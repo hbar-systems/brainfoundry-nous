@@ -1,0 +1,78 @@
+# Minimal Configuration - API Testing Only
+# Use this for very low memory systems or API testing: docker compose -f docker-compose.minimal.yml up
+
+version: '3.8'
+
+services:
+  # FastAPI Backend (without Ollama dependency)
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/llm_db
+      - OLLAMA_URL=http://ollama:11434
+      - ENV=minimal
+      - DISABLE_LLM=true
+      - NODEOS_URL=http://nodeos:8001
+    depends_on:
+      - postgres
+      - nodeos
+    volumes:
+      - ./input_samples:/app/input_samples:ro
+    networks:
+      - llm-network
+
+  # NodeOS Authority Service
+  nodeos:
+    build: ./nodeos
+    ports:
+      - "8001:8001"
+    environment:
+      - NODEOS_SIGNING_SECRET=dev-secret-minimal
+      - NODEOS_HMAC_SECRET=dev-secret-minimal
+      - NODEOS_DB_PATH=/data/nodeos.db
+    volumes:
+      - nodeos_minimal_data:/data
+    networks:
+      - llm-network
+    restart: unless-stopped
+    
+  # Next.js Frontend
+  ui:
+    build: ./ui  
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NODE_ENV=development
+      - NODEOS_INTERNAL_URL=http://nodeos:8001
+    depends_on:
+      - api
+      - nodeos
+    networks:
+      - llm-network
+
+  # Postgres with pgvector (same as production)
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "54322:5432"
+    environment:
+      - POSTGRES_DB=llm_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_minimal_data:/var/lib/postgresql/data
+      - ./vector-db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - llm-network
+    restart: unless-stopped
+
+networks:
+  llm-network:
+    driver: bridge
+
+volumes:
+  postgres_minimal_data:
+  nodeos_minimal_data: 

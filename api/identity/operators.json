@@ -1,0 +1,10 @@
+{
+  "operators": [
+    {
+      "operator_id": "HBAR-0001",
+      "trust_tier": "root",
+      "display_name": "hbar",
+      "active": true
+    }
+  ]
+}

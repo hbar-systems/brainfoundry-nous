@@ -1,0 +1,99 @@
+# Docker
+.dockerignore
+
+# Node.js
+ui/node_modules/
+ui/.next/
+ui/.env.local
+ui/.env.development.local
+ui/.env.test.local
+ui/.env.production.local
+ui/npm-debug.log*
+ui/yarn-debug.log*
+ui/yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# hbar brain layer - exclude semantic database files
+extensions/brain/*.db
+
+# Docker volumes (data will persist in named volumes)
+postgres_data/
+ollama_data/
+postgres_dev_data/
+ollama_dev_data/
+postgres_minimal_data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Model files (will be downloaded by Ollama)
+*.gguf
+*.bin
+
+# Input samples (except the sample we're including)
+input_samples/*
+!input_samples/sample_company_doc.md
+!input_samples/.gitkeep
+
+# Environment files
+.env*
+!.env.example 
+# Runtime ops (audit logs, proposals)
+ops/
+
+# accidental junk files
+os
+threading
+
+# caches
+__pycache__/
+*.pyc
+.huggingface/
+.cache/
+
+# local artifacts
+brainfoundry/audit.jsonl
+
+# local junk
+json
+api/kernel/registry.py.bak
+api/main.py.bak
+hbar-brain/

@@ -1,0 +1,7 @@
+brain_id: system.ops.nodeos.v1
+display_name: "NodeOS (authority)"
+lineage: system
+domain: ops
+role: authority
+model: null
+tags: [system, ops, authority, memory, loops]

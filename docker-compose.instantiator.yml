@@ -1,0 +1,80 @@
+services:
+  api_demo:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    env_file:
+    - ./instances/hbar.brain.demo/.env
+    networks:
+    - llm-network
+    ports:
+    - 8110:8000
+    environment:
+      HBAR_IDENTITY_SECRET: dev-secret-please-change
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      NODEOS_BASE_URL: http://nodeos:8001
+      BRAIN_IDENTITY_PATH: /app/api/brain_identity.yaml
+    volumes:
+    - ./instances/hbar.brain.demo/api/brain_identity.yaml:/app/api/brain_identity.yaml:ro,Z
+    - ./instances/hbar.brain.demo/ops:/app/ops:Z
+    - ./instances/hbar.brain.demo/data:/app/data:Z
+  api_alpha:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    env_file:
+    - ./instances/hbar.brain.alpha/.env
+    networks:
+    - llm-network
+    ports:
+    - 8120:8000
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      NODEOS_BASE_URL: http://nodeos:8001
+      BRAIN_IDENTITY_PATH: /app/api/brain_identity.yaml
+    volumes:
+    - ./instances/hbar.brain.alpha/api/brain_identity.yaml:/app/api/brain_identity.yaml:ro,Z
+    - ./instances/hbar.brain.alpha/ops:/app/ops:Z
+    - ./instances/hbar.brain.alpha/data:/app/data:Z
+  api_beta:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    env_file:
+    - ./instances/hbar.brain.beta/.env
+    networks:
+    - llm-network
+    ports:
+    - 8130:8000
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      NODEOS_BASE_URL: http://nodeos:8001
+      BRAIN_IDENTITY_PATH: /app/api/brain_identity.yaml
+    volumes:
+    - ./instances/hbar.brain.beta/api/brain_identity.yaml:/app/api/brain_identity.yaml:ro,Z
+    - ./instances/hbar.brain.beta/ops:/app/ops:Z
+    - ./instances/hbar.brain.beta/data:/app/data:Z
+  brainfoundry:
+    build:
+      context: .
+      dockerfile: brainfoundry/Dockerfile
+    restart: unless-stopped
+    networks:
+    - llm-network
+    ports:
+    - 127.0.0.1:8090:8090
+    environment:
+      BRAINFOUNDRY_OPERATOR_TOKEN: dev-operator-token
+networks:
+  llm-network:
+    external: true
+    name: hbar-brain_llm-network

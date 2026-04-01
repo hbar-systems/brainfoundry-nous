@@ -1,0 +1,44 @@
+services:
+  api:
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --no-access-log
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      args:
+        HBAR_GIT_COMMIT: ${HBAR_GIT_COMMIT:-unknown}
+        HBAR_BUILD_TIME: ${HBAR_BUILD_TIME:-unknown}
+    environment:
+    - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/llm_db
+    - OLLAMA_URL=http://ollama:11434
+    - OLLAMA_MODEL=llama3.2:1b
+    - SEMANTIC_DB_PATH=/app/extensions/brain/semantic.db
+    - NODEOS_URL=http://nodeos:8001
+    - KERNEL_RATE_LIMIT_MAX=30
+    - KERNEL_RATE_LIMIT_WINDOW=60
+    - REDIS_URL=redis://redis:6379/0
+    - HBAR_IDENTITY_SECRET=dev-secret-please-change
+    - DEV_ENABLE_MEMORY_APPEND=1
+    - HBAR_ENV=dev
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -fsS
+      - http://localhost:8000/health
+      interval: 10s
+      timeout: 2s
+      retries: 6
+      start_period: 10s
+    volumes:
+    - ./input_samples:/app/input_samples:ro
+    - ./extensions/brain:/app/extensions/brain:rw
+    - ./prepared_docs:/app/prepared_docs:rw
+    - api_data:/app/data
+    - ./api:/app/api:Z
+    networks:
+    - llm-network
+networks:
+  llm-network:
+    driver: bridge
+volumes:
+  api_data: {}

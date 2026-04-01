@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+import argparse, os, sqlite3
+
+DB_PATH = os.getenv("SEMANTIC_DB_PATH", "extensions/brain/semantic.db")
+
+def main():
+    ap = argparse.ArgumentParser(description="Show docs that match ALL given tags.")
+    ap.add_argument("--tags", nargs="+", required=True)
+    args = ap.parse_args()
+    cx = sqlite3.connect(DB_PATH)
+    try:
+        q = """
+        SELECT de.document_name
+        FROM document_entities de
+        JOIN entity_tags et ON de.entity_id = et.entity_id
+        JOIN tags t ON et.tag_id = t.id
+        WHERE t.name IN ({place})
+        GROUP BY de.document_name
+        HAVING COUNT(DISTINCT t.name) = ?
+        ORDER BY de.document_name;
+        """.replace("{place}", ",".join(["?"]*len(args.tags)))
+        rows = cx.execute(q, (*args.tags, len(args.tags))).fetchall()
+        for (doc,) in rows:
+            print(doc)
+    finally:
+        cx.close()
+
+if __name__ == "__main__":
+    main()

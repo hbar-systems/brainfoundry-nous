@@ -1,0 +1,161 @@
+services:
+
+  api_dev_off:
+    image: hbar-brain-api
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/llm_db
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:1b
+      SEMANTIC_DB_PATH: /app/extensions/brain/semantic.db
+      NODEOS_URL: http://nodeos:8001
+      KERNEL_RATE_LIMIT_MAX: "30"
+      KERNEL_RATE_LIMIT_WINDOW: "60"
+      REDIS_URL: redis://redis:6379/0
+      HBAR_IDENTITY_SECRET: dev-secret-please-change
+      DEV_ENABLE_MEMORY_APPEND: "0"
+
+    volumes:
+      - ./api:/app/api
+      - ./data:/app/data
+    ports:
+      - "8011:8000"
+
+  # Ollama container for serving Mistral/LLaVA
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - llm-network
+    restart: unless-stopped
+    
+  api:
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --no-access-log
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      args:
+        HBAR_GIT_COMMIT: ${HBAR_GIT_COMMIT:-unknown}
+        HBAR_BUILD_TIME: ${HBAR_BUILD_TIME:-unknown}
+    ports:
+      - "8010:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/llm_db
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2:1b
+      - SEMANTIC_DB_PATH=/app/extensions/brain/semantic.db
+      - NODEOS_URL=http://nodeos:8001
+      - KERNEL_RATE_LIMIT_MAX=30
+      - KERNEL_RATE_LIMIT_WINDOW=60
+      - REDIS_URL=redis://redis:6379/0
+      - HBAR_IDENTITY_SECRET=dev-secret-please-change
+      - DEV_ENABLE_MEMORY_APPEND=1
+    depends_on:
+      - postgres
+      - nodeos
+      - redis
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 2s
+      retries: 6
+      start_period: 10s
+
+
+
+    volumes:
+      - ./input_samples:/app/input_samples:ro
+      - ./extensions/brain:/app/extensions/brain:rw
+      - ./prepared_docs:/app/prepared_docs:rw
+      - ./api:/app/api
+      - api_data:/app/data
+
+    networks:
+      - llm-network
+
+  # NodeOS Authority Service
+  nodeos:
+    build:
+      context: ./nodeos
+      dockerfile: Dockerfile
+    environment:
+      - NODEOS_SIGNING_SECRET=${NODEOS_SIGNING_SECRET:-change-this-in-production}
+      - NODEOS_HMAC_SECRET=${NODEOS_SIGNING_SECRET:-change-this-in-production}
+      - NODEOS_DB_PATH=/data/nodeos.db
+    volumes:
+      - nodeos_data:/data
+    networks:
+      - llm-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Next.js Frontend
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    ports:
+      - "3010:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://api:8000"
+      NEXT_PUBLIC_API_BASE: "http://api:8000"
+      NODEOS_INTERNAL_URL: "http://nodeos:8001"
+
+
+    depends_on:
+      - api
+      - nodeos
+    networks:
+      - llm-network
+
+
+  # Postgres with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "54332:5432"
+    environment:
+      - POSTGRES_DB=llm_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./vector-db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - llm-network
+    restart: unless-stopped
+
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - llm-network
+    restart: unless-stopped
+
+networks:
+  llm-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  ollama_data:
+  nodeos_data:
+  redis_data:
+  api_data:
+
+

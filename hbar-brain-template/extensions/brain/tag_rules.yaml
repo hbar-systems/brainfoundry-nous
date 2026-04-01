@@ -1,0 +1,59 @@
+# Simple keyword → tags/entities rules
+# Schema:
+# rules:
+#   - id: string
+#     if:
+#       any: [keywords...]        # case-insensitive substring/regex
+#       exclude: [keywords...]    # optional
+#     add_tags: [tag1, tag2]      # creates tags if missing
+#     add_entities:               # optional entities to upsert + link
+#       - {name: "hbar-brain", type: "project", description: "Brain layer"}
+#       - {name: "AudioNova",  type: "product"}
+
+rules:
+  - id: todo
+    if:
+      any: ["todo", "next:", "action item", "task:"]
+    add_tags: ["todo"]
+
+  - id: project_hbar_brain
+    if:
+      any: ["hbar brain", "hbar-brain", "brain layer"]
+    add_tags: ["project:hbar-brain"]
+    add_entities:
+      - {name: "hbar-brain", type: "project", description: "Hbar Brain Layer"}
+
+  - id: audionova
+    if:
+      any: ["audionova", "audio nova"]
+      exclude: ["unrelated test"]   # example
+    add_tags: ["product:audionova"]
+    add_entities:
+      - {name: "AudioNova", type: "product", description: "Audio cleanup tool"}
+  
+  - id: math_research
+    if: { any: ["proof sketch", "lemma", "theorem", "ODE", "PDE", "eigenvalue"] }
+    add_tags: ["domain:math","stage:research"]
+
+  - id: physics_qm
+    if: { any: ["hamiltonian", "eigenstate", "eigensolver", "VQE", "ansatz"] }
+    add_tags: ["domain:physics","topic:quantum"]
+
+  - id: music_theory
+    if: { any: ["polyrhythm", "counterpoint", "voice leading", "Lydian"] }
+    add_tags: ["domain:music"]
+
+  - id: philosophy
+    if: { any: ["epistemology", "ontology", "phenomenology", "ethics"] }
+    add_tags: ["domain:philosophy"]
+
+  - id: prediction
+    if: { any: ["I predict", "my forecast", "by Q4", "within 2 years"] }
+    add_tags: ["prediction","stage:draft"]
+    add_entities: [{name: "prediction-log", type: "registry", description: "Personal forecasts"}]
+
+  - id: web3_general
+    if: { any: ["smart contract", "DID", "verifiable credential", "IPFS", "zk", "rollup"] }
+    add_tags: ["domain:web3"]
+
+
