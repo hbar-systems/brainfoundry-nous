@@ -1,9 +1,9 @@
 {
   "operators": [
     {
-      "operator_id": "HBAR-0001",
+      "operator_id": "OWNER-0001",
       "trust_tier": "root",
-      "display_name": "hbar",
+      "display_name": "${BRAIN_OWNER}",
       "active": true
     }
   ]

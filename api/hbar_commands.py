@@ -424,7 +424,7 @@ def _ingest_status(payload: dict) -> dict:
         "status": "queued",
         "path":   path,
         "note":   "Full CLI ingest (hbar ingest ./docs/) coming in phase 2. Use console UI for now.",
-        "console": os.getenv("HBAR_CONSOLE_URL", "https://console.brain.hbar.systems"),
+        "console": os.getenv("HBAR_CONSOLE_URL", "https://localhost:3010"),
     }
 
 

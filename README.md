@@ -13,7 +13,7 @@ stores your knowledge. You own it. Nobody else has access.
 
 **Stack:**
 - FastAPI — chat, RAG, embeddings, identity
-- NodeOS — governance (loop permits, PROPOSE/CONFIRM)
+- CognitiveOS — governance kernel (loop permits, PROPOSE/CONFIRM)
 - PostgreSQL + pgvector — vector memory
 - Ollama — local model fallback (always available, no API key needed)
 - Next.js — console UI (dashboard, chat, knowledge, kernel)
@@ -51,7 +51,7 @@ Ollama is always available with no key required.
 ### 1. Clone
 
 ```bash
-git clone https://github.com/hbar-systems/brainfoundry-node.git my-brain
+git clone https://github.com/hbar-systems/brainfoundry-nous.git my-brain
 cd my-brain
 ```
 
@@ -130,17 +130,8 @@ The protocol is open. The brain is yours.
 
 ---
 
-## Connect with `nous`
-
-`nous` is the universal CLI for BrainFoundryOS — point it at any brain endpoint.
-
-```bash
-pip install nous-cli
-nous --endpoint https://your-brain-domain chat
-```
-
----
-
 ## License
 
-MIT
+AGPL-3.0 — see [LICENSE](LICENSE).
+
+Run it, modify it, self-host it freely. If you run a modified version as a service, you must release your modifications under the same license.

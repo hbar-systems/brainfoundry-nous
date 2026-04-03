@@ -148,9 +148,9 @@ class ExportIndexer:
     
     def generate_source_path(self, document_name: str, chunk_index: int = 0) -> str:
         """
-        Generate a relative source path for hbar.blog
+        Generate a relative source path for the document
         """
-        return f"/courses/hbar-linear-algebra-course-oct3/pdfs/{document_name}"
+        return f"/docs/{document_name}"
     
     def export_index(self, course: str, output_path: str) -> Dict[str, Any]:
         """Export index for the specified course"""

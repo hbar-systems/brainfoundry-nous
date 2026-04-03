@@ -5,3 +5,4 @@ domain: authority
 role: operator_node
 model: mistral:7b
 tags: [authority, nodeos, operator]
+public_key: "${BRAIN_PUBLIC_KEY}"

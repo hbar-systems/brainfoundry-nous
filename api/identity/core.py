@@ -6,7 +6,18 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 
 import json
@@ -212,3 +223,127 @@ def verify_assertion(*, secret: str, token: str, expected_aud: str) -> Dict[str,
     return claims
 
 
+# ---------------------------------------------------------------------------
+# Federation signing — ED25519 (asymmetric, no shared secret)
+#
+# Intra-brain permits use HMAC-SHA256 (above) — same brain issues and verifies.
+# Cross-brain assertions use ED25519 — Brain A signs with private key,
+# Brain B fetches Brain A's public key from GET /identity and verifies.
+# No secrets are shared. Sovereignty preserved.
+# ---------------------------------------------------------------------------
+
+def generate_brain_keypair() -> Tuple[str, str]:
+    """
+    Generate a new ED25519 keypair for this brain node.
+    Run once at brain setup via scripts/generate_keypair.py.
+
+    Returns:
+        (private_key_b64, public_key_b64) — both base64url-encoded, no padding.
+        Store private_key_b64 as BRAIN_PRIVATE_KEY in .env (never share).
+        Store public_key_b64 as BRAIN_PUBLIC_KEY in .env and brain_identity.yaml.
+    """
+    private_key = Ed25519PrivateKey.generate()
+    private_bytes = private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    public_bytes = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    return _b64url(private_bytes), _b64url(public_bytes)
+
+
+def issue_federation_assertion(
+    *,
+    private_key_b64: str,
+    issuer_brain_id: str,
+    audience_brain_id: str,
+    subject: str,
+    ttl_seconds: int = 300,
+    claims: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Issue a cross-brain assertion signed with this brain's ED25519 private key.
+
+    The receiving brain verifies with verify_federation_assertion() using the
+    issuing brain's public key (fetched from GET /identity on the issuing brain).
+
+    Args:
+        private_key_b64: BRAIN_PRIVATE_KEY from .env (base64url, no padding)
+        issuer_brain_id: brain_id of this brain (the signer)
+        audience_brain_id: brain_id of the intended recipient
+        subject: what this assertion is about (e.g. operator_id or action)
+        ttl_seconds: expiry window (default 5 min)
+        claims: optional additional claims to include
+
+    Returns:
+        Signed token string: base64url(header).base64url(claims).base64url(sig)
+    """
+    private_bytes = base64.urlsafe_b64decode(private_key_b64 + "==")
+    private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
+
+    now = int(time.time())
+    payload: Dict[str, Any] = {
+        "iss": issuer_brain_id,
+        "aud": audience_brain_id,
+        "sub": subject,
+        "iat": now,
+        "exp": now + int(ttl_seconds),
+        "v": 1,
+    }
+    if claims:
+        payload.update(claims)
+
+    header = {"alg": "EdDSA", "typ": "HBAR_FED_ASSERTION", "v": 1}
+    header_b64 = _b64url_json(header)
+    claims_b64 = _b64url_json(payload)
+    signing_input = f"{header_b64}.{claims_b64}".encode()
+    sig_b64 = _b64url(private_key.sign(signing_input))
+    return f"{header_b64}.{claims_b64}.{sig_b64}"
+
+
+def verify_federation_assertion(
+    *,
+    public_key_b64: str,
+    token: str,
+    expected_audience: str,
+) -> Dict[str, Any]:
+    """
+    Verify a cross-brain assertion using the issuing brain's public key.
+
+    Fetch the public key from GET /identity on the issuing brain
+    (brain_identity.yaml -> public_key field).
+
+    Args:
+        public_key_b64: BRAIN_PUBLIC_KEY of the issuing brain (base64url, no padding)
+        token: the signed token string from issue_federation_assertion()
+        expected_audience: this brain's brain_id -- rejects tokens not addressed to us
+
+    Returns:
+        Decoded claims dict on success.
+
+    Raises:
+        ValueError: invalid_token_format | invalid_signature | aud_mismatch | expired
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("invalid_token_format")
+
+    header_b64, claims_b64, sig_b64 = parts
+    signing_input = f"{header_b64}.{claims_b64}".encode()
+
+    public_bytes = base64.urlsafe_b64decode(public_key_b64 + "==")
+    public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
+    sig = base64.urlsafe_b64decode(sig_b64 + "==")
+
+    try:
+        public_key.verify(sig, signing_input)
+    except Exception:
+        raise ValueError("invalid_signature")
+
+    padded = claims_b64 + "=" * (-len(claims_b64) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+
+    if payload.get("aud") != expected_audience:
+        raise ValueError("aud_mismatch")
+
+    exp = payload.get("exp")
+    if exp is not None and int(time.time()) >= int(exp):
+        raise ValueError("expired")
+
+    return payload

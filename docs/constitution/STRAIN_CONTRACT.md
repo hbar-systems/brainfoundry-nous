@@ -23,7 +23,7 @@ Example:
   - science-web
   - science-api
 - owners:
-  - HBAR-0001
+  - OWNER-0001
 - operators_allowed:
   - collab
   - operator

@@ -185,17 +185,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 # CORS: allow UI to call API from browser
+_cors_extra = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         'http://127.0.0.1:3010',
         'http://localhost:3010',
-        'http://91.99.158.48:3010',
-        'http://[2a01:4f8:1c17:6098::1]:3010',
-        'https://console.brain.hbar.systems',
-        'https://orfeo.music',
-        'https://www.orfeo.music',
-    ],
+    ] + _cors_extra,
     allow_credentials=False,
     allow_methods=['*'],
     allow_headers=['*'],
@@ -760,60 +756,59 @@ async def chat_completion(request: dict):
         # non-streaming — route to correct provider via providers.py
         if not do_stream:
             assistant_message = await _providers.complete(model, messages, max_tokens=request.get("max_tokens", 2048))
-                
-                # Save to database if session_id provided
-                if session_id and messages:
-                    try:
-                        conn = get_db_connection()
-                        cursor = conn.cursor()
-                        
-                        # Save the latest user message
-                        latest_user_msg = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
-                        if latest_user_msg:
-                            cursor.execute(
-                                "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-                                (session_id, "user", latest_user_msg.get("content", ""))
-                            )
-                        
-                        # Save the assistant response
+
+            # Save to database if session_id provided
+            if session_id and messages:
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+
+                    # Save the latest user message
+                    latest_user_msg = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+                    if latest_user_msg:
                         cursor.execute(
                             "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-                            (session_id, "assistant", assistant_message)
+                            (session_id, "user", latest_user_msg.get("content", ""))
                         )
-                        
-                        conn.commit()
-                        cursor.close()
-                        conn.close()
-                    except Exception as db_error:
-                        print(f"Database save error: {db_error}")  # Log but don't fail the request
 
+                    # Save the assistant response
+                    cursor.execute(
+                        "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+                        (session_id, "assistant", assistant_message)
+                    )
 
-                response_body = {
-                    "id": f"chatcmpl-{uuid.uuid4()}",
-                    "object": "chat.completion",
-                    "created": int(datetime.utcnow().timestamp()),
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": assistant_message
-                        },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                        "total_tokens": 0
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+                except Exception as db_error:
+                    print(f"Database save error: {db_error}")  # Log but don't fail the request
+
+            response_body = {
+                "id": f"chatcmpl-{uuid.uuid4()}",
+                "object": "chat.completion",
+                "created": int(datetime.utcnow().timestamp()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": assistant_message
                     },
-                }
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                },
+            }
 
-                return JSONResponse(
-                    content=response_body,
-                    headers={
-                        "X-Brain-Persona-Injected": "1" if BRAIN_PERSONA else "0"
-                    }
-                )
+            return JSONResponse(
+                content=response_body,
+                headers={
+                    "X-Brain-Persona-Injected": "1" if BRAIN_PERSONA else "0"
+                }
+            )
 
 
         # streaming path (SSE: "data: {...}\n\n" frames)
