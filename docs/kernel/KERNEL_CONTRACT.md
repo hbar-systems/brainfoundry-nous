@@ -1,7 +1,7 @@
 # KERNEL CONTRACT (HBAR-BRAIN)
 Version: 1.0
 Status: GOVERNANCE FREEZE — Task 2
-Scope: Sovereign execution boundary of the hbar-brain kernel
+Scope: Sovereign execution boundary of the brainfoundry-node kernel
 
 ---
 
@@ -15,7 +15,7 @@ This document is constitutional.
 
 ## 1. Scope & Authority
 
-This contract defines and freezes the sovereign execution semantics of hbar-brain.
+This contract defines and freezes the sovereign execution semantics of brainfoundry-node.
 
 It governs:
 
