@@ -147,7 +147,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     ports:
-      - "54332:5432"
+      - "127.0.0.1:54332:5432"
     environment:
       - POSTGRES_DB=llm_db
       - POSTGRES_USER=postgres

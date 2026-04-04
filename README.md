@@ -95,13 +95,27 @@ docker compose exec ollama ollama pull mistral:7b
 
 ### 6. Ingest your documents
 
-Put your documents (PDFs, text files, markdown) in a folder and ingest:
+Organize documents into folders and ingest:
 
 ```bash
 python scripts/ingest_folder.py --dir /path/to/your/docs
 ```
 
 This is what makes the brain know you. The more you ingest, the more personal it becomes.
+
+**RAG tier folders (optional):** The brain prioritizes documents from certain folders during search.
+Default folder names (configurable via env vars):
+
+| Folder | Env var | Priority | Purpose |
+|--------|---------|----------|---------|
+| `identity/` | `RAG_TIER1` | Highest (always 2) | Who you are, core context |
+| `thinking/` | `RAG_TIER2A` | High (always 1) | Notes, active reasoning |
+| `projects/` | `RAG_TIER2B` | High (always 1) | Current work, in-progress |
+| `writing/` | `RAG_TIER2C` | High (always 1) | Essays, published work |
+| everything else | — | Similarity search | General corpus |
+
+You can use any folder names — set `RAG_TIER1`, `RAG_TIER2A/B/C` in `.env`.
+Or skip the structure entirely and let the similarity search find everything.
 
 ### 7. Access
 
@@ -110,6 +124,38 @@ This is what makes the brain know you. The more you ingest, the more personal it
 - API docs: `http://your-server:8010/docs`
 
 Add a domain with Caddy for HTTPS — see `docs/DEPLOYMENT.md`.
+
+---
+
+## Production deployment checklist
+
+Before exposing your brain to the internet:
+
+```bash
+# 1. Generate all secrets (run once, save output to .env)
+openssl rand -hex 32   # → HBAR_BRAIN_API_KEY
+openssl rand -hex 32   # → HBAR_IDENTITY_SECRET
+openssl rand -hex 32   # → NODEOS_SIGNING_SECRET
+openssl rand -hex 32   # → HBAR_SITE_PERMIT_ORFEO (if using Orfeo)
+
+# 2. Generate federation keypair (required for /identity endpoint)
+python scripts/generate_keypair.py
+# Copy BRAIN_PRIVATE_KEY and BRAIN_PUBLIC_KEY output into .env
+
+# 3. Set non-default postgres credentials in .env
+POSTGRES_USER=your_db_user
+POSTGRES_PASSWORD=your_strong_password
+
+# 4. Set HBAR_ENV=prod in .env — enables startup secret enforcement
+
+# 5. Build and start
+docker compose up -d --build
+```
+
+**Security notes:**
+- PostgreSQL binds to `127.0.0.1` only — never exposed to the public internet
+- Never commit `.env` — it is gitignored
+- The `GITHUB_TOKEN` approach (git credentials in container) is for development convenience only; for production use SSH deploy keys instead
 
 ---
 

@@ -67,9 +67,10 @@ HBAR_ENV = os.getenv("HBAR_ENV", "dev").lower()
 if HBAR_ENV != "dev" and DEV_ENABLE_MEMORY_APPEND:
     print("WARNING: DEV_ENABLE_MEMORY_APPEND=1 while HBAR_ENV is not 'dev'. This is unsafe.")
 
-if HBAR_ENV != "dev" and HBAR_IDENTITY_SECRET == "dev-secret-please-change":
+if HBAR_ENV != "dev" and (not HBAR_IDENTITY_SECRET or HBAR_IDENTITY_SECRET == "dev-secret-please-change"):
     raise RuntimeError(
-        "Startup refused: default HBAR_IDENTITY_SECRET in non-dev environment. Set a real secret."
+        "Startup refused: HBAR_IDENTITY_SECRET must be set to a strong secret in non-dev environments. "
+        "Generate one with: openssl rand -hex 32"
     )
 
 
@@ -108,7 +109,7 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI, HTTPException, Security
 
-# Version constant for hbar-brain server
+# Version constant
 HBAR_BRAIN_VERSION = "0.5.0"
 
 APP_DIR = Path(__file__).resolve().parent
@@ -399,11 +400,24 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Search for similar documents with tier-weighted injection.
 
-    Tier 1 (always 2): identity-rag
-    Tier 2 (always 1 each): my-thinking, working-on, writings-blog
-    Tier 3 (always 1 each): hbar-brain-feb-march, docs-BF
-    Tier 4: chatgpt-conversations + everything else via similarity
+    RAG tier folders (optional conventions — rename to match your corpus):
+    Tier 1 (always 2 results): identity/        — who you are, core context
+    Tier 2 (always 1 each):    thinking/        — active reasoning, notes
+                               projects/        — current work, in-progress docs
+                               writing/         — essays, blog posts, published work
+    Tier 3: similarity search over everything else (general corpus)
+
+    To use different folder names, set env vars:
+      RAG_TIER1=identity
+      RAG_TIER2A=thinking
+      RAG_TIER2B=projects
+      RAG_TIER2C=writing
     """
+    _t1  = os.getenv("RAG_TIER1",  "identity")
+    _t2a = os.getenv("RAG_TIER2A", "thinking")
+    _t2b = os.getenv("RAG_TIER2B", "projects")
+    _t2c = os.getenv("RAG_TIER2C", "writing")
+
     try:
         query_embedding = generate_embeddings([query])[0]
         conn = get_db_connection()
@@ -424,35 +438,31 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
             )
             return cursor.fetchall()
 
-        tier1 = fetch_tier('identity-rag/%', 2)
-        tier2a = fetch_tier('my-thinking/%', 1)
-        tier2b = fetch_tier('working-on/%', 1)
-        tier2c = fetch_tier('writings-blog/%', 1)
-        tier3a = fetch_tier('hbar-brain-feb-march/%', 1)
-        tier3b = fetch_tier('docs-BF/%', 1)
+        tier1 = fetch_tier(f'{_t1}/%', 2)
+        tier2a = fetch_tier(f'{_t2a}/%', 1)
+        tier2b = fetch_tier(f'{_t2b}/%', 1)
+        tier2c = fetch_tier(f'{_t2c}/%', 1)
 
-        # Tier 4: similarity search excluding tiered folders
+        # Tier 3: similarity search excluding tiered folders
         cursor.execute(
             """
             SELECT document_name, content, metadata,
                    embedding <-> %s::vector as distance
             FROM document_embeddings
-            WHERE document_name NOT LIKE 'identity-rag/%%'
-              AND document_name NOT LIKE 'my-thinking/%%'
-              AND document_name NOT LIKE 'working-on/%%'
-              AND document_name NOT LIKE 'writings-blog/%%'
-              AND document_name NOT LIKE 'hbar-brain-feb-march/%%'
-              AND document_name NOT LIKE 'docs-BF/%%'
+            WHERE document_name NOT LIKE %s
+              AND document_name NOT LIKE %s
+              AND document_name NOT LIKE %s
+              AND document_name NOT LIKE %s
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (embedding_str, embedding_str, limit)
+            (embedding_str, f'{_t1}/%', f'{_t2a}/%', f'{_t2b}/%', f'{_t2c}/%', embedding_str, limit)
         )
-        tier4 = cursor.fetchall()
+        tier3 = cursor.fetchall()
         cursor.close()
         conn.close()
 
-        all_results = tier1 + tier2a + tier2b + tier2c + tier3a + tier3b + tier4
+        all_results = tier1 + tier2a + tier2b + tier2c + tier3
         return [
             {
                 "document_name": r[0],
@@ -1295,8 +1305,12 @@ def get_api_key(
     authorization: str = Security(bearer_token),
 ) -> str:
     """Get API key from either X-API-Key header or Authorization header (Bearer token)"""
-    # If HBAR_BRAIN_API_KEY is not set, we're in dev mode - allow all requests
+    # If HBAR_BRAIN_API_KEY is not set, allow in dev mode only — log a loud warning
     if not HBAR_BRAIN_API_KEY:
+        _env = os.getenv("HBAR_ENV", "dev").lower()
+        if _env != "dev":
+            raise HTTPException(status_code=500, detail="Server misconfigured: HBAR_BRAIN_API_KEY not set.")
+        print("WARNING: HBAR_BRAIN_API_KEY is not set. All requests are unauthenticated. Set this before production use.")
         return "dev_mode"
     
     # Check X-API-Key header
@@ -2210,7 +2224,7 @@ app.include_router(router)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ORFEO SESSION ENDPOINT
-# Site-permit gated (NOT loop-gated). Called by orfeo.music via hbar-brain.
+# Site-permit gated (NOT loop-gated). Called by connected site via site permit.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ORFEO_SITE_PERMIT = os.getenv("HBAR_SITE_PERMIT_ORFEO", "")
