@@ -37,9 +37,14 @@ services:
       - DEV_ENABLE_MEMORY_APPEND=0
       - BRAIN_ID=${BRAIN_ID:-my-brain-01}
       - BRAIN_NAME=${BRAIN_NAME:-My Brain}
+      - BRAIN_SYMBOL=${BRAIN_SYMBOL:-⊕}
       - BRAIN_OWNER=${BRAIN_OWNER}
       - BRAIN_PRIVATE_KEY=${BRAIN_PRIVATE_KEY}
       - BRAIN_PUBLIC_KEY=${BRAIN_PUBLIC_KEY}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:1b}
+      - CHUNK_SIZE=${CHUNK_SIZE:-750}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
+      - TZ=${TZ:-UTC}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - RAG_TIER1=${RAG_TIER1:-identity}
       - RAG_TIER2A=${RAG_TIER2A:-thinking}
@@ -65,7 +70,7 @@ services:
       - ./input_samples:/app/input_samples:ro
       - ./extensions/brain:/app/extensions/brain:rw
       - ./prepared_docs:/app/prepared_docs:rw
-      - ./api:/app/api
+      - ./api:/app/api  # Development: hot-reload. Production: remove this line (code is baked into image).
       - api_data:/app/data
     networks:
       - llm-network
