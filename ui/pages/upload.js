@@ -57,7 +57,7 @@ export default function Upload() {
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "ui-sans-serif, system-ui" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700 }}>hbar brain — Upload & Search</h1>
+      <h1 style={{ fontSize: 28, fontWeight: 700 }}>Brain — Upload & Search</h1>
 
       <section style={{ marginTop: 24, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
         <div

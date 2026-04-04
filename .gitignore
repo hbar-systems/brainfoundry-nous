@@ -49,7 +49,7 @@ logs/
 *.db
 *.sqlite
 
-# hbar brain layer - exclude semantic database files
+# exclude semantic database files
 extensions/brain/*.db
 
 # Docker volumes (data will persist in named volumes)

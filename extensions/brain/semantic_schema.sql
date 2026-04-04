@@ -1,4 +1,4 @@
--- hbar brain layer: Semantic/Identity micro-DB schema
+-- BrainFoundryOS brain layer: Semantic/Identity micro-DB schema
 -- SQLite database for entities, tags, and relations (separate from main pgvector DB)
 
 -- Enable foreign key constraints and WAL mode for better performance

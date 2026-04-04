@@ -186,7 +186,7 @@ def validate_command_payload(command_key: str, payload: Dict[str, Any]) -> None:
     if missing:
         raise ValueError(f"missing_fields:{sorted(list(missing))}")
 
-# ── hbar custom commands ──────────────────────────────────────────────────────
+# ── brain custom commands ──────────────────────────────────────────────────────
 REGISTRY.update({
     "remember": CommandSpec(
         command="remember",
@@ -377,7 +377,7 @@ PAYLOAD_REQUIRED_FIELDS.update({
     "model.use":       {"model"},
 })
 
-# ── patch parse_normalized_command to handle dotted + hbar single commands ───
+# ── patch parse_normalized_command to handle dotted + brain single commands ───
 _original_parse = parse_normalized_command
 
 def parse_normalized_command(normalized_command: str):
@@ -389,7 +389,7 @@ def parse_normalized_command(normalized_command: str):
     # dotted commands e.g. context.show, peers.introduce, model.use
     if "." in parts[0]:
         return parts[0], {}
-    # hbar single-word commands
+    # brain single-word commands
     hbar_single = {
         "remember", "recall", "forget", "memories",
         "peers", "introduce", "model", "audit", "policy", "ingest", "think",

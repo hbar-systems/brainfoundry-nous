@@ -2,7 +2,7 @@
 
 ## Overview
 
-NodeOS is the authority service for the hbar brain system. It enforces:
+NodeOS is the authority service for the BrainFoundryOS brain system. It enforces:
 
 1. **Memory Authority**: Only NodeOS can commit long-term memory
 2. **Loop Permits**: Agents must request explicit autonomy permits

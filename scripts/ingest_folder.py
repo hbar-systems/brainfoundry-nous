@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hbar brain layer: Ingestion script (host-side)
+BrainFoundryOS brain layer: Ingestion script (host-side)
 Batch upload documents from a local folder to the existing /documents/upload endpoint
 """
 
@@ -225,7 +225,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Batch upload documents to hbar brain layer",
+        description="Batch upload documents to BrainFoundryOS brain layer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

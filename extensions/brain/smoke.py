@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hbar brain layer: Smoke test for semantic database
+BrainFoundryOS brain layer: Smoke test for semantic database
 Initializes SQLite DB from schema, seeds test data, and prints as JSON
 """
 
@@ -15,7 +15,7 @@ from extensions.brain.semantic_db import SemanticDB
 
 def smoke_test():
     """Initialize DB, seed test data, and print results"""
-    print("🧪 hbar brain layer smoke test")
+    print("🧪 BrainFoundryOS brain layer smoke test")
     
     # Initialize semantic database
     print("📊 Initializing semantic database...")
@@ -90,7 +90,7 @@ def smoke_test():
     
     # Compile results
     results = {
-        "smoke_test": "hbar brain layer",
+        "smoke_test": "BrainFoundryOS brain layer",
         "status": "success",
         "database_stats": stats,
         "entities": entities,

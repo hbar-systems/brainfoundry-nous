@@ -1,4 +1,0 @@
-services:
-  ui:
-    ports:
-      - "${UI_PORT}:3000"

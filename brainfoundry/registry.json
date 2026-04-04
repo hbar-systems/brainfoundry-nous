@@ -1,7 +1,0 @@
-{
-  "brains": [
-    { "brain_id": "hbar.brain.demo",  "service": "api_demo",  "port": 8110 },
-    { "brain_id": "hbar.brain.alpha", "service": "api_alpha", "port": 8120 },
-    { "brain_id": "hbar.brain.beta",  "service": "api_beta",  "port": 8130 }
-  ]
-}

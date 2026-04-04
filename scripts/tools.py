@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hbar brain layer: Tools implementation
+BrainFoundryOS brain layer: Tools implementation
 Simple web.fetch tool and other utilities for the planner
 """
 
@@ -258,7 +258,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Test hbar brain layer tools",
+        description="Test BrainFoundryOS brain layer tools",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -399,8 +399,8 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Search for similar documents with tier-weighted injection.
 
-    Tier 1 (always 2): hbar-identity-rag
-    Tier 2 (always 1 each): my-thinking, working-on, writings-HBAR-BLOG
+    Tier 1 (always 2): identity-rag
+    Tier 2 (always 1 each): my-thinking, working-on, writings-blog
     Tier 3 (always 1 each): hbar-brain-feb-march, docs-BF
     Tier 4: chatgpt-conversations + everything else via similarity
     """
@@ -424,10 +424,10 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
             )
             return cursor.fetchall()
 
-        tier1 = fetch_tier('hbar-identity-rag/%', 2)
+        tier1 = fetch_tier('identity-rag/%', 2)
         tier2a = fetch_tier('my-thinking/%', 1)
         tier2b = fetch_tier('working-on/%', 1)
-        tier2c = fetch_tier('writings-HBAR-BLOG/%', 1)
+        tier2c = fetch_tier('writings-blog/%', 1)
         tier3a = fetch_tier('hbar-brain-feb-march/%', 1)
         tier3b = fetch_tier('docs-BF/%', 1)
 
@@ -437,10 +437,10 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
             SELECT document_name, content, metadata,
                    embedding <-> %s::vector as distance
             FROM document_embeddings
-            WHERE document_name NOT LIKE 'hbar-identity-rag/%%'
+            WHERE document_name NOT LIKE 'identity-rag/%%'
               AND document_name NOT LIKE 'my-thinking/%%'
               AND document_name NOT LIKE 'working-on/%%'
-              AND document_name NOT LIKE 'writings-HBAR-BLOG/%%'
+              AND document_name NOT LIKE 'writings-blog/%%'
               AND document_name NOT LIKE 'hbar-brain-feb-march/%%'
               AND document_name NOT LIKE 'docs-BF/%%'
             ORDER BY embedding <-> %s::vector
@@ -2014,7 +2014,7 @@ async def brain_command(
 
         
 
-                    # ── hbar custom commands ─────────────────────────────────
+                    # ── brain custom commands ─────────────────────────────────
                     elif normalized_command in {
                         'remember', 'recall', 'forget', 'memories',
                         'context.show', 'context.set', 'context.clear',
@@ -2031,7 +2031,7 @@ async def brain_command(
                             ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
                             model=os.getenv('OLLAMA_MODEL', 'mistral:7b'),
                         )
-                    # ── end hbar custom commands ──────────────────────────────
+                    # ── end brain custom commands ──────────────────────────────
                     # Log successful execution
                     execution_log = {
                         "timestamp": datetime.utcnow().isoformat(),

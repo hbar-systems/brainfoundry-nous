@@ -1,10 +1,10 @@
-# hbar Brain Layer Extension
+# BrainFoundryOS Brain Layer Extension
 
 A minimal, non-invasive semantic layer on top of the existing LLM Private Assistant system.
 
 ## Overview
 
-The hbar brain layer adds entity/relation tracking and basic planning capabilities without modifying the existing RAG + API/UI system. It operates as a separate SQLite database alongside the main PostgreSQL vector store.
+The BrainFoundryOS brain layer adds entity/relation tracking and basic planning capabilities without modifying the existing RAG + API/UI system. It operates as a separate SQLite database alongside the main PostgreSQL vector store.
 
 ## Components
 
@@ -90,7 +90,7 @@ doc_entities = db.get_document_entities("quantum_paper.pdf")
                               │
                               ▼ (document names)
 ┌─────────────────────────────────────────────────────────────┐
-│                 hbar Brain Layer                            │
+│                 BrainFoundryOS Brain Layer                            │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
 │  │   Scripts   │    │  Semantic   │    │   SQLite    │     │
 │  │ (ingest,    │◄──►│     DB      │◄──►│  Database   │     │

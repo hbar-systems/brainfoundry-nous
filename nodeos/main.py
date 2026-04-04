@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NodeOS Authority Service - Phase 1
-Enforces memory and loop permit authority for hbar brain system
+Enforces memory and loop permit authority for BrainFoundryOS brain system
 """
 
 from fastapi import FastAPI, HTTPException, Header, Depends

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hbar brain layer: Semantic/Identity micro-DB operations
+BrainFoundryOS brain layer: Semantic/Identity micro-DB operations
 SQLite database operations for entities, tags, and relations (separate from main pgvector DB)
 """
 

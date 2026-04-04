@@ -117,7 +117,7 @@ Add a domain with Caddy for HTTPS — see `docs/DEPLOYMENT.md`.
 
 **White-glove personal service:**
 Email [hello@hbar.systems](mailto:hello@hbar.systems) — subject line `brainfoundry`.
-hbar reviews your request, interviews you, and crafts your brain personally.
+BrainFoundry reviews your request and crafts your brain personally.
 
 ---
 

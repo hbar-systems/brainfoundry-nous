@@ -1,1 +1,0 @@
-hello from NodeOS isolated clone write (should succeed)

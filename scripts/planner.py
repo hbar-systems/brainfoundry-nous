@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hbar brain layer: Simple plan → act → verify loop
+BrainFoundryOS brain layer: Simple plan → act → verify loop
 Basic query routing and tool orchestration for the brain layer
 """
 
@@ -391,7 +391,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="hbar brain layer planner - plan → act → verify loop",
+        description="BrainFoundryOS brain layer planner - plan → act → verify loop",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
