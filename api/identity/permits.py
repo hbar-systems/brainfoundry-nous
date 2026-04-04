@@ -1,3 +1,4 @@
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Literal
@@ -79,7 +80,7 @@ def build_permit(
     """
     now = now_ts()
     return {
-        "iss": "hbar-brain",
+        "iss": os.getenv("BRAIN_ID", "brainfoundry-node"),
         "sub": operator_id,
         "aud": client_id,
         "iat": now,

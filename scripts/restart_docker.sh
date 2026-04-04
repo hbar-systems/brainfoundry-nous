@@ -23,13 +23,3 @@ done
 
 echo "⚠️  API did not become healthy (30s). See 'docker compose logs -f api'."
 exit 1
-
-
-# #!/usr/bin/env bash
-# set -e
-# PROJECT_ROOT="/Users/hbar/dev/hbar-brain-slm"
-# cd "$PROJECT_ROOT" || { echo "Missing: $PROJECT_ROOT"; exit 1; }
-# docker compose down
-# docker compose up -d
-# curl -sS http://127.0.0.1:8000/health || true
-# echo "🔁 Docker stack restarted."

@@ -13,8 +13,8 @@ TAG_RX = re.compile(r"\[(?P<body>[^\]]+)\]")
 def parse_tags(q: str):
     """
     Accepts:
-        [topic:quantum] [project:hbar-brain] [todo]
-    Returns normalized tags like: ["topic:quantum","project:hbar-brain","todo"]
+        [topic:quantum] [project:my-project] [todo]
+    Returns normalized tags like: ["topic:quantum","project:my-project","todo"]
     """
     tags = []
     for m in TAG_RX.finditer(q):

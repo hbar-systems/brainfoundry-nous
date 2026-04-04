@@ -27,21 +27,4 @@ for i in {1..30}; do
 done
 
 echo "⚠️  API did not become healthy in time (30s). Check 'docker compose logs -f api'."
-exit 1 
-
-
-#!/usr/bin/env bash
-# set -e
-
-# PROJECT_ROOT="/Users/hbar/dev/hbar-brain-slm"
-
-# cd "$PROJECT_ROOT" || { echo "Missing: $PROJECT_ROOT"; exit 1; }
-
-# # bring up the stack
-# docker compose up -d
-
-# # quick health ping (non-fatal if curl missing)
-# echo "→ Checking API health..."
-# curl -sS http://127.0.0.1:8000/health || true
-
-# echo "✅ Docker stack started. UI at http://localhost:3000"
+exit 1

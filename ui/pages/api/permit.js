@@ -6,7 +6,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        node_id: process.env.BRAIN_NODE_ID || 'hbar-brain-01',
+        node_id: process.env.BRAIN_ID || process.env.BRAIN_NODE_ID || 'my-brain-01',
         agent_id: 'console',
         loop_type: 'chat',
         ttl_seconds: 300,

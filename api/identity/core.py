@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.serialization import (
 
 
 import json
+import os
 from pathlib import Path
 
 
@@ -31,7 +32,11 @@ def load_operator(operator_id: str) -> Dict[str, Any]:
     if not _OPERATORS_PATH.exists():
         raise ValueError("operator_registry_missing")
 
-    data = json.loads(_OPERATORS_PATH.read_text())
+    raw = _OPERATORS_PATH.read_text()
+    # Resolve ${VAR} placeholders using environment variables
+    for key, val in os.environ.items():
+        raw = raw.replace(f"${{{key}}}", val)
+    data = json.loads(raw)
     for op in data.get("operators", []):
         if op.get("operator_id") == operator_id and op.get("active") is True:
             return op
@@ -58,21 +63,6 @@ def _b64url_json(obj: Dict[str, Any]) -> str:
 def _sign(secret: str, msg: str) -> str:
     sig = hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).digest()
     return _b64url(sig)
-
-
-def issue_permit(*, secret: str, claims: Dict[str, Any]) -> str:
-    """
-    Issues a compact, signed permit token.
-
-    Format: base64url(header).base64url(claims).base64url(signature)
-    Signature covers "header.payload" (HMAC-SHA256).
-    """
-    header = {"alg": "HS256", "typ": "HBAR_PERMIT", "v": 1}
-    header_b64 = _b64url_json(header)
-    claims_b64 = _b64url_json(claims)
-    signing_input = f"{header_b64}.{claims_b64}"
-    sig_b64 = _sign(secret, signing_input)
-    return f"{signing_input}.{sig_b64}"
 
 
 def verify_permit(*, secret: str, token: str) -> Dict[str, Any]:
@@ -181,7 +171,7 @@ def issue_assertion(
 
     now = int(time.time())
     claims = {
-        "iss": "hbar-brain",
+        "iss": os.getenv("BRAIN_ID", "brainfoundry-node"),
         "sub": operator_id,
         "aud": client_id,
         "strain_id": strain_id,

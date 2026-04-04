@@ -27,7 +27,7 @@ class WebFetchTool:
         
         # Set a reasonable User-Agent
         self.session.headers.update({
-            'User-Agent': 'hbar-brain-layer/1.0 (Educational Research Tool)'
+            'User-Agent': 'brainfoundry-node/1.0'
         })
     
     def fetch(self, url: str, extract_text: bool = True, 

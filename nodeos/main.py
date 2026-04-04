@@ -105,7 +105,7 @@ if not SIGNING_SECRET or SIGNING_SECRET == _DEFAULT_SECRET:
         print("WARNING: NodeOS using default signing secret. Set NODEOS_SIGNING_SECRET before deploying to production.")
 DB_PATH = os.getenv("NODEOS_DB_PATH", "/data/nodeos.db")
 MEMORY_LOG_PATH = os.getenv("NODEOS_MEMORY_LOG_PATH", "/data/memory_log.jsonl")
-ACTION_WORKSPACE_ROOT = os.getenv("NODEOS_WORKSPACE_ROOT", "/data/repos/hbar-brain")
+ACTION_WORKSPACE_ROOT = os.getenv("NODEOS_WORKSPACE_ROOT", "/data/repos/brain")
 
 # Ensure data directory exists
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -517,7 +517,7 @@ def _run_git(args: list[str], cwd: str, *, allow_token: bool = False) -> subproc
 def resolve_repo_path(repo_rel: str) -> Path:
     """
     Resolve a repo path under NODEOS_WORKSPACE_ROOT safely.
-    repo_rel must be relative (e.g. ".", "hbar-brain").
+    repo_rel must be relative (e.g. ".", "my-project").
     """
     if not isinstance(repo_rel, str) or not repo_rel.strip():
         raise HTTPException(status_code=400, detail="Invalid repo path")
@@ -1195,7 +1195,7 @@ def operator_overview(conn: sqlite3.Connection = Depends(get_db)):
     db_path = DB_PATH
 
     # Prefer explicit repo env if present; otherwise default to the governed repo used in practice.
-    repo_path = os.getenv("NODEOS_GOVERNED_REPO_PATH", "/data/repos/hbar-brain")
+    repo_path = os.getenv("NODEOS_GOVERNED_REPO_PATH", "/data/repos/brain")
 
     repo_summary = {
         "repo_path": repo_path,

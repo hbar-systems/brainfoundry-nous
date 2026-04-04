@@ -1,6 +1,7 @@
 # api/kernel/handlers.py
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict
 
 
@@ -15,7 +16,7 @@ def handle_echo(*, ctx: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, An
 
 def handle_whoami(*, ctx: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "brain": "hbar-brain",
+        "brain": os.getenv("BRAIN_ID", "brainfoundry-node"),
         "version": ctx.get("kernel_version"),
         "host": ctx.get("host"),
     }
@@ -132,7 +133,7 @@ def handle_version(*, ctx: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str,
     return {
         "server_version": ctx.get("kernel_version"),
         "canon_version": "v1",
-        "api_title": "hbar-brain authority endpoint",
+        "api_title": "BrainFoundryOS authority endpoint",
         "python_version": ctx.get("python_version"),
         "git_commit": ctx.get("git_commit"),
         "build_time": ctx.get("build_time"),
