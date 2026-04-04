@@ -65,7 +65,10 @@ if not DEV_ENABLE_MEMORY_APPEND:
 HBAR_ENV = os.getenv("HBAR_ENV", "dev").lower()
 
 if HBAR_ENV != "dev" and DEV_ENABLE_MEMORY_APPEND:
-    print("WARNING: DEV_ENABLE_MEMORY_APPEND=1 while HBAR_ENV is not 'dev'. This is unsafe.")
+    raise RuntimeError(
+        "Startup refused: DEV_ENABLE_MEMORY_APPEND must not be set in non-dev environments. "
+        "Remove it from .env or set HBAR_ENV=dev."
+    )
 
 if HBAR_ENV != "dev" and (not HBAR_IDENTITY_SECRET or HBAR_IDENTITY_SECRET == "dev-secret-please-change"):
     raise RuntimeError(
@@ -194,8 +197,15 @@ app.add_middleware(
         'http://localhost:3010',
     ] + _cors_extra,
     allow_credentials=False,
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_methods=['GET', 'POST', 'OPTIONS'],
+    allow_headers=[
+        'Content-Type',
+        'Authorization',
+        'X-API-Key',
+        'X-HBAR-Assertion',
+        'X-HBAR-Permit',
+        'X-HBAR-SITE-PERMIT',
+    ],
 )
 IDENTITY_PATH = Path(__file__).parent / "brain_identity.yaml"
 
