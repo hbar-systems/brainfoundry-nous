@@ -136,7 +136,6 @@ Before exposing your brain to the internet:
 openssl rand -hex 32   # → HBAR_BRAIN_API_KEY
 openssl rand -hex 32   # → HBAR_IDENTITY_SECRET
 openssl rand -hex 32   # → NODEOS_SIGNING_SECRET
-openssl rand -hex 32   # → HBAR_SITE_PERMIT_ORFEO (if using Orfeo)
 
 # 2. Generate federation keypair (required for /identity endpoint)
 python scripts/generate_keypair.py

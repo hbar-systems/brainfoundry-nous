@@ -68,8 +68,6 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - HBAR_ENV=dev
-      - HBAR_SITE_PERMIT_ORFEO=${HBAR_SITE_PERMIT_ORFEO}
-      - HBAR_LISTENER_SECRET=${HBAR_LISTENER_SECRET}
     depends_on:
       - postgres
       - nodeos

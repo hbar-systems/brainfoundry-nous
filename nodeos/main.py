@@ -79,13 +79,15 @@ app = FastAPI(
     description="Phase 1: Memory and loop permit authority"
 )
 
-# CORS - internal service, but allow UI proxy
+# CORS - internal service only; never exposed directly to browsers
+# API container is the only legitimate caller.
+_nodeos_allowed_origins = [o.strip() for o in os.getenv("NODEOS_CORS_ORIGINS", "http://api:8000").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Internal service, UI proxy handles auth
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_nodeos_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Configuration
@@ -864,12 +866,12 @@ def execute_git_commit(payload: dict) -> dict:
 # =====================================================================# Pydantic Models
 # =====================================================================
 class LoopPermitRequest(BaseModel):
-    node_id: str
-    agent_id: str
-    loop_type: str = Field(..., description="inbox_sweep|research|music_assist|admin")
-    ttl_seconds: int
-    scopes: List[str] = Field(default_factory=list)
-    reason: str
+    node_id: str = Field(..., max_length=128)
+    agent_id: str = Field(..., max_length=128)
+    loop_type: str = Field(..., max_length=64, description="inbox_sweep|research|admin")
+    ttl_seconds: int = Field(..., ge=1, le=86400)
+    scopes: List[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(..., max_length=1000)
     trace_id: Optional[str] = None
 
 
@@ -885,9 +887,9 @@ class LoopRevokeRequest(BaseModel):
 
 
 class MemoryProposal(BaseModel):
-    permit_id: str
-    memory_type: str = Field(..., description="fact|preference|task|note")
-    content: str
+    permit_id: str = Field(..., max_length=128)
+    memory_type: str = Field(..., max_length=32, description="fact|preference|task|note")
+    content: str = Field(..., max_length=32000)
     source_refs: Optional[Dict[str, Any]] = None
 
 
