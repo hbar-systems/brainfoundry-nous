@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Export script for hbar.blog agent
+Export script for brain content agent
 Produces site-ready export at export/index.json
 
 Usage:
@@ -148,7 +148,7 @@ class ExportIndexer:
     
     def generate_source_path(self, document_name: str, chunk_index: int = 0) -> str:
         """
-        Generate a relative source path for hbar.blog
+        Generate a relative source path for the brain content
         """
         return f"/docs/{document_name}"
     
@@ -293,7 +293,7 @@ def load_config() -> Dict[str, str]:
     return config
 
 def main():
-    parser = argparse.ArgumentParser(description='Export index for hbar.blog agent')
+    parser = argparse.ArgumentParser(description='Export index for brain content agent')
     parser.add_argument('--course', help='Course name to export (e.g., "Linear Algebra")', default="Linear Algebra")
     parser.add_argument('--out', required=True, help='Output file path (e.g., export/index.json)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')

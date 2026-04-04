@@ -89,7 +89,18 @@ app.add_middleware(
 )
 
 # Configuration
-SIGNING_SECRET = os.getenv("NODEOS_SIGNING_SECRET") or os.getenv("NODEOS_HMAC_SECRET", "dev-secret-change-in-production")
+SIGNING_SECRET = os.getenv("NODEOS_SIGNING_SECRET") or os.getenv("NODEOS_HMAC_SECRET", "")
+_DEFAULT_SECRET = "dev-secret-change-in-production"
+if not SIGNING_SECRET or SIGNING_SECRET == _DEFAULT_SECRET:
+    _env = os.getenv("HBAR_ENV", "dev").lower()
+    if _env != "dev":
+        raise RuntimeError(
+            "Startup refused: NODEOS_SIGNING_SECRET must be set to a strong secret in non-dev environments. "
+            "Generate one with: openssl rand -hex 32"
+        )
+    else:
+        SIGNING_SECRET = _DEFAULT_SECRET
+        print("WARNING: NodeOS using default signing secret. Set NODEOS_SIGNING_SECRET before deploying to production.")
 DB_PATH = os.getenv("NODEOS_DB_PATH", "/data/nodeos.db")
 MEMORY_LOG_PATH = os.getenv("NODEOS_MEMORY_LOG_PATH", "/data/memory_log.jsonl")
 ACTION_WORKSPACE_ROOT = os.getenv("NODEOS_WORKSPACE_ROOT", "/data/repos/hbar-brain")

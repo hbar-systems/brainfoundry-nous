@@ -1,6 +1,6 @@
 # STRAIN CONTRACT (v0.1)
 
-A Strain defines a logical cognitive domain within the hbar.systems ecosystem.
+A Strain defines a logical cognitive domain within a BrainFoundryOS node.
 Strains are logical boundaries. Nodes are physical boundaries.
 Strains do not automatically trust each other.
 
@@ -10,7 +10,7 @@ All cross-strain interaction is deny-by-default and must be explicitly permitted
 
 ## 1. Identity
 
-- `strain_id` (globally unique string, e.g. `hbar.science`)
+- `strain_id` (globally unique string, e.g. `your-brain.science`)
 - `client_ids[]` (authorized service surfaces for this strain)
 - `owners[]` (operator_ids with governance authority)
 - `operators_allowed[]` (trust tiers allowed to operate this strain)
@@ -18,7 +18,7 @@ All cross-strain interaction is deny-by-default and must be explicitly permitted
 
 Example:
 
-- strain_id: hbar.science
+- strain_id: your-brain.science
 - client_ids:
   - science-web
   - science-api
@@ -51,15 +51,15 @@ Example:
 List of allowed connector namespaces this strain may request read permits for.
 
 Example:
-- github:repos/hbar.science/**
-- local:memory/hbar.science/**
+- github:repos/your-brain.science/**
+- local:memory/your-brain.science/**
 
 #### Write
 List of allowed connector namespaces this strain may request write permits for.
 
 Example:
-- github:repos/hbar.science/**
-- local:memory/hbar.science/**
+- github:repos/your-brain.science/**
+- local:memory/your-brain.science/**
 
 ---
 

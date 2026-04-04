@@ -16,7 +16,11 @@ COPY . .
 # Expose port
 EXPOSE 8001
 
-# Wire GITHUB_TOKEN to git credentials at startup, then run the application
+# Wire GITHUB_TOKEN to git credentials at startup, then run the application.
+# SECURITY NOTE: GITHUB_TOKEN is stored in /root/.git-credentials inside the container.
+# This is visible via `docker inspect` and container forensics.
+# For higher security deployments, use SSH deploy keys instead:
+# mount your SSH private key as a Docker secret and configure git to use it.
 CMD if [ -n "$GITHUB_TOKEN" ]; then \
       echo "https://x-access-token:$GITHUB_TOKEN@github.com" > /root/.git-credentials && \
       chmod 600 /root/.git-credentials && \

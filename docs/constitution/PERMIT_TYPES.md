@@ -37,7 +37,7 @@ The model cannot invent permits.
 Grants permission to append memory into the node memory substrate.
 
 **Scope**
-- `scope` = namespace/path-like keyspace (e.g. `memory/hbar.science/*`)
+- `scope` = namespace/path-like keyspace (e.g. `memory/your-brain.science/*`)
 
 **Constraints**
 - `keys_allowed[]`
@@ -51,7 +51,7 @@ Grants permission to append memory into the node memory substrate.
 Grants permission to read from an external connector surface (repos, docs, storage).
 
 **Scope**
-- `scope` = connector name + path glob (e.g. `github:repos/hbar.science/**`)
+- `scope` = connector name + path glob (e.g. `github:repos/your-brain.science/**`)
 
 **Constraints**
 - `path_glob`
@@ -65,7 +65,7 @@ Grants permission to read from an external connector surface (repos, docs, stora
 Grants permission to write to an external connector surface.
 
 **Scope**
-- `scope` = connector name + path glob (e.g. `github:repos/hbar.ink/**`)
+- `scope` = connector name + path glob (e.g. `github:repos/your-brain.ink/**`)
 
 **Constraints**
 - `path_glob`
@@ -94,7 +94,7 @@ Grants permission to execute a specific command (usually STATE_MUTATION or EXTER
 Grants permission to export data out of the node.
 
 **Scope**
-- `scope` = export target (e.g. `EXPORT:strain=hbar.science,class=INTERNAL`)
+- `scope` = export target (e.g. `EXPORT:strain=your-brain.science,class=INTERNAL`)
 
 **Constraints**
 - `format` (json|md|pdf|zip)
