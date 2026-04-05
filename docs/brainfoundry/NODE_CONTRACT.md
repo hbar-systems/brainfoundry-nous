@@ -3,7 +3,7 @@
 **Version:** 0.1.0  
 **Status:** Future Specification — describes the target protocol, NOT the current implementation
 
-> **Note for brainfoundry-nous users:** This document is a protocol design spec for the BrainFoundry federation protocol (target: v1.0). The current brainfoundry-nous implementation (v0.5.x) is a subset. The table below maps contract terms to current env var names.
+> **Note for brainfoundry-nous users:** This document is a protocol design spec for the BrainFoundry federation protocol (target: v1.0). The current brainfoundry-nous implementation (v0.6.x) is a subset. The table below maps contract terms to current env var names.
 >
 > | Contract term | Current env var / behaviour |
 > |---|---|

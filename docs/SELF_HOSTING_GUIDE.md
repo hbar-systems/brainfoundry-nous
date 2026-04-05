@@ -343,16 +343,25 @@ CognitiveOS is the governance service running in the `nodeos` container. It
 provides loop permits, memory/action proposals, and an append-only audit log
 for the brain's chat completion path.
 
-> **Scope (v0.5).** CognitiveOS is an authoritative store for permits,
-> proposals, and audit events — not yet a universal executor. It gates the
-> chat inference flow (every `/chat/completions` call verifies a permit) and
-> records memory proposals. It does **not** yet intercept every direct
-> write to the brain's document store; custom brain commands such as
-> `remember` and `forget` currently execute against the database directly
-> and are logged in the API audit file rather than mediated through a
-> NodeOS proposal. Full mediation of those paths is on the v0.6 roadmap.
-> Treat CognitiveOS today as a strong authority for the chat loop and an
-> honest audit log everywhere else, not as a hermetic gate on all writes.
+> **Scope (v0.6).** CognitiveOS is the authoritative store for permits,
+> proposals, and audit events, and it mediates the paths that matter:
+>
+> - Every `/chat/completions` and `/chat/rag` call verifies a caller-bound
+>   permit token (HMAC-signed, returned only once from
+>   `/v1/loops/request`). A bare `permit_id` observed in a log cannot be
+>   replayed.
+> - Brain-layer mutations (`remember`, `forget`, `audit.clear`) are routed
+>   through a propose → approve → execute flow against NodeOS before any
+>   database write or audit-file wipe lands. Fail-closed if NodeOS is
+>   unreachable.
+> - `git_push` and other external side effects go through a strict
+>   preview-and-decide flow with a branch allowlist.
+>
+> Honest v0.6 scope limits: `context.set` / `context.clear` mutate an
+> in-process dict that resets on container restart and is not yet routed
+> through NodeOS. The offline bulk-ingest helper
+> (`scripts/ingest_folder.py`) writes directly to the database for the
+> single-owner bootstrap case.
 
 ### Core concepts
 
@@ -366,9 +375,9 @@ REQUEST → ACTIVE → (expires) | (revoked) → INACTIVE
 
 **Memory proposal** — A pending record submitted to NodeOS describing a
 proposed long-term memory write. Proposals are stored with `PENDING` status
-until explicitly decided (`APPROVED` / `REJECTED`). The v0.5 chat flow records
-selected outputs as proposals; approval and replay into the vector store is a
-manual operator step.
+until explicitly decided (`APPROVED` / `REJECTED`). Brain-layer mutation
+commands auto-approve on behalf of the initiating client (the owner) and
+leave the proposal in the append-only NodeOS memory log.
 
 **Action proposal** — The analogous record for external side effects such as
 `git_push`. NodeOS enforces a strict branch allowlist and a

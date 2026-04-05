@@ -11,15 +11,22 @@ Clone this to run your own sovereign personal brain.
 A full-stack AI brain node. Runs on your server, connects to the models you choose,
 stores your knowledge. You own it. Nobody else has access.
 
-### Trust model (v0.5) — read this before you run it in production
+### Trust model (v0.6) — read this before you run it in production
 
 This repo is the **reference implementation**, not a polished appliance. The
 guarantees it gives you today are:
 
 - **You are the only tenant.** Designed for single-owner, self-hosted use. Not
   multi-tenant. Not a hosted service.
-- **CognitiveOS gates the chat loop.** Every `/chat/completions` requires a
-  valid, unexpired loop permit from the `nodeos` authority container.
+- **CognitiveOS gates the chat loop with caller-bound permits.** Every
+  `/chat/completions` and `/chat/rag` request must present both a valid
+  `permit_id` and its HMAC-signed `permit_token`. The token is issued once,
+  from `POST /v1/loops/request`, and is bound to the agent that requested
+  it — a leaked `permit_id` cannot be replayed without the token.
+- **Brain-layer mutations go through NodeOS.** `remember`, `forget`, and
+  `audit.clear` are routed through a propose → approve → execute flow
+  against the NodeOS authority kernel before any database write or audit
+  wipe lands. Fail-closed if NodeOS is unreachable.
 - **CognitiveOS is internal-only.** NodeOS binds to `127.0.0.1:8001`, has no
   browser proxy, and requires `X-Internal-Key` on all state-mutating routes.
 - **External actions are preview-then-execute.** `git_push` and similar
@@ -28,12 +35,11 @@ guarantees it gives you today are:
 - **Append-only audit log.** Every kernel command and every model call is
   recorded.
 
-What CognitiveOS **does not** yet do in v0.5: mediate every possible write to
-the brain's document store. Custom brain commands (`remember`, `forget`,
-`audit.clear`, `context.set`) execute against the database directly and are
-logged in the API audit file rather than routed through a NodeOS proposal.
-Full mediation is on the v0.6 roadmap. See `SECURITY.md` and Section 8 of
-`docs/SELF_HOSTING_GUIDE.md` for the honest scope.
+Known v0.6 scope limits: `context.set` / `context.clear` mutate an in-process
+dict that resets on container restart and is not yet routed through NodeOS.
+Bulk offline ingestion via `scripts/ingest_folder.py` writes directly to the
+database for the single-owner bootstrap case. See `SECURITY.md` and Section
+8 of `docs/SELF_HOSTING_GUIDE.md` for the full honest scope.
 
 
 **Stack:**
