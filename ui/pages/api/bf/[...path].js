@@ -10,6 +10,10 @@ export default async function handler(req, res) {
     const headers = {};
     // forward content-type when present
     if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"];
+    // inject server-side API key (falls back to browser-forwarded header)
+    const apiKey = process.env.BRAIN_API_KEY || req.headers["x-api-key"] || "";
+    if (apiKey) headers["x-api-key"] = apiKey;
+    if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
 
     const r = await fetch(url, {
       method: req.method,

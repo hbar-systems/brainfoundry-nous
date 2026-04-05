@@ -188,3 +188,53 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
             resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
             resp.raise_for_status()
             return resp.json()["message"]["content"]
+
+
+async def stream(model: str, messages: list, max_tokens: int = 2048):
+    """
+    Async generator that yields text chunks from the model.
+    Routes to the correct provider based on model name prefix.
+    Raises ValueError if the required API key is not configured.
+    """
+    import json as _json
+
+    client_type, client, actual_model = _resolve(model)
+
+    if client_type == "anthropic":
+        if not client:
+            raise ValueError("ANTHROPIC_API_KEY is not set")
+        system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
+        user_msgs = [m for m in messages if m.get("role") != "system"]
+        kwargs = {"system": system_msg} if system_msg else {}
+        async with client.messages.stream(
+            model=actual_model, max_tokens=max_tokens, messages=user_msgs, **kwargs
+        ) as s:
+            async for text in s.text_stream:
+                yield text
+
+    elif client_type == "openai_compat":
+        if not client:
+            raise ValueError(f"API key not configured for model: {model}")
+        stream_resp = await client.chat.completions.create(
+            model=actual_model, max_tokens=max_tokens, messages=messages, stream=True
+        )
+        async for chunk in stream_resp:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
+    else:  # ollama
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=120)) as http:
+            system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
+            user_msgs = [m for m in messages if m.get("role") != "system"]
+            payload = {"model": actual_model, "messages": user_msgs, "stream": True}
+            if system_msg:
+                payload["system"] = system_msg
+            async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if line:
+                        data = _json.loads(line)
+                        text = data.get("message", {}).get("content", "")
+                        if text:
+                            yield text

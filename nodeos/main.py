@@ -14,7 +14,7 @@ def _parse_prefix_allowlist(raw: str) -> tuple[str, ...]:
     return tuple([x.strip() for x in (raw or "").split(",") if x.strip()])
 
 # PR-only: restrict pushes to branch prefixes (comma-separated)
-ALLOWED_PUSH_PREFIXES = _parse_prefix_allowlist(os.getenv("NODEOS_PUSH_BRANCH_PREFIX_ALLOWLIST", "nodeos/,v0.17-"))
+ALLOWED_PUSH_PREFIXES = _parse_prefix_allowlist(os.getenv("NODEOS_PUSH_BRANCH_PREFIX_ALLOWLIST", "nodeos/"))
 
 def _parse_allowlist(raw: str) -> set[str]:
     return {b.strip() for b in (raw or "").split(",") if b.strip()}
@@ -94,7 +94,7 @@ app.add_middleware(
 SIGNING_SECRET = os.getenv("NODEOS_SIGNING_SECRET") or os.getenv("NODEOS_HMAC_SECRET", "")
 _DEFAULT_SECRET = "dev-secret-change-in-production"
 if not SIGNING_SECRET or SIGNING_SECRET == _DEFAULT_SECRET:
-    _env = os.getenv("HBAR_ENV", "dev").lower()
+    _env = os.getenv("BRAIN_ENV", "dev").lower()
     if _env != "dev":
         raise RuntimeError(
             "Startup refused: NODEOS_SIGNING_SECRET must be set to a strong secret in non-dev environments. "
@@ -878,7 +878,12 @@ class LoopPermitRequest(BaseModel):
 class LoopPermitResponse(BaseModel):
     permit_id: str
     permit_token: str
+    node_id: str
+    agent_id: str
+    loop_type: str
+    reason: str
     expires_at_unix: int
+    status: str = "ACTIVE"
 
 
 class LoopRevokeRequest(BaseModel):
@@ -1029,6 +1034,10 @@ def request_loop_permit(
     return LoopPermitResponse(
         permit_id=permit_id,
         permit_token=permit_token,
+        node_id=request.node_id,
+        agent_id=request.agent_id,
+        loop_type=request.loop_type,
+        reason=request.reason,
         expires_at_unix=expires_at_unix
     )
 

@@ -90,8 +90,8 @@ Replace the `[CONFIGURE: ...]` placeholders. See [Section 5](#5-persona--making-
 
 ```bash
 # Run these one at a time and paste each output into .env
-openssl rand -hex 32   # → HBAR_BRAIN_API_KEY
-openssl rand -hex 32   # → HBAR_IDENTITY_SECRET
+openssl rand -hex 32   # → BRAIN_API_KEY
+openssl rand -hex 32   # → BRAIN_IDENTITY_SECRET
 openssl rand -hex 32   # → NODEOS_SIGNING_SECRET
 
 # Federation keypair (required for /identity endpoint)
@@ -115,14 +115,13 @@ docker compose exec ollama ollama pull llama3.2
 ### Step 7 — Ingest your documents
 
 ```bash
-python scripts/ingest_folder.py --dir /path/to/your/notes
+python scripts/ingest_folder.py /path/to/your/notes
 ```
 
 ### Step 8 — Access
 
 - Console UI: `http://your-server:3010`
-- API: `http://your-server:8010`
-- API docs (Swagger): `http://your-server:8010/docs`
+- API: `http://your-server:8010` (OpenAPI/Swagger docs are disabled; see docs/DEPLOYMENT.md for all routes)
 
 Add a domain + HTTPS via Caddy — see `docs/DEPLOYMENT.md`.
 
@@ -145,8 +144,8 @@ Copy `.env.example` to `.env`. All variables are optional unless marked **requir
 
 | Variable | Description |
 |----------|-------------|
-| `HBAR_BRAIN_API_KEY` | API authentication key for all private endpoints |
-| `HBAR_IDENTITY_SECRET` | Signs identity assertions and permits |
+| `BRAIN_API_KEY` | API authentication key for all private endpoints |
+| `BRAIN_IDENTITY_SECRET` | Signs identity assertions and permits |
 | `NODEOS_SIGNING_SECRET` | Signs CognitiveOS governance tokens |
 | `BRAIN_PRIVATE_KEY` | ED25519 private key for federation |
 | `BRAIN_PUBLIC_KEY` | ED25519 public key (published via `/identity`) |
@@ -167,8 +166,8 @@ All secrets: generate with `openssl rand -hex 32`. Keypair: use `python scripts/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `llama3.2:1b` | Default local model |
-| `DEFAULT_MODEL` | `llama3.2:1b` | Default model for chat |
+| `OLLAMA_MODEL` | `llama3.2:3b` | Default local model |
+| `DEFAULT_MODEL` | `llama3.2:3b` | Default model for chat |
 | `ANTHROPIC_API_KEY` | — | Enables Claude models |
 | `OPENAI_API_KEY` | — | Enables GPT models |
 | `GOOGLE_API_KEY` | — | Enables Gemini models |
@@ -205,7 +204,7 @@ Everything else in your corpus is searched by similarity. You can ignore the tie
 |----------|---------|-------------|
 | `API_BASE` | `http://localhost:8010` | API base URL |
 | `CORS_ORIGINS` | — | Additional allowed origins (comma-separated) |
-| `HBAR_ENV` | `dev` | Set to `prod` to enable startup secret enforcement |
+| `BRAIN_ENV` | `dev` | Set to `prod` to enable startup secret enforcement |
 
 ---
 
@@ -253,7 +252,7 @@ Your brain learns from your documents. Ingest any folder of text files, PDFs, or
 ### Basic ingestion
 
 ```bash
-python scripts/ingest_folder.py --dir /path/to/folder
+python scripts/ingest_folder.py /path/to/folder
 ```
 
 The script recursively processes all `.txt`, `.md`, `.pdf` files.
@@ -275,7 +274,7 @@ my-docs/
 Then ingest the top-level folder:
 
 ```bash
-python scripts/ingest_folder.py --dir my-docs
+python scripts/ingest_folder.py my-docs
 ```
 
 The tier folder names match what you set in `RAG_TIER1`, `RAG_TIER2A/B/C` (defaults: `identity`, `thinking`, `projects`, `writing`). Rename folders to match your own structure and update the env vars.
@@ -309,7 +308,7 @@ claude-*         → Anthropic (ANTHROPIC_API_KEY)
 gpt-*, o1-*      → OpenAI (OPENAI_API_KEY)
 gemini-*         → Google (GOOGLE_API_KEY)
 grok-*           → xAI (XAI_API_KEY)
-llama-*, mixtral-* → Groq (GROQ_API_KEY)
+groq/*             → Groq (GROQ_API_KEY)   e.g. groq/llama-3.3-70b-versatile
 openrouter/*     → OpenRouter (OPENROUTER_API_KEY)
 (anything else)  → Ollama (local, no key required)
 ```
@@ -404,7 +403,7 @@ Before exposing your brain to the internet:
 ### Required
 
 1. **Set all secrets** (see Section 4)
-2. **Set `HBAR_ENV=prod`** — startup will refuse if secrets are missing or default
+2. **Set `BRAIN_ENV=prod`** — startup will refuse if secrets are missing or default
 3. **Change Postgres credentials** — `POSTGRES_USER` and `POSTGRES_PASSWORD`
 4. **Set up a reverse proxy with TLS** — see `docs/DEPLOYMENT.md`
 
@@ -438,10 +437,10 @@ curl -H "X-API-Key: your-key" http://your-server:8010/health
 ### Chat via API
 
 ```bash
-curl -X POST http://your-server:8010/v1/chat \
+curl -X POST http://your-server:8010/chat/completions \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
-  -d '{"message": "What am I working on?", "model": "llama3.2"}'
+  -d '{"messages": [{"role": "user", "content": "What am I working on?"}], "model": "llama3.2:3b", "permit_id": "<permit_id>"}'
 ```
 
 ### Public endpoints (no auth required)
@@ -526,7 +525,7 @@ docker compose logs nodeos
 ```
 
 Common causes:
-- Missing or default secrets with `HBAR_ENV=prod` — the startup check will print exactly which secret is missing
+- Missing or default secrets with `BRAIN_ENV=prod` — the startup check will print exactly which secret is missing
 - Postgres not ready yet — wait 10 seconds and retry; the API retries on startup
 
 ### Chat returns 500
@@ -549,7 +548,7 @@ docker compose exec ollama ollama pull <model-name>
 Ingestion may have failed silently. Check:
 
 ```bash
-python scripts/ingest_folder.py --dir /your/folder --verbose
+python scripts/ingest_folder.py /your/folder
 ```
 
 Also verify the database has embeddings:

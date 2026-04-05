@@ -1,4 +1,3 @@
-import anthropic
 from api import providers as _providers
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,14 +14,6 @@ import socket
 from typing import List, Optional, Annotated, Dict, Any, Union
 from datetime import datetime
 import uuid
-import anthropic as _ant
-_ants = _ant.Anthropic()
-_anta = _ant.AsyncAnthropic()
-CM = "claude-sonnet-4-6"
-import anthropic as _ant
-_ants=_ant.Anthropic()
-_anta=_ant.AsyncAnthropic()
-CM="claude-sonnet-4-6"
 import PyPDF2
 import docx
 from PIL import Image
@@ -50,29 +41,33 @@ from api.identity.permits import normalize_permit_type
 
 DEV_ENABLE_MEMORY_APPEND = os.getenv("DEV_ENABLE_MEMORY_APPEND", "false").lower() in ("true", "1", "yes")
 
-_anthropic = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-CLAUDE_MODEL = "claude-sonnet-4-6"   
-
-HBAR_IDENTITY_SECRET = os.getenv("HBAR_IDENTITY_SECRET", "")
+BRAIN_IDENTITY_SECRET = os.getenv("BRAIN_IDENTITY_SECRET", "")
 
 # --- v0.15 startup sanity hardening ---
 if not DEV_ENABLE_MEMORY_APPEND:
-    if not HBAR_IDENTITY_SECRET:
+    if not BRAIN_IDENTITY_SECRET:
         raise RuntimeError(
-            "Startup refused: HBAR_IDENTITY_SECRET must be set when DEV_ENABLE_MEMORY_APPEND is disabled."
+            "Startup refused: BRAIN_IDENTITY_SECRET must be set when DEV_ENABLE_MEMORY_APPEND is disabled."
         )
 
-HBAR_ENV = os.getenv("HBAR_ENV", "dev").lower()
+BRAIN_ENV = os.getenv("BRAIN_ENV", "dev").lower()
 
-if HBAR_ENV != "dev" and DEV_ENABLE_MEMORY_APPEND:
+if BRAIN_ENV != "dev" and DEV_ENABLE_MEMORY_APPEND:
     raise RuntimeError(
         "Startup refused: DEV_ENABLE_MEMORY_APPEND must not be set in non-dev environments. "
-        "Remove it from .env or set HBAR_ENV=dev."
+        "Remove it from .env or set BRAIN_ENV=dev."
     )
 
-if HBAR_ENV != "dev" and (not HBAR_IDENTITY_SECRET or HBAR_IDENTITY_SECRET == "dev-secret-please-change"):
+if BRAIN_ENV != "dev" and (not BRAIN_IDENTITY_SECRET or BRAIN_IDENTITY_SECRET == "dev-secret-please-change"):
     raise RuntimeError(
-        "Startup refused: HBAR_IDENTITY_SECRET must be set to a strong secret in non-dev environments. "
+        "Startup refused: BRAIN_IDENTITY_SECRET must be set to a strong secret in non-dev environments. "
+        "Generate one with: openssl rand -hex 32"
+    )
+
+_BRAIN_API_KEY_STARTUP = os.getenv("BRAIN_API_KEY", "")
+if BRAIN_ENV != "dev" and not _BRAIN_API_KEY_STARTUP:
+    raise RuntimeError(
+        "Startup refused: BRAIN_API_KEY must be set in non-dev environments. "
         "Generate one with: openssl rand -hex 32"
     )
 
@@ -113,7 +108,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Security
 
 # Version constant
-HBAR_BRAIN_VERSION = "0.5.0"
+BRAIN_VERSION = "0.5.0"
 
 APP_DIR = Path(__file__).resolve().parent
 PERSONA_PATH = APP_DIR / "brain_persona.md"
@@ -202,10 +197,40 @@ app.add_middleware(
         'Content-Type',
         'Authorization',
         'X-API-Key',
-        'X-HBAR-Assertion',
-        'X-HBAR-Permit',
+        'X-Brain-Assertion',
+        'X-Brain-Permit',
     ],
 )
+
+# --- API key authentication (defined early so all endpoints can use Depends(get_api_key)) ---
+BRAIN_API_KEY = os.getenv("BRAIN_API_KEY", "")
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+bearer_token = APIKeyHeader(name="Authorization", auto_error=False)
+
+def get_api_key(
+    x_api_key: str = Security(api_key_header),
+    authorization: str = Security(bearer_token),
+) -> str:
+    """Get API key from either X-API-Key header or Authorization header (Bearer token)"""
+    if not BRAIN_API_KEY:
+        _env = os.getenv("BRAIN_ENV", "dev").lower()
+        if _env != "dev":
+            raise HTTPException(status_code=500, detail="Server misconfigured: BRAIN_API_KEY not set.")
+        print("WARNING: BRAIN_API_KEY is not set. All requests are unauthenticated. Set this before production use.")
+        return "dev_mode"
+    if x_api_key and x_api_key == BRAIN_API_KEY:
+        return x_api_key
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+        if token == BRAIN_API_KEY:
+            return token
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 IDENTITY_PATH = Path(__file__).parent / "brain_identity.yaml"
 
 @app.get("/identity")
@@ -222,6 +247,16 @@ def get_identity():
         raise HTTPException(status_code=500, detail=f"brain_identity.yaml not found at {identity_path}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed reading {identity_path}: {type(e).__name__}: {e}")
+
+    # Substitute ${VAR} placeholders from environment before parsing
+    import re as _re
+    def _sub(m):
+        return os.getenv(m.group(1), m.group(0))
+    raw = _re.sub(r"\$\{([^}]+)\}", _sub, raw)
+
+    # Also stamp in the active model at runtime
+    active_model = os.getenv("OLLAMA_MODEL") or os.getenv("DEFAULT_MODEL") or "llama3.2:3b"
+    raw = _re.sub(r"model:\s*null", f"model: {active_model}", raw)
 
     try:
         data = yaml.safe_load(raw)
@@ -260,14 +295,9 @@ def capabilities():
     }
 
 @app.get("/persona")
-def get_persona():
+def get_persona(api_key: str = Depends(get_api_key)):
     """Return the loaded brain persona text (debug/verification)."""
     return {"persona": BRAIN_PERSONA}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 
 @app.get("/ready")
@@ -295,7 +325,6 @@ KERNEL_RATE_LIMIT_WINDOW = int(os.getenv("KERNEL_RATE_LIMIT_WINDOW", "60"))
 
 
 NODEOS_URL = os.getenv("NODEOS_URL", "http://nodeos:8001")
-HBAR_BRAIN_API_KEY = os.getenv("HBAR_BRAIN_API_KEY", "")
 
 def _verify_loop_permit(permit_id: str) -> dict:
     """Verify a loop permit is ACTIVE and not expired. Raises 403 on failure."""
@@ -480,7 +509,7 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/")
-def read_root():
+def read_root(api_key: str = Depends(get_api_key)):
     return {
         "message": "🤖 LLM Private Assistant API v2.0",
         "status": "running",
@@ -499,8 +528,6 @@ def read_root():
             "search": "/documents/search",
             "sessions": "/sessions"
         },
-        "database_url": DATABASE_URL[:50] + "..." if DATABASE_URL else "Not set",
-        "ollama_url": OLLAMA_URL
     }
 
 @app.get("/health")
@@ -587,13 +614,13 @@ def health_check():
     }
 
 @app.get("/models")
-def list_models():
+def list_models(api_key: str = Depends(get_api_key)):
     """Get all available models across configured providers + local Ollama"""
     return {"models": _providers.get_available_models()}
 
 
 @app.post("/chat/completions")
-async def chat_completion(request: dict):
+async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """Chat completion endpoint compatible with OpenAI format - supports streaming"""
     try:
         _verify_loop_permit(request.get("permit_id"))
@@ -670,14 +697,12 @@ async def chat_completion(request: dict):
 
 
         # streaming path (SSE: "data: {...}\n\n" frames)
+        _stream_max_tokens = request.get("max_tokens", 2048)
         async def event_stream():
-            sm = next((m["content"] for m in messages if m.get("role") == "system"), None)
-            cm = [m for m in messages if m.get("role") != "system"]
-            async with _anta.messages.stream(model=CM, max_tokens=2048, messages=cm, **( {"system": sm} if sm else {} )) as stream:
-                async for text in stream.text_stream:
-                    chunk = {"id": f"chatcmpl-{uuid.uuid4()}", "object": "chat.completion.chunk", "model": CM, "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
+            async for text in _providers.stream(model, messages, max_tokens=_stream_max_tokens):
+                chunk = {"id": f"chatcmpl-{uuid.uuid4()}", "object": "chat.completion.chunk", "model": model, "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
         return StreamingResponse(event_stream(), media_type="text/event-stream")
     
     except HTTPException as e:
@@ -686,11 +711,11 @@ async def chat_completion(request: dict):
         raise HTTPException(status_code=500, detail=f"Chat completion error: {str(e)}")
 
 @app.post("/chat/rag")
-def rag_chat_completion(request: dict):
+async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """RAG-enhanced chat completion - chat with your documents!"""
     try:
         _verify_loop_permit(request.get("permit_id"))
-        model = request.get("model", "llama3.2:3b")
+        model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 3)
         
@@ -715,8 +740,9 @@ def rag_chat_completion(request: dict):
             for i, doc in enumerate(relevant_docs, 1):
                 context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
         
-        # Build prompt with context
-        prompt = "You are a helpful assistant. Use the provided documents to answer questions accurately."
+        # Build prompt with context — use brain persona if configured
+        prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
+        prompt += "\n\nUse the provided documents to answer questions accurately."
         if context:
             prompt += context
         prompt += "\n\nConversation:\n"
@@ -733,14 +759,13 @@ def rag_chat_completion(request: dict):
         
         prompt += "Assistant: "
         
-        # Call Claude
-        cr = _ants.messages.create(model=CM, max_tokens=2048, messages=[{"role": "user", "content": prompt}])
-        reply = cr.content[0].text
+        # Route to correct provider via providers.py
+        reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
             "object": "chat.completion",
             "created": int(datetime.utcnow().timestamp()),
-            "model": CM,
+            "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
             "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": [d["document_name"] for d in relevant_docs]},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
@@ -794,7 +819,7 @@ def _nodeos_check_proposal(proposal_id: str) -> str:
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...), proposal_id: Optional[str] = None, permit_id: Optional[str] = None):
+async def upload_document(file: UploadFile = File(...), proposal_id: Optional[str] = None, permit_id: Optional[str] = None, api_key: str = Depends(get_api_key)):
     """Upload and process document for embeddings and RAG.
     
     Memory governance (deny-by-default):
@@ -915,7 +940,7 @@ async def upload_document(file: UploadFile = File(...), proposal_id: Optional[st
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
 @app.post("/documents/search")
-def search_documents(request: dict):
+def search_documents(request: dict, api_key: str = Depends(get_api_key)):
     """Search documents using semantic similarity"""
     try:
         query = request.get("query", "")
@@ -935,7 +960,7 @@ def search_documents(request: dict):
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/documents/stats")
-def get_document_stats():
+def get_document_stats(api_key: str = Depends(get_api_key)):
     """Get statistics about stored documents"""
     try:
         conn = get_db_connection()
@@ -986,7 +1011,7 @@ def get_document_stats():
 
 # Session Management Endpoints
 @app.get("/sessions")
-def list_chat_sessions():
+def list_chat_sessions(api_key: str = Depends(get_api_key)):
     """List all chat sessions with message counts and preview"""
     try:
         conn = get_db_connection()
@@ -1027,10 +1052,10 @@ def list_chat_sessions():
         raise HTTPException(status_code=500, detail=f"Failed to fetch sessions: {str(e)}")
 
 @app.post("/sessions")
-def create_chat_session(request: dict):
+def create_chat_session(request: dict, api_key: str = Depends(get_api_key)):
     """Create a new chat session"""
     try:
-        model_name = request.get("model_name", "llama3.2:3b")
+        model_name = request.get("model_name", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         title = request.get("title", "New Chat")
         
         conn = get_db_connection()
@@ -1054,7 +1079,7 @@ def create_chat_session(request: dict):
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
 @app.delete("/sessions/{session_id}")
-def delete_chat_session(session_id: str):
+def delete_chat_session(session_id: str, api_key: str = Depends(get_api_key)):
     """Delete a chat session and all its messages"""
     try:
         conn = get_db_connection()
@@ -1078,7 +1103,7 @@ def delete_chat_session(session_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
 @app.get("/sessions/{session_id}/messages")
-def get_session_messages(session_id: str):
+def get_session_messages(session_id: str, api_key: str = Depends(get_api_key)):
     """Get all messages for a specific session"""
     try:
         conn = get_db_connection()
@@ -1110,7 +1135,7 @@ def get_session_messages(session_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to fetch messages: {str(e)}")
 
 @app.put("/sessions/{session_id}/title")
-def update_session_title(session_id: str, request: dict):
+def update_session_title(session_id: str, request: dict, api_key: str = Depends(get_api_key)):
     """Update a session's title"""
     try:
         title = request.get("title", "").strip()
@@ -1120,7 +1145,7 @@ def update_session_title(session_id: str, request: dict):
         conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE chat_sessions SET title = %s WHERE id = %s RETURNING id",
+                "UPDATE chat_sessions SET title = %s WHERE session_id = %s::uuid RETURNING session_id",
                 (title, session_id)
             )
             result = cursor.fetchone()
@@ -1143,40 +1168,6 @@ class CommandRequest(BaseModel):
     confirm_token: Optional[str] = None
     client_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     payload: Dict[str, Any] = Field(default_factory=dict)
-
-# API key security
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-bearer_token = APIKeyHeader(name="Authorization", auto_error=False)
-
-def get_api_key(
-    x_api_key: str = Security(api_key_header),
-    authorization: str = Security(bearer_token),
-) -> str:
-    """Get API key from either X-API-Key header or Authorization header (Bearer token)"""
-    # If HBAR_BRAIN_API_KEY is not set, allow in dev mode only — log a loud warning
-    if not HBAR_BRAIN_API_KEY:
-        _env = os.getenv("HBAR_ENV", "dev").lower()
-        if _env != "dev":
-            raise HTTPException(status_code=500, detail="Server misconfigured: HBAR_BRAIN_API_KEY not set.")
-        print("WARNING: HBAR_BRAIN_API_KEY is not set. All requests are unauthenticated. Set this before production use.")
-        return "dev_mode"
-    
-    # Check X-API-Key header
-    if x_api_key and x_api_key == HBAR_BRAIN_API_KEY:
-        return x_api_key
-    
-    # Check Authorization header (Bearer token)
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "")
-        if token == HBAR_BRAIN_API_KEY:
-            return token
-    
-    # If we get here and HBAR_BRAIN_API_KEY is set, authentication failed
-    raise HTTPException(
-        status_code=401,
-        detail="Invalid API key",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
 
 _kernel_rate_limiter = KernelRateLimiter()
 
@@ -1314,7 +1305,8 @@ async def brain_command(
                             if not current_spec:
                                 log_entry["decision"] = "confirm_rejected"
                                 log_entry["reason"] = "kernel_unknown_command_confirm"
-                                audit_append(log_entry)
+                                with open(audit_file, "a") as f:
+                                    f.write(json.dumps(log_entry) + "\n")
 
                                 return JSONResponse(
                                     status_code=400,
@@ -1332,7 +1324,8 @@ async def brain_command(
                             if prop.get("command_key") != current_command_key:
                                 log_entry["decision"] = "confirm_rejected"
                                 log_entry["reason"] = "kernel_spec_mismatch"
-                                audit_append(log_entry)
+                                with open(audit_file, "a") as f:
+                                    f.write(json.dumps(log_entry) + "\n")
                                 return JSONResponse(
                                     status_code=409,
                                     content=build_error(
@@ -1349,7 +1342,8 @@ async def brain_command(
                             if prop.get("execution_class") != current_spec.execution_class.value:
                                 log_entry["decision"] = "confirm_rejected"
                                 log_entry["reason"] = "kernel_spec_mismatch"
-                                audit_append(log_entry)
+                                with open(audit_file, "a") as f:
+                                    f.write(json.dumps(log_entry) + "\n")
                                 return JSONResponse(
                                    status_code=409,
                                    content=build_error(
@@ -1366,7 +1360,8 @@ async def brain_command(
                             if prop.get("params_hash") != current_params_hash:
                                 log_entry["decision"] = "confirm_rejected"
                                 log_entry["reason"] = "kernel_params_mismatch"
-                                audit_append(log_entry)
+                                with open(audit_file, "a") as f:
+                                    f.write(json.dumps(log_entry) + "\n")
                                 return JSONResponse(
                                    status_code=409,
                                    content=build_error(
@@ -1406,24 +1401,24 @@ async def brain_command(
             if execution_class == ExecutionClass.READ_ONLY:
                   # v0.16: permit issuance is a read-only command but requires root assertion
                   if command_key == "permit issue":
-                      assertion = http_request.headers.get("X-HBAR-Assertion")
+                      assertion = http_request.headers.get("X-Brain-Assertion")
                       if not assertion:
                           return JSONResponse(
                               status_code=401,
                               content=build_error(
                                   code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                                  message="Missing X-HBAR-Assertion header",
+                                  message="Missing X-Brain-Assertion header",
                                   details={"command_key": command_key},
                               ).dict(),
                           )
 
-                      identity_secret = os.getenv("HBAR_IDENTITY_SECRET", "")
+                      identity_secret = os.getenv("BRAIN_IDENTITY_SECRET", "")
                       if not identity_secret:
                           return JSONResponse(
                               status_code=500,
                               content=build_error(
                                   code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                                  message="HBAR_IDENTITY_SECRET not configured",
+                                  message="BRAIN_IDENTITY_SECRET not configured",
                                   details={},
                               ).dict(),
                           )
@@ -1455,24 +1450,24 @@ async def brain_command(
                           )
 
             elif execution_class == ExecutionClass.MEMORY_APPEND:
-                assertion = http_request.headers.get("X-HBAR-Assertion")
+                assertion = http_request.headers.get("X-Brain-Assertion")
                 if not assertion:
                     return JSONResponse(
                         status_code=401,
                         content=build_error(
                             code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                            message="Missing X-HBAR-Assertion header",
+                            message="Missing X-Brain-Assertion header",
                             details={"execution_class": execution_class.value},
                         ).dict(),
                     )
 
-                identity_secret = os.getenv("HBAR_IDENTITY_SECRET", "")
+                identity_secret = os.getenv("BRAIN_IDENTITY_SECRET", "")
                 if not identity_secret:
                     return JSONResponse(
                         status_code=500,
                         content=build_error(
                             code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                            message="HBAR_IDENTITY_SECRET not configured",
+                            message="BRAIN_IDENTITY_SECRET not configured",
                             details={},
                         ).dict(),
                     )
@@ -1493,13 +1488,13 @@ async def brain_command(
                         ).dict(),
                     )
 
-                permit = http_request.headers.get("X-HBAR-Permit")
+                permit = http_request.headers.get("X-Brain-Permit")
                 if not permit:
                     return JSONResponse(
                         status_code=401,
                         content=build_error(
                             code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                            message="Missing X-HBAR-Permit header",
+                            message="Missing X-Brain-Permit header",
                             details={"execution_class": execution_class.value},
                         ).dict(),
                     )
@@ -1583,13 +1578,13 @@ async def brain_command(
 
 
             elif execution_class == ExecutionClass.STATE_MUTATION:
-                assertion = http_request.headers.get("X-HBAR-Assertion")
+                assertion = http_request.headers.get("X-Brain-Assertion")
                 if not assertion:
                     return JSONResponse(
                         status_code=401,
                         content=build_error(
                             code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                            message="Missing X-HBAR-Assertion header",
+                            message="Missing X-Brain-Assertion header",
                             details={"execution_class": execution_class.value},
                         ).dict(),
                     )
@@ -1607,13 +1602,13 @@ async def brain_command(
 
 
             elif execution_class == ExecutionClass.EXTERNAL_SIDE_EFFECT:
-                assertion = http_request.headers.get("X-HBAR-Assertion")
+                assertion = http_request.headers.get("X-Brain-Assertion")
                 if not assertion:
                     return JSONResponse(
                         status_code=401,
                         content=build_error(
                             code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                            message="Missing X-HBAR-Assertion header",
+                            message="Missing X-Brain-Assertion header",
                             details={"execution_class": execution_class.value},
                         ).dict(),
                     )
@@ -1658,7 +1653,7 @@ async def brain_command(
                         result = handler(
                             ctx={
                                 "client_id": request.client_id,
-                                "kernel_version": HBAR_BRAIN_VERSION,
+                                "kernel_version": BRAIN_VERSION,
                                 "host": socket.gethostname(),
                                 "health_check": health_check,
                             },
@@ -1678,7 +1673,7 @@ async def brain_command(
 
                         ctx = {
                             "client_id": request.client_id,
-                            "kernel_version": HBAR_BRAIN_VERSION,
+                            "kernel_version": BRAIN_VERSION,
                             "host": socket.gethostname(),
                             "health_check": health_check,
                         }
@@ -1691,8 +1686,6 @@ async def brain_command(
 
 
                     elif command_key == "permit issue":
-                        print("DEBUG normalized:", normalized_command)
-                        print("DEBUG command_key:", command_key)
                         handler = READ_ONLY_HANDLERS.get(command_key)
                         if not handler:
                             raise KernelException(
@@ -1705,24 +1698,24 @@ async def brain_command(
 
                         ctx = {
                             "client_id": request.client_id,
-                            "kernel_version": HBAR_BRAIN_VERSION,
+                            "kernel_version": BRAIN_VERSION,
                             "host": socket.gethostname(),
                             "health_check": health_check,
                         }
 
                         # Require root assertion for permit issuance
-                        assertion = http_request.headers.get("X-HBAR-Assertion")
+                        assertion = http_request.headers.get("X-Brain-Assertion")
                         if not assertion:
                             return JSONResponse(
                                 status_code=401,
                                 content=build_error(
                                     code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
-                                    message="Missing X-HBAR-Assertion header",
+                                    message="Missing X-Brain-Assertion header",
                                     details={"command_key": command_key},
                                 ).dict(),
                             )
 
-                        identity_secret = os.getenv("HBAR_IDENTITY_SECRET", "")
+                        identity_secret = os.getenv("BRAIN_IDENTITY_SECRET", "")
                         try:
                             _claims = verify_assertion(
                                 secret=identity_secret,
@@ -1774,7 +1767,7 @@ async def brain_command(
                         result = handler(
                             ctx={
                                 "client_id": request.client_id,
-                                "kernel_version": HBAR_BRAIN_VERSION,
+                                "kernel_version": BRAIN_VERSION,
                                 "host": socket.gethostname(),
                             },
                             payload=payload,
@@ -1792,11 +1785,11 @@ async def brain_command(
                         result = handler(
                             ctx={
                                 "client_id": request.client_id,
-                                "kernel_version": HBAR_BRAIN_VERSION,
+                                "kernel_version": BRAIN_VERSION,
                                 "host": socket.gethostname(),
                                 "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-                                "git_commit": os.getenv("HBAR_GIT_COMMIT", "unknown"),
-                                "build_time": os.getenv("HBAR_BUILD_TIME", "unknown"),
+                                "git_commit": os.getenv("BRAIN_GIT_COMMIT", "unknown"),
+                                "build_time": os.getenv("BRAIN_BUILD_TIME", "unknown"),
                             },
                             payload=payload,
                         )
@@ -1837,7 +1830,7 @@ async def brain_command(
                         result = handler(
                             ctx={
                                 "client_id": request.client_id,
-                                "kernel_version": HBAR_BRAIN_VERSION,
+                                "kernel_version": BRAIN_VERSION,
                                 "host": socket.gethostname(),
                                 "requests": requests,
                                 "nodeos_url": NODEOS_URL,
@@ -1891,7 +1884,7 @@ async def brain_command(
                             payload=request.payload or {},
                             client_id=request.client_id,
                             ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
-                            model=os.getenv('OLLAMA_MODEL', 'mistral:7b'),
+                            model=os.getenv('OLLAMA_MODEL', 'llama3.2:3b'),
                         )
                     # ── end brain custom commands ──────────────────────────────
                     # Log successful execution
@@ -1969,8 +1962,8 @@ async def brain_command(
     # PROPOSE flow
     else:
         # Generate confirmation token
-        token_hex = hashlib.md5(f"{normalized_command}:{time.time()}".encode()).hexdigest()[:8]
-        confirmation_token = f"CONFIRM-{token_hex}"
+        import secrets as _secrets
+        confirmation_token = f"CONFIRM-{_secrets.token_hex(8)}"
 
         command_key, params = parse_normalized_command(normalized_command)
 
@@ -2020,7 +2013,7 @@ def _sqlite_conn():
     return con
 
 @router.get("/brain/tags")
-def brain_tags():
+def brain_tags(api_key: str = Depends(get_api_key)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -2039,7 +2032,7 @@ def brain_tags():
     return rows
 
 @router.get("/brain/docs")
-def brain_docs(tags: str = ""):
+def brain_docs(tags: str = "", api_key: str = Depends(get_api_key)):
     conn = get_db_connection()
     cur = conn.cursor()
     if not tags.strip():

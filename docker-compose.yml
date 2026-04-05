@@ -18,19 +18,19 @@ services:
       context: .
       dockerfile: api/Dockerfile
       args:
-        HBAR_GIT_COMMIT: ${HBAR_GIT_COMMIT:-unknown}
-        HBAR_BUILD_TIME: ${HBAR_BUILD_TIME:-unknown}
+        BRAIN_GIT_COMMIT: ${BRAIN_GIT_COMMIT:-unknown}
+        BRAIN_BUILD_TIME: ${BRAIN_BUILD_TIME:-unknown}
     ports:
       - "8010:8000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-llm_db}
       - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:1b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       - SEMANTIC_DB_PATH=/app/extensions/brain/semantic.db
       - NODEOS_URL=http://nodeos:8001
-      - HBAR_BRAIN_API_KEY=${HBAR_BRAIN_API_KEY}
-      - HBAR_IDENTITY_SECRET=${HBAR_IDENTITY_SECRET}
-      - HBAR_ENV=${HBAR_ENV:-dev}
+      - BRAIN_API_KEY=${BRAIN_API_KEY}
+      - BRAIN_IDENTITY_SECRET=${BRAIN_IDENTITY_SECRET}
+      - BRAIN_ENV=${BRAIN_ENV:-dev}
       - KERNEL_RATE_LIMIT_MAX=30
       - KERNEL_RATE_LIMIT_WINDOW=60
       - REDIS_URL=redis://redis:6379/0
@@ -41,7 +41,7 @@ services:
       - BRAIN_OWNER=${BRAIN_OWNER}
       - BRAIN_PRIVATE_KEY=${BRAIN_PRIVATE_KEY}
       - BRAIN_PUBLIC_KEY=${BRAIN_PUBLIC_KEY}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:1b}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - CHUNK_SIZE=${CHUNK_SIZE:-750}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
       - TZ=${TZ:-UTC}
@@ -87,7 +87,7 @@ services:
       - NODEOS_DB_PATH=/data/nodeos.db
       - NODEOS_PUSH_BRANCH_ALLOWLIST=${NODEOS_PUSH_BRANCH_ALLOWLIST:-}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - HBAR_ENV=${HBAR_ENV:-dev}
+      - BRAIN_ENV=${BRAIN_ENV:-dev}
     volumes:
       - nodeos_data:/data
     networks:
@@ -110,9 +110,11 @@ services:
     ports:
       - "3010:3000"
     environment:
-      NEXT_PUBLIC_API_URL: "http://api:8000"
-      NEXT_PUBLIC_API_BASE: "http://api:8000"
+      API_INTERNAL_URL: "http://api:8000"
       NODEOS_INTERNAL_URL: "http://nodeos:8001"
+      BRAIN_API_KEY: "${BRAIN_API_KEY}"
+      BRAIN_ID: "${BRAIN_ID:-my-brain-01}"
+      NEXT_PUBLIC_BRAIN_NAME: "${BRAIN_NAME:-My Brain}"
     depends_on:
       - api
       - nodeos

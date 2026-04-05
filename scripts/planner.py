@@ -23,8 +23,24 @@ from scripts.tools import ToolRegistry
 from extensions.brain.semantic_db import SemanticDB
 
 # Default values from environment
-DEFAULT_API_BASE = "http://localhost:8000"
-DEFAULT_MODEL = "mistral:7b"
+DEFAULT_API_BASE  = "http://localhost:8010"
+DEFAULT_NODEOS    = "http://localhost:8001"
+DEFAULT_MODEL     = os.getenv("DEFAULT_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+_API_KEY          = os.getenv("BRAIN_API_KEY", "")
+_AUTH_HEADERS     = {"X-Api-Key": _API_KEY} if _API_KEY else {}
+_BRAIN_ID         = os.getenv("BRAIN_ID", "my-brain-01")
+_NODEOS_URL       = os.getenv("NODEOS_URL", DEFAULT_NODEOS)
+
+def _acquire_permit():
+    r = requests.post(f"{_NODEOS_URL}/v1/loops/request", json={
+        "node_id": _BRAIN_ID,
+        "agent_id": "script/planner",
+        "loop_type": "research",
+        "ttl_seconds": 600,
+        "reason": "planner.py script execution",
+    }, timeout=5)
+    r.raise_for_status()
+    return r.json()["permit_id"]
 
 class SimplePlanner:
     """Simple planner with plan → act → verify loop"""
@@ -186,9 +202,10 @@ class SimplePlanner:
                 parameters = action.get('parameters', {})
                 
                 if endpoint == 'documents/search':
-                    response = requests.post(self.search_url, json=parameters, timeout=30)
+                    response = requests.post(self.search_url, json=parameters, headers=_AUTH_HEADERS, timeout=30)
                 elif endpoint == 'chat/rag':
-                    response = requests.post(self.rag_url, json=parameters, timeout=120)
+                    permit_id = _acquire_permit()
+                    response = requests.post(self.rag_url, json={**parameters, "permit_id": permit_id}, headers=_AUTH_HEADERS, timeout=120)
                 else:
                     return {
                         'action': action,

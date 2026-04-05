@@ -1,8 +1,7 @@
 brain_id: "${BRAIN_ID}"
 display_name: "${BRAIN_NAME}"
-lineage: "${BRAIN_LINEAGE}"
 domain: authority
 role: operator_node
-model: mistral:7b
+model: null
 tags: [authority, nodeos, operator]
 public_key: "${BRAIN_PUBLIC_KEY}"

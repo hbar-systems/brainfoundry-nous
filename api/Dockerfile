@@ -1,11 +1,11 @@
 FROM python:3.11-slim
 
-ARG HBAR_GIT_COMMIT=unknown
-ARG HBAR_BUILD_TIME=unknown
-ENV HBAR_GIT_COMMIT=${HBAR_GIT_COMMIT}
-ENV HBAR_BUILD_TIME=${HBAR_BUILD_TIME}
+ARG BRAIN_GIT_COMMIT=unknown
+ARG BRAIN_BUILD_TIME=unknown
+ENV BRAIN_GIT_COMMIT=${BRAIN_GIT_COMMIT}
+ENV BRAIN_BUILD_TIME=${BRAIN_BUILD_TIME}
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl tesseract-ocr && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

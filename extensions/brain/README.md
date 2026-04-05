@@ -113,7 +113,7 @@ extensions/brain/
 
 - **Python 3.11+**
 - **Dependencies**: Built-in SQLite3, no additional packages required
-- **Timezone**: Europe/Berlin for timestamps
+- **Timezone**: UTC for timestamps (set TZ env var to override)
 - **Database**: Auto-created at `extensions/brain/semantic.db`
 
 ## Integration with Main System

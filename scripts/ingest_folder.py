@@ -17,17 +17,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Default values
-DEFAULT_API_BASE = "http://localhost:8000"
+DEFAULT_API_BASE = "http://localhost:8010"
 DEFAULT_DOCS_DIR = "./input_samples"
 
 class DocumentIngester:
     """Batch document uploader using existing FastAPI endpoints"""
-    
+
     def __init__(self, api_base: str = None):
         """Initialize ingester with API base URL"""
         self.api_base = api_base or os.getenv("API_BASE", DEFAULT_API_BASE)
         self.upload_url = f"{self.api_base}/documents/upload"
         self.health_url = f"{self.api_base}/health"
+        api_key = os.getenv("BRAIN_API_KEY", "")
+        self.auth_headers = {"X-Api-Key": api_key} if api_key else {}
         
         # Supported file extensions (matching existing API)
         self.supported_extensions = {
@@ -38,7 +40,7 @@ class DocumentIngester:
     def check_api_health(self) -> bool:
         """Check if the API is accessible"""
         try:
-            response = requests.get(self.health_url, timeout=10)
+            response = requests.get(self.health_url, headers=self.auth_headers, timeout=10)
             if response.status_code == 200:
                 health_data = response.json()
                 print(f"✅ API healthy: {health_data.get('status', 'unknown')}")
@@ -93,6 +95,7 @@ class DocumentIngester:
                 response = requests.post(
                     self.upload_url,
                     files=files,
+                    headers=self.auth_headers,
                     timeout=120  # Allow time for processing
                 )
             
@@ -239,7 +242,7 @@ Examples:
   python scripts/ingest_folder.py . --no-recursive
   
   # Use custom API endpoint
-  API_BASE=http://192.168.1.100:8000 python scripts/ingest_folder.py ~/docs
+  API_BASE=http://YOUR_SERVER_IP:8010 python scripts/ingest_folder.py ~/docs
         """
     )
     

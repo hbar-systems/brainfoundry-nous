@@ -26,5 +26,5 @@ pytesseract>=0.3.10
 # ML / vector
 numpy>=1.26.0
 sentence-transformers>=2.6.0
-anthropic
+anthropic>=0.40.0
 openai>=1.0.0

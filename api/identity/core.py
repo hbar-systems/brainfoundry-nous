@@ -152,7 +152,7 @@ def issue_permit(
         constraints=constraints,
     )
 
-    header = {"alg": "HS256", "typ": "HBAR_PERMIT", "v": 1}
+    header = {"alg": "HS256", "typ": "BRAIN_PERMIT", "v": 1}
     header_b64 = _b64url_json(header)
     claims_b64 = _b64url_json(claims)
     signing_input = f"{header_b64}.{claims_b64}"
@@ -181,7 +181,7 @@ def issue_assertion(
         "v": 1,
     }
 
-    header = {"alg": "HS256", "typ": "HBAR_ASSERTION", "v": 1}
+    header = {"alg": "HS256", "typ": "BRAIN_ASSERTION", "v": 1}
     header_b64 = _b64url_json(header)
     claims_b64 = _b64url_json(claims)
     signing_input = f"{header_b64}.{claims_b64}"
@@ -279,7 +279,7 @@ def issue_federation_assertion(
     if claims:
         payload.update(claims)
 
-    header = {"alg": "EdDSA", "typ": "HBAR_FED_ASSERTION", "v": 1}
+    header = {"alg": "EdDSA", "typ": "BRAIN_FED_ASSERTION", "v": 1}
     header_b64 = _b64url_json(header)
     claims_b64 = _b64url_json(payload)
     signing_input = f"{header_b64}.{claims_b64}".encode()

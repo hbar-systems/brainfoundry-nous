@@ -1,7 +1,21 @@
 # BrainFoundry Node Runtime Contract
 
-**Version:** 0.1.0 (unversioned)  
-**Status:** Draft
+**Version:** 0.1.0  
+**Status:** Future Specification — describes the target protocol, NOT the current implementation
+
+> **Note for brainfoundry-nous users:** This document is a protocol design spec for the BrainFoundry federation protocol (target: v1.0). The current brainfoundry-nous implementation (v0.5.x) is a subset. The table below maps contract terms to current env var names.
+>
+> | Contract term | Current env var / behaviour |
+> |---|---|
+> | `NODE_ID` | `BRAIN_ID` |
+> | `POLICY_MODE` (sealed/standard/dev) | `BRAIN_ENV` (prod/dev) |
+> | `API_KEY` | `BRAIN_API_KEY` |
+> | `RUNTIME_VERSION` | Hardcoded as `BRAIN_VERSION` in `api/main.py` |
+> | `/ready` body | `{ "ok": bool, "model": { "loaded": bool, "error": str } }` |
+>
+> Everything below is aspirational protocol design. Implementation will converge toward it over time.
+
+---
 
 This document defines the minimal interface that any BrainFoundry node runtime MUST expose. This contract prevents divergent implementations and ensures all nodes can participate in the federated network.
 
@@ -212,4 +226,4 @@ All extensions MUST be backward-compatible or require MAJOR version bump.
 
 **Contract Version:** 0.1.0  
 **Last Updated:** 2026-02-03  
-**Status:** Draft — subject to refinement before v1.0.0
+**Status:** Future specification — see note at top for current implementation mapping

@@ -5,7 +5,7 @@ set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 cd "$PROJECT_ROOT"
 
-MODEL="${OLLAMA_MODEL:-llama3.2:1b}"
+MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
 
 # 1) Start the stack
 echo "→ Starting Docker stack..."

@@ -1,4 +1,4 @@
-# KERNEL CONTRACT (HBAR-BRAIN)
+# KERNEL CONTRACT (brainfoundry-node)
 Version: 1.0
 Status: GOVERNANCE FREEZE — Task 2
 Scope: Sovereign execution boundary of the brainfoundry-node kernel

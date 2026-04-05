@@ -52,19 +52,21 @@ role: authority
 
 ### loop_permits
 - `permit_id` (PK)
+- `node_id`
 - `agent_id`
-- `purpose`
-- `max_iterations`
-- `expires_at`
+- `loop_type`
+- `ttl_seconds`
+- `reason`
+- `expires_at_unix`
 - `status` (ACTIVE, REVOKED)
 - `created_at`, `revoked_at`, `revoke_reason`
 
 ### memory_proposals
 - `proposal_id` (PK)
-- `agent_id`
+- `permit_id`
 - `memory_type`
 - `content`
-- `metadata` (JSON)
+- `source_refs` (JSON)
 - `status` (PENDING, APPROVED, REJECTED)
 - `created_at`, `decided_at`, `decision_reason`
 
@@ -83,13 +85,14 @@ role: authority
 ### Request a Loop Permit
 
 ```bash
-curl -X POST http://localhost:8011/v1/loops/request \
+curl -X POST http://localhost:8001/v1/loops/request \
   -H "Content-Type: application/json" \
   -d '{
-    "agent_id": "lyra.v1",
-    "purpose": "Generate music captions batch",
-    "max_iterations": 10,
-    "duration_minutes": 30
+    "node_id": "my-brain-01",
+    "agent_id": "my-agent.v1",
+    "loop_type": "research",
+    "ttl_seconds": 1800,
+    "reason": "Research assistant loop"
   }'
 ```
 
@@ -98,10 +101,11 @@ Response:
 {
   "permit_id": "uuid-here",
   "permit_token": "uuid.hmac-signature",
-  "agent_id": "lyra.v1",
-  "purpose": "Generate music captions batch",
-  "max_iterations": 10,
-  "expires_at": "2025-12-31T06:30:00",
+  "node_id": "my-brain-01",
+  "agent_id": "my-agent.v1",
+  "loop_type": "research",
+  "reason": "Research assistant loop",
+  "expires_at_unix": 1700000000,
   "status": "ACTIVE"
 }
 ```
@@ -109,24 +113,25 @@ Response:
 ### Propose Memory
 
 ```bash
-curl -X POST http://localhost:8011/v1/memory/propose \
+curl -X POST http://localhost:8001/v1/memory/propose \
   -H "Content-Type: application/json" \
   -d '{
-    "agent_id": "lyra.v1",
+    "permit_id": "<permit_id from loop request>",
     "memory_type": "preference",
     "content": "User prefers concise, modern language",
-    "metadata": {"confidence": 0.95}
+    "source_refs": {"confidence": 0.95}
   }'
 ```
 
 ### Approve Memory Proposal
 
 ```bash
-curl -X POST http://localhost:8011/v1/memory/{proposal_id}/decide \
+curl -X POST http://localhost:8001/v1/memory/{proposal_id}/decide \
   -H "Content-Type: application/json" \
   -d '{
-    "decision": "APPROVED",
-    "reason": "High confidence user preference"
+    "decision": "APPROVE",
+    "decided_by": "operator",
+    "note": "High confidence user preference"
   }'
 ```
 
@@ -134,13 +139,13 @@ curl -X POST http://localhost:8011/v1/memory/{proposal_id}/decide \
 
 ```bash
 # All events
-curl http://localhost:8011/v1/audit/events
+curl http://localhost:8001/v1/audit/events
 
 # Filter by event type
-curl "http://localhost:8011/v1/audit/events?event_type=LOOP_PERMIT"
+curl "http://localhost:8001/v1/audit/events?event_type=LOOP_PERMIT"
 
 # Filter by agent
-curl "http://localhost:8011/v1/audit/events?agent_id=lyra.v1&limit=50"
+curl "http://localhost:8001/v1/audit/events?agent_id=my-agent.v1&limit=50"
 ```
 
 ## Browser Access (via Next.js Proxy)
@@ -153,9 +158,11 @@ const response = await fetch('/api/nodeos/v1/loops/request', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    agent_id: 'lyra.v1',
-    purpose: 'Generate captions',
-    max_iterations: 5
+    node_id: 'my-brain-01',
+    agent_id: 'my-agent.v1',
+    loop_type: 'research',
+    ttl_seconds: 300,
+    reason: 'Research assistant loop'
   })
 });
 ```
@@ -174,7 +181,7 @@ The Next.js proxy at `ui/pages/api/nodeos/[...path].js` forwards to `http://node
 ### Build and Run
 
 ```bash
-# Development mode (with port 8011 exposed)
+# Development mode (nodeos exposed on port 8001)
 docker compose -f docker-compose.dev.yml up -d nodeos
 
 # Production mode (internal only)

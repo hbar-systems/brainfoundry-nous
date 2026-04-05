@@ -98,7 +98,7 @@ docker compose exec ollama ollama pull mistral:7b
 Organize documents into folders and ingest:
 
 ```bash
-python scripts/ingest_folder.py --dir /path/to/your/docs
+python scripts/ingest_folder.py /path/to/your/docs
 ```
 
 This is what makes the brain know you. The more you ingest, the more personal it becomes.
@@ -120,8 +120,9 @@ Or skip the structure entirely and let the similarity search find everything.
 ### 7. Access
 
 - Console UI: `http://your-server:3010`
-- API: `http://your-server:8010`
-- API docs: `http://your-server:8010/docs`
+- API: `http://your-server:8010` (OpenAPI docs disabled — see `docs/DEPLOYMENT.md`)
+
+> **Security note:** Port 3010 proxies the API server-side using your `BRAIN_API_KEY`. Do not expose it to the public internet without a firewall rule, VPN, or reverse proxy with authentication. Anyone who can reach port 3010 can use the brain.
 
 Add a domain with Caddy for HTTPS — see `docs/DEPLOYMENT.md`.
 
@@ -133,8 +134,8 @@ Before exposing your brain to the internet:
 
 ```bash
 # 1. Generate all secrets (run once, save output to .env)
-openssl rand -hex 32   # → HBAR_BRAIN_API_KEY
-openssl rand -hex 32   # → HBAR_IDENTITY_SECRET
+openssl rand -hex 32   # → BRAIN_API_KEY
+openssl rand -hex 32   # → BRAIN_IDENTITY_SECRET
 openssl rand -hex 32   # → NODEOS_SIGNING_SECRET
 
 # 2. Generate federation keypair (required for /identity endpoint)
@@ -145,7 +146,7 @@ python scripts/generate_keypair.py
 POSTGRES_USER=your_db_user
 POSTGRES_PASSWORD=your_strong_password
 
-# 4. Set HBAR_ENV=prod in .env — enables startup secret enforcement
+# 4. Set BRAIN_ENV=prod in .env — enables startup secret enforcement
 
 # 5. Build and start
 docker compose up -d --build

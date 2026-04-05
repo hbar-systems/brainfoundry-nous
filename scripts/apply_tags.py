@@ -13,9 +13,9 @@ try:
 except Exception:
     print("Missing dependency: tabulate. Run: pip install tabulate", file=sys.stderr); sys.exit(1)
 
-#API = os.getenv("API_BASE", "http://localhost:8000")
-API = os.getenv("API_URL", os.getenv("API_BASE", "http://127.0.0.1:8000"))
+API = os.getenv("API_URL", os.getenv("API_BASE", "http://127.0.0.1:8010"))
 DB_PATH = os.getenv("SEMANTIC_DB_PATH", "extensions/brain/semantic.db")
+API_KEY = os.getenv("BRAIN_API_KEY", "")
 
 def load_rules(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -30,8 +30,11 @@ def load_rules(path):
     return rules
 
 def api_search(query, limit):
+    hdrs = {"Content-Type": "application/json"}
+    if API_KEY:
+        hdrs["X-Api-Key"] = API_KEY
     r = requests.post(f"{API}/documents/search",
-                      headers={"Content-Type":"application/json"},
+                      headers=hdrs,
                       data=json.dumps({"query": query, "limit": limit}))
     r.raise_for_status()
     return r.json().get("results", [])

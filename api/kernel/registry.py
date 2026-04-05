@@ -190,7 +190,7 @@ def validate_command_payload(command_key: str, payload: Dict[str, Any]) -> None:
 REGISTRY.update({
     "remember": CommandSpec(
         command="remember",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Store a memory.",
         allowed_fields={"content", "tags"},
         required_fields={"content"},
@@ -206,7 +206,7 @@ REGISTRY.update({
     ),
     "forget": CommandSpec(
         command="forget",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Delete a memory by id.",
         allowed_fields={"id"},
         required_fields={"id"},
@@ -229,7 +229,7 @@ REGISTRY.update({
     ),
     "context.set": CommandSpec(
         command="context.set",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Set a context key.",
         allowed_fields={"key", "value"},
         required_fields={"value"},
@@ -238,7 +238,7 @@ REGISTRY.update({
     ),
     "context.clear": CommandSpec(
         command="context.clear",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Clear context.",
         allowed_fields={"key"},
         required_fields=set(),
@@ -254,7 +254,7 @@ REGISTRY.update({
     ),
     "peers.introduce": CommandSpec(
         command="peers.introduce",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Introduce to a peer brain.",
         allowed_fields={"endpoint"},
         required_fields={"endpoint"},
@@ -270,7 +270,7 @@ REGISTRY.update({
     ),
     "peers.remove": CommandSpec(
         command="peers.remove",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Remove a peer.",
         allowed_fields={"id"},
         required_fields={"id"},
@@ -300,7 +300,7 @@ REGISTRY.update({
     ),
     "model.use": CommandSpec(
         command="model.use",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Switch active model.",
         allowed_fields={"model"},
         required_fields={"model"},
@@ -316,7 +316,7 @@ REGISTRY.update({
     ),
     "audit.clear": CommandSpec(
         command="audit.clear",
-        execution_class=ExecutionClass.READ_ONLY,
+        execution_class=ExecutionClass.STATE_MUTATION,
         description="Clear audit log.",
         allowed_fields=set(),
         required_fields=set(),

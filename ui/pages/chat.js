@@ -20,11 +20,9 @@ export default function Chat() {
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return
-        const claude = { name: 'claude-sonnet-4-6' }
-        const ollama = (d.models || []).filter(m => !m.name.includes('claude'))
-        const list = [claude, ...ollama]
+        const list = d.models || []
         setModels(list)
-        setSelectedModel('claude-sonnet-4-6')
+        setSelectedModel(list[0]?.name || '')
       })
       .catch(e => setError(`Models: ${e.message}`))
 

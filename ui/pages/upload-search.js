@@ -1,144 +1,96 @@
 import { useState, useEffect } from 'react';
 
+const API_BASE = '/api/bf';
+
+const card = {
+  background: '#fff',
+  border: '1px solid #e5e5e5',
+  borderRadius: 12,
+  padding: 24,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
+};
+
 export default function UploadSearch() {
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [uploadedFiles, setUploadedFiles] = useState([]);
-  
-  // Search state
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchLimit, setSearchLimit] = useState(5);
   const [searchResults, setSearchResults] = useState([]);
   const [expandedResult, setExpandedResult] = useState(null);
-  
-  // Index status state
-  const [indexStatus, setIndexStatus] = useState(null);
-  
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000';
 
-  // Load index status on mount and after uploads
+  const [indexStatus, setIndexStatus] = useState(null);
+
   const loadIndexStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE}/index/status`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      setIndexStatus(data);
+      const r = await fetch(`${API_BASE}/documents/stats`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setIndexStatus(await r.json());
     } catch (err) {
       console.error('Failed to load index status:', err);
     }
   };
 
-  useEffect(() => {
-    loadIndexStatus();
-  }, []);
+  useEffect(() => { loadIndexStatus(); }, []);
 
-  // Drag and drop handlers
   const handleDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
+    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true);
+    else if (e.type === 'dragleave') setDragActive(false);
   };
 
   const handleDrop = async (e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
     const files = [...(e.dataTransfer?.files || [])];
-    if (!files.length) return;
-    
-    await uploadFiles(files);
+    if (files.length) await uploadFiles(files);
   };
 
   const handleFileInput = async (e) => {
     const files = [...(e.target?.files || [])];
-    if (!files.length) return;
-    
-    await uploadFiles(files);
-    e.target.value = ''; // Reset input
+    if (files.length) await uploadFiles(files);
+    e.target.value = '';
   };
 
   const uploadFiles = async (files) => {
     setLoading(true);
     setError(null);
     const results = [];
-    
     for (const file of files) {
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        const response = await fetch(`${API_BASE}/documents/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Upload failed: ${errorText}`);
-        }
-        
-        const result = await response.json();
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: fd });
+        if (!r.ok) throw new Error(await r.text());
+        const result = await r.json();
         results.push({ file: file.name, success: true, result });
-        
-        // Show success toast
-        showToast(`✅ ${file.name} uploaded successfully`);
-        
       } catch (err) {
         results.push({ file: file.name, success: false, error: err.message });
-        showToast(`❌ ${file.name} upload failed: ${err.message}`);
       }
     }
-    
     setUploadedFiles(prev => [...results, ...prev]);
     setLoading(false);
-    
-    // Refresh index status
     await loadIndexStatus();
-  };
-
-  const showToast = (message) => {
-    // Simple toast implementation - could be enhanced with a proper toast library
-    const toast = document.createElement('div');
-    toast.className = 'fixed top-4 right-4 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50';
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => document.body.removeChild(toast), 3000);
   };
 
   const handleSearch = async () => {
     const query = searchQuery.trim();
-    if (!query) {
-      setSearchResults([]);
-      return;
-    }
-    
+    if (!query) { setSearchResults([]); return; }
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await fetch(`${API_BASE}/documents/search`, {
+      const r = await fetch(`${API_BASE}/documents/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          query: query, 
-          limit: searchLimit 
-        }),
+        body: JSON.stringify({ query, limit: searchLimit }),
       });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Search failed: ${errorText}`);
-      }
-      
-      const data = await response.json();
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
       setSearchResults(data.results || []);
-      
     } catch (err) {
       setError(err.message);
       setSearchResults([]);
@@ -147,237 +99,182 @@ export default function UploadSearch() {
     }
   };
 
-  const toggleExpanded = (index) => {
-    setExpandedResult(expandedResult === index ? null : index);
-  };
+  const toggleExpanded = (i) => setExpandedResult(expandedResult === i ? null : i);
 
   return (
-    <div className="container mx-auto p-6 max-w-6xl">
-      <h1 className="text-3xl font-bold mb-8">Upload & Search</h1>
-      
-      {/* Error display */}
+    <div style={{ maxWidth: 1100, margin: '40px auto', padding: '0 24px', fontFamily: 'ui-sans-serif, system-ui' }}>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 32 }}>Upload &amp; Search</h1>
+
       {error && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+        <div style={{ marginBottom: 24, padding: 16, background: '#fff5f5', border: '1px solid #fca5a5', borderRadius: 8, color: '#b91c1c' }}>
           Error: {error}
         </div>
       )}
-      
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Upload Card */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">📁 Upload Documents</h2>
-            
-            {/* Drag and Drop Zone */}
-            <div
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors mb-4 ${
-                dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
-              }`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 24 }}>
+
+        {/* Upload */}
+        <div style={card}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Upload Documents</h2>
+
+          <div
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            style={{
+              border: `2px dashed ${dragActive ? '#3b82f6' : '#d1d5db'}`,
+              borderRadius: 8,
+              padding: 24,
+              textAlign: 'center',
+              background: dragActive ? '#eff6ff' : '#fafafa',
+              marginBottom: 16,
+            }}
+          >
+            <p style={{ marginBottom: 8, color: '#4b5563' }}>Drop files here</p>
+            <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>PDF, DOCX, TXT, MD, Images</p>
+            <label style={{ display: 'inline-block', padding: '8px 16px', background: '#3b82f6', color: '#fff', borderRadius: 8, cursor: 'pointer' }}>
+              Choose Files
+              <input type="file" multiple accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.gif" onChange={handleFileInput} style={{ display: 'none' }} />
+            </label>
+          </div>
+
+          {loading && (
+            <div style={{ textAlign: 'center', color: '#3b82f6', marginBottom: 12 }}>Uploading...</div>
+          )}
+
+          {uploadedFiles.length > 0 && (
+            <div>
+              <p style={{ fontWeight: 500, marginBottom: 8 }}>Recent Uploads</p>
+              <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                {uploadedFiles.slice(0, 5).map((u, i) => (
+                  <div key={i} style={{
+                    fontSize: 13,
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    marginBottom: 4,
+                    background: u.success ? '#f0fdf4' : '#fff5f5',
+                    color: u.success ? '#15803d' : '#b91c1c',
+                  }}>
+                    {u.success ? 'OK' : 'FAIL'}: {u.file}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Search */}
+        <div style={card}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Search Documents</h2>
+
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSearch()}
+            placeholder="Enter your search query..."
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, marginBottom: 10, boxSizing: 'border-box', fontSize: 14 }}
+          />
+
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+            <select
+              value={searchLimit}
+              onChange={e => setSearchLimit(parseInt(e.target.value))}
+              style={{ padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 8 }}
             >
-              <div className="text-gray-600">
-                <p className="text-lg mb-2">Drop files here</p>
-                <p className="text-sm">PDF, DOCX, TXT, MD, Images</p>
-              </div>
-              
-              <div className="mt-4">
-                <label className="inline-block px-4 py-2 bg-blue-500 text-white rounded-lg cursor-pointer hover:bg-blue-600">
-                  Choose Files
-                  <input
-                    type="file"
-                    multiple
-                    accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.gif"
-                    onChange={handleFileInput}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-            </div>
-            
-            {/* Upload Status */}
-            {loading && (
-              <div className="text-center text-blue-600">
-                <div className="animate-spin inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full mr-2"></div>
-                Uploading...
-              </div>
-            )}
-            
-            {/* Recent Uploads */}
-            {uploadedFiles.length > 0 && (
-              <div className="mt-4">
-                <h3 className="font-medium mb-2">Recent Uploads</h3>
-                <div className="space-y-2 max-h-32 overflow-y-auto">
-                  {uploadedFiles.slice(0, 5).map((upload, idx) => (
-                    <div key={idx} className={`text-sm p-2 rounded ${
-                      upload.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-                    }`}>
-                      {upload.success ? '✅' : '❌'} {upload.file}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Chunk Settings Display */}
-            {indexStatus && (
-              <div className="mt-4 p-3 bg-gray-50 rounded text-sm">
-                <p><strong>Current Settings:</strong></p>
-                <p>Chunk Size: {indexStatus.chunk_size}</p>
-                <p>Overlap: {indexStatus.chunk_overlap}</p>
-              </div>
-            )}
+              <option value={3}>Top 3</option>
+              <option value={5}>Top 5</option>
+              <option value={10}>Top 10</option>
+              <option value={20}>Top 20</option>
+            </select>
+            <button
+              onClick={handleSearch}
+              disabled={!searchQuery.trim() || loading}
+              style={{ flex: 1, padding: '8px 14px', background: (!searchQuery.trim() || loading) ? '#d1d5db' : '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+            >
+              Search
+            </button>
           </div>
-        </div>
-        
-        {/* Search Card */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">🔍 Search Documents</h2>
-            
-            {/* Search Input */}
-            <div className="space-y-4">
-              <div>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Enter your search query..."
-                  className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                />
+
+          {searchQuery && (
+            <button
+              onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+              style={{ width: '100%', padding: '8px 14px', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', cursor: 'pointer', marginBottom: 10 }}
+            >
+              Clear
+            </button>
+          )}
+
+          {searchResults.length > 0 && (
+            <div>
+              <p style={{ fontWeight: 500, marginBottom: 8 }}>Results ({searchResults.length})</p>
+              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                {searchResults.map((r, i) => (
+                  <div key={i} style={{ border: '1px solid #e5e5e5', borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontWeight: 500, color: '#3b82f6', fontSize: 13 }}>{r.document_name}</span>
+                      <span style={{ fontSize: 12, color: '#9ca3af' }}>{(r.similarity_score * 100).toFixed(1)}%</span>
+                    </div>
+                    <p style={{ fontSize: 13, color: '#4b5563', margin: 0 }}>
+                      {(r.content || '').substring(0, 150)}{r.content?.length > 150 ? '...' : ''}
+                    </p>
+                    <button onClick={() => toggleExpanded(i)} style={{ fontSize: 12, color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginTop: 6 }}>
+                      {expandedResult === i ? 'Show less' : 'Show more'}
+                    </button>
+                    {expandedResult === i && (
+                      <div style={{ marginTop: 8, padding: 8, background: '#f9fafb', borderRadius: 6, fontSize: 13 }}>{r.content}</div>
+                    )}
+                  </div>
+                ))}
               </div>
-              
-              <div className="flex gap-2">
-                <select
-                  value={searchLimit}
-                  onChange={(e) => setSearchLimit(parseInt(e.target.value))}
-                  className="px-3 py-2 border rounded-lg"
-                >
-                  <option value={3}>Top 3</option>
-                  <option value={5}>Top 5</option>
-                  <option value={10}>Top 10</option>
-                  <option value={20}>Top 20</option>
-                </select>
-                
-                <button
-                  onClick={handleSearch}
-                  disabled={!searchQuery.trim() || loading}
-                  className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300"
-                >
-                  Search
-                </button>
-              </div>
-              
-              {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(''); setSearchResults([]); }}
-                  className="w-full px-4 py-2 border rounded-lg hover:bg-gray-50"
-                >
-                  Clear
-                </button>
-              )}
             </div>
-            
-            {/* Search Results */}
-            {searchResults.length > 0 && (
-              <div className="mt-6">
-                <h3 className="font-medium mb-3">Results ({searchResults.length})</h3>
-                <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {searchResults.map((result, idx) => (
-                    <div key={idx} className="border rounded-lg p-3">
-                      <div className="flex justify-between items-start">
-                        <h4 className="font-medium text-blue-600 text-sm">
-                          {result.document_name}
-                        </h4>
-                        <span className="text-xs text-gray-500">
-                          {(result.similarity_score * 100).toFixed(1)}%
-                        </span>
+          )}
+        </div>
+
+        {/* Index Status */}
+        <div style={card}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Index Status</h2>
+
+          {indexStatus ? (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ color: '#6b7280' }}>Documents:</span>
+                <span style={{ fontWeight: 600 }}>{indexStatus.unique_documents ?? '—'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ color: '#6b7280' }}>Total chunks:</span>
+                <span style={{ fontWeight: 600 }}>{indexStatus.total_chunks ?? '—'}</span>
+              </div>
+
+              {indexStatus.recent_documents?.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <p style={{ fontWeight: 500, marginBottom: 8, fontSize: 13 }}>Recent Documents</p>
+                  <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                    {indexStatus.recent_documents.map((d, i) => (
+                      <div key={i} style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, marginBottom: 4, background: '#f9fafb' }}>
+                        <span style={{ color: '#374151' }}>{d.name}</span>
+                        <span style={{ color: '#9ca3af', marginLeft: 8 }}>{d.chunks} chunks</span>
                       </div>
-                      
-                      <p className="text-sm text-gray-600 mt-1">
-                        {(result.content || '').substring(0, 150)}
-                        {result.content && result.content.length > 150 ? '...' : ''}
-                      </p>
-                      
-                      <button
-                        onClick={() => toggleExpanded(idx)}
-                        className="text-xs text-blue-500 hover:text-blue-700 mt-2"
-                      >
-                        {expandedResult === idx ? 'Show less' : 'Show more'}
-                      </button>
-                      
-                      {expandedResult === idx && (
-                        <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
-                          {result.content}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+
+              <button
+                onClick={loadIndexStatus}
+                style={{ width: '100%', marginTop: 16, padding: '8px 14px', background: '#f3f4f6', border: '1px solid #e5e5e5', borderRadius: 8, cursor: 'pointer', fontSize: 13 }}
+              >
+                Refresh
+              </button>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', color: '#9ca3af', paddingTop: 40 }}>
+              Loading...
+            </div>
+          )}
         </div>
-        
-        {/* Index Status Panel */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">📊 Index Status</h2>
-            
-            {indexStatus ? (
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Documents:</span>
-                  <span className="font-medium">{indexStatus.documents}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Chunks:</span>
-                  <span className="font-medium">{indexStatus.chunks}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Last Ingest:</span>
-                  <span className="font-medium text-sm">
-                    {indexStatus.last_ingest 
-                      ? new Date(indexStatus.last_ingest).toLocaleDateString()
-                      : 'None'
-                    }
-                  </span>
-                </div>
-                
-                <hr className="my-3" />
-                
-                <div className="text-sm text-gray-600">
-                  <p><strong>Embedding Model:</strong></p>
-                  <p className="break-words">{indexStatus.embed_model}</p>
-                </div>
-                
-                <div className="text-sm text-gray-600">
-                  <p><strong>Chunk Configuration:</strong></p>
-                  <p>Size: {indexStatus.chunk_size} words</p>
-                  <p>Overlap: {indexStatus.chunk_overlap} words</p>
-                </div>
-                
-                <button
-                  onClick={loadIndexStatus}
-                  className="w-full mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
-                >
-                  Refresh Status
-                </button>
-              </div>
-            ) : (
-              <div className="text-center text-gray-500">
-                <div className="animate-spin inline-block w-6 h-6 border-2 border-current border-t-transparent rounded-full"></div>
-                <p className="mt-2">Loading status...</p>
-              </div>
-            )}
-          </div>
-        </div>
+
       </div>
     </div>
   );

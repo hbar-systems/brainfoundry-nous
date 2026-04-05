@@ -79,10 +79,6 @@ input_samples/*
 # Runtime ops (audit logs, proposals)
 ops/
 
-# accidental junk files
-os
-threading
-
 # caches
 __pycache__/
 *.pyc
@@ -91,9 +87,4 @@ __pycache__/
 
 # local artifacts
 brainfoundry/audit.jsonl
-
-# local junk
-json
-api/kernel/registry.py.bak
-api/main.py.bak
-hbar-brain/
+data/

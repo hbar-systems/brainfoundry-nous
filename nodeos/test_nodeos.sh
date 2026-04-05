@@ -4,7 +4,7 @@
 
 set -e
 
-BASE_URL="${NODEOS_URL:-http://localhost:8011}"
+BASE_URL="${NODEOS_URL:-http://localhost:8001}"
 AGENT_ID="test-agent-$(date +%s)"
 
 echo "🧪 Testing NodeOS Authority Service"
@@ -27,10 +27,11 @@ echo "3️⃣  Testing POST /v1/loops/request"
 PERMIT_RESPONSE=$(curl -s -X POST "$BASE_URL/v1/loops/request" \
   -H "Content-Type: application/json" \
   -d "{
+    \"node_id\": \"test-node-01\",
     \"agent_id\": \"$AGENT_ID\",
-    \"purpose\": \"Test loop execution\",
-    \"max_iterations\": 5,
-    \"duration_minutes\": 10
+    \"loop_type\": \"research\",
+    \"ttl_seconds\": 600,
+    \"reason\": \"Test loop execution\"
   }")
 
 echo "$PERMIT_RESPONSE" | jq .
@@ -49,10 +50,10 @@ echo "5️⃣  Testing POST /v1/memory/propose"
 MEMORY_RESPONSE=$(curl -s -X POST "$BASE_URL/v1/memory/propose" \
   -H "Content-Type: application/json" \
   -d "{
-    \"agent_id\": \"$AGENT_ID\",
+    \"permit_id\": \"$PERMIT_ID\",
     \"memory_type\": \"fact\",
     \"content\": \"Test memory content from automated test\",
-    \"metadata\": {\"source\": \"test_script\", \"confidence\": 0.99}
+    \"source_refs\": {\"source\": \"test_script\", \"confidence\": 0.99}
   }")
 
 echo "$MEMORY_RESPONSE" | jq .
@@ -69,8 +70,9 @@ echo "7️⃣  Testing POST /v1/memory/{proposal_id}/decide (APPROVED)"
 curl -s -X POST "$BASE_URL/v1/memory/$PROPOSAL_ID/decide" \
   -H "Content-Type: application/json" \
   -d '{
-    "decision": "APPROVED",
-    "reason": "Test approval from automated test"
+    "decision": "APPROVE",
+    "decided_by": "test-admin",
+    "note": "Test approval from automated test"
   }' | jq .
 echo ""
 
@@ -90,8 +92,7 @@ echo "🔟 Testing POST /v1/loops/revoke"
 curl -s -X POST "$BASE_URL/v1/loops/revoke" \
   -H "Content-Type: application/json" \
   -d "{
-    \"permit_token\": \"$PERMIT_TOKEN\",
-    \"agent_id\": \"$AGENT_ID\",
+    \"permit_id\": \"$PERMIT_ID\",
     \"reason\": \"Test completed\"
   }" | jq .
 echo ""

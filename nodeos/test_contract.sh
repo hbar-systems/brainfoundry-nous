@@ -4,7 +4,7 @@
 
 set -e
 
-BASE_URL="${NODEOS_URL:-http://localhost:8011}"
+BASE_URL="${NODEOS_URL:-http://localhost:8001}"
 
 echo "🔒 Testing NodeOS LOCKED Contract"
 echo "Base URL: $BASE_URL"
@@ -31,11 +31,11 @@ PERMIT_RESPONSE=$(curl -s -X POST "$BASE_URL/v1/loops/request" \
   -H "Content-Type: application/json" \
   -d '{
     "node_id": "node-test-001",
-    "agent_id": "lyra.v1",
-    "loop_type": "music_assist",
+    "agent_id": "my-agent.v1",
+    "loop_type": "research",
     "ttl_seconds": 300,
-    "scopes": ["read:clips", "write:captions"],
-    "reason": "Generate music captions batch",
+    "scopes": ["read:docs", "write:memory"],
+    "reason": "Research assistant loop",
     "trace_id": "trace-123"
   }')
 

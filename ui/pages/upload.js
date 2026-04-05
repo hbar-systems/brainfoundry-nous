@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+// Use the internal Next.js proxy so the API key is forwarded server-side
+const API_BASE = "/api/bf";
 
 export default function Upload() {
   const [files, setFiles] = useState([]);
@@ -36,7 +36,7 @@ export default function Upload() {
         });
         if (!r.ok) throw new Error(`${r.status}`);
         const j = await r.json();
-        pushLog(`✅ ${file.name}: ${j?.chunks?.length ?? 0} chunk(s)`);
+        pushLog(`OK ${file.name}: ${j?.chunks_created ?? 0} chunk(s)`);
       } catch (err) {
         pushLog(`❌ ${file.name}: ${err.message}`);
       }
