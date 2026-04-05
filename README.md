@@ -11,6 +11,31 @@ Clone this to run your own sovereign personal brain.
 A full-stack AI brain node. Runs on your server, connects to the models you choose,
 stores your knowledge. You own it. Nobody else has access.
 
+### Trust model (v0.5) — read this before you run it in production
+
+This repo is the **reference implementation**, not a polished appliance. The
+guarantees it gives you today are:
+
+- **You are the only tenant.** Designed for single-owner, self-hosted use. Not
+  multi-tenant. Not a hosted service.
+- **CognitiveOS gates the chat loop.** Every `/chat/completions` requires a
+  valid, unexpired loop permit from the `nodeos` authority container.
+- **CognitiveOS is internal-only.** NodeOS binds to `127.0.0.1:8001`, has no
+  browser proxy, and requires `X-Internal-Key` on all state-mutating routes.
+- **External actions are preview-then-execute.** `git_push` and similar
+  side-effects go through a strict branch allowlist and a preview step before
+  anything lands.
+- **Append-only audit log.** Every kernel command and every model call is
+  recorded.
+
+What CognitiveOS **does not** yet do in v0.5: mediate every possible write to
+the brain's document store. Custom brain commands (`remember`, `forget`,
+`audit.clear`, `context.set`) execute against the database directly and are
+logged in the API audit file rather than routed through a NodeOS proposal.
+Full mediation is on the v0.6 roadmap. See `SECURITY.md` and Section 8 of
+`docs/SELF_HOSTING_GUIDE.md` for the honest scope.
+
+
 **Stack:**
 - FastAPI — chat, RAG, embeddings, identity
 - CognitiveOS — governance kernel (loop permits, PROPOSE/CONFIRM)
@@ -137,6 +162,7 @@ Before exposing your brain to the internet:
 openssl rand -hex 32   # → BRAIN_API_KEY
 openssl rand -hex 32   # → BRAIN_IDENTITY_SECRET
 openssl rand -hex 32   # → NODEOS_SIGNING_SECRET
+openssl rand -hex 32   # → NODEOS_INTERNAL_KEY   (service-to-service auth between api ↔ nodeos)
 
 # 2. Generate federation keypair (required for /identity endpoint)
 python scripts/generate_keypair.py

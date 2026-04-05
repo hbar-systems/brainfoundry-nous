@@ -31,4 +31,21 @@ brainfoundry-nous is designed as a **personal, self-hosted node**. Its security 
 
 - The console UI at port 3010 forwards the `X-API-Key` header to the API, but does not implement its own session layer. Protect the UI with network-level controls (VPN, firewall, Tailscale) if you expose it.
 - `BRAIN_ENV=dev` (the default) disables several enforcement checks. Never use dev mode in production.
-- The CognitiveOS `POST /v1/memory/{id}/decide` endpoint (internal port 8001) has no authentication in the current release. It is blocked from browser access by the UI proxy denylist, but any service on the same Docker network can call it. This is a known limitation — do not expose port 8001 externally and keep the Docker network internal.
+- API keys for upstream model providers (Anthropic, OpenAI, …) are passed to containers as environment variables and are visible to anything with access to the Docker socket on the host. For multi-tenant or hostile-host environments, use Docker secrets or an external vault.
+
+## Governance scope (v0.5)
+
+CognitiveOS (the `nodeos` container) is the authority for loop permits,
+memory proposals, action proposals, and the append-only audit log.
+
+**What it gates today:**
+
+- Every `/chat/completions` request must present an `ACTIVE` loop permit; requests without one are refused.
+- `git_push` and other external side-effect actions go through a strict preview-and-decide flow with a branch allowlist.
+- All state-mutating NodeOS endpoints require `X-Internal-Key` (service-to-service auth); NodeOS binds only to `127.0.0.1:8001` and has no browser proxy.
+
+**What it does not yet gate (v0.5):**
+
+- Custom brain commands such as `remember`, `forget`, `audit.clear`, and `context.set` currently execute against the brain database directly and are logged to the API audit file. They are **not** mediated through a NodeOS proposal in this release. Full mediation of these paths is on the v0.6 roadmap.
+
+Treat CognitiveOS today as a strong authority for the chat loop and external actions, and an honest audit trail for the rest — not as a hermetic gate on every possible write.

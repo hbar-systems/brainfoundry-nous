@@ -147,6 +147,7 @@ Copy `.env.example` to `.env`. All variables are optional unless marked **requir
 | `BRAIN_API_KEY` | API authentication key for all private endpoints |
 | `BRAIN_IDENTITY_SECRET` | Signs identity assertions and permits |
 | `NODEOS_SIGNING_SECRET` | Signs CognitiveOS governance tokens |
+| `NODEOS_INTERNAL_KEY` | Service-to-service key; `api` → `nodeos` |
 | `BRAIN_PRIVATE_KEY` | ED25519 private key for federation |
 | `BRAIN_PUBLIC_KEY` | ED25519 public key (published via `/identity`) |
 
@@ -338,32 +339,68 @@ docker compose exec ollama ollama list
 
 ## 8. CognitiveOS — the governance kernel
 
-CognitiveOS is the governance layer running in the `nodeos` container. It controls what agents and connected systems can do — requiring explicit permits for state-mutating actions.
+CognitiveOS is the governance service running in the `nodeos` container. It
+provides loop permits, memory/action proposals, and an append-only audit log
+for the brain's chat completion path.
+
+> **Scope (v0.5).** CognitiveOS is an authoritative store for permits,
+> proposals, and audit events — not yet a universal executor. It gates the
+> chat inference flow (every `/chat/completions` call verifies a permit) and
+> records memory proposals. It does **not** yet intercept every direct
+> write to the brain's document store; custom brain commands such as
+> `remember` and `forget` currently execute against the database directly
+> and are logged in the API audit file rather than mediated through a
+> NodeOS proposal. Full mediation of those paths is on the v0.6 roadmap.
+> Treat CognitiveOS today as a strong authority for the chat loop and an
+> honest audit log everywhere else, not as a hermetic gate on all writes.
 
 ### Core concepts
 
-**Loop permit** — A timed authorization issued to an agent or system. Required before any write operation.
+**Loop permit** — A timed authorization bound to an agent, node, and loop
+type. The brain API verifies the permit is `ACTIVE` and not expired on every
+chat completion; requests without a valid permit are refused.
 
 ```
-PROPOSE → PENDING → (user confirms) → APPROVED → ACTIVE → (expires) → REVOKED
+REQUEST → ACTIVE → (expires) | (revoked) → INACTIVE
 ```
 
-**Memory proposal** — Any attempt to write to long-term memory must be proposed to CognitiveOS and approved before executing.
+**Memory proposal** — A pending record submitted to NodeOS describing a
+proposed long-term memory write. Proposals are stored with `PENDING` status
+until explicitly decided (`APPROVED` / `REJECTED`). The v0.5 chat flow records
+selected outputs as proposals; approval and replay into the vector store is a
+manual operator step.
+
+**Action proposal** — The analogous record for external side effects such as
+`git_push`. NodeOS enforces a strict branch allowlist and a
+preview-before-execute contract for the actions it does run.
+
+### Internal-only access
+
+NodeOS binds only to `127.0.0.1:8001` on the host and is never exposed to
+browsers. All state-mutating NodeOS endpoints require an `X-Internal-Key`
+header matching `NODEOS_INTERNAL_KEY`. The brain API forwards this header
+automatically; other callers on the Docker network cannot forge requests
+without the secret.
 
 ### Using the kernel from the API
 
-The brain's chat interface automatically requests a loop permit for each session. You interact with the kernel through the console UI (Kernel tab) or directly via:
+The brain's chat interface automatically requests a loop permit for each
+session via an internal route. For inspection and manual governance you can
+use:
 
 ```
-POST /v1/loops/request    — request a loop permit
-GET  /v1/audit            — read the audit log
-POST /v1/memory/propose   — propose a memory write
+POST /v1/brain/command         — PROPOSE / CONFIRM read-only commands via the brain API
+GET  /v1/audit                 — read the audit log
 ```
+
+The raw NodeOS endpoints (`/v1/loops/request`, `/v1/memory/propose`, …) are
+reachable only from inside the Docker network with a valid `X-Internal-Key`.
 
 ### Kernel rate limits
 
-Loop permit requests are rate-limited per client. Defaults: 30 requests per 60 seconds.
-Adjust with `KERNEL_RATE_LIMIT_MAX` and `KERNEL_RATE_LIMIT_WINDOW` in `.env`.
+Kernel commands are rate-limited per client. Defaults: 30 requests per 60
+seconds. Adjust with `KERNEL_RATE_LIMIT_MAX` and `KERNEL_RATE_LIMIT_WINDOW`
+in `.env`.
 
 ---
 
@@ -501,7 +538,8 @@ This brain node is designed for **personal self-hosted use** by a single owner.
 **What is protected:**
 - All private endpoints require API key authentication
 - PostgreSQL never binds to a public interface (127.0.0.1 only)
-- CognitiveOS requires explicit loop permits before state mutations
+- CognitiveOS requires a valid loop permit on every chat completion
+- NodeOS state-mutating endpoints require `X-Internal-Key` (service-to-service auth)
 - Startup refuses if secrets are missing or default (in prod mode)
 - CognitiveOS kernel request bodies are size-limited
 
