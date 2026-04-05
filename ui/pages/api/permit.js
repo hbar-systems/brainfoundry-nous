@@ -2,9 +2,13 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
   try {
+    const headers = { 'Content-Type': 'application/json' }
+    if (process.env.NODEOS_INTERNAL_KEY) {
+      headers['X-Internal-Key'] = process.env.NODEOS_INTERNAL_KEY
+    }
     const r = await fetch('http://nodeos:8001/v1/loops/request', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         node_id: process.env.BRAIN_ID || process.env.BRAIN_NODE_ID || 'my-brain-01',
         agent_id: 'console',

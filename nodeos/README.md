@@ -10,10 +10,12 @@ NodeOS is the authority service for the BrainFoundryOS brain system. It enforces
 
 ## Architecture
 
-- **FastAPI** service running on port 8001 (internal)
+- **FastAPI** service running on port 8001 (internal, bound to `127.0.0.1`)
 - **SQLite** database for permits, memory proposals, and audit events
 - **HMAC-signed tokens** for permit authentication
-- **Browser access via Next.js proxy** at `/api/nodeos/*`
+- **No browser proxy.** NodeOS is reachable only from inside the Docker network.
+  The brain API (`api` container) is the sole legitimate caller. Browser clients
+  do not talk to NodeOS directly.
 
 ## Identity
 
@@ -148,33 +150,24 @@ curl "http://localhost:8001/v1/audit/events?event_type=LOOP_PERMIT"
 curl "http://localhost:8001/v1/audit/events?agent_id=my-agent.v1&limit=50"
 ```
 
-## Browser Access (via Next.js Proxy)
+## Access model
 
-When running in the stack, browser clients access NodeOS through the UI proxy:
+NodeOS is an **internal-only service**. It has no browser-facing proxy and
+binds only to `127.0.0.1:8001` on the host. The only legitimate caller is the
+brain `api` container on the Docker network.
 
-```javascript
-// Browser-side code
-const response = await fetch('/api/nodeos/v1/loops/request', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    node_id: 'my-brain-01',
-    agent_id: 'my-agent.v1',
-    loop_type: 'research',
-    ttl_seconds: 300,
-    reason: 'Research assistant loop'
-  })
-});
-```
+All state-mutating endpoints (permit request/revoke, memory propose/decide,
+action propose/decide) additionally require an `X-Internal-Key` header matching
+`NODEOS_INTERNAL_KEY`. The brain API forwards this header automatically when it
+calls NodeOS. Requests without the header are rejected `401`.
 
-The Next.js proxy at `ui/pages/api/nodeos/[...path].js` forwards to `http://nodeos:8001` internally.
+## Security Notes
 
-## Security Notes (Phase 1)
-
-- HMAC secret is environment-based (dev default provided)
-- No authentication on `/v1/memory/{id}/decide` endpoint (Phase 2: add admin auth)
-- Permit tokens are HMAC-signed but not encrypted
-- SQLite database is volume-mounted for persistence
+- `NODEOS_SIGNING_SECRET` (HMAC) and `NODEOS_INTERNAL_KEY` (service-to-service
+  auth) are required. In `BRAIN_ENV=prod`, NodeOS refuses to start if either is
+  unset or left at a default value.
+- Permit tokens are HMAC-signed (not encrypted) — do not log them.
+- SQLite database is volume-mounted for persistence at `/data/nodeos.db`.
 
 ## Development
 
