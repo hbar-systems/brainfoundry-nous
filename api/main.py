@@ -14,7 +14,7 @@ import socket
 from typing import List, Optional, Annotated, Dict, Any, Union
 from datetime import datetime
 import uuid
-import PyPDF2
+import pypdf
 import docx
 from PIL import Image
 import pytesseract
@@ -122,7 +122,7 @@ def load_persona_text() -> str:
 BRAIN_PERSONA = load_persona_text()
 
 
-app = FastAPI(title="LLM Private Assistant API", version="2.0.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="BrainFoundry Node", version=BRAIN_VERSION, docs_url=None, redoc_url=None, openapi_url=None)
 
 
 
@@ -325,13 +325,31 @@ KERNEL_RATE_LIMIT_WINDOW = int(os.getenv("KERNEL_RATE_LIMIT_WINDOW", "60"))
 
 
 NODEOS_URL = os.getenv("NODEOS_URL", "http://nodeos:8001")
+NODEOS_INTERNAL_KEY = os.getenv("NODEOS_INTERNAL_KEY", "")
+
+if BRAIN_ENV != "dev" and not NODEOS_INTERNAL_KEY:
+    raise RuntimeError(
+        "Startup refused: NODEOS_INTERNAL_KEY must be set in non-dev environments. "
+        "Generate one with: openssl rand -hex 32"
+    )
+
+
+def _nodeos_headers() -> dict:
+    """Headers for service-to-service calls to NodeOS.
+
+    NodeOS requires X-Internal-Key on state-mutating routes. Read routes
+    (e.g. /v1/loops/status) do not require it, but sending it is harmless
+    and keeps all NodeOS traffic uniformly authenticated.
+    """
+    return {"X-Internal-Key": NODEOS_INTERNAL_KEY} if NODEOS_INTERNAL_KEY else {}
+
 
 def _verify_loop_permit(permit_id: str) -> dict:
     """Verify a loop permit is ACTIVE and not expired. Raises 403 on failure."""
     if not permit_id:
         raise HTTPException(status_code=403, detail="permit_id is required. Obtain a loop permit from NodeOS first (POST /v1/loops/request).")
     try:
-        resp = requests.get(f"{NODEOS_URL}/v1/loops/status/{permit_id}", timeout=5)
+        resp = requests.get(f"{NODEOS_URL}/v1/loops/status/{permit_id}", headers=_nodeos_headers(), timeout=5)
     except Exception:
         raise HTTPException(status_code=503, detail="NodeOS unreachable — inference denied (fail closed).")
     if resp.status_code == 404:
@@ -377,7 +395,7 @@ def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file"""
     try:
         pdf_file = io.BytesIO(file_content)
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        pdf_reader = pypdf.PdfReader(pdf_file)
         text = ""
         for page in pdf_reader.pages:
             text += page.extract_text() + "\n"
@@ -511,7 +529,7 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
 @app.get("/")
 def read_root(api_key: str = Depends(get_api_key)):
     return {
-        "message": "🤖 LLM Private Assistant API v2.0",
+        "message": f"BrainFoundry Node v{BRAIN_VERSION}",
         "status": "running",
         "features": {
             "chat": "OpenAI-compatible chat completions",
@@ -785,6 +803,7 @@ def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, sourc
                 "content": content,
                 "source_refs": source_refs,
             },
+            headers=_nodeos_headers(),
             timeout=5,
         )
         resp.raise_for_status()
@@ -802,6 +821,7 @@ def _nodeos_check_proposal(proposal_id: str) -> str:
     try:
         resp = requests.get(
             f"{NODEOS_URL}/v1/memory/proposals/{proposal_id}",
+            headers=_nodeos_headers(),
             timeout=5,
         )
         if resp.status_code == 404:

@@ -87,7 +87,7 @@ app.add_middleware(
     allow_origins=_nodeos_allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Internal-Key"],
 )
 
 # Configuration
@@ -103,6 +103,39 @@ if not SIGNING_SECRET or SIGNING_SECRET == _DEFAULT_SECRET:
     else:
         SIGNING_SECRET = _DEFAULT_SECRET
         print("WARNING: NodeOS using default signing secret. Set NODEOS_SIGNING_SECRET before deploying to production.")
+# Internal service-to-service key — required on all state-mutating POST routes.
+# The brain `api` container forwards this as `X-Internal-Key`. NodeOS is not
+# reachable from browsers, and this header makes it explicit that only trusted
+# in-network callers can issue permits, propose memory, or decide proposals.
+NODEOS_INTERNAL_KEY = os.getenv("NODEOS_INTERNAL_KEY", "")
+_INTERNAL_KEY_DEFAULTS = {"", "change-me", "dev-internal-key"}
+if not NODEOS_INTERNAL_KEY or NODEOS_INTERNAL_KEY in _INTERNAL_KEY_DEFAULTS:
+    _env = os.getenv("BRAIN_ENV", "dev").lower()
+    if _env != "dev":
+        raise RuntimeError(
+            "Startup refused: NODEOS_INTERNAL_KEY must be set to a strong secret in non-dev environments. "
+            "Generate one with: openssl rand -hex 32"
+        )
+    else:
+        print(
+            "WARNING: NODEOS_INTERNAL_KEY is not set. NodeOS mutating endpoints are "
+            "unauthenticated in dev mode. Set this before deploying to production."
+        )
+
+
+def require_internal_key(x_internal_key: Optional[str] = Header(default=None)) -> None:
+    """FastAPI dependency that fails closed on state-mutating NodeOS routes.
+
+    If NODEOS_INTERNAL_KEY is configured, the caller must present a matching
+    X-Internal-Key header. If it is unset (dev mode only), the check is
+    skipped and a warning was already emitted at startup.
+    """
+    if not NODEOS_INTERNAL_KEY:
+        return  # dev mode, startup warning already logged
+    if not x_internal_key or not hmac.compare_digest(x_internal_key, NODEOS_INTERNAL_KEY):
+        raise HTTPException(status_code=401, detail="invalid or missing X-Internal-Key")
+
+
 DB_PATH = os.getenv("NODEOS_DB_PATH", "/data/nodeos.db")
 MEMORY_LOG_PATH = os.getenv("NODEOS_MEMORY_LOG_PATH", "/data/memory_log.jsonl")
 ACTION_WORKSPACE_ROOT = os.getenv("NODEOS_WORKSPACE_ROOT", "/data/repos/brain")
@@ -976,7 +1009,7 @@ def list_audit_events(
     return {"ok": True, "count": len(rows), "events": rows}
 
 
-@app.post("/v1/loops/request", response_model=LoopPermitResponse)
+@app.post("/v1/loops/request", response_model=LoopPermitResponse, dependencies=[Depends(require_internal_key)])
 def request_loop_permit(
     request: LoopPermitRequest,
     conn: sqlite3.Connection = Depends(get_db)
@@ -1042,7 +1075,7 @@ def request_loop_permit(
     )
 
 
-@app.post("/v1/loops/revoke")
+@app.post("/v1/loops/revoke", dependencies=[Depends(require_internal_key)])
 def revoke_loop_permit(
     request: LoopRevokeRequest,
     conn: sqlite3.Connection = Depends(get_db)
@@ -1088,7 +1121,7 @@ def revoke_loop_permit(
     return {"status": "revoked", "permit_id": request.permit_id}
 
 
-@app.post("/v1/memory/propose")
+@app.post("/v1/memory/propose", dependencies=[Depends(require_internal_key)])
 def propose_memory(
     proposal: MemoryProposal,
     conn: sqlite3.Connection = Depends(get_db)
@@ -2141,7 +2174,7 @@ def get_action_commit(
 
 
 
-@app.post("/v1/actions/propose")
+@app.post("/v1/actions/propose", dependencies=[Depends(require_internal_key)])
 def propose_action(
     proposal: ActionProposal,
     conn: sqlite3.Connection = Depends(get_db)
@@ -2210,7 +2243,7 @@ def propose_action(
 
 
 
-@app.post("/v1/actions/{proposal_id}/decide")
+@app.post("/v1/actions/{proposal_id}/decide", dependencies=[Depends(require_internal_key)])
 def decide_action_proposal(
     proposal_id: str,
     decision: ActionDecision,
@@ -2380,7 +2413,7 @@ def decide_action_proposal(
 
 
 
-@app.post("/v1/memory/{proposal_id}/decide")
+@app.post("/v1/memory/{proposal_id}/decide", dependencies=[Depends(require_internal_key)])
 def decide_memory_proposal(
     proposal_id: str,
     decision: MemoryDecision,
