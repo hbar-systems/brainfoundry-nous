@@ -292,6 +292,7 @@ def verify_federation_assertion(
     public_key_b64: str,
     token: str,
     expected_audience: str,
+    expected_issuer: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Verify a cross-brain assertion using the issuing brain's public key.
@@ -303,12 +304,17 @@ def verify_federation_assertion(
         public_key_b64: BRAIN_PUBLIC_KEY of the issuing brain (base64url, no padding)
         token: the signed token string from issue_federation_assertion()
         expected_audience: this brain's brain_id -- rejects tokens not addressed to us
+        expected_issuer: if provided, the iss claim must match this brain_id.
+            Callers that fetched public_key_b64 from a specific brain MUST pass
+            that brain's id here, otherwise an attacker who compromises any other
+            brain's private key could forge an assertion that verifies against a
+            public key they supply via a different channel.
 
     Returns:
         Decoded claims dict on success.
 
     Raises:
-        ValueError: invalid_token_format | invalid_signature | aud_mismatch | expired
+        ValueError: invalid_token_format | invalid_signature | aud_mismatch | iss_mismatch | missing_iss | expired
     """
     parts = token.split(".")
     if len(parts) != 3:
@@ -331,6 +337,12 @@ def verify_federation_assertion(
 
     if payload.get("aud") != expected_audience:
         raise ValueError("aud_mismatch")
+
+    iss = payload.get("iss")
+    if not iss:
+        raise ValueError("missing_iss")
+    if expected_issuer is not None and iss != expected_issuer:
+        raise ValueError("iss_mismatch")
 
     exp = payload.get("exp")
     if exp is not None and int(time.time()) >= int(exp):
