@@ -1,0 +1,15 @@
+# Development override — copy this file to docker-compose.override.yml
+# to enable live-reload of the api container from your working tree.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# Docker Compose auto-loads docker-compose.override.yml when present.
+# DO NOT commit docker-compose.override.yml (it is gitignored).
+#
+# In production, leave this file as .example — the base docker-compose.yml
+# bakes api code into the image and does not bind-mount the host directory.
+
+services:
+  api:
+    volumes:
+      - ./api:/app/api

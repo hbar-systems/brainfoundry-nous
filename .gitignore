@@ -75,7 +75,11 @@ input_samples/*
 
 # Environment files
 .env*
-!.env.example 
+!.env.example
+
+# Docker compose override (dev only — see docker-compose.override.yml.example)
+docker-compose.override.yml
+
 # Runtime ops (audit logs, proposals)
 ops/
 

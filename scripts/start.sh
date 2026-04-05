@@ -25,7 +25,6 @@ for i in {1..60}; do
     echo "✅ API is healthy."
     echo "   Console UI: http://localhost:3010"
     echo "   API:        $API_URL"
-    echo "   API docs:   $API_URL/docs"
     exit 0
   fi
   sleep 1
