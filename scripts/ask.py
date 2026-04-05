@@ -8,7 +8,9 @@ NODEOS_URL = os.getenv("NODEOS_URL", "http://127.0.0.1:8001")
 BRAIN_ID   = os.getenv("BRAIN_ID", "my-brain-01")
 MODEL      = os.getenv("DEFAULT_MODEL", os.getenv("RAG_MODEL", "llama3.2:3b"))
 API_KEY    = os.getenv("BRAIN_API_KEY", "")
+NODEOS_INTERNAL_KEY = os.getenv("NODEOS_INTERNAL_KEY", "")
 _HEADERS   = {"Content-Type": "application/json", **({"X-Api-Key": API_KEY} if API_KEY else {})}
+_NODEOS_HEADERS = {"X-Internal-Key": NODEOS_INTERNAL_KEY} if NODEOS_INTERNAL_KEY else {}
 
 TAG_RX = re.compile(r"\[(?P<body>[^\]]+)\]")
 
@@ -19,9 +21,10 @@ def _acquire_permit():
         "loop_type": "research",
         "ttl_seconds": 300,
         "reason": "ask.py script query",
-    }, timeout=5)
+    }, headers=_NODEOS_HEADERS, timeout=5)
     r.raise_for_status()
-    return r.json()["permit_id"]
+    body = r.json()
+    return body["permit_id"], body["permit_token"]
 
 def parse_tags(q: str):
     tags = []
@@ -62,9 +65,9 @@ def ask(query: str):
         if not docs:
             return f"No documents found for tags: {', '.join(tags)}"
 
-    permit_id = _acquire_permit()
+    permit_id, permit_token = _acquire_permit()
     r = requests.post(f"{API_BASE}/chat/rag",
-                      json={"query": bare, "permit_id": permit_id},
+                      json={"query": bare, "permit_id": permit_id, "permit_token": permit_token},
                       headers=_HEADERS, timeout=60)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]

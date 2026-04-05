@@ -351,7 +351,7 @@ async def handle_hbar_command(
         if policy_path.exists():
             docs = [p.name for p in sorted(policy_path.iterdir()) if p.suffix in (".md", ".txt")]
         return {
-            "governance": "brainfoundry-nous v0.5",
+            "governance": "brainfoundry-nous v0.6",
             "permit_required": True,
             "propose_confirm": True,
             "execution_classes": ["READ_ONLY", "STATE_MUTATION"],

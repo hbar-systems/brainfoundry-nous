@@ -121,7 +121,7 @@ export default function Chat() {
     try {
       const permitRes = await fetch('/api/permit', { method: 'POST' })
       const permitData = await permitRes.json()
-      if (!permitData.permit_id) {
+      if (!permitData.permit_id || !permitData.permit_token) {
         setError(`Permit failed: ${permitData.detail || permitData.error || 'NodeOS did not issue permit'}`)
         setIsLoading(false)
         return
@@ -136,6 +136,7 @@ export default function Chat() {
           session_id: sessionId,
           max_tokens: 1000,
           permit_id: permitData.permit_id,
+          permit_token: permitData.permit_token,
         }),
       })
       if (r.ok) {

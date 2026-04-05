@@ -30,6 +30,8 @@ _API_KEY          = os.getenv("BRAIN_API_KEY", "")
 _AUTH_HEADERS     = {"X-Api-Key": _API_KEY} if _API_KEY else {}
 _BRAIN_ID         = os.getenv("BRAIN_ID", "my-brain-01")
 _NODEOS_URL       = os.getenv("NODEOS_URL", DEFAULT_NODEOS)
+_NODEOS_INTERNAL_KEY = os.getenv("NODEOS_INTERNAL_KEY", "")
+_NODEOS_HEADERS   = {"X-Internal-Key": _NODEOS_INTERNAL_KEY} if _NODEOS_INTERNAL_KEY else {}
 
 def _acquire_permit():
     r = requests.post(f"{_NODEOS_URL}/v1/loops/request", json={
@@ -38,9 +40,10 @@ def _acquire_permit():
         "loop_type": "research",
         "ttl_seconds": 600,
         "reason": "planner.py script execution",
-    }, timeout=5)
+    }, headers=_NODEOS_HEADERS, timeout=5)
     r.raise_for_status()
-    return r.json()["permit_id"]
+    body = r.json()
+    return body["permit_id"], body["permit_token"]
 
 class SimplePlanner:
     """Simple planner with plan → act → verify loop"""
@@ -204,8 +207,13 @@ class SimplePlanner:
                 if endpoint == 'documents/search':
                     response = requests.post(self.search_url, json=parameters, headers=_AUTH_HEADERS, timeout=30)
                 elif endpoint == 'chat/rag':
-                    permit_id = _acquire_permit()
-                    response = requests.post(self.rag_url, json={**parameters, "permit_id": permit_id}, headers=_AUTH_HEADERS, timeout=120)
+                    permit_id, permit_token = _acquire_permit()
+                    response = requests.post(
+                        self.rag_url,
+                        json={**parameters, "permit_id": permit_id, "permit_token": permit_token},
+                        headers=_AUTH_HEADERS,
+                        timeout=120,
+                    )
                 else:
                     return {
                         'action': action,

@@ -219,11 +219,12 @@ def get_api_key(
             raise HTTPException(status_code=500, detail="Server misconfigured: BRAIN_API_KEY not set.")
         print("WARNING: BRAIN_API_KEY is not set. All requests are unauthenticated. Set this before production use.")
         return "dev_mode"
-    if x_api_key and x_api_key == BRAIN_API_KEY:
+    # Use constant-time comparison to avoid timing side channels
+    if x_api_key and hmac.compare_digest(x_api_key, BRAIN_API_KEY):
         return x_api_key
     if authorization and authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "")
-        if token == BRAIN_API_KEY:
+        token = authorization[len("Bearer "):]
+        if hmac.compare_digest(token, BRAIN_API_KEY):
             return token
     raise HTTPException(
         status_code=401,
@@ -344,23 +345,42 @@ def _nodeos_headers() -> dict:
     return {"X-Internal-Key": NODEOS_INTERNAL_KEY} if NODEOS_INTERNAL_KEY else {}
 
 
-def _verify_loop_permit(permit_id: str) -> dict:
-    """Verify a loop permit is ACTIVE and not expired. Raises 403 on failure."""
+def _verify_loop_permit(permit_id: str, permit_token: str) -> dict:
+    """Verify a loop permit via NodeOS caller-bound verification.
+
+    Both permit_id AND permit_token are required. The token is HMAC(permit_id +
+    agent_id) signed with NodeOS's SIGNING_SECRET and is only returned once,
+    from POST /v1/loops/request. A bare permit_id observed in logs cannot be
+    replayed without the token. Fails closed on any error (unreachable
+    NodeOS, bad token, expired, revoked).
+    """
     if not permit_id:
-        raise HTTPException(status_code=403, detail="permit_id is required. Obtain a loop permit from NodeOS first (POST /v1/loops/request).")
+        raise HTTPException(
+            status_code=403,
+            detail="permit_id is required. Obtain a loop permit from NodeOS first (POST /v1/loops/request).",
+        )
+    if not permit_token:
+        raise HTTPException(
+            status_code=403,
+            detail="permit_token is required. Present the token returned alongside permit_id from /v1/loops/request.",
+        )
     try:
-        resp = requests.get(f"{NODEOS_URL}/v1/loops/status/{permit_id}", headers=_nodeos_headers(), timeout=5)
+        resp = requests.post(
+            f"{NODEOS_URL}/v1/loops/verify",
+            json={"permit_id": permit_id, "permit_token": permit_token},
+            headers=_nodeos_headers(),
+            timeout=5,
+        )
     except Exception:
         raise HTTPException(status_code=503, detail="NodeOS unreachable — inference denied (fail closed).")
-    if resp.status_code == 404:
-        raise HTTPException(status_code=403, detail=f"Permit {permit_id} not found.")
+    if resp.status_code == 403:
+        try:
+            detail = resp.json().get("detail", "permit_rejected")
+        except Exception:
+            detail = "permit_rejected"
+        raise HTTPException(status_code=403, detail=f"Permit rejected: {detail}")
     resp.raise_for_status()
-    data = resp.json()
-    if data.get("status") != "ACTIVE":
-        raise HTTPException(status_code=403, detail=f"Permit {permit_id} is {data.get('status')} — not ACTIVE.")
-    if data.get("expires_at_unix", 0) < int(time.time()):
-        raise HTTPException(status_code=403, detail=f"Permit {permit_id} has expired.")
-    return data
+    return resp.json()
 
 
 # Initialize embedding model (will download on first use)
@@ -641,7 +661,7 @@ def list_models(api_key: str = Depends(get_api_key)):
 async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """Chat completion endpoint compatible with OpenAI format - supports streaming"""
     try:
-        _verify_loop_permit(request.get("permit_id"))
+        _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
 
@@ -732,7 +752,7 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
 async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """RAG-enhanced chat completion - chat with your documents!"""
     try:
-        _verify_loop_permit(request.get("permit_id"))
+        _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 3)
@@ -814,6 +834,83 @@ def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, sourc
         raise HTTPException(status_code=503, detail="NodeOS authority service timeout — memory write denied (fail closed)")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"NodeOS proposal failed: {str(e)}")
+
+
+def _nodeos_decide_memory(proposal_id: str, decision: str, decided_by: str, note: Optional[str] = None) -> dict:
+    """Decide a memory proposal via NodeOS. Fail-closed on any error."""
+    try:
+        resp = requests.post(
+            f"{NODEOS_URL}/v1/memory/{proposal_id}/decide",
+            json={"decision": decision, "decided_by": decided_by, "note": note},
+            headers=_nodeos_headers(),
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="NodeOS authority service unreachable — mutation denied (fail closed)")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=503, detail="NodeOS authority service timeout — mutation denied (fail closed)")
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"NodeOS decide failed: {e.response.status_code} {e.response.text[:200]}",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"NodeOS decide failed: {str(e)}")
+
+
+def _gate_mutation_via_nodeos(
+    *,
+    memory_type: str,
+    content: str,
+    permit_id: Optional[str],
+    permit_token: Optional[str],
+    client_id: str,
+    source_refs: Optional[dict] = None,
+) -> str:
+    """
+    Gate a brain-layer mutation (remember, forget, audit.clear) through the
+    NodeOS authority kernel. Fail-closed at every step:
+
+      1. Verify the loop permit + caller-bound token via /v1/loops/verify.
+         A bare permit_id is not sufficient.
+      2. Submit a memory proposal recording what is about to happen.
+      3. Auto-approve the proposal on behalf of the owner (decided_by is
+         namespaced to the client_id that initiated the command).
+      4. Only if all three steps succeed is the caller allowed to proceed.
+
+    Prior to v0.6, remember/forget/audit.clear executed against the
+    database directly with no kernel mediation. They now leave an
+    append-only trail in the NodeOS memory log and require an active,
+    token-bound permit.
+
+    Returns the proposal_id for inclusion in the caller's response.
+    Raises HTTPException on any failure.
+    """
+    # Step 1: caller-bound permit verification
+    _verify_loop_permit(permit_id, permit_token)
+
+    # Step 2: propose
+    proposal = _nodeos_propose_memory(
+        memory_type=memory_type,
+        content=content,
+        permit_id=permit_id,
+        source_refs=source_refs,
+    )
+    proposal_id = proposal.get("proposal_id")
+    if not proposal_id:
+        raise HTTPException(status_code=502, detail="NodeOS propose returned no proposal_id")
+
+    # Step 3: auto-approve (owner-initiated command from a trusted client)
+    _nodeos_decide_memory(
+        proposal_id=proposal_id,
+        decision="APPROVE",
+        decided_by=f"client/{client_id}",
+        note=f"auto-approved via /v1/brain/command ({memory_type})",
+    )
+
+    return proposal_id
 
 
 def _nodeos_check_proposal(proposal_id: str) -> str:
@@ -1188,6 +1285,11 @@ class CommandRequest(BaseModel):
     confirm_token: Optional[str] = None
     client_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     payload: Dict[str, Any] = Field(default_factory=dict)
+    # permit_id + permit_token are REQUIRED for mutation commands (remember,
+    # forget, audit.clear). Read-only commands (recall, memories, audit, etc.)
+    # ignore them. Enforced in brain_command dispatch.
+    permit_id: Optional[str] = None
+    permit_token: Optional[str] = None
 
 _kernel_rate_limiter = KernelRateLimiter()
 
@@ -1899,13 +2001,57 @@ async def brain_command(
                         'ingest', 'think',
                     }:
                         from api.hbar_commands import handle_hbar_command
+
+                        # ── v0.6: gate brain-layer mutations through NodeOS ──
+                        # remember/forget/audit.clear were historically routed
+                        # directly to the database / audit file. They now require
+                        # a caller-bound permit AND leave a proposal trail in the
+                        # NodeOS authority log before any side effect lands.
+                        gate_proposal_id: Optional[str] = None
+                        _payload = request.payload or {}
+                        if normalized_command == "remember":
+                            _content = (_payload.get("content") or "").strip()
+                            if not _content:
+                                raise ValueError("payload.content is required for remember")
+                            gate_proposal_id = _gate_mutation_via_nodeos(
+                                memory_type="brain.remember",
+                                content=_content[:32000],
+                                permit_id=request.permit_id,
+                                permit_token=request.permit_token,
+                                client_id=request.client_id,
+                                source_refs={"tags": _payload.get("tags") or []},
+                            )
+                        elif normalized_command == "forget":
+                            _mem_id = (_payload.get("id") or "").strip()
+                            if not _mem_id:
+                                raise ValueError("payload.id is required for forget")
+                            gate_proposal_id = _gate_mutation_via_nodeos(
+                                memory_type="brain.forget",
+                                content=f"forget memory/{_mem_id}",
+                                permit_id=request.permit_id,
+                                permit_token=request.permit_token,
+                                client_id=request.client_id,
+                                source_refs={"memory_id": _mem_id},
+                            )
+                        elif normalized_command == "audit.clear":
+                            gate_proposal_id = _gate_mutation_via_nodeos(
+                                memory_type="brain.audit.clear",
+                                content="clear api audit log",
+                                permit_id=request.permit_id,
+                                permit_token=request.permit_token,
+                                client_id=request.client_id,
+                            )
+
                         result = await handle_hbar_command(
                             command=normalized_command,
-                            payload=request.payload or {},
+                            payload=_payload,
                             client_id=request.client_id,
                             ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
                             model=os.getenv('OLLAMA_MODEL', 'llama3.2:3b'),
                         )
+                        if gate_proposal_id:
+                            result = dict(result or {})
+                            result["nodeos_proposal_id"] = gate_proposal_id
                     # ── end brain custom commands ──────────────────────────────
                     # Log successful execution
                     execution_log = {
@@ -1931,6 +2077,24 @@ async def brain_command(
                     })
 
                     
+                except HTTPException as http_exc:
+                    # Authoritative denials from the NodeOS gate (e.g. 403 permit
+                    # rejection, 503 NodeOS unreachable, 502 decide failure)
+                    # must propagate with their original status, not be
+                    # relabeled as a 500 read-only execution failure.
+                    denial_log = {
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "client_id": request.client_id,
+                        "command": normalized_command,
+                        "action": "gate_denied",
+                        "decision": "denied",
+                        "effect": "none",
+                        "status_code": http_exc.status_code,
+                        "detail": str(http_exc.detail),
+                    }
+                    with open(audit_file, "a") as f:
+                        f.write(json.dumps(denial_log) + "\n")
+                    raise
                 except Exception as e:
                     # Log execution error
                     execution_log = {
@@ -1942,10 +2106,10 @@ async def brain_command(
                         "effect": "read_only",
                         "error": str(e)
                     }
-                    
+
                     with open(audit_file, "a") as f:
                         f.write(json.dumps(execution_log) + "\n")
-                    
+
                     # Return partial result
                     return JSONResponse(
                         status_code=500,

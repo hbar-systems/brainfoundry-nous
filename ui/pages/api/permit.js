@@ -24,7 +24,10 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'permit request failed', detail: data })
     }
 
-    return res.status(200).json({ permit_id: data.permit_id })
+    return res.status(200).json({
+      permit_id: data.permit_id,
+      permit_token: data.permit_token,
+    })
   } catch (e) {
     return res.status(502).json({ error: String(e) })
   }

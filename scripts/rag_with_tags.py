@@ -6,9 +6,13 @@ NODEOS_URL = os.getenv("NODEOS_URL", "http://127.0.0.1:8001")
 BRAIN_ID   = os.getenv("BRAIN_ID", "my-brain-01")
 MODEL      = os.getenv("DEFAULT_MODEL", os.getenv("RAG_MODEL", "llama3.2:3b"))
 API_KEY    = os.getenv("BRAIN_API_KEY", "")
+NODEOS_INTERNAL_KEY = os.getenv("NODEOS_INTERNAL_KEY", "")
 
 def _acquire_permit():
     import urllib.error
+    headers = {"Content-Type": "application/json"}
+    if NODEOS_INTERNAL_KEY:
+        headers["X-Internal-Key"] = NODEOS_INTERNAL_KEY
     req = urllib.request.Request(
         f"{NODEOS_URL}/v1/loops/request",
         data=json.dumps({
@@ -18,10 +22,11 @@ def _acquire_permit():
             "ttl_seconds": 300,
             "reason": "rag_with_tags.py script query",
         }).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=5) as r:
-        return json.loads(r.read().decode())["permit_id"]
+        body = json.loads(r.read().decode())
+        return body["permit_id"], body["permit_token"]
 
 def post(path, payload):
     hdrs = {"Content-Type": "application/json"}
@@ -70,10 +75,11 @@ def main():
     ctx = "\n\n".join(r["content"] for r in chunks)[:6000]
 
     # ask the model using only this context
-    permit_id = _acquire_permit()
+    permit_id, permit_token = _acquire_permit()
     body = {
         "model": MODEL,
         "permit_id": permit_id,
+        "permit_token": permit_token,
         "messages": [
             {"role":"system","content":"Answer using ONLY the provided context. If context is insufficient, say so."},
             {"role":"user","content": f"Context:\n{ctx}\n\nQuestion: {args.query}"}

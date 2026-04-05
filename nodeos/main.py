@@ -924,6 +924,11 @@ class LoopRevokeRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class LoopVerifyRequest(BaseModel):
+    permit_id: str = Field(..., max_length=128)
+    permit_token: str = Field(..., max_length=512)
+
+
 class MemoryProposal(BaseModel):
     permit_id: str = Field(..., max_length=128)
     memory_type: str = Field(..., max_length=32, description="fact|preference|task|note")
@@ -2568,6 +2573,65 @@ def get_permit_status(
         "created_at": row["created_at"],
         "revoked_at": row["revoked_at"],
         "revoke_reason": row["revoke_reason"]
+    }
+
+
+@app.post("/v1/loops/verify", dependencies=[Depends(require_internal_key)])
+def verify_loop_permit(
+    request: LoopVerifyRequest,
+    conn: sqlite3.Connection = Depends(get_db)
+):
+    """
+    Verify a loop permit presented with its HMAC-signed permit_token.
+
+    This is the caller-bound check: a bare permit_id is NOT sufficient to
+    use a permit. The caller must also present the permit_token returned
+    from /v1/loops/request, which is HMAC(permit_id + agent_id) and cannot
+    be forged without SIGNING_SECRET. This prevents anyone who merely
+    observes a permit_id (e.g. in audit logs) from replaying it.
+
+    Returns the same shape as /v1/loops/status on success; 403 on any
+    failure (unknown permit, bad token, wrong status, expired).
+    """
+    import time
+
+    cursor = conn.execute(
+        "SELECT * FROM loop_permits WHERE permit_id = ?",
+        (request.permit_id,)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=403, detail="permit_not_found")
+
+    verified_permit_id = verify_permit_token(request.permit_token, row["agent_id"])
+    if verified_permit_id != request.permit_id:
+        log_audit_event(
+            conn,
+            event_type="LOOP_PERMIT",
+            action="VERIFY",
+            outcome="DENIED_BAD_TOKEN",
+            agent_id=row["agent_id"],
+            resource_id=request.permit_id,
+        )
+        raise HTTPException(status_code=403, detail="invalid_permit_token")
+
+    if row["status"] != "ACTIVE":
+        raise HTTPException(status_code=403, detail=f"permit_status_{row['status']}")
+
+    if row["expires_at_unix"] < int(time.time()):
+        raise HTTPException(status_code=403, detail="permit_expired")
+
+    return {
+        "permit_id": row["permit_id"],
+        "node_id": row["node_id"],
+        "agent_id": row["agent_id"],
+        "loop_type": row["loop_type"],
+        "reason": row["reason"],
+        "status": row["status"],
+        "ttl_seconds": row["ttl_seconds"],
+        "expires_at_unix": row["expires_at_unix"],
+        "created_at": row["created_at"],
     }
 
 
