@@ -1394,7 +1394,107 @@ async def brain_command(
         "normalized_command": normalized_command,
         "confirm_token": request.confirm_token,
     }
-    
+
+    # ── v0.6: NODEOS_GATED commands bypass propose-confirm entirely ──
+    # These commands (remember, forget, audit.clear) are governed by the
+    # NodeOS authority gate (_gate_mutation_via_nodeos), which does its own
+    # permit verification + proposal trail + auto-approve. The old
+    # propose-confirm + execution-class system is redundant for them.
+    if command_spec.execution_class == ExecutionClass.NODEOS_GATED:
+        from api.hbar_commands import handle_hbar_command
+
+        gate_proposal_id: Optional[str] = None
+        _payload = request.payload or {}
+        try:
+            if normalized_command == "remember":
+                _content = (_payload.get("content") or "").strip()
+                if not _content:
+                    raise ValueError("payload.content is required for remember")
+                gate_proposal_id = _gate_mutation_via_nodeos(
+                    memory_type="brain.remember",
+                    content=_content[:32000],
+                    permit_id=request.permit_id,
+                    permit_token=request.permit_token,
+                    client_id=request.client_id,
+                    source_refs={"tags": _payload.get("tags") or []},
+                )
+            elif normalized_command == "forget":
+                _mem_id = (_payload.get("id") or "").strip()
+                if not _mem_id:
+                    raise ValueError("payload.id is required for forget")
+                gate_proposal_id = _gate_mutation_via_nodeos(
+                    memory_type="brain.forget",
+                    content=f"forget memory/{_mem_id}",
+                    permit_id=request.permit_id,
+                    permit_token=request.permit_token,
+                    client_id=request.client_id,
+                    source_refs={"memory_id": _mem_id},
+                )
+            elif normalized_command == "audit.clear":
+                gate_proposal_id = _gate_mutation_via_nodeos(
+                    memory_type="brain.audit.clear",
+                    content="clear api audit log",
+                    permit_id=request.permit_id,
+                    permit_token=request.permit_token,
+                    client_id=request.client_id,
+                )
+
+            result = await handle_hbar_command(
+                command=normalized_command,
+                payload=_payload,
+                client_id=request.client_id,
+                ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
+                model=os.getenv('DEFAULT_MODEL', ''),
+            )
+            if gate_proposal_id:
+                result["nodeos_proposal_id"] = gate_proposal_id
+
+            nodeos_log = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "client_id": request.client_id,
+                "command": normalized_command,
+                "action": "nodeos_gated_executed",
+                "decision": "allowed",
+                "nodeos_proposal_id": gate_proposal_id,
+            }
+            with open(audit_file, "a") as f:
+                f.write(json.dumps(nodeos_log) + "\n")
+
+            return ok(result)
+
+        except HTTPException as http_exc:
+            denial_log = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "client_id": request.client_id,
+                "command": normalized_command,
+                "action": "gate_denied",
+                "decision": "denied",
+                "effect": "none",
+                "status_code": http_exc.status_code,
+                "detail": str(http_exc.detail),
+            }
+            with open(audit_file, "a") as f:
+                f.write(json.dumps(denial_log) + "\n")
+            raise
+        except ValueError as ve:
+            return JSONResponse(
+                status_code=400,
+                content=build_error(
+                    code=KernelErrorCode.KERNEL_VALIDATION_ERROR,
+                    message=str(ve),
+                    details={"command": normalized_command},
+                ).model_dump()
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content=build_error(
+                    code=KernelErrorCode.READ_ONLY_EXECUTION_ERROR,
+                    message="Command execution failed",
+                    details={"command": normalized_command, "error": str(e)},
+                ).model_dump()
+            )
+
     # CONFIRM flow
     if request.confirm_token:
         log_entry["action"] = "confirm_attempt"

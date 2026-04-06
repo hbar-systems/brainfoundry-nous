@@ -9,6 +9,7 @@ class ExecutionClass(str, Enum):
     STATE_MUTATION = "state_mutation"
     EXTERNAL_SIDE_EFFECT = "external_side_effect"
     MEMORY_APPEND = "memory_append"
+    NODEOS_GATED = "nodeos_gated"
 
 
 @dataclass(frozen=True)
@@ -190,7 +191,7 @@ def validate_command_payload(command_key: str, payload: Dict[str, Any]) -> None:
 REGISTRY.update({
     "remember": CommandSpec(
         command="remember",
-        execution_class=ExecutionClass.STATE_MUTATION,
+        execution_class=ExecutionClass.NODEOS_GATED,
         description="Store a memory.",
         allowed_fields={"content", "tags"},
         required_fields={"content"},
@@ -206,7 +207,7 @@ REGISTRY.update({
     ),
     "forget": CommandSpec(
         command="forget",
-        execution_class=ExecutionClass.STATE_MUTATION,
+        execution_class=ExecutionClass.NODEOS_GATED,
         description="Delete a memory by id.",
         allowed_fields={"id"},
         required_fields={"id"},
@@ -316,7 +317,7 @@ REGISTRY.update({
     ),
     "audit.clear": CommandSpec(
         command="audit.clear",
-        execution_class=ExecutionClass.STATE_MUTATION,
+        execution_class=ExecutionClass.NODEOS_GATED,
         description="Clear audit log.",
         allowed_fields=set(),
         required_fields=set(),
