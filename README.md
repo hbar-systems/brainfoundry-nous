@@ -44,7 +44,7 @@ database for the single-owner bootstrap case. See `SECURITY.md` and Section
 
 **Stack:**
 - FastAPI — chat, RAG, embeddings, identity
-- CognitiveOS — governance kernel (loop permits, PROPOSE/CONFIRM)
+- CognitiveOS — governance kernel (loop permits, mutation gate, append-only audit)
 - PostgreSQL + pgvector — vector memory
 - Ollama — local model fallback (always available, no API key needed)
 - Next.js — console UI (dashboard, chat, knowledge, kernel)
