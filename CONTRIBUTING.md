@@ -17,6 +17,23 @@ Open an issue on GitHub. Include your stack version (`docker compose exec api py
 
 The BrainFoundry node contract (`docs/brainfoundry/NODE_CONTRACT.md`) and the CognitiveOS governance model are versioned. Changes that break the wire protocol or command API require a version bump and a migration note.
 
+## Contributor License Agreement (CLA)
+
+Before your first pull request can be merged, you must sign the project's
+Contributor License Agreement. The CLA grants the project maintainer the
+right to relicense your contribution (e.g. under a commercial license)
+while you retain copyright over your own code.
+
+This is standard practice for AGPL projects that may offer dual licensing
+in the future. It does not restrict your right to use your own code however
+you wish.
+
+The CLA is at [CLA.md](CLA.md). Sign by adding your name and date to the
+file in your first PR, or by commenting "I have read and agree to the CLA"
+on your pull request.
+
 ## License
 
-By submitting a contribution you agree that your changes will be licensed under the project's [AGPL-3.0 license](LICENSE).
+By submitting a contribution you agree that your changes will be licensed
+under the project's [AGPL-3.0 license](LICENSE) and that you have signed
+the Contributor License Agreement.
