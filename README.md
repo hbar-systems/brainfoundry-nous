@@ -13,8 +13,9 @@ stores your knowledge. You own it. Nobody else has access.
 
 ### Trust model (v0.6) — read this before you run it in production
 
-This repo is the **reference implementation**, not a polished appliance. The
-guarantees it gives you today are:
+This repo is the **reference implementation**, not a polished appliance.
+CognitiveOS is the governance kernel (named `nodeos` in the container and env vars).
+The guarantees it gives you today are:
 
 - **You are the only tenant.** Designed for single-owner, self-hosted use. Not
   multi-tenant. Not a hosted service.

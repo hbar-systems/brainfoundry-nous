@@ -15,7 +15,7 @@ Open an issue on GitHub. Include your stack version (`docker compose exec api py
 
 ## Protocol changes
 
-The BrainFoundry node contract (`docs/brainfoundry/NODE_CONTRACT.md`) and the CognitiveOS governance model are versioned. Changes that break the wire protocol or command API require a version bump and a migration note.
+The BrainFoundry node contract (`docs/brainfoundry/NODE_CONTRACT.md`) and the CognitiveOS governance model (the `nodeos` service) are versioned. Changes that break the wire protocol or command API require a version bump and a migration note.
 
 ## Contributor License Agreement (CLA)
 
