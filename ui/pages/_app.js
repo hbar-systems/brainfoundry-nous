@@ -6,7 +6,6 @@ const NAV = [
   { href: '/', label: 'Dashboard' },
   { href: '/chat', label: 'Chat' },
   { href: '/docs', label: 'Knowledge' },
-  { href: '/kernel', label: 'Kernel' },
 ]
 
 // Warm academic palette
@@ -20,7 +19,6 @@ const NAV = [
 
 export default function App({ Component, pageProps }) {
   const router = useRouter()
-  const isKernel = router.pathname === '/kernel'
 
   return (
     <>
@@ -69,7 +67,7 @@ export default function App({ Component, pageProps }) {
               borderRadius: '6px',
               fontSize: '13px',
               textDecoration: 'none',
-              fontFamily: isKernel && n.href === '/kernel' ? 'DM Mono, monospace' : 'system-ui, sans-serif',
+              fontFamily: 'system-ui, sans-serif',
               color: router.pathname === n.href ? '#e8e0d5' : '#6b5f52',
               backgroundColor: router.pathname === n.href ? '#1c1814' : 'transparent',
               fontWeight: router.pathname === n.href ? 600 : 400,

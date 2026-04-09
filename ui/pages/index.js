@@ -90,11 +90,10 @@ export default function Dashboard() {
         />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '48px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginBottom: '48px' }}>
         {[
           { href: '/chat', label: 'Chat', desc: 'Talk to your brain. RAG-backed, session-aware, model-selectable.' },
           { href: '/docs', label: 'Knowledge', desc: 'Browse and search your ingested documents across all tiers.' },
-          { href: '/kernel', label: 'Kernel', desc: 'Issue governance commands. PROPOSE / CONFIRM flow.' },
         ].map(item => (
           <a key={item.href} href={item.href} style={{ textDecoration: 'none' }}>
             <div
