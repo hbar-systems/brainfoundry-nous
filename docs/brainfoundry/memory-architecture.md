@@ -1,4 +1,4 @@
-# Memory Architecture for hbar-brain
+# Memory Architecture for a BrainFoundry Node
 *Distilled from research session — April 2026*
 
 ---
@@ -47,7 +47,7 @@ Always-injection is fine as a prototype and for short sessions. It breaks down o
 
 ## The RAG + Conversation Storage Architecture
 
-This is the right immediate architecture for hbar-brain. The gaps to design around:
+This is the right immediate architecture for a BrainFoundry node. The gaps to design around:
 
 ### Chunking
 Conversations don't chunk cleanly by token count — semantic coherence gets destroyed. Requires either semantic chunking (split at meaning boundaries) or summarization-based compression before storage.
@@ -96,11 +96,11 @@ Fine-tuning and RAG are complementary layers, not competitors.
 
 Fine-tune the base model periodically (monthly, quarterly) as your thinking evolves. RAG handles the dynamic layer on top.
 
-**The real blocker for continuous fine-tuning** is the feedback signal. To fine-tune well you need a signal for what's good — labeled examples for supervised fine-tuning, preference data for RLHF. Generating that signal systematically from node experience is itself an unsolved design problem. Define early: what does "this memory update was good" mean for hbar-brain, and how do you measure it?
+**The real blocker for continuous fine-tuning** is the feedback signal. To fine-tune well you need a signal for what's good — labeled examples for supervised fine-tuning, preference data for RLHF. Generating that signal systematically from node experience is itself an unsolved design problem. Define early: what does "this memory update was good" mean for your node, and how do you measure it?
 
 ---
 
-## How hbar-brain "Learns You"
+## How a BrainFoundry Node "Learns You"
 
 The model doesn't learn you. The three mechanisms available:
 
@@ -151,7 +151,7 @@ To make raw experience into memory, you must answer explicitly:
 
 ## The Identity Layer as Schema
 
-The identity layer is not just *about* you — it is the **organizational schema** for all memory in the system. What hbar is, what it cares about, what domains it operates in, how it thinks — this determines what is salient, how things get categorized, what connects to what.
+The identity layer is not just *about* you — it is the **organizational schema** for all memory in the system. What the owner is, what they care about, what domains they operate in, how they think — this determines what is salient, how things get categorized, what connects to what.
 
 The identity layer should explicitly define:
 - **Domains** — named areas of work and thought
@@ -170,7 +170,7 @@ Before building infrastructure, establish a discipline. At the end of each signi
 
 ```
 DATE:
-DOMAIN: (which hbar.systems subsystem or life area)
+DOMAIN: (which subsystem or life area)
 SESSION TYPE: (exploration / decision / problem-solving / creative)
 
 KEY INSIGHTS: (what became clearer)
@@ -210,7 +210,7 @@ Retrieval pulls from both. Consolidation is what connects them.
 
 1. **Save everything** — every conversation, timestamped, structured
 2. **Start the memory protocol manually** — before any automation exists
-3. **Build consolidation** — even a simple weekly LLM pass that reads recent conversations and updates a "current state of hbar" document
+3. **Build consolidation** — even a simple weekly LLM pass that reads recent conversations and updates a "current state of the owner" document
 4. **Design the injection layer** — what gets injected every session (semantic document) vs. what gets retrieved dynamically (relevant episodes)
 5. **Instrument retrieval quality** — retrieval hit rate, staleness, wrong memory surfaced. Without metrics you are building blind.
 6. **Fine-tune periodically** — once enough consolidated signal exists to know what stable patterns are worth baking into weights

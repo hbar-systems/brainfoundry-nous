@@ -109,8 +109,8 @@ import os
 
 token = issue_federation_assertion(
     private_key_b64=os.getenv("BRAIN_PRIVATE_KEY"),
-    issuer_brain_id="hbar-brain-01",
-    audience_brain_id="elena-brain-01",
+    issuer_brain_id="brain-alpha",
+    audience_brain_id="brain-beta",
     subject="context_share",          # what you're asserting
     ttl_seconds=300,                  # 5 minutes
     claims={"action": "read_memory"}, # optional extra claims
@@ -128,7 +128,7 @@ import httpx
 from api.identity.core import verify_federation_assertion
 
 # 1. Fetch the issuing brain's public key
-identity = httpx.get("https://brain.hbar-brain-01-domain.com/identity").json()
+identity = httpx.get("https://brain.alpha.example.com/identity").json()
 public_key_b64 = identity["public_key"]
 
 # 2. Verify
@@ -136,7 +136,7 @@ try:
     claims = verify_federation_assertion(
         public_key_b64=public_key_b64,
         token=token,
-        expected_audience="elena-brain-01",  # this brain's brain_id
+        expected_audience="brain-beta",  # this brain's brain_id
     )
     # claims is the decoded payload — iss, aud, sub, exp, etc.
 except ValueError as e:
@@ -192,7 +192,7 @@ Federation assertions answer "is this really Brain A talking?" — before the re
 
 ---
 
-## First handshake — hbar-brain-01 ↔ elena-brain-01
+## First handshake — brain-alpha ↔ brain-beta
 
 **Prerequisites:**
 - [ ] Keypairs generated and deployed on both brains

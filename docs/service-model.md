@@ -9,7 +9,7 @@ relocated_from: hbar.world/ops/SERVICE_MODEL.md (2026-04-10)
 
 # BrainFoundry — Service Model
 
-Internal spec: what "hbar crafts your brain" means end to end.
+Internal spec: what "BrainFoundry crafts your brain" means end to end.
 This defines the intake, build, and handoff process for a personally-crafted brain node.
 
 ---
