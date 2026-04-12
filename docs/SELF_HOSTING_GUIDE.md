@@ -13,7 +13,7 @@ A complete reference for running your own sovereign brain node.
 5. [Persona — making it yours](#5-persona--making-it-yours)
 6. [Knowledge ingestion (RAG)](#6-knowledge-ingestion-rag)
 7. [Models](#7-models)
-8. [CognitiveOS — the governance kernel](#8-cognitiveos--the-governance-kernel)
+8. [BrainKernel — the governance kernel](#8-brainkernel--the-governance-kernel)
 9. [Federation](#9-federation)
 10. [Production hardening](#10-production-hardening)
 11. [Connecting external systems](#11-connecting-external-systems)
@@ -33,7 +33,7 @@ Nobody else has access. You control the data, the models, and the behavior.
 | Service | Port | Purpose |
 |---------|------|---------|
 | `api` | 8010 | Main brain API — chat, RAG, identity, kernel |
-| `nodeos` | 8001 (internal) | CognitiveOS governance kernel |
+| `nodeos` | 8001 (internal) | BrainKernel governance kernel |
 | `ui` | 3010 | Console — dashboard, chat, knowledge, kernel |
 | `postgres` | 127.0.0.1:54332 | Vector memory (pgvector) |
 | `ollama` | 11434 (internal) | Local model inference |
@@ -146,7 +146,7 @@ Copy `.env.example` to `.env`. All variables are optional unless marked **requir
 |----------|-------------|
 | `BRAIN_API_KEY` | API authentication key for all private endpoints |
 | `BRAIN_IDENTITY_SECRET` | Signs identity assertions and permits |
-| `NODEOS_SIGNING_SECRET` | Signs CognitiveOS governance tokens |
+| `NODEOS_SIGNING_SECRET` | Signs BrainKernel governance tokens |
 | `NODEOS_INTERNAL_KEY` | Service-to-service key; `api` → `nodeos` |
 | `BRAIN_PRIVATE_KEY` | ED25519 private key for federation |
 | `BRAIN_PUBLIC_KEY` | ED25519 public key (published via `/identity`) |
@@ -337,13 +337,13 @@ docker compose exec ollama ollama list
 
 ---
 
-## 8. CognitiveOS — the governance kernel
+## 8. BrainKernel — the governance kernel
 
-CognitiveOS is the governance service running in the `nodeos` container. It
+BrainKernel is the governance service running in the `nodeos` container. It
 provides loop permits, memory/action proposals, and an append-only audit log
 for the brain's chat completion path.
 
-> **Scope (v0.6).** CognitiveOS is the authoritative store for permits,
+> **Scope (v0.6).** BrainKernel is the authoritative store for permits,
 > proposals, and audit events, and it mediates the paths that matter:
 >
 > - Every `/chat/completions` and `/chat/rag` call verifies a caller-bound
@@ -547,10 +547,10 @@ This brain node is designed for **personal self-hosted use** by a single owner.
 **What is protected:**
 - All private endpoints require API key authentication
 - PostgreSQL never binds to a public interface (127.0.0.1 only)
-- CognitiveOS requires a valid loop permit on every chat completion
+- BrainKernel requires a valid loop permit on every chat completion
 - NodeOS state-mutating endpoints require `X-Internal-Key` (service-to-service auth)
 - Startup refuses if secrets are missing or default (in prod mode)
-- CognitiveOS kernel request bodies are size-limited
+- BrainKernel request bodies are size-limited
 
 **What is not protected (and why):**
 - `/identity`, `/ready`, `/capabilities` are unauthenticated — required for federation protocol; they expose only public information

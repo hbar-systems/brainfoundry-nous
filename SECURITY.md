@@ -35,7 +35,7 @@ brainfoundry-nous is designed as a **personal, self-hosted node**. Its security 
 
 ## Governance scope (v0.6)
 
-CognitiveOS (the `nodeos` container) is the authority for loop permits,
+BrainKernel (the `nodeos` container) is the authority for loop permits,
 memory proposals, action proposals, and the append-only audit log.
 
 **What it gates today:**
@@ -68,5 +68,5 @@ memory proposals, action proposals, and the append-only audit log.
   path (`POST /documents/upload`) is fully gated; the offline script is
   intended for the single-owner bootstrap case only.
 
-Treat CognitiveOS in v0.6 as a strong authority for the chat loop, external
+Treat BrainKernel in v0.6 as a strong authority for the chat loop, external
 actions, and all long-term memory writes that transit the API.

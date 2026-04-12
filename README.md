@@ -14,12 +14,14 @@ stores your knowledge. You own it. Nobody else has access.
 ### Trust model (v0.6) — read this before you run it in production
 
 This repo is the **reference implementation**, not a polished appliance.
-CognitiveOS is the governance kernel (named `nodeos` in the container and env vars).
+BrainKernel is the governance kernel (named `nodeos` in the container and env vars).
+BrainFoundryOS is the overall platform and federation protocol; each node runs a
+BrainKernel (internally `nodeos`) that handles persona, memory routing, and decision-making.
 The guarantees it gives you today are:
 
 - **You are the only tenant.** Designed for single-owner, self-hosted use. Not
   multi-tenant. Not a hosted service.
-- **CognitiveOS gates the chat loop with caller-bound permits.** Every
+- **BrainKernel gates the chat loop with caller-bound permits.** Every
   `/chat/completions` and `/chat/rag` request must present both a valid
   `permit_id` and its HMAC-signed `permit_token`. The token is issued once,
   from `POST /v1/loops/request`, and is bound to the agent that requested
@@ -28,7 +30,7 @@ The guarantees it gives you today are:
   `audit.clear` are routed through a propose → approve → execute flow
   against the NodeOS authority kernel before any database write or audit
   wipe lands. Fail-closed if NodeOS is unreachable.
-- **CognitiveOS is internal-only.** NodeOS binds to `127.0.0.1:8001`, has no
+- **BrainKernel is internal-only.** NodeOS binds to `127.0.0.1:8001`, has no
   browser proxy, and requires `X-Internal-Key` on all state-mutating routes.
 - **External actions are preview-then-execute.** `git_push` and similar
   side-effects go through a strict branch allowlist and a preview step before
@@ -45,7 +47,7 @@ database for the single-owner bootstrap case. See `SECURITY.md` and Section
 
 **Stack:**
 - FastAPI — chat, RAG, embeddings, identity
-- CognitiveOS — governance kernel (loop permits, mutation gate, append-only audit)
+- BrainKernel — governance kernel (loop permits, mutation gate, append-only audit)
 - PostgreSQL + pgvector — vector memory
 - Ollama — local model fallback (always available, no API key needed)
 - Next.js — console UI (dashboard, chat, knowledge, kernel)

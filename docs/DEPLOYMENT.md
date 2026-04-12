@@ -30,7 +30,7 @@ All configuration lives in `.env`. The key fields:
 | `BRAIN_OWNER` | Yes | Your name |
 | `BRAIN_API_KEY` | Yes | API key for all authenticated endpoints |
 | `BRAIN_IDENTITY_SECRET` | Yes | Secret for signing identity tokens |
-| `NODEOS_SIGNING_SECRET` | Yes | Secret for CognitiveOS governance kernel |
+| `NODEOS_SIGNING_SECRET` | Yes | Secret for BrainKernel governance kernel |
 | `BRAIN_PRIVATE_KEY` | Yes | ED25519 private key for federation |
 | `BRAIN_PUBLIC_KEY` | Yes | ED25519 public key (published via /identity) |
 | `POSTGRES_PASSWORD` | Yes | Change from default before production |
@@ -52,7 +52,7 @@ python scripts/generate_keypair.py
 |---|---|---|
 | `3010` | Console UI | `0.0.0.0` |
 | `8010` | Brain API | `0.0.0.0` |
-| `127.0.0.1:8001` | CognitiveOS | localhost only |
+| `127.0.0.1:8001` | BrainKernel | localhost only |
 | `127.0.0.1:54332` | PostgreSQL | localhost only |
 | `127.0.0.1:11435` | Ollama | localhost only |
 

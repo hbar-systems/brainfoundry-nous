@@ -78,7 +78,7 @@ services:
       - llm-network
     restart: unless-stopped
 
-  # CognitiveOS — governance kernel
+  # BrainKernel — governance kernel
   nodeos:
     build:
       context: ./nodeos
