@@ -292,19 +292,35 @@ function MemoryPanel() {
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Memory layers (also: "zones" or "collections") are how your brain organises
-        what it knows about you. Each layer is a themed notebook — files ingested
-        into it are tagged by theme so your brain can retrieve with context.
-        Start blank and build your mind, or start from a preset.
+        what it knows about you. Each layer is a themed notebook. Start blank and
+        build your mind, or start from a preset.
+      </p>
+      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0', fontStyle: 'italic' }}>
+        Heads-up: today layers are <b>labels</b> — you define them here, then
+        tag documents with them when uploading. Layer-scoped upload (drop files
+        straight into a layer, layer-filtered retrieval) lands in v0.8.
       </p>
 
-      {presets.length > 0 && layers.length === 0 && (
+      {presets.length > 0 && (
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 8 }}>Presets:</div>
-          {presets.map(p => (
-            <button key={p.name} onClick={() => addPreset(p)} style={{
-              ...BTN_GHOST, marginRight: 8, marginBottom: 8,
-            }}>+ {p.name}</button>
-          ))}
+          {presets.map(p => {
+            const already = layers.find(l => l.name === p.name)
+            return (
+              <button
+                key={p.name}
+                onClick={() => addPreset(p)}
+                disabled={!!already}
+                style={{
+                  ...BTN_GHOST,
+                  marginRight: 8,
+                  marginBottom: 8,
+                  opacity: already ? 0.35 : 1,
+                  cursor: already ? 'default' : 'pointer',
+                }}
+              >+ {p.name}</button>
+            )
+          })}
         </div>
       )}
 
@@ -426,7 +442,7 @@ function AdvancedPanel() {
         permit, which are auto-approved, which are blocked. Most brains never
         touch this. If you know you need it, it's here.
       </p>
-      <a href="/admin" style={{ ...BTN, textDecoration: 'none', display: 'inline-block' }}>
+      <a href="/admin/kernel" style={{ ...BTN, textDecoration: 'none', display: 'inline-block' }}>
         Open Kernel console →
       </a>
     </div>

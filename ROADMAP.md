@@ -21,7 +21,20 @@ to grow into, not promises with dates.
 - [ ] Clean public URLs (drop `-brain-01` from customer-facing hostnames).
 - [ ] Provisioner: proper CI/CD (replace rsync) — blocked on org Deploy Keys policy.
 
-## v0.8 — observability + trust surface
+## v0.8 — memory layers become real + observability
+
+**Memory layers currently = labels only.** You define them in Settings but
+uploads are not yet scoped to them. Fixing this is the top v0.8 item.
+
+- [ ] **Layer-scoped upload** — in Knowledge (or from inside a layer row in
+      Settings), drop files into a specific layer. Each chunk gets the
+      layer name as a tag in the vector store.
+- [ ] **Layer-filtered retrieval** — RAG queries can narrow to one or more
+      layers, so "what did I say about X in my `thinking` layer" works.
+- [ ] **Per-layer stats** — doc count, last-ingested timestamp, shown in
+      the Settings layer row.
+
+Also in v0.8 (observability + trust surface):
 
 Deferred from the v0.7.x Brain UX v2 pass because each one needs its own
 backend (event store, pollable endpoints, etc). These are the natural next
