@@ -301,6 +301,53 @@ def get_persona(api_key: str = Depends(get_api_key)):
     return {"persona": BRAIN_PERSONA}
 
 
+class FederationAssertionRequest(BaseModel):
+    token: str
+    issuer_endpoint: str
+
+
+@app.post("/v1/federation/assertion")
+async def receive_federation_assertion(req: FederationAssertionRequest):
+    """
+    Accept a cross-brain assertion from a peer.
+
+    Flow: caller POSTs {token, issuer_endpoint}. We fetch issuer_endpoint/identity
+    to retrieve the issuing brain's public key + brain_id, then verify the token
+    with this brain as the expected audience. Returns the decoded claims on success.
+    """
+    from api.identity.core import verify_federation_assertion
+
+    this_brain_id = os.getenv("BRAIN_ID")
+    if not this_brain_id:
+        raise HTTPException(500, "BRAIN_ID not configured")
+
+    identity_url = req.issuer_endpoint.rstrip("/") + "/identity"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(identity_url)
+            resp.raise_for_status()
+            identity = resp.json()
+    except Exception as e:
+        raise HTTPException(502, f"Could not fetch issuer /identity: {type(e).__name__}: {e}")
+
+    issuer_brain_id = identity.get("brain_id")
+    public_key = identity.get("public_key")
+    if not issuer_brain_id or not public_key:
+        raise HTTPException(502, "Issuer /identity missing brain_id or public_key")
+
+    try:
+        claims = verify_federation_assertion(
+            public_key_b64=public_key,
+            token=req.token,
+            expected_audience=this_brain_id,
+            expected_issuer=issuer_brain_id,
+        )
+    except ValueError as e:
+        raise HTTPException(401, f"assertion_verify_failed: {e}")
+
+    return {"verified": True, "issuer": issuer_brain_id, "audience": this_brain_id, "claims": claims}
+
+
 @app.get("/ready")
 def ready():
     """
