@@ -348,6 +348,98 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
     return {"verified": True, "issuer": issuer_brain_id, "audience": this_brain_id, "claims": claims}
 
 
+# ---------------------------------------------------------------------------
+# Settings endpoints (runtime-mutable config, backed by sidecar JSON file)
+# ---------------------------------------------------------------------------
+
+from api import settings_store
+
+
+class SetKeyRequest(BaseModel):
+    provider: str
+    key: str  # empty string clears
+
+
+class SetModelRequest(BaseModel):
+    model: str
+
+
+class MemoryLayer(BaseModel):
+    name: str
+    description: str = ""
+
+
+class SetMemoryLayersRequest(BaseModel):
+    layers: List[MemoryLayer]
+
+
+@app.get("/settings/keys")
+def settings_get_keys(api_key: str = Depends(get_api_key)):
+    """Return masked key state per provider. Never returns full secrets."""
+    return {
+        "providers": list(settings_store.PROVIDER_ENV.keys()),
+        "keys": settings_store.get_keys_masked(),
+    }
+
+
+@app.post("/settings/keys")
+def settings_set_key(req: SetKeyRequest, api_key: str = Depends(get_api_key)):
+    try:
+        settings_store.set_key(req.provider, req.key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _providers.rebuild_clients()
+    return {"ok": True, "keys": settings_store.get_keys_masked()}
+
+
+@app.get("/settings/model")
+def settings_get_model(api_key: str = Depends(get_api_key)):
+    return {
+        "active": settings_store.get_active_model(),
+        "available": _providers.get_available_models(),
+    }
+
+
+@app.post("/settings/model")
+def settings_set_model(req: SetModelRequest, api_key: str = Depends(get_api_key)):
+    settings_store.set_active_model(req.model)
+    return {"ok": True, "active": req.model}
+
+
+@app.get("/settings/memory-layers")
+def settings_get_memory_layers(api_key: str = Depends(get_api_key)):
+    return {
+        "layers": settings_store.get_memory_layers(),
+        "presets": settings_store.MEMORY_LAYER_PRESETS,
+    }
+
+
+@app.post("/settings/memory-layers")
+def settings_set_memory_layers(req: SetMemoryLayersRequest, api_key: str = Depends(get_api_key)):
+    settings_store.set_memory_layers([l.model_dump() for l in req.layers])
+    return {"ok": True, "layers": settings_store.get_memory_layers()}
+
+
+@app.get("/settings/federation")
+def settings_get_federation(api_key: str = Depends(get_api_key)):
+    """Brain identity summary for the Security & Federation panel."""
+    brain_id = os.getenv("BRAIN_ID")
+    public_key = os.getenv("BRAIN_PUBLIC_KEY")
+    if not public_key:
+        # Fall back to parsing brain_identity.yaml
+        try:
+            ident = get_identity()
+            public_key = ident.get("public_key")
+        except Exception:
+            public_key = None
+    return {
+        "brain_id": brain_id,
+        "public_key": public_key,
+        "api_key_configured": bool(os.getenv("BRAIN_API_KEY")),
+        "federation_route": "/v1/federation/assertion",
+    }
+
+
 @app.get("/ready")
 def ready():
     """

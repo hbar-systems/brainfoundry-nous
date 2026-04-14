@@ -1,4 +1,58 @@
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+
+function FirstLoginTour() {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!localStorage.getItem('brain_tour_seen')) setShow(true)
+  }, [])
+  const dismiss = () => {
+    localStorage.setItem('brain_tour_seen', '1')
+    setShow(false)
+  }
+  if (!show) return null
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 200,
+      background: 'rgba(0,0,0,0.7)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 20,
+    }}>
+      <div style={{
+        background: '#161310',
+        border: '1px solid #2a2420',
+        borderRadius: 12,
+        maxWidth: 520,
+        width: '100%',
+        padding: 32,
+        color: '#e8e0d5',
+      }}>
+        <div style={{ color: '#c9a96e', fontSize: 24, marginBottom: 8 }}>ℏ</div>
+        <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontSize: 24, margin: '0 0 14px 0' }}>
+          Welcome to your brain.
+        </h2>
+        <p style={{ color: '#e8e0d5', fontSize: 14, lineHeight: 1.7, margin: '0 0 12px 0' }}>
+          This isn't a chat product. It's an instance you own — running on your
+          server, remembering what you teach it, answering only to you.
+        </p>
+        <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: '0 0 16px 0' }}>
+          Three things to do first:
+        </p>
+        <ol style={{ color: '#e8e0d5', fontSize: 14, lineHeight: 1.8, paddingLeft: 20, margin: '0 0 20px 0' }}>
+          <li>Open <Link href="/settings" style={{ color: '#c9a96e' }}>Settings</Link> and add an API key (or skip — local Ollama works out of the box).</li>
+          <li>Set up your memory layers — start blank, or pick presets.</li>
+          <li>Upload something via <Link href="/upload" style={{ color: '#c9a96e' }}>Knowledge</Link>. Your brain learns from what you give it.</li>
+        </ol>
+        <button onClick={dismiss} style={{
+          background: '#c9a96e', color: '#0e0c0b',
+          border: 'none', borderRadius: 6, padding: '10px 20px',
+          fontSize: 13, fontWeight: 600, cursor: 'pointer',
+        }}>Got it</button>
+      </div>
+    </div>
+  )
+}
 
 function StatCard({ label, value, sub, accent }) {
   return (
@@ -47,6 +101,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: '40px 32px', maxWidth: '920px', margin: '0 auto' }}>
+      <FirstLoginTour />
 
       <div style={{ marginBottom: '40px' }}>
         <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: '#e5e5e5' }}>

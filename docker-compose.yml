@@ -72,6 +72,7 @@ services:
       - ./extensions/brain:/app/extensions/brain:rw
       - ./prepared_docs:/app/prepared_docs:rw
       - api_data:/app/data
+      - api_runtime:/app/runtime
       # For live-reload during development, copy docker-compose.override.yml.example
       # to docker-compose.override.yml — it bind-mounts ./api over /app/api.
     networks:
@@ -161,3 +162,4 @@ volumes:
   nodeos_data:
   redis_data:
   api_data:
+  api_runtime:

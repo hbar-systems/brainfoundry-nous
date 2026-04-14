@@ -2,53 +2,56 @@
 providers.py — Multi-provider LLM routing for BrainFoundry Node
 
 Bring Your Own Key: only providers with configured API keys are active.
-Supported: Anthropic, OpenAI, Google Gemini, xAI Grok, Groq, OpenRouter, Ollama (local)
+Supported: Anthropic, OpenAI, Google Gemini, xAI Grok, Groq, OpenRouter,
+Together.ai, Mistral, Ollama (local).
 
-Groq and xAI and OpenRouter and Gemini all use OpenAI-compatible APIs,
-so we use the openai SDK with a different base_url for each.
+Groq, xAI, OpenRouter, Gemini, Together, and Mistral all expose
+OpenAI-compatible APIs, so we use the openai SDK with a different base_url.
+
+Clients are (re)built from os.environ. Call rebuild_clients() after
+mutating keys at runtime (e.g. via /settings/keys) so the change takes
+effect without a container restart.
 """
 import os
 import httpx
 
+from api import settings_store
+
+# Hydrate sidecar-stored keys into os.environ before client init.
+settings_store.hydrate_env()
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 
-# --- Anthropic ---
-try:
-    import anthropic as _ant
-    _anthropic_async = _ant.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) if os.getenv("ANTHROPIC_API_KEY") else None
-except ImportError:
-    _anthropic_async = None
+_anthropic_async = None
+_openai = _groq = _xai = _openrouter = _gemini = _together = _mistral = None
 
-# --- OpenAI-compatible clients ---
-try:
-    from openai import AsyncOpenAI
 
-    _openai = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY")
-    ) if os.getenv("OPENAI_API_KEY") else None
+def rebuild_clients() -> None:
+    """(Re)build all provider clients from current os.environ.
+    Safe to call at import time and after any key change."""
+    global _anthropic_async, _openai, _groq, _xai, _openrouter, _gemini, _together, _mistral
 
-    _groq = AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1"
-    ) if os.getenv("GROQ_API_KEY") else None
+    try:
+        import anthropic as _ant
+        _anthropic_async = _ant.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY")) if os.getenv("ANTHROPIC_API_KEY") else None
+    except ImportError:
+        _anthropic_async = None
 
-    _xai = AsyncOpenAI(
-        api_key=os.getenv("XAI_API_KEY"),
-        base_url="https://api.x.ai/v1"
-    ) if os.getenv("XAI_API_KEY") else None
+    try:
+        from openai import AsyncOpenAI
 
-    _openrouter = AsyncOpenAI(
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-        base_url="https://openrouter.ai/api/v1"
-    ) if os.getenv("OPENROUTER_API_KEY") else None
+        _openai = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+        _groq = AsyncOpenAI(api_key=os.getenv("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1") if os.getenv("GROQ_API_KEY") else None
+        _xai = AsyncOpenAI(api_key=os.getenv("XAI_API_KEY"), base_url="https://api.x.ai/v1") if os.getenv("XAI_API_KEY") else None
+        _openrouter = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1") if os.getenv("OPENROUTER_API_KEY") else None
+        _gemini = AsyncOpenAI(api_key=os.getenv("GOOGLE_API_KEY"), base_url="https://generativelanguage.googleapis.com/v1beta/openai/") if os.getenv("GOOGLE_API_KEY") else None
+        _together = AsyncOpenAI(api_key=os.getenv("TOGETHER_API_KEY"), base_url="https://api.together.xyz/v1") if os.getenv("TOGETHER_API_KEY") else None
+        _mistral = AsyncOpenAI(api_key=os.getenv("MISTRAL_API_KEY"), base_url="https://api.mistral.ai/v1") if os.getenv("MISTRAL_API_KEY") else None
+    except ImportError:
+        _openai = _groq = _xai = _openrouter = _gemini = _together = _mistral = None
 
-    _gemini = AsyncOpenAI(
-        api_key=os.getenv("GOOGLE_API_KEY"),
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-    ) if os.getenv("GOOGLE_API_KEY") else None
 
-except ImportError:
-    _openai = _groq = _xai = _openrouter = _gemini = None
+rebuild_clients()
 
 
 # Static model lists per provider (shown when key is present)
@@ -81,6 +84,15 @@ PROVIDER_MODELS = {
         "openrouter/qwen/qwen-2.5-72b-instruct",
         "openrouter/mistralai/mistral-large",
     ],
+    "together": [
+        "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "together/deepseek-ai/DeepSeek-V3",
+        "together/Qwen/Qwen2.5-72B-Instruct-Turbo",
+    ],
+    "mistral": [
+        "mistral-large-latest",
+        "mistral-small-latest",
+    ],
 }
 
 
@@ -94,23 +106,21 @@ def get_available_models() -> list:
 
     if os.getenv("ANTHROPIC_API_KEY") and _anthropic_async:
         models += [{"name": m, "provider": "anthropic"} for m in PROVIDER_MODELS["anthropic"]]
-
     if os.getenv("OPENAI_API_KEY") and _openai:
         models += [{"name": m, "provider": "openai"} for m in PROVIDER_MODELS["openai"]]
-
     if os.getenv("GOOGLE_API_KEY") and _gemini:
         models += [{"name": m, "provider": "gemini"} for m in PROVIDER_MODELS["gemini"]]
-
     if os.getenv("XAI_API_KEY") and _xai:
         models += [{"name": m, "provider": "xai"} for m in PROVIDER_MODELS["xai"]]
-
     if os.getenv("GROQ_API_KEY") and _groq:
         models += [{"name": m, "provider": "groq"} for m in PROVIDER_MODELS["groq"]]
-
     if os.getenv("OPENROUTER_API_KEY") and _openrouter:
         models += [{"name": m, "provider": "openrouter"} for m in PROVIDER_MODELS["openrouter"]]
+    if os.getenv("TOGETHER_API_KEY") and _together:
+        models += [{"name": m, "provider": "together"} for m in PROVIDER_MODELS["together"]]
+    if os.getenv("MISTRAL_API_KEY") and _mistral:
+        models += [{"name": m, "provider": "mistral"} for m in PROVIDER_MODELS["mistral"]]
 
-    # Always include local Ollama models (whatever is actually pulled)
     try:
         import requests as _req
         r = _req.get(f"{OLLAMA_URL}/api/tags", timeout=3)
@@ -133,6 +143,8 @@ def _resolve(model: str):
       grok-*           → xAI
       groq/*           → Groq (prefix stripped before API call)
       openrouter/*     → OpenRouter (prefix stripped before API call)
+      together/*       → Together.ai (prefix stripped before API call)
+      mistral-*        → Mistral
       anything else    → Ollama (local)
     """
     if model.startswith("claude-"):
@@ -147,6 +159,10 @@ def _resolve(model: str):
         return ("openai_compat", _groq, model[5:])
     elif model.startswith("openrouter/"):
         return ("openai_compat", _openrouter, model[11:])
+    elif model.startswith("together/"):
+        return ("openai_compat", _together, model[9:])
+    elif model.startswith("mistral-"):
+        return ("openai_compat", _mistral, model)
     else:
         return ("ollama", None, model)
 

@@ -194,6 +194,42 @@ docker compose up -d --build
 
 ---
 
+## Upgrading your brain (you own the deploy)
+
+Your brain is a `git clone` of this repo. There is no vendor upgrade channel,
+no forced updates, no telemetry. You choose when to pull and what to pull.
+
+**Track `main` (latest stable):**
+```bash
+ssh <you>@<your-brain-host>
+cd /home/hbar/brain
+git pull origin main
+docker compose up -d --build api ui
+```
+
+**Pin to a specific commit** (reproducible, audit-friendly):
+```bash
+git fetch
+git checkout <commit-sha>
+docker compose up -d --build api ui
+```
+
+**Fork and run your own changes:** also fine. It's your brain. The only
+contract that must stay compatible across forks is the federation protocol
+(`/identity` + `POST /v1/federation/assertion`) so other brains can still
+verify you.
+
+This means three populations run this repo side-by-side and all three work:
+
+1. **BrainFoundry-provisioned customers** — default, track `main`.
+2. **Self-hosters** — `git clone` + `docker compose up` on any VPS.
+3. **Forkers** — diverge however you want.
+
+Backwards-incompatible changes are always called out in `CHANGELOG.md` with
+an upgrade note. See `ROADMAP.md` for what's coming and what's deferred.
+
+---
+
 ## Get your brain built for you
 
 **White-glove personal service:**
