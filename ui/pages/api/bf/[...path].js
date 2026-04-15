@@ -1,36 +1,52 @@
 // ui/pages/api/bf/[...path].js
+// Raw-passthrough proxy: Next.js default bodyParser breaks multipart uploads
+// by consuming the stream and leaving req.body undefined. We disable the
+// built-in parser and forward the raw body for any method that has one.
+
+export const config = {
+  api: {
+    bodyParser: false,
+    responseLimit: false,
+  },
+};
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 export default async function handler(req, res) {
   const base = process.env.API_INTERNAL_URL || "http://api:8000";
   const pathParts = req.query.path || [];
   const path = Array.isArray(pathParts) ? pathParts.join("/") : String(pathParts);
-
-  const url = `${base.replace(/\/$/, "")}/${path}`;
+  const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+  const url = `${base.replace(/\/$/, "")}/${path}${qs}`;
 
   try {
     const headers = {};
-    // forward content-type when present
     if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"];
-    // inject server-side API key (falls back to browser-forwarded header)
+    if (req.headers["content-length"]) headers["content-length"] = req.headers["content-length"];
     const apiKey = process.env.BRAIN_API_KEY || req.headers["x-api-key"] || "";
     if (apiKey) headers["x-api-key"] = apiKey;
     if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
 
-    const r = await fetch(url, {
-      method: req.method,
-      headers,
-      body: req.method === "GET" || req.method === "HEAD" ? undefined : JSON.stringify(req.body),
-    });
+    let body;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      body = await readBody(req);
+    }
 
+    const r = await fetch(url, { method: req.method, headers, body });
     const text = await r.text();
     res.status(r.status);
 
-    // try to keep JSON responses as JSON
     const ct = r.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
       res.setHeader("content-type", "application/json");
       return res.send(text);
     }
-
     res.setHeader("content-type", ct || "text/plain");
     return res.send(text);
   } catch (e) {

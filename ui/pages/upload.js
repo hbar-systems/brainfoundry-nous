@@ -38,13 +38,22 @@ export default function Upload() {
   const [results, setResults] = useState([]);
   const [layers, setLayers] = useState([]);
   const [layer, setLayer] = useState("");
+  const [stats, setStats] = useState(null);
   const inputRef = useRef(null);
+
+  const loadStats = () => {
+    fetch(`${API_BASE}/documents/stats`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setStats(d))
+      .catch(() => {});
+  };
 
   useEffect(() => {
     fetch(`${API_BASE}/settings/memory-layers`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.layers) setLayers(d.layers); })
       .catch(() => {});
+    loadStats();
   }, []);
 
   const pushLog = (m) => setLog((x) => [...x, m]);
@@ -78,6 +87,7 @@ export default function Upload() {
       }
     }
     setUploading(false);
+    loadStats();
   };
 
   const runSearch = async () => {
@@ -142,6 +152,29 @@ export default function Upload() {
           </pre>
         )}
       </section>
+
+      {stats && (
+        <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>What your brain knows</h2>
+            <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
+              {stats.unique_documents ?? 0} docs &middot; {stats.total_chunks ?? 0} chunks
+            </div>
+          </div>
+          {stats.recent_documents?.length ? (
+            <div>
+              {stats.recent_documents.map((d, i) => (
+                <div key={i} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12 }}>{d.name}</span>
+                  <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>Nothing ingested yet. Upload a file above.</div>
+          )}
+        </section>
+      )}
 
       <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12 }}>
         <div style={{ display: "flex", gap: 8 }}>
