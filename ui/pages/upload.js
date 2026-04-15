@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // Use the internal Next.js proxy so the API key is forwarded server-side
 const API_BASE = "/api/bf";
@@ -9,7 +9,16 @@ export default function Upload() {
   const [log, setLog] = useState([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
+  const [layers, setLayers] = useState([]);
+  const [layer, setLayer] = useState("");
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings/memory-layers`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.layers) setLayers(d.layers); })
+      .catch(() => {});
+  }, []);
 
   const pushLog = (m) => setLog((x) => [...x, m]);
 
@@ -29,6 +38,7 @@ export default function Upload() {
     for (const file of files) {
       const fd = new FormData();
       fd.append("file", file);
+      if (layer) fd.append("layer", layer);
       try {
         const r = await fetch(`${API_BASE}/documents/upload`, {
           method: "POST",
@@ -91,11 +101,27 @@ export default function Upload() {
           </div>
         )}
 
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
+          <label style={{ fontSize: 13, color: "#555" }}>Memory layer:</label>
+          <select
+            value={layer}
+            onChange={e => setLayer(e.target.value)}
+            style={{ padding: "8px 10px", border: "1px solid #ccc", borderRadius: 8 }}
+          >
+            <option value="">(unscoped)</option>
+            {layers.map(l => (
+              <option key={l.name} value={l.name}>{l.name}</option>
+            ))}
+          </select>
           <button onClick={upload} disabled={uploading || !files.length} style={{ padding: "8px 14px" }}>
             {uploading ? "Uploading…" : "Upload"}
           </button>
         </div>
+        {layers.length === 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
+            No layers defined yet. Add some in Settings → Memory layers to scope uploads.
+          </div>
+        )}
 
         {!!log.length && (
           <pre style={{ marginTop: 16, background: "#f6f6f6", padding: 12, borderRadius: 8, whiteSpace: "pre-wrap" }}>

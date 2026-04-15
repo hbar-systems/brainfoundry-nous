@@ -1,5 +1,5 @@
 from api import providers as _providers
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 import sqlite3
@@ -607,8 +607,17 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
 
-def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """Search for similar documents with tier-weighted injection.
+def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Search for similar documents.
+
+    Two modes:
+    - **Layer-filtered (v0.8):** if `layers` is non-empty, run a single
+      similarity query restricted to chunks whose `metadata->>'layer'` is in
+      that list. Tier logic is bypassed — layers are an explicit user-driven
+      scoping mechanism and shouldn't be silently mixed with auto-injection.
+    - **Tier-weighted (legacy):** if `layers` is None or empty, run the
+      original tier1/tier2/tier3 folder-based behavior described below.
+
 
     RAG tier folders (optional conventions — rename to match your corpus):
     Tier 1 (always 2 results): identity/        — who you are, core context
@@ -633,6 +642,32 @@ def search_similar_documents(query: str, limit: int = 5) -> List[Dict[str, Any]]
         conn = get_db_connection()
         cursor = conn.cursor()
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+
+        # ── Layer-filtered path (v0.8) ───────────────────────────────
+        if layers:
+            cursor.execute(
+                """
+                SELECT document_name, content, metadata,
+                       embedding <-> %s::vector as distance
+                FROM document_embeddings
+                WHERE metadata->>'layer' = ANY(%s)
+                ORDER BY embedding <-> %s::vector
+                LIMIT %s
+                """,
+                (embedding_str, list(layers), embedding_str, limit),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            return [
+                {
+                    "document_name": r[0],
+                    "content": r[1],
+                    "metadata": r[2] or {},
+                    "similarity_score": float(1 - r[3]),
+                }
+                for r in rows
+            ]
 
         def fetch_tier(pattern, n):
             cursor.execute(
@@ -895,7 +930,10 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 3)
-        
+        layers = request.get("layers") or None
+        if layers and not isinstance(layers, list):
+            raise HTTPException(status_code=400, detail="`layers` must be a list of layer name strings")
+
         # Extract user query from latest message
         user_query = ""
         for msg in reversed(messages):
@@ -908,7 +946,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             user_query = request.get("query", "")
 
         # Search for relevant documents
-        relevant_docs = search_similar_documents(user_query, limit=search_limit)
+        relevant_docs = search_similar_documents(user_query, limit=search_limit, layers=layers)
         
         # Build context from relevant documents
         context = ""
@@ -1075,14 +1113,32 @@ def _nodeos_check_proposal(proposal_id: str) -> str:
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...), proposal_id: Optional[str] = None, permit_id: Optional[str] = None, api_key: str = Depends(get_api_key)):
+async def upload_document(
+    file: UploadFile = File(...),
+    proposal_id: Optional[str] = Form(None),
+    permit_id: Optional[str] = Form(None),
+    layer: Optional[str] = Form(None),
+    api_key: str = Depends(get_api_key),
+):
     """Upload and process document for embeddings and RAG.
-    
+
     Memory governance (deny-by-default):
     - Without proposal_id: proposes memory to NodeOS, returns 202 PENDING. No embeddings written.
     - With proposal_id: verifies APPROVED status via NodeOS before writing embeddings.
     - Requires permit_id for initial proposal (loop permit from NodeOS).
+
+    Layer scoping (v0.8):
+    - Optional `layer` field tags every chunk with the named memory layer.
+    - Layer must be one defined in Settings → Memory layers (validated against settings_store).
+    - Omitted/empty = unscoped (legacy behavior; chunks have no layer tag).
     """
+    if layer:
+        valid_layers = settings_store.get_layer_names()
+        if layer not in valid_layers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown layer '{layer}'. Defined layers: {valid_layers or '(none — define one in Settings → Memory layers)'}",
+            )
     try:
         content = await file.read()
         
@@ -1115,11 +1171,12 @@ async def upload_document(file: UploadFile = File(...), proposal_id: Optional[st
                     detail="permit_id is required to propose a document upload. "
                            "Obtain a loop permit from NodeOS first (POST /v1/loops/request)."
                 )
+            layer_suffix = f" [layer={layer}]" if layer else ""
             proposal = _nodeos_propose_memory(
                 memory_type="document_embedding",
-                content=f"Document upload: {file.filename} ({len(text)} chars, {file.content_type})",
+                content=f"Document upload: {file.filename} ({len(text)} chars, {file.content_type}){layer_suffix}",
                 permit_id=permit_id,
-                source_refs={"filename": file.filename, "content_type": file.content_type, "size": len(content)},
+                source_refs={"filename": file.filename, "content_type": file.content_type, "size": len(content), "layer": layer},
             )
             return JSONResponse(
                 status_code=202,
@@ -1169,7 +1226,8 @@ async def upload_document(file: UploadFile = File(...), proposal_id: Optional[st
                         "content_type": file.content_type,
                         "upload_timestamp": datetime.utcnow().isoformat(),
                         "chunk_index": stored_chunks,
-                        "proposal_id": proposal_id
+                        "proposal_id": proposal_id,
+                        "layer": layer,
                     })
                 )
             )
@@ -1187,6 +1245,7 @@ async def upload_document(file: UploadFile = File(...), proposal_id: Optional[st
             "chunks_created": len(chunks),
             "embeddings_stored": stored_chunks,
             "proposal_id": proposal_id,
+            "layer": layer,
             "status": "success",
             "message": f"Document processed and ready for RAG! Created {stored_chunks} searchable chunks."
         }
@@ -1264,6 +1323,53 @@ def get_document_stats(api_key: str = Depends(get_api_key)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stats retrieval failed: {str(e)}")
+
+@app.get("/documents/stats/by-layer")
+def get_document_stats_by_layer(api_key: str = Depends(get_api_key)):
+    """Per-layer document statistics for Settings → Memory layers UI.
+
+    Returns one row per declared layer (from settings_store) plus an "(unscoped)"
+    row for chunks without a layer tag. Empty layers appear with zero counts so
+    the UI can render every layer row consistently.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COALESCE(metadata->>'layer', '') AS layer,
+                   COUNT(DISTINCT document_name) AS doc_count,
+                   COUNT(*) AS chunk_count,
+                   MAX(created_at) AS last_ingested
+            FROM document_embeddings
+            GROUP BY COALESCE(metadata->>'layer', '')
+            """
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        observed = {
+            r[0]: {
+                "doc_count": r[1],
+                "chunk_count": r[2],
+                "last_ingested": r[3].isoformat() if r[3] else None,
+            }
+            for r in rows
+        }
+
+        declared_layers = settings_store.get_layer_names()
+        out = []
+        for name in declared_layers:
+            stats = observed.get(name, {"doc_count": 0, "chunk_count": 0, "last_ingested": None})
+            out.append({"layer": name, **stats})
+        # Include unscoped bucket if there are any chunks without a layer tag
+        if observed.get("", {}).get("chunk_count", 0) > 0:
+            out.append({"layer": None, **observed[""]})
+        return {"layers": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Per-layer stats failed: {str(e)}")
+
 
 # Session Management Endpoints
 @app.get("/sessions")

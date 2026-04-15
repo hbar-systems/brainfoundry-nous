@@ -258,12 +258,22 @@ function ModelsPanel() {
 function MemoryPanel() {
   const [layers, setLayers] = useState([])
   const [presets, setPresets] = useState([])
+  const [stats, setStats] = useState({})
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [err, setErr] = useState(null)
 
+  const loadStats = () => api('/documents/stats/by-layer').then(d => {
+    const map = {}
+    for (const row of (d.layers || [])) {
+      if (row.layer) map[row.layer] = row
+    }
+    setStats(map)
+  }).catch(() => {})
+
   const load = () => api('/settings/memory-layers').then(d => {
     setLayers(d.layers || []); setPresets(d.presets || [])
+    loadStats()
   }).catch(e => setErr(e.message))
   useEffect(() => { load() }, [])
 
@@ -296,9 +306,9 @@ function MemoryPanel() {
         build your mind, or start from a preset.
       </p>
       <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0', fontStyle: 'italic' }}>
-        Heads-up: today layers are <b>labels</b> — you define them here, then
-        tag documents with them when uploading. Layer-scoped upload (drop files
-        straight into a layer, layer-filtered retrieval) lands in v0.8.
+        Layers are real now (v0.8). Choose a layer when uploading from
+        Knowledge, and ask the brain scoped questions by passing
+        <code> layers: ["thinking"] </code> in <code>/chat/rag</code>.
       </p>
 
       {presets.length > 0 && (
@@ -337,6 +347,12 @@ function MemoryPanel() {
           <div>
             <div style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace', fontSize: 13 }}>{l.name}</div>
             {l.description && <div style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic' }}>{l.description}</div>}
+            {(() => {
+              const s = stats[l.name]
+              if (!s || !s.doc_count) return <div style={{ color: '#4a4038', fontSize: 11, marginTop: 4 }}>no documents yet</div>
+              const last = s.last_ingested ? new Date(s.last_ingested).toLocaleDateString() : '—'
+              return <div style={{ color: '#6b5f52', fontSize: 11, marginTop: 4 }}>{s.doc_count} doc{s.doc_count === 1 ? '' : 's'} · {s.chunk_count} chunks · last added {last}</div>
+            })()}
           </div>
           <button onClick={() => remove(i)} style={BTN_GHOST}>Remove</button>
         </div>

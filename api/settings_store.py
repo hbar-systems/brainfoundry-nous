@@ -118,6 +118,11 @@ def set_memory_layers(layers: list) -> None:
         _save(data)
 
 
+def get_layer_names() -> list:
+    """Return just the layer name strings, for fast membership checks."""
+    return [l.get("name") for l in get_memory_layers() if l.get("name")]
+
+
 MEMORY_LAYER_PRESETS = [
     {
         "name": "identity",

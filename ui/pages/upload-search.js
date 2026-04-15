@@ -22,6 +22,15 @@ export default function UploadSearch() {
   const [expandedResult, setExpandedResult] = useState(null);
 
   const [indexStatus, setIndexStatus] = useState(null);
+  const [layers, setLayers] = useState([]);
+  const [layer, setLayer] = useState('');
+
+  useEffect(() => {
+    fetch(`${API_BASE}/settings/memory-layers`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.layers) setLayers(d.layers); })
+      .catch(() => {});
+  }, []);
 
   const loadIndexStatus = async () => {
     try {
@@ -64,6 +73,7 @@ export default function UploadSearch() {
       try {
         const fd = new FormData();
         fd.append('file', file);
+        if (layer) fd.append('layer', layer);
         const r = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: fd });
         if (!r.ok) throw new Error(await r.text());
         const result = await r.json();
@@ -137,6 +147,20 @@ export default function UploadSearch() {
               Choose Files
               <input type="file" multiple accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.gif" onChange={handleFileInput} style={{ display: 'none' }} />
             </label>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+            <label style={{ fontSize: 13, color: '#4b5563' }}>Layer:</label>
+            <select
+              value={layer}
+              onChange={e => setLayer(e.target.value)}
+              style={{ flex: 1, padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+            >
+              <option value=''>(unscoped)</option>
+              {layers.map(l => (
+                <option key={l.name} value={l.name}>{l.name}</option>
+              ))}
+            </select>
           </div>
 
           {loading && (

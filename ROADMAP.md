@@ -21,6 +21,25 @@ to grow into, not promises with dates.
 - [ ] Clean public URLs (drop `-brain-01` from customer-facing hostnames).
 - [ ] Provisioner: proper CI/CD (replace rsync) — blocked on org Deploy Keys policy.
 
+## Sequencing (load-bearing — do not reorder without reason)
+
+1. **v0.8 memory layers** (this week) — layer-scoped upload, layer-filtered retrieval, per-layer stats. Everything downstream depends on this primitive being real.
+2. **URL rename** (week 2) — drop `-brain-01` from customer-facing hostnames *before* the CLI ships a public origin config. Federation is keyed on endpoints, so this is done carefully, in-place, with DNS + Caddy updates coordinated.
+3. **`nous` CLI** (week 2–3) — `nous chat`, `nous upload --layer X`, `nous stats`. Published origin points at the clean URLs. nous-brain (renamed from nous-brain-01) is the canonical public test target.
+
+Rationale: a CLI before layers would be a thinner wrapper on `/chat`. A CLI published against `*-brain-01.brainfoundry.ai` would bake a URL we intend to drop into every customer's shell history.
+
+## Testing-ring timeline (internal → private → community)
+
+- **Week 1 (now → +7d):** Internal dogfood only. Me on yury-brain + one fresh template-rebuilt brain. No external users.
+- **Week 2–3 (+7 → +21d):** 2–3 close friends, Model 3 white-glove. Surface the install/first-chat papercuts the author can't see. Each tester onboarded live, not self-serve.
+- **Week 4 (+21 → +28d):** Widen to 5–10 friends/colleagues via Model 2B provisioner. Tests the self-serve path end-to-end (email, SSH delivery, first-login tour).
+- **Week 5+ (+28d onward):** Open to brainfoundry community / public signal. Only after two rounds of private feedback have closed obvious gaps.
+
+Anti-pattern to avoid: tapping the community before the private ring on the theory that "more eyes = faster feedback." Public eyes see a broken thing and leave; private eyes see a broken thing and tell you.
+
+Caveat: timeline assumes current rate holds and no major legal/contract interruption. The employment contract question logged in FOCUS.md, if it activates, eats a week.
+
 ## v0.8 — memory layers become real + observability
 
 **Memory layers currently = labels only.** You define them in Settings but
@@ -54,6 +73,18 @@ beats once the settings surface exists.
 - [ ] **Per-key "test" button** — next to each saved provider key, a button
       that does a 1-token completion against that provider. Confirms the key
       works without burning a chat session.
+
+## v0.8.x — layer-store performance (follow-on)
+
+- [ ] **Index layer tag in vector store** — v0.8 stores layer in
+      `document_embeddings.metadata->>'layer'` (JSONB extraction, unindexed).
+      Fine at current corpus size (low-thousands of chunks per brain); becomes
+      a hot path once brains hold tens of thousands of chunks or layer filters
+      are used in every query. Fix: add a generated column
+      `layer TEXT GENERATED ALWAYS AS (metadata->>'layer') STORED` + btree
+      index, or promote layer to a first-class column. Schedule when any brain
+      crosses ~20k chunks or p95 latency on layer-filtered `/chat/rag` exceeds
+      ~300ms.
 
 ## v0.9 — appearance + identity
 
