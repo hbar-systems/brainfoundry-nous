@@ -288,7 +288,15 @@ function MemoryPanel() {
   }
 
   const add = () => {
-    if (!name.trim()) return
+    if (!name.trim()) {
+      setErr('Layer name is required — type a name in the left input, then click Add.')
+      return
+    }
+    if (layers.find(l => l.name === name.trim())) {
+      setErr(`Layer "${name.trim()}" already exists.`)
+      return
+    }
+    setErr(null)
     save([...layers, { name: name.trim(), description: desc.trim() }])
     setName(''); setDesc('')
   }
