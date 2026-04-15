@@ -1,15 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 
-// Use the internal Next.js proxy so the API key is forwarded server-side
 const API_BASE = "/api/bf";
 
-// Warm-academic palette to match nav + settings
 const BG = "#0e0c0b";
 const SURFACE = "#161310";
 const BORDER = "#2a2420";
 const TEXT = "#e8e0d5";
 const MUTED = "#6b5f52";
 const ACCENT = "#c9a96e";
+const APPROVE = "#7a9e6e";
+const REJECT = "#a96e6e";
+
 const INPUT = {
   background: "#0e0c0b",
   border: `1px solid ${BORDER}`,
@@ -32,14 +33,17 @@ const BTN = {
 
 export default function Upload() {
   const [files, setFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [log, setLog] = useState([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [layers, setLayers] = useState([]);
   const [layer, setLayer] = useState("");
   const [stats, setStats] = useState(null);
+  const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
   const inputRef = useRef(null);
+
+  const pushLog = (m) => setLog((x) => [m, ...x].slice(0, 20));
 
   const loadStats = () => {
     fetch(`${API_BASE}/documents/stats`)
@@ -56,38 +60,89 @@ export default function Upload() {
     loadStats();
   }, []);
 
-  const pushLog = (m) => setLog((x) => [...x, m]);
   const onSelect = (e) => setFiles(Array.from(e.target.files || []));
-  const onDrop = (e) => {
-    e.preventDefault();
-    setFiles(Array.from(e.dataTransfer.files || []));
-  };
+  const onDrop = (e) => { e.preventDefault(); setFiles(Array.from(e.dataTransfer.files || [])); };
   const prevent = (e) => e.preventDefault();
 
-  const upload = async () => {
+  // Step 1: request a loop permit, then propose each file → get proposal_id back.
+  const propose = async () => {
     if (!files.length) return;
-    setUploading(true);
-    setLog([]);
-    for (const file of files) {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (layer) fd.append("layer", layer);
-      try {
+    setBusy(true);
+    try {
+      const pr = await fetch("/api/permit", { method: "POST" });
+      if (!pr.ok) { pushLog(`FAIL permit request: ${pr.status}`); setBusy(false); return; }
+      const { permit_id } = await pr.json();
+
+      const newPending = [];
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("permit_id", permit_id);
+        if (layer) fd.append("layer", layer);
+        try {
+          const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
+          const body = await r.text();
+          if (r.status === 202) {
+            const j = JSON.parse(body);
+            newPending.push({ proposal_id: j.proposal_id, file, layer, filename: file.name });
+            pushLog(`PROPOSED ${file.name} → awaiting your approval below`);
+          } else if (r.ok) {
+            pushLog(`OK ${file.name} (already approved)`);
+          } else {
+            pushLog(`FAIL ${file.name}: ${r.status} — ${body.slice(0, 200)}`);
+          }
+        } catch (err) {
+          pushLog(`FAIL ${file.name}: ${err.message}`);
+        }
+      }
+      setPending(p => [...newPending, ...p]);
+      setFiles([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 2: approve → re-upload with proposal_id → chunks land.
+  const decide = async (idx, decision) => {
+    setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: true } : x));
+    const prop = pending[idx];
+    try {
+      const d = await fetch("/api/proposal-decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposal_id: prop.proposal_id, decision, decided_by: "operator" }),
+      });
+      if (!d.ok) {
+        const body = await d.text();
+        pushLog(`FAIL decide ${prop.filename}: ${d.status} — ${body.slice(0, 200)}`);
+        setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: false } : x));
+        return;
+      }
+
+      if (decision === "APPROVE") {
+        const fd = new FormData();
+        fd.append("file", prop.file);
+        fd.append("proposal_id", prop.proposal_id);
+        if (prop.layer) fd.append("layer", prop.layer);
         const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
         const body = await r.text();
-        if (!r.ok) {
-          pushLog(`FAIL ${file.name}: ${r.status} — ${body.slice(0, 200)}`);
-          continue;
+        if (r.ok) {
+          const j = JSON.parse(body);
+          const scope = j.layer ? ` → layer=${j.layer}` : " (unscoped)";
+          pushLog(`INGESTED ${prop.filename}: ${j?.chunks_created ?? 0} chunk(s)${scope}`);
+        } else {
+          pushLog(`FAIL ingest ${prop.filename}: ${r.status} — ${body.slice(0, 200)}`);
         }
-        const j = JSON.parse(body);
-        const scope = j.layer ? ` → layer=${j.layer}` : " (unscoped)";
-        pushLog(`OK ${file.name}: ${j?.chunks_created ?? 0} chunk(s)${scope}`);
-      } catch (err) {
-        pushLog(`FAIL ${file.name}: ${err.message}`);
+      } else {
+        pushLog(`REJECTED ${prop.filename}`);
       }
+
+      setPending(p => p.filter((_, i) => i !== idx));
+      loadStats();
+    } catch (err) {
+      pushLog(`FAIL decide ${prop.filename}: ${err.message}`);
+      setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: false } : x));
     }
-    setUploading(false);
-    loadStats();
   };
 
   const runSearch = async () => {
@@ -105,18 +160,13 @@ export default function Upload() {
     <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", fontFamily: "system-ui, -apple-system, sans-serif", color: TEXT }}>
       <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>Knowledge — Upload &amp; Search</h1>
 
+      {/* Upload */}
       <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
         <div
           onDrop={onDrop}
           onDragOver={prevent}
           onDragEnter={prevent}
-          style={{
-            border: `2px dashed ${BORDER}`,
-            padding: 28,
-            borderRadius: 12,
-            textAlign: "center",
-            background: BG,
-          }}
+          style={{ border: `2px dashed ${BORDER}`, padding: 28, borderRadius: 12, textAlign: "center", background: BG }}
         >
           <p style={{ marginBottom: 12, color: MUTED, fontSize: 13 }}>Drag files here or</p>
           <button onClick={() => inputRef.current?.click()} style={BTN}>Choose files</button>
@@ -135,30 +185,77 @@ export default function Upload() {
             <option value="">(unscoped)</option>
             {layers.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
           </select>
-          <button onClick={upload} disabled={uploading || !files.length} style={{ ...BTN, opacity: (uploading || !files.length) ? 0.4 : 1, cursor: (uploading || !files.length) ? "not-allowed" : "pointer" }}>
-            {uploading ? "Uploading…" : "Upload"}
+          <button
+            onClick={propose}
+            disabled={busy || !files.length}
+            style={{ ...BTN, opacity: (busy || !files.length) ? 0.4 : 1, cursor: (busy || !files.length) ? "not-allowed" : "pointer" }}
+          >
+            {busy ? "Proposing…" : "Propose for ingestion"}
           </button>
         </div>
-
+        <div style={{ marginTop: 10, fontSize: 11, color: MUTED, fontStyle: "italic", lineHeight: 1.6 }}>
+          Uploads go through the governance kernel: propose first, then you approve below.
+          This is what sovereignty looks like — nothing enters your brain&apos;s long-term memory
+          without your explicit consent, and every ingestion is logged.
+        </div>
         {layers.length === 0 && (
-          <div style={{ marginTop: 10, fontSize: 12, color: MUTED, fontStyle: "italic" }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: MUTED, fontStyle: "italic" }}>
             No layers defined yet. Add some in Settings → Memory layers to scope uploads.
           </div>
         )}
 
         {!!log.length && (
-          <pre style={{ marginTop: 16, background: BG, border: `1px solid ${BORDER}`, color: TEXT, padding: 12, borderRadius: 8, whiteSpace: "pre-wrap", fontSize: 12, fontFamily: "DM Mono, monospace" }}>
+          <pre style={{ marginTop: 16, background: BG, border: `1px solid ${BORDER}`, color: TEXT, padding: 12, borderRadius: 8, whiteSpace: "pre-wrap", fontSize: 12, fontFamily: "DM Mono, monospace", maxHeight: 160, overflow: "auto" }}>
 {log.join("\n")}
           </pre>
         )}
       </section>
 
+      {/* Pending proposals — the governance moment */}
+      {pending.length > 0 && (
+        <section style={{ padding: 20, border: `1px solid ${ACCENT}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: "0 0 4px 0", color: ACCENT }}>Pending memory proposals</h2>
+          <div style={{ fontSize: 12, color: MUTED, fontStyle: "italic", marginBottom: 14, lineHeight: 1.6 }}>
+            Your NodeOS governance kernel is asking for explicit approval before writing each of these into long-term memory. Approve or reject.
+          </div>
+          {pending.map((p, i) => (
+            <div key={p.proposal_id} style={{ padding: 14, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 13 }}>{p.filename}</div>
+                  <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
+                    layer: {p.layer || "(unscoped)"} · proposal: {p.proposal_id.slice(0, 8)}…
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => decide(i, "APPROVE")}
+                    disabled={p.deciding}
+                    style={{ ...BTN, background: APPROVE, color: "#fff", opacity: p.deciding ? 0.4 : 1 }}
+                  >
+                    {p.deciding ? "…" : "Approve & ingest"}
+                  </button>
+                  <button
+                    onClick={() => decide(i, "DENY")}
+                    disabled={p.deciding}
+                    style={{ ...BTN, background: "transparent", color: REJECT, border: `1px solid ${REJECT}`, opacity: p.deciding ? 0.4 : 1 }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* What your brain knows */}
       {stats && (
         <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
             <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>What your brain knows</h2>
             <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
-              {stats.unique_documents ?? 0} docs &middot; {stats.total_chunks ?? 0} chunks
+              {stats.unique_documents ?? 0} docs · {stats.total_chunks ?? 0} chunks
             </div>
           </div>
           {stats.recent_documents?.length ? (
@@ -176,6 +273,7 @@ export default function Upload() {
         </section>
       )}
 
+      {/* Search */}
       <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12 }}>
         <div style={{ display: "flex", gap: 8 }}>
           <input
