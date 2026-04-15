@@ -3,6 +3,33 @@ import { useState, useRef, useEffect } from "react";
 // Use the internal Next.js proxy so the API key is forwarded server-side
 const API_BASE = "/api/bf";
 
+// Warm-academic palette to match nav + settings
+const BG = "#0e0c0b";
+const SURFACE = "#161310";
+const BORDER = "#2a2420";
+const TEXT = "#e8e0d5";
+const MUTED = "#6b5f52";
+const ACCENT = "#c9a96e";
+const INPUT = {
+  background: "#0e0c0b",
+  border: `1px solid ${BORDER}`,
+  borderRadius: 8,
+  color: TEXT,
+  padding: "8px 10px",
+  fontFamily: "DM Mono, monospace",
+  fontSize: 13,
+  outline: "none",
+};
+const BTN = {
+  background: ACCENT,
+  color: "#0e0c0b",
+  border: "none",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 export default function Upload() {
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -21,14 +48,11 @@ export default function Upload() {
   }, []);
 
   const pushLog = (m) => setLog((x) => [...x, m]);
-
   const onSelect = (e) => setFiles(Array.from(e.target.files || []));
-
   const onDrop = (e) => {
     e.preventDefault();
     setFiles(Array.from(e.dataTransfer.files || []));
   };
-
   const prevent = (e) => e.preventDefault();
 
   const upload = async () => {
@@ -40,15 +64,17 @@ export default function Upload() {
       fd.append("file", file);
       if (layer) fd.append("layer", layer);
       try {
-        const r = await fetch(`${API_BASE}/documents/upload`, {
-          method: "POST",
-          body: fd,
-        });
-        if (!r.ok) throw new Error(`${r.status}`);
-        const j = await r.json();
-        pushLog(`OK ${file.name}: ${j?.chunks_created ?? 0} chunk(s)`);
+        const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
+        const body = await r.text();
+        if (!r.ok) {
+          pushLog(`FAIL ${file.name}: ${r.status} — ${body.slice(0, 200)}`);
+          continue;
+        }
+        const j = JSON.parse(body);
+        const scope = j.layer ? ` → layer=${j.layer}` : " (unscoped)";
+        pushLog(`OK ${file.name}: ${j?.chunks_created ?? 0} chunk(s)${scope}`);
       } catch (err) {
-        pushLog(`❌ ${file.name}: ${err.message}`);
+        pushLog(`FAIL ${file.name}: ${err.message}`);
       }
     }
     setUploading(false);
@@ -66,87 +92,75 @@ export default function Upload() {
   };
 
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "ui-sans-serif, system-ui" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700 }}>Brain — Upload & Search</h1>
+    <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", fontFamily: "system-ui, -apple-system, sans-serif", color: TEXT }}>
+      <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>Knowledge — Upload &amp; Search</h1>
 
-      <section style={{ marginTop: 24, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
+      <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
         <div
           onDrop={onDrop}
           onDragOver={prevent}
           onDragEnter={prevent}
           style={{
-            border: "2px dashed #aaa",
-            padding: 24,
+            border: `2px dashed ${BORDER}`,
+            padding: 28,
             borderRadius: 12,
             textAlign: "center",
-            background: "#fafafa",
+            background: BG,
           }}
         >
-          <p style={{ marginBottom: 12 }}>Drag files here or</p>
-          <button onClick={() => inputRef.current?.click()} style={{ padding: "8px 14px" }}>
-            Choose files
-          </button>
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            onChange={onSelect}
-            style={{ display: "none" }}
-          />
+          <p style={{ marginBottom: 12, color: MUTED, fontSize: 13 }}>Drag files here or</p>
+          <button onClick={() => inputRef.current?.click()} style={BTN}>Choose files</button>
+          <input ref={inputRef} type="file" multiple onChange={onSelect} style={{ display: "none" }} />
         </div>
 
         {!!files.length && (
-          <div style={{ marginTop: 12, fontSize: 14 }}>
-            <strong>Selected:</strong> {files.map(f => f.name).join(", ")}
+          <div style={{ marginTop: 12, fontSize: 13, color: MUTED }}>
+            <span style={{ color: TEXT }}>Selected:</span> {files.map(f => f.name).join(", ")}
           </div>
         )}
 
-        <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}>
-          <label style={{ fontSize: 13, color: "#555" }}>Memory layer:</label>
-          <select
-            value={layer}
-            onChange={e => setLayer(e.target.value)}
-            style={{ padding: "8px 10px", border: "1px solid #ccc", borderRadius: 8 }}
-          >
+        <div style={{ marginTop: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 13, color: MUTED }}>Memory layer:</label>
+          <select value={layer} onChange={e => setLayer(e.target.value)} style={INPUT}>
             <option value="">(unscoped)</option>
-            {layers.map(l => (
-              <option key={l.name} value={l.name}>{l.name}</option>
-            ))}
+            {layers.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
           </select>
-          <button onClick={upload} disabled={uploading || !files.length} style={{ padding: "8px 14px" }}>
+          <button onClick={upload} disabled={uploading || !files.length} style={{ ...BTN, opacity: (uploading || !files.length) ? 0.4 : 1, cursor: (uploading || !files.length) ? "not-allowed" : "pointer" }}>
             {uploading ? "Uploading…" : "Upload"}
           </button>
         </div>
+
         {layers.length === 0 && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>
+          <div style={{ marginTop: 10, fontSize: 12, color: MUTED, fontStyle: "italic" }}>
             No layers defined yet. Add some in Settings → Memory layers to scope uploads.
           </div>
         )}
 
         {!!log.length && (
-          <pre style={{ marginTop: 16, background: "#f6f6f6", padding: 12, borderRadius: 8, whiteSpace: "pre-wrap" }}>
+          <pre style={{ marginTop: 16, background: BG, border: `1px solid ${BORDER}`, color: TEXT, padding: 12, borderRadius: 8, whiteSpace: "pre-wrap", fontSize: 12, fontFamily: "DM Mono, monospace" }}>
 {log.join("\n")}
           </pre>
         )}
       </section>
 
-      <section style={{ marginTop: 24, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
+      <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12 }}>
         <div style={{ display: "flex", gap: 8 }}>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()}
             placeholder='Search… (e.g., "VQE regularization")'
-            style={{ flex: 1, padding: 10, border: "1px solid #ccc", borderRadius: 8 }}
+            style={{ ...INPUT, flex: 1, fontFamily: "system-ui, sans-serif", fontSize: 14 }}
           />
-          <button onClick={runSearch} style={{ padding: "8px 14px" }}>Search</button>
+          <button onClick={runSearch} style={BTN}>Search</button>
         </div>
 
         {!!results.length && (
           <div style={{ marginTop: 16 }}>
             {results.map((r, i) => (
-              <div key={i} style={{ padding: 12, border: "1px solid #eee", borderRadius: 8, marginBottom: 10 }}>
-                <div style={{ fontSize: 12, color: "#666" }}>{r.document_name}</div>
-                <div>{r.content}</div>
+              <div key={i} style={{ padding: 12, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
+                <div style={{ fontSize: 12, color: ACCENT, fontFamily: "DM Mono, monospace" }}>{r.document_name}</div>
+                <div style={{ fontSize: 13, color: TEXT, marginTop: 6, lineHeight: 1.6 }}>{r.content}</div>
               </div>
             ))}
           </div>
