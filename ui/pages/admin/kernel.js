@@ -83,9 +83,41 @@ export default function KernelConsole() {
     <div style={{ padding: "40px 32px", maxWidth: "1100px", margin: "0 auto" }}>
       <div style={{ marginBottom: "32px" }}>
         <h1 style={{ fontSize: "26px", fontWeight: "700", margin: "0 0 6px 0", color: "#e5e5e5" }}>Kernel</h1>
-        <p style={{ color: "#444", fontSize: "13px", margin: 0 }}>
+        <p style={{ color: "#6b5f52", fontSize: "13px", margin: "0 0 18px 0", fontStyle: "italic" }}>
           Governance boundary — PROPOSE → CONFIRM, permit-gated mutation.
         </p>
+
+        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 12, padding: 20, color: "#b8ad9e", fontSize: 13, lineHeight: 1.7 }}>
+          <div style={{ color: "#c9a96e", fontFamily: "Lora, Georgia, serif", fontSize: 15, marginBottom: 10 }}>What is this page?</div>
+          <p style={{ margin: "0 0 10px 0" }}>
+            This is the live operator&apos;s window into the <strong style={{ color: "#e5e5e5" }}>authority kernel</strong> — the layer that stands between any command and your brain&apos;s state.
+            Nothing writes to memory or runs a mutation here without passing a two-step gate: <strong style={{ color: "#e5e5e5" }}>PROPOSE</strong> (declare intent, get a token) and <strong style={{ color: "#e5e5e5" }}>CONFIRM</strong> (present the token, execute).
+          </p>
+          <p style={{ margin: "0 0 10px 0" }}>
+            You&apos;ll use this page to prove to yourself that sovereignty actually holds — not as a slogan, but as a protocol you can poke at.
+          </p>
+
+          <div style={{ color: "#c9a96e", fontFamily: "Lora, Georgia, serif", fontSize: 14, margin: "18px 0 6px 0" }}>Try this</div>
+          <ol style={{ margin: 0, paddingLeft: 20 }}>
+            <li style={{ marginBottom: 6 }}>
+              Leave the defaults (<code style={{ color: "#e5e5e5" }}>client_id: demo</code>, <code style={{ color: "#e5e5e5" }}>command: echo</code>, <code style={{ color: "#e5e5e5" }}>payload.text: hello</code>) and click <strong style={{ color: "#e5e5e5" }}>PROPOSE</strong>. The right panel will show a response with a <code style={{ color: "#e5e5e5" }}>token</code>. That token is auto-filled into the CONFIRM_TOKEN field.
+            </li>
+            <li style={{ marginBottom: 6 }}>
+              Click <strong style={{ color: "#e5e5e5" }}>CONFIRM</strong>. The kernel verifies the token matches the propose, and only then executes the command. You&apos;ll see <code style={{ color: "#e5e5e5" }}>echo</code> return <code style={{ color: "#e5e5e5" }}>hello</code>.
+            </li>
+            <li style={{ marginBottom: 6 }}>
+              Click <strong style={{ color: "#e5e5e5" }}>CONFIRM (bad token)</strong>. This sends a made-up token. The kernel rejects it with <code style={{ color: "#e5e5e5" }}>KERNEL_BAD_CONFIRM_TOKEN</code>. This is what a replay attack looks like from the kernel&apos;s point of view — blocked.
+            </li>
+            <li>
+              Change <strong>command</strong> to <code style={{ color: "#e5e5e5" }}>__does_not_exist__</code> and PROPOSE — the kernel returns <code style={{ color: "#e5e5e5" }}>KERNEL_UNKNOWN_COMMAND</code> before any state is touched. Unknown verbs don&apos;t get partial execution.
+            </li>
+          </ol>
+
+          <div style={{ color: "#c9a96e", fontFamily: "Lora, Georgia, serif", fontSize: 14, margin: "18px 0 6px 0" }}>What you should see</div>
+          <p style={{ margin: 0 }}>
+            Every response is a structured JSON envelope: <code style={{ color: "#e5e5e5" }}>{'{ ok, data?, error? }'}</code>. Errors carry a machine-readable code (<code style={{ color: "#e5e5e5" }}>KERNEL_*</code>) — the same codes your own agents, CLIs, and federated peers will see. This is the contract; the UI is just a thin window onto it.
+          </p>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
