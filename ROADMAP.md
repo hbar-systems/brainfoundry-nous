@@ -94,6 +94,14 @@ beats once the settings surface exists.
 - [ ] **Identity card** — single shareable URL/PDF: brain name, public key,
       federation endpoint, owner contact. The thing you hand someone when
       saying "here's my brain".
+- [ ] **In-UI update banner + one-click upgrade** — today brain owners update
+      via SSH (`git pull && docker compose up -d --build`). Fine for Week-2
+      Model-3 white-glove onboarding; becomes a real gap at Week-4 Model-2B
+      self-serve scale. Landing this means detecting new `main` via a
+      runtime check, surfacing a banner in Settings, and running the
+      rebuild from inside the container (likely via a small host-side
+      agent or Caddy exec, since the API container can't `docker compose`
+      itself). Blocks nothing earlier; schedule before first public widening.
 
 ## v1.0 — first real federation workflows
 
