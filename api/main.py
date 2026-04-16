@@ -550,6 +550,26 @@ def get_db_connection():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
+
+@app.on_event("startup")
+def _ensure_runtime_indexes() -> None:
+    # Brings existing brains up to the latest init.sql index set on boot.
+    # Fail-soft: a missing index is a perf regression, not a reason to refuse to start.
+    if not DATABASE_URL:
+        return
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_embeddings_layer_idx "
+                "ON document_embeddings ((metadata->>'layer')) "
+                "WHERE metadata->>'layer' IS NOT NULL"
+            )
+        conn.close()
+    except Exception as e:
+        print(f"[startup] layer index ensure skipped: {e}", flush=True)
+
 def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file"""
     try:

@@ -76,15 +76,14 @@ beats once the settings surface exists.
 
 ## v0.8.x — layer-store performance (follow-on)
 
-- [ ] **Index layer tag in vector store** — v0.8 stores layer in
-      `document_embeddings.metadata->>'layer'` (JSONB extraction, unindexed).
-      Fine at current corpus size (low-thousands of chunks per brain); becomes
-      a hot path once brains hold tens of thousands of chunks or layer filters
-      are used in every query. Fix: add a generated column
-      `layer TEXT GENERATED ALWAYS AS (metadata->>'layer') STORED` + btree
-      index, or promote layer to a first-class column. Schedule when any brain
-      crosses ~20k chunks or p95 latency on layer-filtered `/chat/rag` exceeds
-      ~300ms.
+- [x] **Index layer tag in vector store** (2026-04-16) — partial btree index
+      `document_embeddings_layer_idx ON document_embeddings ((metadata->>'layer'))
+      WHERE metadata->>'layer' IS NOT NULL`. Added to `vector-db/init.sql` for
+      new brains and applied on boot via a fail-soft startup hook in
+      `api/main.py` for existing brains. Partial keeps the index small since
+      most chunks are unscoped. Revisit if layer cardinality grows past a few
+      dozen and a generated column or first-class `layer` column becomes
+      cheaper than the JSONB expression.
 
 ## v0.9 — appearance + identity
 
@@ -102,6 +101,30 @@ beats once the settings surface exists.
       the assertion primitive.
 - [ ] hbar-brain rebuilt from this template (dogfood pass, validates that
       the template is genuinely usable by its own creator).
+
+## v1.1+ — tool registry (external capabilities)
+
+Added: 2026-04-15. Status: parked, post-federation.
+
+The brain currently has no formal way to call out to the world. Tools are the surface that gives it hands, eyes, and reach — but the protocol contract has to come before any specific tool, otherwise every tool reinvents permitting and provenance.
+
+**Why parked:** federation (v1.0) is the harder primitive and unlocks more. Tools are easy to bolt on once the registry shape is decided; doing them earlier means designing the registry against an immature governance surface.
+
+**Scope when picked up:**
+
+- [ ] **Tool registry primitive** — `tools/local.toml` schema (name, endpoint, permit-class: read/write/network, budget, provenance-tag format) + `POST /v1/tools/:name/invoke` contract. One registry pattern, every tool slots in.
+- [ ] **Permit classes** — read-only tools (web search, fetch, calendar read) auto-permit with audit log. Write tools (mail send, blog post, federation call) gated by PROPOSE/CONFIRM. Hard monthly budget cap per tool.
+- [ ] **Provenance tagging** — every tool result entering memory tagged with source, tool name, timestamp, session id. Required for commercial use — must be able to answer "where did this claim come from."
+- [ ] **First reference tool: web search** — Brave Search API (commercial-clean, soloist-friendly: paid tier ~$3/1k queries, no contract). Auto-permitted, audit-logged, budget-capped.
+- [ ] **Tool tier rollout** (sequence, not all at once):
+  - Tier 1 (hands): web search + fetch, file read/write in `.hbar/`, sandboxed shell, git read
+  - Tier 2 (senses): calendar read, mail read, RSS, screenshot+OCR, audio in
+  - Tier 3 (reach): mail send, post to own systems via API, federation call, code-exec sandbox
+  - Tier 4 (domain): music (Spotify/Bandcamp/Ableton), finance, health bridges
+
+**Sequencing principle:** read-only first, write second, autonomous third. Most personal-AI failure modes come from giving write access before the governance layer is real. The tool registry exists *because* PROPOSE/CONFIRM exists — it's the gate every Tier 3+ tool passes through.
+
+**Provider posture (commercial use):** API keys held under owner's personal billing, not company alias — keeps tools portable across entity structures. Self-hosted scrapers (SearXNG etc.) skipped: ops burden too high for a soloist.
 
 ---
 

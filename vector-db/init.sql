@@ -14,8 +14,14 @@ CREATE TABLE IF NOT EXISTS document_embeddings (
 );
 
 -- Create an index for vector similarity search
-CREATE INDEX IF NOT EXISTS document_embeddings_embedding_idx 
+CREATE INDEX IF NOT EXISTS document_embeddings_embedding_idx
 ON document_embeddings USING ivfflat (embedding vector_cosine_ops);
+
+-- v0.8.x: index layer lookups. Partial index keeps it small — only chunks
+-- that were actually scoped to a memory layer are indexed.
+CREATE INDEX IF NOT EXISTS document_embeddings_layer_idx
+ON document_embeddings ((metadata->>'layer'))
+WHERE metadata->>'layer' IS NOT NULL;
 
 -- Create a table for chat sessions
 CREATE TABLE IF NOT EXISTS chat_sessions (
