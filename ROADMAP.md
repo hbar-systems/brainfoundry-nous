@@ -25,7 +25,7 @@ to grow into, not promises with dates.
 
 1. **v0.8 memory layers** (this week) — layer-scoped upload, layer-filtered retrieval, per-layer stats. Everything downstream depends on this primitive being real.
 2. **URL rename** (week 2) — drop `-brain-01` from customer-facing hostnames *before* the CLI ships a public origin config. Federation is keyed on endpoints, so this is done carefully, in-place, with DNS + Caddy updates coordinated.
-3. **`nous` CLI** (week 2–3) — `nous chat`, `nous upload --layer X`, `nous stats`. Published origin points at the clean URLs. nous-brain (renamed from nous-brain-01) is the canonical public test target.
+3. **`hbar` CLI** (week 2–3) — `hbar chat`, `hbar upload --layer X`, `hbar stats`. One binary, endpoint-configurable per brain (nous, your own, a friend's). nous-brain is the canonical public test target; `hbar --init` scaffolds `.hbar/brain.toml` for any user pointing at their own instance.
 
 Rationale: a CLI before layers would be a thinner wrapper on `/chat`. A CLI published against `*-brain-01.brainfoundry.ai` would bake a URL we intend to drop into every customer's shell history.
 

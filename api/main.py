@@ -1132,6 +1132,38 @@ def _nodeos_check_proposal(proposal_id: str) -> str:
         raise HTTPException(status_code=502, detail=f"NodeOS proposal check failed: {str(e)}")
 
 
+@app.post("/documents/upload/permit")
+def request_upload_permit(api_key: str = Depends(get_api_key)):
+    """Issue a NodeOS loop permit for a CLI upload proposal.
+
+    Wraps NodeOS's internal-only POST /v1/loops/request. API-key auth gates
+    external access; the brain holds the NodeOS internal key server-side.
+    CLI flow: permit -> POST /documents/upload (proposes) -> web-UI approval
+    -> re-POST /documents/upload with proposal_id (persists chunks).
+    """
+    node_id = os.getenv("BRAIN_ID") or os.getenv("BRAIN_NODE_ID") or "my-brain-01"
+    try:
+        resp = requests.post(
+            f"{NODEOS_URL}/v1/loops/request",
+            json={
+                "node_id": node_id,
+                "agent_id": "cli",
+                "loop_type": "upload",
+                "ttl_seconds": 300,
+                "reason": "CLI upload proposal",
+            },
+            headers=_nodeos_headers(),
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {"permit_id": data["permit_id"], "permit_token": data["permit_token"]}
+    except requests.Timeout:
+        raise HTTPException(503, "NodeOS timeout — permit request denied")
+    except Exception as e:
+        raise HTTPException(502, f"permit request failed: {e}")
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),

@@ -432,7 +432,7 @@ function CLIPanel() {
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Talk to your brain from your laptop terminal. One-time install, then
-        <code> nous chat </code> anywhere.
+        <code> hbar chat </code> anywhere.
       </p>
       <pre style={{
         background: '#0e0c0b',
@@ -444,14 +444,16 @@ function CLIPanel() {
         fontFamily: 'DM Mono, monospace',
         overflowX: 'auto',
       }}>
-{`pip install nous-cli
-export BRAIN_ENDPOINT="${origin}"
-export BRAIN_API_KEY="<your api key>"
-nous chat`}
+{`pip install hbar
+export HBAR_ENDPOINT="${origin}"
+export HBAR_API_KEY="<your api key>"
+hbar chat "hello"`}
       </pre>
       <p style={{ color: '#6b5f52', fontSize: 12, marginTop: 10 }}>
-        Your API key is in your brain's <code>.env</code> file. It was included in
-        your welcome email under "Console login password" if you provisioned via BrainFoundry.
+        <code>hbar</code> is the BrainFoundry CLI — one binary for every brain.
+        Configure it with your endpoint and API key above, and it talks to
+        <em> your </em> brain only. Your API key is in your brain's <code>.env</code>
+        file, or the "Console login password" line of your welcome email.
       </p>
     </div>
   )
