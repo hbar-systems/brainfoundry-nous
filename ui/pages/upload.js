@@ -145,6 +145,24 @@ export default function Upload() {
     }
   };
 
+  const forgetDoc = async (name) => {
+    if (!name) return;
+    if (!confirm(`Forget "${name}" from your brain's memory?\n\nThis removes every chunk of this document. Cannot be undone.`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const body = await r.text();
+      if (r.ok) {
+        const j = JSON.parse(body);
+        pushLog(`FORGOTTEN ${name}: ${j.chunks_deleted ?? 0} chunk(s) removed`);
+        loadStats();
+      } else {
+        pushLog(`FAIL forget ${name}: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL forget ${name}: ${err.message}`);
+    }
+  };
+
   const runSearch = async () => {
     setResults([]);
     const r = await fetch(`${API_BASE}/documents/search`, {
@@ -261,9 +279,19 @@ export default function Upload() {
           {stats.recent_documents?.length ? (
             <div>
               {stats.recent_documents.map((d, i) => (
-                <div key={i} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12 }}>{d.name}</span>
-                  <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
+                <div key={i} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                    <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
+                    <button
+                      onClick={() => forgetDoc(d.name)}
+                      title={`Forget "${d.name}"`}
+                      aria-label={`Forget ${d.name}`}
+                      style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

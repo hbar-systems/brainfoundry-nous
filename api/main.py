@@ -1306,6 +1306,40 @@ async def upload_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
+@app.delete("/documents/{document_name:path}")
+def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_key)):
+    """Delete every chunk of a named document from long-term memory.
+
+    Operator-gated (BRAIN_API_KEY). Full governance gate (propose→approve→
+    forget) is a v0.8.1 task; for now the api-key check is the boundary.
+    """
+    if not document_name.strip():
+        raise HTTPException(status_code=400, detail="document_name is required")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM document_embeddings WHERE document_name = %s",
+            (document_name,),
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if deleted == 0:
+            raise HTTPException(status_code=404, detail=f"No chunks found for document: {document_name}")
+
+        return {
+            "document_name": document_name,
+            "chunks_deleted": deleted,
+            "status": "forgotten",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
 @app.post("/documents/search")
 def search_documents(request: dict, api_key: str = Depends(get_api_key)):
     """Search documents using semantic similarity"""
