@@ -7,7 +7,7 @@ then verify the token was signed by it and addressed to this brain.
 Usage:
     docker compose exec brain-api python3 scripts/fed_verify.py \
         --token <token> \
-        --issuer-endpoint https://yury-brain-01.brainfoundry.ai
+        --issuer-endpoint https://yury.brainfoundry.ai
 """
 import argparse
 import os
@@ -23,7 +23,7 @@ from api.identity.core import verify_federation_assertion
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--token", required=True)
-    ap.add_argument("--issuer-endpoint", required=True, help="e.g. https://yury-brain-01.brainfoundry.ai")
+    ap.add_argument("--issuer-endpoint", required=True, help="e.g. https://yury.brainfoundry.ai")
     args = ap.parse_args()
 
     brain_id = os.getenv("BRAIN_ID")
