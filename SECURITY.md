@@ -51,9 +51,14 @@ memory proposals, action proposals, and the append-only audit log.
   the permit is rejected, the mutation is denied.
 - `git_push` and other external side-effect actions go through a strict
   preview-and-decide flow with a branch allowlist.
-- Federation assertions require a non-empty `iss` claim; callers that fetch
-  a peer's public key from a known endpoint can pin `expected_issuer` to
-  reject assertions signed by a different brain.
+- Federation assertions are verified against public keys pinned in
+  `api/identity/known_peers.toml` — a local registry of peer brains the
+  operator has deliberately federated with. Incoming assertions whose
+  `issuer_endpoint` is not registered are rejected fail-closed with 403
+  `unknown_peer` before any signature check runs. The registry is the
+  authoritative source for a peer's `brain_id` and `public_key`;
+  the peer's own `/identity` endpoint is not trusted for these values.
+  Empty or missing registry = federation denied for all peers.
 - All state-mutating NodeOS endpoints require `X-Internal-Key`
   (service-to-service auth). NodeOS binds only to `127.0.0.1:8001` and has
   no browser proxy.
