@@ -1,8 +1,10 @@
 """
 Part A federation handshake — VERIFY side.
 
-Inside a brain container, fetch the issuer's /identity to get its public key,
-then verify the token was signed by it and addressed to this brain.
+Inside a brain container, look the issuer endpoint up in the local known_peers
+registry to retrieve the pinned brain_id + public_key, then verify the token
+was signed by that key and addressed to this brain. Registry lookup replaces
+the earlier /identity fetch — see T1 in the federation threat model.
 
 Usage:
     docker compose exec brain-api python3 scripts/fed_verify.py \
@@ -16,8 +18,8 @@ import json
 
 sys.path.insert(0, "/app")
 
-import httpx
 from api.identity.core import verify_federation_assertion
+from api.identity.peers import find_peer_by_endpoint
 
 
 def main():
@@ -31,23 +33,17 @@ def main():
         print("ERROR: BRAIN_ID must be set in env", file=sys.stderr)
         sys.exit(2)
 
-    url = args.issuer_endpoint.rstrip("/") + "/identity"
-    resp = httpx.get(url, timeout=10.0)
-    resp.raise_for_status()
-    identity = resp.json()
-
-    issuer_brain_id = identity.get("brain_id")
-    public_key = identity.get("public_key")
-    if not issuer_brain_id or not public_key:
-        print(f"ERROR: /identity missing brain_id or public_key: {identity}", file=sys.stderr)
-        sys.exit(3)
+    peer = find_peer_by_endpoint(args.issuer_endpoint)
+    if peer is None:
+        print(f"VERIFY_FAIL: unknown_peer — {args.issuer_endpoint} not in known_peers.toml", file=sys.stderr)
+        sys.exit(1)
 
     try:
         claims = verify_federation_assertion(
-            public_key_b64=public_key,
+            public_key_b64=peer["public_key"],
             token=args.token,
             expected_audience=brain_id,
-            expected_issuer=issuer_brain_id,
+            expected_issuer=peer["brain_id"],
         )
     except ValueError as e:
         print(f"VERIFY_FAIL: {e}", file=sys.stderr)

@@ -1,0 +1,33 @@
+# known_peers.toml — federation peer registry
+#
+# Copy to `known_peers.toml` (sibling file) and populate with the peer
+# brains you have deliberately federated with.
+#
+# CRITICAL: this file is the load-bearing control against issuer
+# impersonation. An incoming federation assertion whose `issuer_endpoint`
+# does not match an entry here is rejected BEFORE any signature check.
+# An entry here is a deliberate trust decision, not a default.
+#
+# To add a peer:
+#   1. Fetch the peer's `/identity` once, out-of-band, via a channel you
+#      trust — ideally confirmed by the peer's operator over a side
+#      channel (signed message, phone call, in person).
+#   2. Record their `brain_id` and `public_key` verbatim.
+#   3. Record the exact https:// endpoint you will connect to. Trailing
+#      slashes are normalized; scheme and host must match.
+#   4. Never populate this file from automated /identity polling —
+#      that reintroduces the T1 flaw it is here to prevent.
+#
+# Empty file = federation denied for all peers (fail-closed).
+
+# Example (commented — replace with your actual peers):
+#
+# [[peer]]
+# brain_id   = "yury"
+# endpoint   = "https://yury.brainfoundry.ai"
+# public_key = "_NyMlZbmJGg4JHRslXrUz6fbgTFYzWwbbuzOwwMQk5o"
+#
+# [[peer]]
+# brain_id   = "nous"
+# endpoint   = "https://nous.brainfoundry.ai"
+# public_key = "<fetch-via-curl-https-nous-brainfoundry-ai-identity-and-paste>"

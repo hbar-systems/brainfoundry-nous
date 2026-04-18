@@ -309,43 +309,39 @@ class FederationAssertionRequest(BaseModel):
 @app.post("/v1/federation/assertion")
 async def receive_federation_assertion(req: FederationAssertionRequest):
     """
-    Accept a cross-brain assertion from a peer.
+    Accept a cross-brain assertion from a registered peer.
 
-    Flow: caller POSTs {token, issuer_endpoint}. We fetch issuer_endpoint/identity
-    to retrieve the issuing brain's public key + brain_id, then verify the token
-    with this brain as the expected audience. Returns the decoded claims on success.
+    Caller POSTs {token, issuer_endpoint}. We look issuer_endpoint up in the
+    local known_peers registry — if present, we verify the token against the
+    PINNED public_key (NOT a public key fetched from the caller-supplied URL).
+    Unknown endpoints are rejected fail-closed before any signature work runs.
+
+    This closes T1 (issuer impersonation via attacker-controlled /identity)
+    and T3 (SSRF via issuer_endpoint) — the endpoint URL no longer reaches
+    any outbound HTTP client on the verification path.
     """
     from api.identity.core import verify_federation_assertion
+    from api.identity.peers import find_peer_by_endpoint
 
     this_brain_id = os.getenv("BRAIN_ID")
     if not this_brain_id:
         raise HTTPException(500, "BRAIN_ID not configured")
 
-    identity_url = req.issuer_endpoint.rstrip("/") + "/identity"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(identity_url)
-            resp.raise_for_status()
-            identity = resp.json()
-    except Exception as e:
-        raise HTTPException(502, f"Could not fetch issuer /identity: {type(e).__name__}: {e}")
-
-    issuer_brain_id = identity.get("brain_id")
-    public_key = identity.get("public_key")
-    if not issuer_brain_id or not public_key:
-        raise HTTPException(502, "Issuer /identity missing brain_id or public_key")
+    peer = find_peer_by_endpoint(req.issuer_endpoint)
+    if peer is None:
+        raise HTTPException(403, "unknown_peer")
 
     try:
         claims = verify_federation_assertion(
-            public_key_b64=public_key,
+            public_key_b64=peer["public_key"],
             token=req.token,
             expected_audience=this_brain_id,
-            expected_issuer=issuer_brain_id,
+            expected_issuer=peer["brain_id"],
         )
     except ValueError as e:
         raise HTTPException(401, f"assertion_verify_failed: {e}")
 
-    return {"verified": True, "issuer": issuer_brain_id, "audience": this_brain_id, "claims": claims}
+    return {"verified": True, "issuer": peer["brain_id"], "audience": this_brain_id, "claims": claims}
 
 
 # ---------------------------------------------------------------------------

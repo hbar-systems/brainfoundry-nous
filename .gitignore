@@ -92,3 +92,7 @@ __pycache__/
 # local artifacts
 brainfoundry/audit.jsonl
 data/
+
+# Federation peer registry — per-deployment pinned trust anchors.
+# The .example template is tracked; the real file is never committed.
+api/identity/known_peers.toml
