@@ -274,6 +274,7 @@ def issue_federation_assertion(
         "sub": subject,
         "iat": now,
         "exp": now + int(ttl_seconds),
+        "jti": os.urandom(16).hex(),
         "v": 1,
     }
     if claims:

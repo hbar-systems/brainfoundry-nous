@@ -319,9 +319,16 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
     This closes T1 (issuer impersonation via attacker-controlled /identity)
     and T3 (SSRF via issuer_endpoint) — the endpoint URL no longer reaches
     any outbound HTTP client on the verification path.
+
+    T4 (replay within TTL) is closed here: after signature/aud/iss/exp
+    pass, the assertion's jti is checked against the in-process replay
+    cache. A duplicate jti within the TTL window is rejected with 401
+    replay_detected before verified:true is returned. Tokens without a
+    jti are rejected with 400 missing_jti.
     """
     from api.identity.core import verify_federation_assertion
     from api.identity.peers import find_peer_by_endpoint
+    from api.identity.replay_cache import record, seen_before
 
     this_brain_id = os.getenv("BRAIN_ID")
     if not this_brain_id:
@@ -340,6 +347,13 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
         )
     except ValueError as e:
         raise HTTPException(401, f"assertion_verify_failed: {e}")
+
+    jti = claims.get("jti")
+    if not jti:
+        raise HTTPException(400, "missing_jti")
+    if seen_before(jti):
+        raise HTTPException(401, "replay_detected")
+    record(jti, exp=claims["exp"])
 
     return {"verified": True, "issuer": peer["brain_id"], "audience": this_brain_id, "claims": claims}
 
