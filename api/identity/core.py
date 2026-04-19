@@ -76,6 +76,17 @@ def verify_permit(*, secret: str, token: str) -> Dict[str, Any]:
         raise ValueError("invalid_token_format")
 
     header_b64, claims_b64, sig_b64 = parts
+
+    try:
+        header_padded = header_b64 + "=" * (-len(header_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_padded).decode())
+    except Exception:
+        raise ValueError("invalid_header")
+    if header.get("alg") != "HS256":
+        raise ValueError("alg_mismatch")
+    if header.get("typ") not in ("BRAIN_PERMIT", "BRAIN_ASSERTION"):
+        raise ValueError("typ_mismatch")
+
     signing_input = f"{header_b64}.{claims_b64}"
     expected = _sign(secret, signing_input)
 
