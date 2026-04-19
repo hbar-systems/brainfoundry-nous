@@ -324,6 +324,16 @@ def verify_federation_assertion(
     header_b64, claims_b64, sig_b64 = parts
     signing_input = f"{header_b64}.{claims_b64}".encode()
 
+    try:
+        header_padded = header_b64 + "=" * (-len(header_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_padded).decode())
+    except Exception:
+        raise ValueError("invalid_header")
+    if header.get("alg") != "EdDSA":
+        raise ValueError("alg_mismatch")
+    if header.get("typ") != "BRAIN_FED_ASSERTION":
+        raise ValueError("typ_mismatch")
+
     public_bytes = base64.urlsafe_b64decode(public_key_b64 + "==")
     public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
     sig = base64.urlsafe_b64decode(sig_b64 + "==")

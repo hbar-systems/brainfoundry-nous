@@ -59,6 +59,12 @@ memory proposals, action proposals, and the append-only audit log.
   authoritative source for a peer's `brain_id` and `public_key`;
   the peer's own `/identity` endpoint is not trusted for these values.
   Empty or missing registry = federation denied for all peers.
+- Federation assertion replays are rejected. Every token carries a
+  unique `jti` (128-bit random) issued by default. On successful verify,
+  the handler records the `jti` in an in-process replay cache; a
+  second verify attempt with the same `jti` within the token's TTL is
+  rejected with 401 `replay_detected`. Tokens without a `jti` are
+  rejected with 400 `missing_jti` — there is no opt-out.
 - All state-mutating NodeOS endpoints require `X-Internal-Key`
   (service-to-service auth). NodeOS binds only to `127.0.0.1:8001` and has
   no browser proxy.
