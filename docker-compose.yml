@@ -21,7 +21,7 @@ services:
         BRAIN_GIT_COMMIT: ${BRAIN_GIT_COMMIT:-unknown}
         BRAIN_BUILD_TIME: ${BRAIN_BUILD_TIME:-unknown}
     ports:
-      - "8010:8000"
+      - "127.0.0.1:8010:8000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-llm_db}
       - OLLAMA_URL=http://ollama:11434
@@ -112,7 +112,7 @@ services:
       context: ./ui
       dockerfile: Dockerfile
     ports:
-      - "3010:3000"
+      - "127.0.0.1:3010:3000"
     environment:
       API_INTERNAL_URL: "http://api:8000"
       NODEOS_INTERNAL_URL: "http://nodeos:8001"
