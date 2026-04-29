@@ -959,8 +959,9 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
-        search_limit = request.get("search_limit", 3)
+        search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
+        session_id = request.get("session_id")
         if layers and not isinstance(layers, list):
             raise HTTPException(status_code=400, detail="`layers` must be a list of layer name strings")
 
@@ -1006,6 +1007,28 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         
         # Route to correct provider via providers.py
         reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+
+        # Persist conversation if session_id provided (parity with /chat/completions)
+        if session_id and messages:
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                latest_user_msg = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+                if latest_user_msg:
+                    cursor.execute(
+                        "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+                        (session_id, "user", latest_user_msg.get("content", ""))
+                    )
+                cursor.execute(
+                    "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+                    (session_id, "assistant", reply)
+                )
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception as db_error:
+                print(f"Database save error (rag): {db_error}")
+
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
             "object": "chat.completion",

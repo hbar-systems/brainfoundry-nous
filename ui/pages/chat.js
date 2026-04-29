@@ -127,14 +127,15 @@ export default function Chat() {
         return
       }
 
-      const r = await fetch('/api/bf/chat/completions', {
+      const r = await fetch('/api/bf/chat/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: selectedModel,
           messages: updated,
           session_id: sessionId,
-          max_tokens: 1000,
+          layers: ['identity', 'thinking', 'projects', 'writing'],
+          search_limit: 5,
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
         }),
