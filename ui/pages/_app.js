@@ -7,6 +7,7 @@ const NAV = [
   { href: '/chat', label: 'Chat' },
   { href: '/upload', label: 'Knowledge' },
   { href: '/settings', label: 'Settings' },
+  { href: '/future', label: 'Future' },
 ]
 
 // Warm academic palette
