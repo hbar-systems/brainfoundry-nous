@@ -952,6 +952,107 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat completion error: {str(e)}")
 
+@app.post("/chat/sessions/{session_id}/consolidate")
+async def consolidate_session(session_id: str, request: dict, api_key: str = Depends(get_api_key)):
+    """Consolidate a chat session into episodic memory.
+
+    v0.5 minimal: reads all messages from the session, runs LLM
+    summarization, stores the summary as chunks in document_embeddings
+    with metadata.layer='episodic'. Future RAG queries that include
+    'episodic' in their layers list will retrieve from this memory.
+
+    Click is the consent — buyer explicitly chose to remember this
+    conversation. No NodeOS proposal step in v0.5; that's a v0.6
+    governance-alignment task.
+    """
+    try:
+        _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
+        model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+
+        # Read session messages
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, content, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at",
+            (session_id,)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            raise HTTPException(404, "No messages found for this session")
+        if len(rows) < 2:
+            raise HTTPException(400, "Session too short to consolidate (need at least one user+assistant exchange)")
+
+        convo = "\n\n".join(f"{r[0]}: {r[1]}" for r in rows)
+
+        # Summarization prompt — produces durable, self-contained bullets
+        prompt = f"""You are extracting durable memory from a conversation between an operator and their personal AI brain. Write a structured summary capturing:
+
+- Key facts about the operator that came up (background, current projects, preferences, identity)
+- Decisions made or questions resolved during the conversation
+- Beliefs, opinions, or stances expressed
+- Open questions or pending items the operator should follow up on
+- Topics discussed (one or two phrases each)
+
+Rules:
+- Each bullet must be self-contained — someone reading it later (without the conversation) should understand it.
+- Lead bullets with the subject ('Operator's brain has...', 'Operator decided to...', 'Discussed: ...').
+- Avoid first-person from the AI side. Report as an outside observer.
+- Be concise. No preamble or postamble. Just the bullets.
+
+Conversation:
+{convo}
+
+Summary:"""
+
+        summary = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+        if not summary or not summary.strip():
+            raise HTTPException(502, "Summarization returned empty result")
+
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        doc_name = f"chat-{session_id}-{date_str}.md"
+
+        chunks = chunk_text(summary)
+        embeddings = generate_embeddings(chunks)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        stored = 0
+        for chunk, emb in zip(chunks, embeddings):
+            emb_str = "[" + ",".join(map(str, emb)) + "]"
+            cursor.execute(
+                """
+                INSERT INTO document_embeddings (document_name, content, embedding, metadata)
+                VALUES (%s, %s, %s::vector, %s)
+                """,
+                (doc_name, chunk, emb_str, json.dumps({
+                    "session_id": session_id,
+                    "consolidated_at": datetime.utcnow().isoformat(),
+                    "chunk_index": stored,
+                    "layer": "episodic",
+                    "source": "consolidation_v0.5",
+                }))
+            )
+            stored += 1
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return {
+            "session_id": session_id,
+            "doc_name": doc_name,
+            "chunks_stored": stored,
+            "summary_preview": summary[:300] + ("..." if len(summary) > 300 else ""),
+            "layer": "episodic",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Consolidation error: {str(e)}")
+
+
 def _persist_chat_turn(session_id: str, messages: list, reply: str):
     """Persist user message + assistant reply to chat_messages. Best-effort."""
     if not session_id or not messages:

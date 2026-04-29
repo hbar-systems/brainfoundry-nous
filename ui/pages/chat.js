@@ -14,6 +14,46 @@ export default function Chat() {
   const [showNameModal, setShowNameModal] = useState(false)
   const [newChatName, setNewChatName] = useState('')
   const [attachedImage, setAttachedImage] = useState(null) // {base64, mediaType, name, dataUrl} | null
+  const [consolidating, setConsolidating] = useState(false)
+  const [consolidateStatus, setConsolidateStatus] = useState(null) // {ok: bool, message: string} | null
+
+  const consolidateSession = async () => {
+    if (!currentSessionId || consolidating) return
+    if (messages.length < 2) { setConsolidateStatus({ ok: false, message: 'Chat too short to save (need at least one exchange).' }); return }
+    setConsolidating(true)
+    setConsolidateStatus(null)
+    try {
+      const permitRes = await fetch('/api/permit', { method: 'POST' })
+      const permitData = await permitRes.json()
+      if (!permitData.permit_id || !permitData.permit_token) {
+        setConsolidateStatus({ ok: false, message: 'Permit failed — could not save.' })
+        setConsolidating(false)
+        return
+      }
+      const r = await fetch(`/api/bf/chat/sessions/${currentSessionId}/consolidate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: selectedModel,
+          permit_id: permitData.permit_id,
+          permit_token: permitData.permit_token,
+        }),
+      })
+      if (r.ok) {
+        const data = await r.json()
+        setConsolidateStatus({ ok: true, message: `Saved to memory: ${data.chunks_stored} chunks in episodic layer.` })
+      } else {
+        const err = await r.json().catch(() => ({}))
+        setConsolidateStatus({ ok: false, message: err.detail || `Failed (${r.status})` })
+      }
+    } catch (e) {
+      setConsolidateStatus({ ok: false, message: e.message })
+    } finally {
+      setConsolidating(false)
+      // auto-clear status after 6 sec
+      setTimeout(() => setConsolidateStatus(null), 6000)
+    }
+  }
 
   const handleImageSelect = e => {
     const file = e.target.files?.[0]
@@ -179,7 +219,7 @@ export default function Chat() {
           model: selectedModel,
           messages: messagesForBackend,
           session_id: sessionId,
-          layers: ['identity', 'thinking', 'projects', 'writing'],
+          layers: ['identity', 'thinking', 'projects', 'writing', 'episodic'],
           search_limit: 5,
           stream: useStreaming,
           ...(imageForRequest ? {
@@ -396,7 +436,42 @@ export default function Chat() {
               </option>
             ))}
           </select>
+
+          {currentSessionId && messages.length >= 2 && (
+            <button
+              onClick={consolidateSession}
+              disabled={consolidating}
+              title="Save this conversation into your brain's long-term memory (episodic layer). Future chats will retrieve from it via RAG."
+              style={{
+                marginLeft: 'auto',
+                padding: '8px 14px',
+                background: consolidating ? '#161310' : 'transparent',
+                color: consolidating ? '#6b5f52' : '#c9a96e',
+                border: '1px solid #c9a96e60',
+                borderRadius: '8px',
+                cursor: consolidating ? 'wait' : 'pointer',
+                fontSize: '12px',
+                fontFamily: 'DM Mono, monospace',
+                letterSpacing: '0.04em',
+              }}
+            >
+              {consolidating ? 'saving...' : 'Save to memory'}
+            </button>
+          )}
         </div>
+
+        {consolidateStatus && (
+          <div style={{
+            padding: '8px 20px',
+            backgroundColor: consolidateStatus.ok ? '#1e3a26' : '#3a1e1e',
+            color: consolidateStatus.ok ? '#7fc99c' : '#c98080',
+            fontSize: '12px',
+            borderBottom: '1px solid #2a2420',
+            fontFamily: 'DM Mono, monospace',
+          }}>
+            {consolidateStatus.message}
+          </div>
+        )}
 
         {/* Messages */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
