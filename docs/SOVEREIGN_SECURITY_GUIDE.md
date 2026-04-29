@@ -25,6 +25,22 @@ Three properties make this real:
 - Your billing email (for receipts and provisioning failures)
 - DNS records for `*.brainfoundry.ai` (so subdomains route correctly — we host the zone)
 - The fact that a brain exists at your subdomain (the public reverse-proxy is visible)
+- **The Hetzner Cloud project your server runs in (Model 2B only — see below)**
+
+**Honest disclosure — the Hetzner question:**
+
+In Model 2B (automated self-serve provisioning — what most buyers use today), your brain server runs in BrainFoundry's Hetzner Cloud project, not yours. We pay Hetzner directly and bill you. This is convenient — you don't need a Hetzner account or to manage cloud billing — but it has a real cost to sovereignty:
+
+- We have Hetzner Cloud API access to your server's *infrastructure layer*. We could shut it down, snapshot the disk, or destroy it via Hetzner's API — even if you've removed our automation SSH key (§1 above).
+- The data inside the server is still encrypted at rest and gated by your SSH key. We can't read your chats by stopping the server. But we *could* prevent you from reaching it.
+
+**For full hardware sovereignty, three options:**
+
+1. **Model 2A (self-hosted)** — clone `github.com/hbar-systems/brainfoundry-nous`, run it on YOUR Hetzner account (or any cloud, or on-prem). You own the infrastructure end-to-end. We're not in the picture.
+2. **Model 3 (white-glove with project transfer)** — email `hello@hbar.systems` subject "premium brain". Premium tier provisions on dedicated hardware AND optionally transfers the Hetzner Cloud project to your own Hetzner account at handoff. You hold the API token after that.
+3. **Dedicated physical hardware** — operate a brain on hardware you physically own. We ship setup instructions; you handle the box.
+
+Default Model 2B is convenient but trades hardware sovereignty for setup ease. We tell you this rather than market around it.
 
 **What we DON'T have access to:**
 - The contents of any chat
@@ -306,11 +322,20 @@ You own this brain. You can edit anything. But some changes are safer than other
 - **Charge for inference.** BYOK means your model bill is from your provider. Sovereignty mode is free (just your hardware cost).
 - **Send updates to your brain without you running `update_brain.sh`.** Pulls are explicit, never silent.
 - **Track what your brain does.** No telemetry, no usage analytics, no aggregation. We don't know what you've ingested or how often you chat.
-- **Have a "kill switch."** We cannot shut down your brain remotely. The closest thing we could do is remove your DNS record at Cloudflare — but your brain's IP would still serve directly, and you could re-point DNS yourself elsewhere. **In full sovereignty mode (§1), even SSH access is denied to us.**
+- **Read your data.** We can't decrypt postgres, can't read chat history, can't see your ingested documents.
+- **Track your usage.** No telemetry, no analytics, no aggregation. We don't know what your brain knows or how often you use it.
 
-### Honest disclosure
+### Honest disclosure — what we CAN technically do (and choose not to)
 
-If you're in **convenience mode** (you kept the provisioner's automation key in `authorized_keys`), we technically *could* SSH into your brain. We don't, and we won't without a written request from you. But the technical capability exists until you remove the automation key. We tell you this rather than pretending it's not there. If that bothers you, switch to full sovereignty mode (instructions in §1).
+Three layers of access exist between you and full sovereignty. Each one has a "fix" if you want to close it:
+
+| Layer | What we have | How to close it |
+|---|---|---|
+| **DNS** | We host `*.brainfoundry.ai`. We could remove your subdomain. | Use a custom domain (Model 3 or Model 2A) — point your own DNS at your brain's IP. We're out of the picture. |
+| **SSH (automation key)** | Provisioner's key is in your `~/.ssh/authorized_keys` until you remove it. | Remove the line containing `brainfoundry-automation` from that file (instructions in §1). |
+| **Hetzner Cloud API (Model 2B only)** | Your server runs in our Hetzner project. We could stop/destroy it. | Self-host (Model 2A) on YOUR cloud account, or upgrade to Model 3 with project transfer. |
+
+We tell you these three things explicitly rather than pretending the access doesn't exist. **Sovereignty isn't a sticker we put on the box — it's a series of operator choices, each with a tradeoff.** You pick how far down the stack you want to own.
 
 ---
 
