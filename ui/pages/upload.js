@@ -42,6 +42,31 @@ export default function Upload() {
   const [stats, setStats] = useState(null);
   const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
   const inputRef = useRef(null);
+  const folderInputRef = useRef(null);
+
+  // Set the folder-mode attributes via DOM after mount — React strips unknown
+  // HTML attributes like `webkitdirectory` in some versions.
+  useEffect(() => {
+    if (folderInputRef.current) {
+      folderInputRef.current.setAttribute("webkitdirectory", "");
+      folderInputRef.current.setAttribute("directory", "");
+      folderInputRef.current.setAttribute("mozdirectory", "");
+    }
+  }, []);
+
+  // Filter hidden files (.git, .env, .DS_Store, etc.) and obvious binaries we
+  // don't want indexing into a memory layer. Buyers folder-uploading hbar.world
+  // would otherwise drag the entire .git history in.
+  const HIDDEN_DIR_PATTERN = /(^|\/)(\.git|\.svn|\.hg|node_modules|__pycache__|\.next|\.venv|venv|dist|build)(\/|$)/i;
+  const HIDDEN_FILE_PATTERN = /(^|\/)\.(env|ds_store|gitignore|gitattributes|dockerignore)/i;
+  const filterHidden = (fileList) => {
+    return fileList.filter(f => {
+      const path = f.webkitRelativePath || f.name;
+      if (HIDDEN_DIR_PATTERN.test(path)) return false;
+      if (HIDDEN_FILE_PATTERN.test(path)) return false;
+      return true;
+    });
+  };
 
   const pushLog = (m) => setLog((x) => [m, ...x].slice(0, 20));
 
@@ -60,8 +85,8 @@ export default function Upload() {
     loadStats();
   }, []);
 
-  const onSelect = (e) => setFiles(Array.from(e.target.files || []));
-  const onDrop = (e) => { e.preventDefault(); setFiles(Array.from(e.dataTransfer.files || [])); };
+  const onSelect = (e) => setFiles(filterHidden(Array.from(e.target.files || [])));
+  const onDrop = (e) => { e.preventDefault(); setFiles(filterHidden(Array.from(e.dataTransfer.files || []))); };
   const prevent = (e) => e.preventDefault();
 
   // Step 1: request a loop permit, then propose each file → get proposal_id back.
@@ -186,9 +211,22 @@ export default function Upload() {
           onDragEnter={prevent}
           style={{ border: `2px dashed ${BORDER}`, padding: 28, borderRadius: 12, textAlign: "center", background: BG }}
         >
-          <p style={{ marginBottom: 12, color: MUTED, fontSize: 13 }}>Drag files here or</p>
-          <button onClick={() => inputRef.current?.click()} style={BTN}>Choose files</button>
+          <p style={{ marginBottom: 12, color: MUTED, fontSize: 13 }}>Drag files or a folder here, or</p>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <button onClick={() => inputRef.current?.click()} style={BTN}>Choose files</button>
+            <button onClick={() => folderInputRef.current?.click()} style={BTN}>Choose folder</button>
+          </div>
           <input ref={inputRef} type="file" multiple onChange={onSelect} style={{ display: "none" }} />
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            onChange={onSelect}
+            style={{ display: "none" }}
+          />
+          <p style={{ marginTop: 10, fontSize: 11, color: MUTED, fontStyle: "italic" }}>
+            Folder upload includes all subdirectories. Hidden files (.git, .env, etc.) are skipped.
+          </p>
         </div>
 
         {!!files.length && (
