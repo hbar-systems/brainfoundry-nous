@@ -13,6 +13,23 @@ export default function Chat() {
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [showNameModal, setShowNameModal] = useState(false)
   const [newChatName, setNewChatName] = useState('')
+  const [attachedImage, setAttachedImage] = useState(null) // {base64, mediaType, name, dataUrl} | null
+
+  const handleImageSelect = e => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting same file
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setError('Only image files are supported'); return }
+    if (file.size > 5 * 1024 * 1024) { setError('Image too large (max 5MB)'); return }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      const base64 = String(dataUrl).split(',')[1]
+      setAttachedImage({ base64, mediaType: file.type, name: file.name, dataUrl })
+    }
+    reader.onerror = () => setError('Failed to read image')
+    reader.readAsDataURL(file)
+  }
   const messagesEndRef = useRef(null)
 
   useEffect(() => {
@@ -125,12 +142,19 @@ export default function Chat() {
       setIsCreatingSession(false)
     }
 
-    const userMessage = { role: 'user', content: inputMessage.trim() }
+    const userMessage = {
+      role: 'user',
+      content: inputMessage.trim(),
+      imageDataUrl: attachedImage?.dataUrl, // for local rendering only; not sent to backend
+    }
     const updated = [...messages, userMessage]
+    const imageForRequest = attachedImage // capture before clearing
     setMessages(updated)
     setInputMessage('')
+    setAttachedImage(null)
     setIsLoading(true)
     setError(null)
+    const useStreaming = !imageForRequest // vision path is non-streaming in v0.7
 
     try {
       const permitRes = await fetch('/api/permit', { method: 'POST' })
@@ -141,16 +165,27 @@ export default function Chat() {
         return
       }
 
+      // Strip imageDataUrl from messages sent to backend — server doesn't need it
+      // and it would bloat the request.
+      const messagesForBackend = updated.map(m => {
+        const { imageDataUrl, ...rest } = m
+        return rest
+      })
+
       const r = await fetch('/api/bf/chat/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: selectedModel,
-          messages: updated,
+          messages: messagesForBackend,
           session_id: sessionId,
           layers: ['identity', 'thinking', 'projects', 'writing'],
           search_limit: 5,
-          stream: true,
+          stream: useStreaming,
+          ...(imageForRequest ? {
+            image_base64: imageForRequest.base64,
+            image_media_type: imageForRequest.mediaType,
+          } : {}),
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
         }),
@@ -159,8 +194,13 @@ export default function Chat() {
       if (!r.ok) {
         const err = await r.json().catch(() => ({}))
         setError(`Error ${r.status}: ${err.detail || 'server error — check API logs'}`)
+      } else if (!useStreaming) {
+        // Vision path returns JSON
+        const data = await r.json()
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content }])
+        fetchSessions()
       } else {
-        // Add empty placeholder assistant message; we'll fill it as tokens arrive.
+        // Streaming path consumes SSE
         setMessages([...updated, { role: 'assistant', content: '' }])
 
         const reader = r.body.getReader()
@@ -173,9 +213,8 @@ export default function Chat() {
           if (done) break
           buffer += decoder.decode(value, { stream: true })
 
-          // SSE frames separated by blank line.
           const frames = buffer.split('\n\n')
-          buffer = frames.pop() // keep last partial frame for next iteration
+          buffer = frames.pop()
 
           for (const frame of frames) {
             if (!frame.startsWith('data: ')) continue
@@ -194,7 +233,6 @@ export default function Chat() {
               } else if (parsed.error) {
                 setError(`Stream error: ${parsed.error}`)
               }
-              // Other frame types (rag_meta) ignored for now — could surface sources later.
             } catch {
               // Skip malformed frames silently.
             }
@@ -394,6 +432,13 @@ export default function Chat() {
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px', fontWeight: '500' }}>
                   {msg.role === 'user' ? 'You' : (selectedModel || 'Brain')}
                 </div>
+                {msg.imageDataUrl && (
+                  <img
+                    src={msg.imageDataUrl}
+                    alt="attached"
+                    style={{ maxWidth: '100%', maxHeight: 240, borderRadius: '10px', marginBottom: '8px', display: 'block' }}
+                  />
+                )}
                 {msg.content}
               </div>
             </div>
@@ -419,12 +464,47 @@ export default function Chat() {
 
         {/* Input */}
         <div style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)' }}>
+          {attachedImage && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px', padding: '8px 12px', backgroundColor: '#1c1814', border: '1px solid #2a2420', borderRadius: '8px' }}>
+              <img src={attachedImage.dataUrl} alt={attachedImage.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: '6px' }} />
+              <span style={{ flex: 1, fontSize: '12px', color: '#8b7d6e', fontFamily: 'DM Mono, monospace' }}>{attachedImage.name}</span>
+              <button
+                onClick={() => setAttachedImage(null)}
+                style={{ background: 'transparent', border: 'none', color: '#6b5f52', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
+                title="Remove image"
+              >×</button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+            <label
+              htmlFor="image-upload-input"
+              title="Attach image (uses vision-capable model — Claude / GPT-4o)"
+              style={{
+                padding: '12px 14px',
+                backgroundColor: '#161310',
+                border: '1px solid #2a2420',
+                borderRadius: '10px',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                color: '#8b7d6e',
+                fontSize: '16px',
+                userSelect: 'none',
+                flexShrink: 0,
+                lineHeight: '1',
+              }}
+            >📎</label>
+            <input
+              id="image-upload-input"
+              type="file"
+              accept="image/*"
+              onChange={handleImageSelect}
+              disabled={isLoading}
+              style={{ display: 'none' }}
+            />
             <textarea
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={selectedModel ? 'Message... (Enter to send)' : 'Select a model first'}
+              placeholder={selectedModel ? (attachedImage ? 'Ask about the image...' : 'Message... (Enter to send)') : 'Select a model first'}
               disabled={!selectedModel || isLoading}
               rows={1}
               style={{

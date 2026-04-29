@@ -1018,6 +1018,8 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         layers = request.get("layers") or None
         session_id = request.get("session_id")
         do_stream = request.get("stream", False)
+        image_b64 = request.get("image_base64")
+        image_media = request.get("image_media_type", "image/jpeg")
         if layers and not isinstance(layers, list):
             raise HTTPException(status_code=400, detail="`layers` must be a list of layer name strings")
 
@@ -1028,6 +1030,45 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                 break
         if not user_query:
             user_query = request.get("query", "")
+
+        # ── Vision path ──────────────────────────────────────────────
+        # If an image is attached, bypass RAG retrieval and send a
+        # multimodal message directly to the provider. RAG retrieval over
+        # text docs is rarely the right context when the user is asking
+        # about an image. Vision is fast on Claude/GPT-4V; useless on
+        # local Ollama unless the buyer pulled a vision-capable model
+        # (rare on default tier).
+        if image_b64:
+            mlower = (model or "").lower()
+            if mlower.startswith("claude") or "anthropic" in mlower:
+                vision_msg = {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_query or "What's in this image?"},
+                        {"type": "image", "source": {"type": "base64", "media_type": image_media, "data": image_b64}},
+                    ],
+                }
+            else:
+                # openai-compatible (gpt-4o, gemini-via-openai, groq vision, etc.)
+                vision_msg = {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_query or "What's in this image?"},
+                        {"type": "image_url", "image_url": {"url": f"data:{image_media};base64,{image_b64}"}},
+                    ],
+                }
+
+            reply = await _providers.complete(model, [vision_msg], max_tokens=2048)
+            _persist_chat_turn(session_id, messages, reply)
+            return {
+                "id": f"chatcmpl-vision-{uuid.uuid4()}",
+                "object": "chat.completion",
+                "created": int(datetime.utcnow().timestamp()),
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+                "rag_metadata": {"documents_used": 0, "search_query": user_query, "sources": [], "vision_path": True},
+                "usage": {"prompt_tokens": 0, "completion_tokens": len(reply.split()), "total_tokens": len(reply.split())},
+            }
 
         prompt, relevant_docs = _build_rag_prompt(messages, user_query, layers, search_limit)
         sources = [d["document_name"] for d in relevant_docs]
