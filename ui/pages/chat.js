@@ -36,7 +36,15 @@ export default function Chat() {
   const fetchSessions = () => {
     fetch('/api/bf/sessions')
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setSessions(d.sessions || []))
+      .then(d => {
+        // Only update state if the response is a confirmed array.
+        // Don't wipe sidebar on malformed/empty/transient responses.
+        if (d && Array.isArray(d.sessions)) {
+          setSessions(d.sessions)
+        } else if (d) {
+          console.warn('sessions response missing sessions array:', d)
+        }
+      })
       .catch(console.error)
   }
 
@@ -45,8 +53,14 @@ export default function Chat() {
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return
-        setMessages(d.messages || [])
-        setCurrentSessionId(sessionId)
+        // Same defensive pattern as fetchSessions — don't wipe messages
+        // on malformed responses. Only update if messages is a real array.
+        if (Array.isArray(d.messages)) {
+          setMessages(d.messages)
+          setCurrentSessionId(sessionId)
+        } else {
+          console.warn('messages response missing messages array:', d)
+        }
       })
       .catch(console.error)
   }
