@@ -952,9 +952,64 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat completion error: {str(e)}")
 
+def _persist_chat_turn(session_id: str, messages: list, reply: str):
+    """Persist user message + assistant reply to chat_messages. Best-effort."""
+    if not session_id or not messages:
+        return
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        latest_user_msg = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+        if latest_user_msg:
+            cursor.execute(
+                "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+                (session_id, "user", latest_user_msg.get("content", ""))
+            )
+        cursor.execute(
+            "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+            (session_id, "assistant", reply)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as db_error:
+        print(f"Database save error (rag): {db_error}")
+
+
+def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int):
+    """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs)."""
+    relevant_docs = search_similar_documents(user_query, limit=search_limit, layers=layers)
+    context = ""
+    if relevant_docs:
+        context = "\n\nRelevant documents:\n"
+        for i, doc in enumerate(relevant_docs, 1):
+            context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
+    prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
+    prompt += "\n\nUse the provided documents to answer questions accurately."
+    if context:
+        prompt += context
+    prompt += "\n\nConversation:\n"
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            prompt += f"System: {content}\n"
+        elif role == "user":
+            prompt += f"User: {content}\n"
+        elif role == "assistant":
+            prompt += f"Assistant: {content}\n"
+    prompt += "Assistant: "
+    return prompt, relevant_docs
+
+
 @app.post("/chat/rag")
 async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)):
-    """RAG-enhanced chat completion - chat with your documents!"""
+    """RAG-enhanced chat completion - chat with your documents!
+
+    Set `"stream": true` in the request body for Server-Sent Events streaming
+    (tokens appear progressively). Default is non-streaming JSON for
+    backward-compat with existing clients.
+    """
     try:
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
@@ -962,83 +1017,70 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
         session_id = request.get("session_id")
+        do_stream = request.get("stream", False)
         if layers and not isinstance(layers, list):
             raise HTTPException(status_code=400, detail="`layers` must be a list of layer name strings")
 
-        # Extract user query from latest message
         user_query = ""
         for msg in reversed(messages):
             if msg.get("role") == "user":
                 user_query = msg.get("content", "")
                 break
-        
-        # Fallback: support callers that send {"query": "..."} instead of messages[]
         if not user_query:
             user_query = request.get("query", "")
 
-        # Search for relevant documents
-        relevant_docs = search_similar_documents(user_query, limit=search_limit, layers=layers)
-        
-        # Build context from relevant documents
-        context = ""
-        if relevant_docs:
-            context = "\n\nRelevant documents:\n"
-            for i, doc in enumerate(relevant_docs, 1):
-                context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
-        
-        # Build prompt with context — use brain persona if configured
-        prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
-        prompt += "\n\nUse the provided documents to answer questions accurately."
-        if context:
-            prompt += context
-        prompt += "\n\nConversation:\n"
-        
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                prompt += f"System: {content}\n"
-            elif role == "user":
-                prompt += f"User: {content}\n"
-            elif role == "assistant":
-                prompt += f"Assistant: {content}\n"
-        
-        prompt += "Assistant: "
-        
-        # Route to correct provider via providers.py
+        prompt, relevant_docs = _build_rag_prompt(messages, user_query, layers, search_limit)
+        sources = [d["document_name"] for d in relevant_docs]
+
+        # ── Streaming path (SSE) ──────────────────────────────────────
+        if do_stream:
+            async def event_stream():
+                # First frame announces RAG metadata so the UI can render sources immediately.
+                meta = {
+                    "object": "chat.completion.rag_meta",
+                    "rag_metadata": {
+                        "documents_used": len(relevant_docs),
+                        "search_query": user_query,
+                        "sources": sources,
+                    },
+                }
+                yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+
+                accumulated = []
+                try:
+                    async for text in _providers.stream(model, [{"role": "user", "content": prompt}], max_tokens=2048):
+                        accumulated.append(text)
+                        chunk = {
+                            "id": f"chatcmpl-rag-{uuid.uuid4()}",
+                            "object": "chat.completion.chunk",
+                            "model": model,
+                            "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                except Exception as stream_err:
+                    err_chunk = {"object": "chat.completion.error", "error": str(stream_err)}
+                    yield f"data: {json.dumps(err_chunk, ensure_ascii=False)}\n\n"
+
+                # Persist the full reply once stream completes.
+                full_reply = "".join(accumulated)
+                _persist_chat_turn(session_id, messages, full_reply)
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        # ── Non-streaming path (JSON) ─────────────────────────────────
         reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
-
-        # Persist conversation if session_id provided (parity with /chat/completions)
-        if session_id and messages:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                latest_user_msg = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
-                if latest_user_msg:
-                    cursor.execute(
-                        "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-                        (session_id, "user", latest_user_msg.get("content", ""))
-                    )
-                cursor.execute(
-                    "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-                    (session_id, "assistant", reply)
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-            except Exception as db_error:
-                print(f"Database save error (rag): {db_error}")
-
+        _persist_chat_turn(session_id, messages, reply)
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
             "object": "chat.completion",
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": [d["document_name"] for d in relevant_docs]},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG chat completion error: {str(e)}")
 

@@ -39,10 +39,29 @@ export default async function handler(req, res) {
     }
 
     const r = await fetch(url, { method: req.method, headers, body });
-    const text = await r.text();
     res.status(r.status);
 
     const ct = r.headers.get("content-type") || "";
+
+    // Server-Sent Events (streaming chat): passthrough the chunks as they arrive.
+    // Buffering would defeat the whole point of streaming.
+    if (ct.includes("text/event-stream")) {
+      res.setHeader("content-type", "text/event-stream");
+      res.setHeader("cache-control", "no-cache, no-transform");
+      res.setHeader("x-accel-buffering", "no"); // disable buffering on proxies (Caddy/Nginx)
+      const reader = r.body.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        res.write(value);
+        // Flush each chunk immediately if the response object supports it.
+        if (typeof res.flush === "function") res.flush();
+      }
+      return res.end();
+    }
+
+    // Default: buffer + send (preserves prior behavior for JSON / text endpoints).
+    const text = await r.text();
     if (ct.includes("application/json")) {
       res.setHeader("content-type", "application/json");
       return res.send(text);

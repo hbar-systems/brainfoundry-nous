@@ -150,17 +150,57 @@ export default function Chat() {
           session_id: sessionId,
           layers: ['identity', 'thinking', 'projects', 'writing'],
           search_limit: 5,
+          stream: true,
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
         }),
       })
-      if (r.ok) {
-        const data = await r.json()
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content }])
-        fetchSessions()
-      } else {
+
+      if (!r.ok) {
         const err = await r.json().catch(() => ({}))
         setError(`Error ${r.status}: ${err.detail || 'server error — check API logs'}`)
+      } else {
+        // Add empty placeholder assistant message; we'll fill it as tokens arrive.
+        setMessages([...updated, { role: 'assistant', content: '' }])
+
+        const reader = r.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let assistantContent = ''
+
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          // SSE frames separated by blank line.
+          const frames = buffer.split('\n\n')
+          buffer = frames.pop() // keep last partial frame for next iteration
+
+          for (const frame of frames) {
+            if (!frame.startsWith('data: ')) continue
+            const data = frame.slice(6).trim()
+            if (data === '[DONE]') continue
+            try {
+              const parsed = JSON.parse(data)
+              const delta = parsed.choices?.[0]?.delta?.content
+              if (delta) {
+                assistantContent += delta
+                setMessages(prev => {
+                  const next = [...prev]
+                  next[next.length - 1] = { role: 'assistant', content: assistantContent }
+                  return next
+                })
+              } else if (parsed.error) {
+                setError(`Stream error: ${parsed.error}`)
+              }
+              // Other frame types (rag_meta) ignored for now — could surface sources later.
+            } catch {
+              // Skip malformed frames silently.
+            }
+          }
+        }
+        fetchSessions()
       }
     } catch (e) {
       setError(`Network error: ${e.message}`)
