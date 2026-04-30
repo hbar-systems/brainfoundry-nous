@@ -13,7 +13,9 @@ export default function Chat() {
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [showNameModal, setShowNameModal] = useState(false)
   const [newChatName, setNewChatName] = useState('')
-  const [attachedImage, setAttachedImage] = useState(null) // {base64, mediaType, name, dataUrl} | null
+  const [attachedImages, setAttachedImages] = useState([]) // [{base64, mediaType, name, dataUrl}]
+  const [dragActive, setDragActive] = useState(false)
+  const MAX_IMAGES = 10
   const [consolidating, setConsolidating] = useState(false)
   const [consolidateStatus, setConsolidateStatus] = useState(null) // {ok: bool, message: string} | null
 
@@ -55,20 +57,60 @@ export default function Chat() {
     }
   }
 
-  const handleImageSelect = e => {
-    const file = e.target.files?.[0]
-    e.target.value = '' // allow re-selecting same file
-    if (!file) return
-    if (!file.type.startsWith('image/')) { setError('Only image files are supported'); return }
-    if (file.size > 5 * 1024 * 1024) { setError('Image too large (max 5MB)'); return }
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = reader.result
-      const base64 = String(dataUrl).split(',')[1]
-      setAttachedImage({ base64, mediaType: file.type, name: file.name, dataUrl })
+  const ingestImageFiles = (fileList) => {
+    const incoming = Array.from(fileList || [])
+    const onlyImages = incoming.filter(f => f.type.startsWith('image/'))
+    if (incoming.length > onlyImages.length) {
+      setError(`Skipped ${incoming.length - onlyImages.length} non-image file(s)`)
     }
-    reader.onerror = () => setError('Failed to read image')
-    reader.readAsDataURL(file)
+    setAttachedImages(prev => {
+      const room = MAX_IMAGES - prev.length
+      if (room <= 0) {
+        setError(`Already at max ${MAX_IMAGES} images — remove one to add more`)
+        return prev
+      }
+      const accepted = onlyImages.slice(0, room).filter(f => f.size <= 5 * 1024 * 1024)
+      const oversized = onlyImages.slice(0, room).length - accepted.length
+      if (oversized > 0) setError(`${oversized} image(s) over 5MB — skipped`)
+      if (onlyImages.length > room) setError(`Capped at ${MAX_IMAGES} images — extras ignored`)
+      accepted.forEach(file => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const dataUrl = reader.result
+          const base64 = String(dataUrl).split(',')[1]
+          setAttachedImages(curr => [...curr, { base64, mediaType: file.type, name: file.name, dataUrl }])
+        }
+        reader.onerror = () => setError(`Failed to read ${file.name}`)
+        reader.readAsDataURL(file)
+      })
+      return prev
+    })
+  }
+
+  const handleImageSelect = e => {
+    ingestImageFiles(e.target.files)
+    e.target.value = '' // allow re-selecting same file
+  }
+
+  const removeImageAt = (idx) => {
+    setAttachedImages(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const handleChatDragOver = e => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!dragActive) setDragActive(true)
+  }
+  const handleChatDragLeave = e => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+  }
+  const handleChatDrop = e => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    if (e.dataTransfer?.files?.length) ingestImageFiles(e.dataTransfer.files)
   }
   const messagesEndRef = useRef(null)
 
@@ -185,16 +227,16 @@ export default function Chat() {
     const userMessage = {
       role: 'user',
       content: inputMessage.trim(),
-      imageDataUrl: attachedImage?.dataUrl, // for local rendering only; not sent to backend
+      imageDataUrls: attachedImages.map(i => i.dataUrl), // local render only, not sent to backend
     }
     const updated = [...messages, userMessage]
-    const imageForRequest = attachedImage // capture before clearing
+    const imagesForRequest = attachedImages // capture before clearing
     setMessages(updated)
     setInputMessage('')
-    setAttachedImage(null)
+    setAttachedImages([])
     setIsLoading(true)
     setError(null)
-    const useStreaming = !imageForRequest // vision path is non-streaming in v0.7
+    const useStreaming = imagesForRequest.length === 0 // vision path is non-streaming in v0.7
 
     try {
       const permitRes = await fetch('/api/permit', { method: 'POST' })
@@ -205,10 +247,10 @@ export default function Chat() {
         return
       }
 
-      // Strip imageDataUrl from messages sent to backend — server doesn't need it
-      // and it would bloat the request.
+      // Strip image data URLs from messages sent to backend — server doesn't need them
+      // and they'd bloat the request.
       const messagesForBackend = updated.map(m => {
-        const { imageDataUrl, ...rest } = m
+        const { imageDataUrls, ...rest } = m
         return rest
       })
 
@@ -222,9 +264,8 @@ export default function Chat() {
           layers: ['identity', 'thinking', 'projects', 'writing', 'episodic'],
           search_limit: 5,
           stream: useStreaming,
-          ...(imageForRequest ? {
-            image_base64: imageForRequest.base64,
-            image_media_type: imageForRequest.mediaType,
+          ...(imagesForRequest.length > 0 ? {
+            images: imagesForRequest.map(i => ({ base64: i.base64, media_type: i.mediaType })),
           } : {}),
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
@@ -473,8 +514,25 @@ export default function Chat() {
           </div>
         )}
 
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Messages — also the drop zone for images */}
+        <div
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '24px 28px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            position: 'relative',
+            outline: dragActive ? '2px dashed #c9a96e' : 'none',
+            outlineOffset: '-12px',
+            backgroundColor: dragActive ? 'rgba(201,169,110,0.04)' : 'transparent',
+            transition: 'background 0.15s ease',
+          }}
+        >
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', marginTop: '100px' }}>
               <div style={{ fontSize: '32px', marginBottom: '20px', color: '#c9a96e', opacity: 0.25 }}>ℏ</div>
@@ -507,12 +565,17 @@ export default function Chat() {
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px', fontWeight: '500' }}>
                   {msg.role === 'user' ? 'You' : (selectedModel || 'Brain')}
                 </div>
-                {msg.imageDataUrl && (
-                  <img
-                    src={msg.imageDataUrl}
-                    alt="attached"
-                    style={{ maxWidth: '100%', maxHeight: 240, borderRadius: '10px', marginBottom: '8px', display: 'block' }}
-                  />
+                {msg.imageDataUrls && msg.imageDataUrls.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                    {msg.imageDataUrls.map((url, ii) => (
+                      <img
+                        key={ii}
+                        src={url}
+                        alt={`attached ${ii + 1}`}
+                        style={{ maxWidth: '160px', maxHeight: 160, objectFit: 'cover', borderRadius: '8px', display: 'block' }}
+                      />
+                    ))}
+                  </div>
                 )}
                 {msg.content}
               </div>
@@ -539,15 +602,29 @@ export default function Chat() {
 
         {/* Input */}
         <div style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)' }}>
-          {attachedImage && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px', padding: '8px 12px', backgroundColor: '#1c1814', border: '1px solid #2a2420', borderRadius: '8px' }}>
-              <img src={attachedImage.dataUrl} alt={attachedImage.name} style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: '6px' }} />
-              <span style={{ flex: 1, fontSize: '12px', color: '#8b7d6e', fontFamily: 'DM Mono, monospace' }}>{attachedImage.name}</span>
-              <button
-                onClick={() => setAttachedImage(null)}
-                style={{ background: 'transparent', border: 'none', color: '#6b5f52', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
-                title="Remove image"
-              >×</button>
+          {attachedImages.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px', padding: '10px 12px', backgroundColor: '#1c1814', border: '1px solid #2a2420', borderRadius: '8px' }}>
+              <div style={{ width: '100%', fontSize: '11px', color: '#8b7d6e', fontFamily: 'DM Mono, monospace', marginBottom: '4px' }}>
+                {attachedImages.length} image{attachedImages.length > 1 ? 's' : ''} attached ({MAX_IMAGES} max)
+              </div>
+              {attachedImages.map((img, i) => (
+                <div key={i} style={{ position: 'relative', width: 64, height: 64 }}>
+                  <img src={img.dataUrl} alt={img.name} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: '6px' }} />
+                  <button
+                    onClick={() => removeImageAt(i)}
+                    title="Remove"
+                    style={{
+                      position: 'absolute', top: -6, right: -6,
+                      width: 18, height: 18,
+                      background: '#3a1e1e', color: '#c98080',
+                      border: '1px solid #6b3030', borderRadius: '50%',
+                      cursor: 'pointer', fontSize: '11px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      padding: 0, lineHeight: 1,
+                    }}
+                  >×</button>
+                </div>
+              ))}
             </div>
           )}
           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
@@ -571,6 +648,7 @@ export default function Chat() {
               id="image-upload-input"
               type="file"
               accept="image/*"
+              multiple
               onChange={handleImageSelect}
               disabled={isLoading}
               style={{ display: 'none' }}
@@ -579,7 +657,7 @@ export default function Chat() {
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={selectedModel ? (attachedImage ? 'Ask about the image...' : 'Message... (Enter to send)') : 'Select a model first'}
+              placeholder={selectedModel ? (attachedImages.length > 0 ? `Ask about the image${attachedImages.length > 1 ? 's' : ''}...` : 'Message... (Enter to send, drop images here)') : 'Select a model first'}
               disabled={!selectedModel || isLoading}
               rows={1}
               style={{

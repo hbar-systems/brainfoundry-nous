@@ -9,6 +9,7 @@ import psycopg2
 import requests
 import json
 import os
+import re
 import sys
 import socket
 from typing import List, Optional, Annotated, Dict, Any, Union
@@ -969,9 +970,12 @@ async def consolidate_session(session_id: str, request: dict, api_key: str = Dep
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
 
-        # Read session messages
+        # Read session messages + session title (for human-readable doc name)
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute("SELECT title FROM chat_sessions WHERE session_id = %s::uuid", (session_id,))
+        title_row = cursor.fetchone()
+        session_title = (title_row[0] if title_row else None) or "untitled"
         cursor.execute(
             "SELECT role, content, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at",
             (session_id,)
@@ -1012,7 +1016,11 @@ Summary:"""
             raise HTTPException(502, "Summarization returned empty result")
 
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
-        doc_name = f"chat-{session_id}-{date_str}.md"
+        # Sanitize session title for filename — keep alphanumerics, hyphens, underscores; collapse spaces.
+        title_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", session_title.strip()).strip("-").lower() or "untitled"
+        if len(title_slug) > 60:
+            title_slug = title_slug[:60].rstrip("-")
+        doc_name = f"chat-{title_slug}-{date_str}.md"
 
         chunks = chunk_text(summary)
         embeddings = generate_embeddings(chunks)
@@ -1119,8 +1127,18 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         layers = request.get("layers") or None
         session_id = request.get("session_id")
         do_stream = request.get("stream", False)
+        # Image inputs — support both single (legacy: image_base64 + image_media_type)
+        # and multi (images: [{base64, media_type}, ...] up to 10).
         image_b64 = request.get("image_base64")
         image_media = request.get("image_media_type", "image/jpeg")
+        images_list = request.get("images") or []
+        if not isinstance(images_list, list):
+            raise HTTPException(status_code=400, detail="`images` must be a list of {base64, media_type}")
+        if len(images_list) > 10:
+            raise HTTPException(status_code=400, detail="Max 10 images per message")
+        # If legacy single-image fields used, normalize into images_list.
+        if image_b64 and not images_list:
+            images_list = [{"base64": image_b64, "media_type": image_media}]
         if layers and not isinstance(layers, list):
             raise HTTPException(status_code=400, detail="`layers` must be a list of layer name strings")
 
@@ -1133,31 +1151,23 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             user_query = request.get("query", "")
 
         # ── Vision path ──────────────────────────────────────────────
-        # If an image is attached, bypass RAG retrieval and send a
-        # multimodal message directly to the provider. RAG retrieval over
-        # text docs is rarely the right context when the user is asking
-        # about an image. Vision is fast on Claude/GPT-4V; useless on
-        # local Ollama unless the buyer pulled a vision-capable model
-        # (rare on default tier).
-        if image_b64:
+        # If one or more images are attached, bypass RAG retrieval and send a
+        # multimodal message directly to the provider.
+        if images_list:
             mlower = (model or "").lower()
+            text_part = {"type": "text", "text": user_query or "What's in these images?"}
             if mlower.startswith("claude") or "anthropic" in mlower:
-                vision_msg = {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_query or "What's in this image?"},
-                        {"type": "image", "source": {"type": "base64", "media_type": image_media, "data": image_b64}},
-                    ],
-                }
+                content = [text_part] + [
+                    {"type": "image", "source": {"type": "base64", "media_type": img.get("media_type", "image/jpeg"), "data": img["base64"]}}
+                    for img in images_list if img.get("base64")
+                ]
             else:
                 # openai-compatible (gpt-4o, gemini-via-openai, groq vision, etc.)
-                vision_msg = {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_query or "What's in this image?"},
-                        {"type": "image_url", "image_url": {"url": f"data:{image_media};base64,{image_b64}"}},
-                    ],
-                }
+                content = [text_part] + [
+                    {"type": "image_url", "image_url": {"url": f"data:{img.get('media_type', 'image/jpeg')};base64,{img['base64']}"}}
+                    for img in images_list if img.get("base64")
+                ]
+            vision_msg = {"role": "user", "content": content}
 
             reply = await _providers.complete(model, [vision_msg], max_tokens=2048)
             _persist_chat_turn(session_id, messages, reply)
