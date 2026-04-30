@@ -15,6 +15,7 @@ const IN_PROGRESS = [
 ]
 
 const PLANNED = [
+  { title: 'Image persistence (currently ephemeral)', detail: 'Images you attach in chat are sent to the model and shown in the current session, but not stored. Reload removes them. Consolidation never sees image content. v0.8 will persist images locally on your brain (your data, your server) so reload preserves visual context and episodic memory can reference past images.' },
   { title: 'Plain-language admin / code-edit panel', detail: 'Adjust brain behavior in plain English — no Docker, no SSH. "Your brain, your rules" UI for non-technical operators.' },
   { title: 'Identity-first onboarding wizard', detail: 'New buyers get walked through: drop an identity doc first, then chat. No more landing on Knowledge upload cold.' },
   { title: 'Approval queue UI', detail: 'Governance kernel proposes memory writes; explicit approve/reject UI in the Knowledge tab.' },

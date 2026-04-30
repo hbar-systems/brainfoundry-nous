@@ -427,36 +427,94 @@ function SecurityPanel() {
 
 // ---------- CLI ----------
 function CLIPanel() {
-  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const [info, setInfo] = useState(null)
+  const [revealed, setRevealed] = useState(false)
+  const [copied, setCopied] = useState(null) // 'key' | 'snippet' | null
+
+  useEffect(() => {
+    fetch('/api/cli-info')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setInfo(d))
+      .catch(() => {})
+  }, [])
+
+  const endpoint = info?.endpoint || (typeof window !== 'undefined' ? `https://${window.location.hostname.replace('console.', '')}` : '')
+  const apiKey = info?.api_key || ''
+  const masked = apiKey ? '*'.repeat(Math.max(8, apiKey.length - 4)) + apiKey.slice(-4) : '<not configured>'
+
+  const snippet = `pip install hbar
+export HBAR_ENDPOINT="${endpoint}"
+export HBAR_API_KEY="${revealed ? apiKey : '<paste your API key here — see above>'}"
+hbar chat "hello"`
+
+  const copyText = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(label)
+      setTimeout(() => setCopied(null), 2000)
+    } catch {}
+  }
+
   return (
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Talk to your brain from your laptop terminal. One-time install, then
         <code> hbar chat </code> anywhere.
       </p>
-      <pre style={{
-        background: '#0e0c0b',
-        border: '1px solid #2a2420',
-        borderRadius: 6,
-        padding: 14,
-        color: '#e8e0d5',
-        fontSize: 12,
-        fontFamily: 'DM Mono, monospace',
-        overflowX: 'auto',
-      }}>
-{`pip install hbar
-export HBAR_ENDPOINT="${origin}"
-export HBAR_API_KEY="<your api key>"
-hbar chat "hello"`}
-      </pre>
-      <p style={{ color: '#6b5f52', fontSize: 12, marginTop: 10 }}>
+
+      {/* Endpoint */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: '#6b5f52', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>Endpoint:</span>
+        <code style={{ flex: 1, fontSize: 12, color: '#e8e0d5', background: '#0e0c0b', border: '1px solid #2a2420', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{endpoint}</code>
+        <button onClick={() => copyText(endpoint, 'endpoint')} style={{ ...COPY_BTN, color: copied === 'endpoint' ? '#7fc99c' : '#c9a96e' }}>{copied === 'endpoint' ? 'copied' : 'copy'}</button>
+      </div>
+
+      {/* API key with reveal */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 12, color: '#6b5f52', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>API key:</span>
+        <code style={{ flex: 1, fontSize: 12, color: revealed ? '#e8e0d5' : '#6b5f52', background: '#0e0c0b', border: '1px solid #2a2420', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{revealed ? apiKey : masked}</code>
+        <button onClick={() => setRevealed(r => !r)} style={{ ...COPY_BTN }}>{revealed ? 'hide' : 'reveal'}</button>
+        <button onClick={() => copyText(apiKey, 'key')} disabled={!apiKey} style={{ ...COPY_BTN, color: copied === 'key' ? '#7fc99c' : '#c9a96e', opacity: apiKey ? 1 : 0.4 }}>{copied === 'key' ? 'copied' : 'copy'}</button>
+      </div>
+
+      {/* Setup snippet */}
+      <div style={{ position: 'relative' }}>
+        <pre style={{
+          background: '#0e0c0b',
+          border: '1px solid #2a2420',
+          borderRadius: 6,
+          padding: 14,
+          color: '#e8e0d5',
+          fontSize: 12,
+          fontFamily: 'DM Mono, monospace',
+          overflowX: 'auto',
+          margin: 0,
+        }}>{snippet}</pre>
+        <button
+          onClick={() => copyText(snippet, 'snippet')}
+          style={{ ...COPY_BTN, position: 'absolute', top: 8, right: 8, color: copied === 'snippet' ? '#7fc99c' : '#c9a96e' }}
+        >{copied === 'snippet' ? 'copied' : 'copy block'}</button>
+      </div>
+
+      <p style={{ color: '#6b5f52', fontSize: 12, marginTop: 12, lineHeight: 1.55 }}>
         <code>hbar</code> is the BrainFoundry CLI — one binary for every brain.
-        Configure it with your endpoint and API key above, and it talks to
-        <em> your </em> brain only. Your API key is in your brain's <code>.env</code>
-        file, or the "Console login password" line of your welcome email.
+        Configured with your endpoint + API key above, it talks to
+        <em> your </em> brain only. Your API key never leaves your server unless
+        you ssh and paste it elsewhere.
       </p>
     </div>
   )
+}
+
+const COPY_BTN = {
+  padding: '5px 10px',
+  background: 'transparent',
+  color: '#c9a96e',
+  border: '1px solid #c9a96e60',
+  borderRadius: 4,
+  cursor: 'pointer',
+  fontSize: 11,
+  fontFamily: 'DM Mono, monospace',
 }
 
 // ---------- Advanced ----------
