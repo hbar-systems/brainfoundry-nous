@@ -1118,9 +1118,20 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
     Set `"stream": true` in the request body for Server-Sent Events streaming
     (tokens appear progressively). Default is non-streaming JSON for
     backward-compat with existing clients.
+
+    Loop permits are OPTIONAL on /chat/rag. The endpoint is read-only over
+    the brain's memory (no mutation), so X-API-Key auth alone is sufficient
+    operator authorization. UI clients still pass a permit (preserves the
+    audit trail in BrainKernel); CLI / federation clients can omit it.
     """
     try:
-        _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
+        permit_id = request.get("permit_id")
+        permit_token = request.get("permit_token")
+        if permit_id or permit_token:
+            # Caller chose to use a permit (UI flow) — verify it.
+            _verify_loop_permit(permit_id, permit_token)
+        # else: X-API-Key auth (validated by Depends(get_api_key)) is enough
+        # for this read-only operation.
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 5)
