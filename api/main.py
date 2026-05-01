@@ -581,6 +581,21 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] layer index ensure skipped: {e}", flush=True)
 
+    # Federation DM tables (federation_inbox, federation_outbox)
+    try:
+        from api import federation_dm
+        federation_dm.init_tables()
+    except Exception as e:
+        print(f"[startup] federation_dm init skipped: {e}", flush=True)
+
+
+# Mount federation DM router
+try:
+    from api.federation_dm import router as _federation_dm_router
+    app.include_router(_federation_dm_router)
+except Exception as e:
+    print(f"[startup] federation_dm router mount skipped: {e}", flush=True)
+
 def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file"""
     try:
