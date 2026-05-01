@@ -459,9 +459,40 @@ export default function Update() {
         )}
 
         {/* Footer / fallback path */}
-        <p style={{ color: COLORS.mutedDim, fontSize: '12px', marginTop: '40px', lineHeight: '1.6', fontFamily: 'system-ui, sans-serif' }}>
-          Prefer the SSH path? <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace' }}>./scripts/update_brain.sh</code> from the brain directory does the same thing.
-        </p>
+        <div style={{ marginTop: '40px', padding: '18px 20px', backgroundColor: '#161310', border: '1px solid #2a2420', borderRadius: '10px' }}>
+          <p style={{ color: '#e8e0d5', fontSize: '13px', margin: '0 0 10px 0', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>
+            Or update from your laptop terminal (same result)
+          </p>
+          <p style={{ color: COLORS.mutedDim, fontSize: '12px', margin: '0 0 12px 0', lineHeight: '1.6', fontFamily: 'system-ui, sans-serif' }}>
+            If the button above doesn&rsquo;t work or you prefer the command line, you can run the update yourself in four steps:
+          </p>
+          <ol style={{ color: COLORS.muted, fontSize: '12px', lineHeight: '1.7', paddingLeft: '20px', margin: 0, fontFamily: 'system-ui, sans-serif' }}>
+            <li style={{ marginBottom: '8px' }}>
+              Open <strong style={{ color: '#e8e0d5' }}>Terminal</strong> (Mac: <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Cmd+Space</code> &rarr; type &ldquo;Terminal&rdquo; &rarr; Enter; Linux: usually <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Ctrl+Alt+T</code>; Windows: install WSL or use Git Bash).
+            </li>
+            <li style={{ marginBottom: '8px' }}>
+              SSH into your brain (replace <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>&lt;handle&gt;</code> with your brain&rsquo;s name):
+              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+{`ssh -i ~/.ssh/brainfoundry-<handle>.key hbar@<handle>.brainfoundry.ai`}
+              </pre>
+            </li>
+            <li style={{ marginBottom: '8px' }}>
+              Move into your brain&rsquo;s directory:
+              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+{`cd /home/hbar/brain`}
+              </pre>
+            </li>
+            <li>
+              Run the update script:
+              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+{`./scripts/update_brain.sh`}
+              </pre>
+            </li>
+          </ol>
+          <p style={{ color: COLORS.mutedDim, fontSize: '11px', margin: '14px 0 0 0', lineHeight: '1.6', fontFamily: 'system-ui, sans-serif', fontStyle: 'italic' }}>
+            The script does the same thing as the button: backs up your <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '10px' }}>.env</code>, pulls latest from the public template, rebuilds the brain, and verifies health. Your chats and documents stay intact.
+          </p>
+        </div>
       </div>
     </>
   )
