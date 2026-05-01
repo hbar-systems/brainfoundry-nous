@@ -57,6 +57,10 @@ services:
       - XAI_API_KEY=${XAI_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # Host path of this brain repo, used by /admin/update. Default mirrors the
+      # provisioner's checkout location. If your install lives elsewhere, set
+      # BRAIN_HOST_DIR in .env to that absolute host path.
+      - BRAIN_HOST_DIR=${BRAIN_HOST_DIR:-/home/hbar/brain}
     depends_on:
       - postgres
       - nodeos
@@ -73,6 +77,17 @@ services:
       - ./prepared_docs:/app/prepared_docs:rw
       - api_data:/app/data
       - api_runtime:/app/runtime
+      # /admin/update wiring: docker socket + brain repo at the *same* host path
+      # inside the container. The "same path" trick is required so that when
+      # `docker compose up -d --build` runs from inside, the daemon resolves the
+      # bind-mount paths in this file consistently with how it sees them on the
+      # host. Security note: mounting docker.sock gives the api container
+      # root-equivalent access to the host. That's an acceptable trade in the
+      # single-tenant brain model (the owner already has root via SSH); to opt
+      # out, comment these two mounts and the Update tab will surface a clear
+      # "not configured" error while SSH-driven updates keep working.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BRAIN_HOST_DIR:-/home/hbar/brain}:${BRAIN_HOST_DIR:-/home/hbar/brain}:rw
       # For live-reload during development, copy docker-compose.override.yml.example
       # to docker-compose.override.yml — it bind-mounts ./api over /app/api.
     networks:
