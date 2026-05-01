@@ -7,7 +7,9 @@ const NAV = [
   { href: '/chat', label: 'Chat' },
   { href: '/upload', label: 'Knowledge' },
   { href: '/federation', label: 'Federation' },
+  { href: '/trace', label: 'Trace' },
   { href: '/settings', label: 'Settings' },
+  { href: '/update', label: 'Update' },
   { href: '/future', label: 'Future' },
 ]
 

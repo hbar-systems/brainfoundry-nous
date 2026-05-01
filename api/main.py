@@ -2929,4 +2929,337 @@ def brain_docs(tags: str = "", api_key: str = Depends(get_api_key)):
     conn.close()
     return {"documents": docs, "filter_tags": tag_list, "count": len(docs)}
 
+
+# ---------------------------------------------------------------------------
+# /admin/trace — operator-facing dashboard of what the brain has tracked
+# Read-only. Aggregated; no chat content is exposed verbatim.
+# ---------------------------------------------------------------------------
+
+# Stopwords for top-topic word counting. Kept minimal and inline so /admin/trace
+# has zero new dependencies. Lower-cased; matches are case-insensitive.
+_TRACE_STOPWORDS = frozenset("""
+a about above after again against all am an and any are aren't as at be because
+been before being below between both but by can can't cannot could couldn't did
+didn't do does doesn't doing don't down during each few for from further had
+hadn't has hasn't have haven't having he he'd he'll he's her here here's hers
+herself him himself his how how's i i'd i'll i'm i've if in into is isn't it
+it's its itself just let's me more most mustn't my myself no nor not of off on
+once only or other ought our ours ourselves out over own same shan't she she'd
+she'll she's should shouldn't so some such than that that's the their theirs
+them themselves then there there's these they they'd they'll they're they've
+this those through to too under until up very was wasn't we we'd we'll we're
+we've were weren't what what's when when's where where's which while who who's
+whom why why's with won't would wouldn't you you'd you'll you're you've your
+yours yourself yourselves get got like just also one two three really thing
+things something anything everything someone anyone everyone way ways still
+even much many lot lots make makes made way back going go went come came see
+saw seen know knew known think thought said say says will shall might may must
+need needs needed want wants wanted use used using new old good bad yes okay
+ok yeah well right sure maybe perhaps actually basically literally honestly
+""".split())
+
+_TRACE_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z'\-]{2,}")
+
+
+@app.get("/admin/trace")
+def admin_trace(api_key: str = Depends(get_api_key)):
+    """Operator-only trace dashboard. Aggregated counts + recent timeline only."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # ── Chat session + message counts ────────────────────────────────
+        cur.execute("SELECT COUNT(*) FROM chat_sessions")
+        total_sessions = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM chat_messages")
+        total_messages = cur.fetchone()[0]
+
+        cur.execute("SELECT MIN(created_at), MAX(created_at) FROM chat_messages")
+        msg_min, msg_max = cur.fetchone()
+
+        cur.execute("SELECT MIN(created_at) FROM document_embeddings")
+        doc_min = cur.fetchone()[0]
+
+        # ── Document totals ──────────────────────────────────────────────
+        cur.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT document_name) FROM document_embeddings"
+        )
+        total_chunks, unique_docs = cur.fetchone()
+
+        # ── Per-layer breakdown ──────────────────────────────────────────
+        cur.execute(
+            """
+            SELECT COALESCE(metadata->>'layer', '') AS layer,
+                   COUNT(DISTINCT document_name) AS doc_count,
+                   COUNT(*) AS chunk_count,
+                   MAX(created_at) AS last_ingested
+            FROM document_embeddings
+            GROUP BY COALESCE(metadata->>'layer', '')
+            ORDER BY chunk_count DESC
+            """
+        )
+        layer_rows = cur.fetchall()
+        by_layer = [
+            {
+                "layer": r[0] or None,
+                "doc_count": r[1],
+                "chunk_count": r[2],
+                "last_ingested": r[3].isoformat() if r[3] else None,
+            }
+            for r in layer_rows
+        ]
+
+        # ── Recent ingestion timeline ────────────────────────────────────
+        cur.execute(
+            """
+            SELECT document_name,
+                   COALESCE(MAX(metadata->>'layer'), '') AS layer,
+                   COUNT(*) AS chunks,
+                   MAX(created_at) AS last_at
+            FROM document_embeddings
+            GROUP BY document_name
+            ORDER BY last_at DESC
+            LIMIT 20
+            """
+        )
+        recent_ingestion = [
+            {
+                "document_name": r[0],
+                "layer": r[1] or None,
+                "chunks": r[2],
+                "ingested_at": r[3].isoformat() if r[3] else None,
+            }
+            for r in cur.fetchall()
+        ]
+
+        # ── Top topics from recent chat messages (aggregated word count) ─
+        # Pull a bounded sample so the endpoint stays cheap on large brains.
+        cur.execute(
+            """
+            SELECT content FROM chat_messages
+            ORDER BY created_at DESC
+            LIMIT 2000
+            """
+        )
+        word_counts: Dict[str, int] = defaultdict(int)
+        for (content,) in cur.fetchall():
+            if not content:
+                continue
+            for tok in _TRACE_TOKEN_RE.findall(content):
+                lw = tok.lower()
+                if lw in _TRACE_STOPWORDS or len(lw) < 4:
+                    continue
+                word_counts[lw] += 1
+        top_topics = sorted(word_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        top_topics = [{"term": t, "count": c} for t, c in top_topics]
+
+        # ── Federation activity ──────────────────────────────────────────
+        # Tables may not exist yet on brains that never imported federation_dm.
+        federation = {"sent": 0, "received": 0, "first_sent_at": None, "first_received_at": None}
+        try:
+            cur.execute("SELECT COUNT(*), MIN(sent_at) FROM federation_outbox")
+            sent_count, first_sent = cur.fetchone()
+            federation["sent"] = sent_count or 0
+            federation["first_sent_at"] = first_sent.isoformat() if first_sent else None
+        except Exception:
+            conn.rollback()
+        try:
+            cur.execute("SELECT COUNT(*), MIN(received_at) FROM federation_inbox")
+            recv_count, first_recv = cur.fetchone()
+            federation["received"] = recv_count or 0
+            federation["first_received_at"] = first_recv.isoformat() if first_recv else None
+        except Exception:
+            conn.rollback()
+
+        cur.close()
+        conn.close()
+
+        # Brain "born on" — earliest signal across messages and ingested chunks.
+        candidates = [c for c in (msg_min, doc_min) if c is not None]
+        born_on = min(candidates).isoformat() if candidates else None
+
+        return {
+            "brain_id": os.getenv("BRAIN_ID"),
+            "brain_name": os.getenv("BRAIN_NAME") or os.getenv("NEXT_PUBLIC_BRAIN_NAME"),
+            "born_on": born_on,
+            "chat": {
+                "total_sessions": total_sessions,
+                "total_messages": total_messages,
+                "first_message_at": msg_min.isoformat() if msg_min else None,
+                "last_message_at": msg_max.isoformat() if msg_max else None,
+            },
+            "documents": {
+                "total_chunks": total_chunks,
+                "unique_documents": unique_docs,
+                "by_layer": by_layer,
+                "recent": recent_ingestion,
+            },
+            "topics": top_topics,
+            "federation": federation,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Trace failed: {type(e).__name__}: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /admin/* — operator-only update + version endpoints.
+#
+# These let the console "Update" tab pull the latest brain template from
+# GitHub and rebuild without SSH. They depend on three host-side hooks:
+#   1. /var/run/docker.sock mounted into this container (so docker compose works)
+#   2. The brain repo dir mounted at the SAME path inside the container as on
+#      the host, so docker compose's relative paths resolve correctly when
+#      the daemon evaluates them. The path is read from BRAIN_HOST_DIR (the
+#      provisioner sets this; default mirrors update_brain.sh's default).
+#   3. The docker CLI installed in the api image (handled in api/Dockerfile).
+#
+# When BRAIN_HOST_DIR isn't mounted or docker isn't reachable, /admin/update
+# returns a structured error explaining what to set. The classic SSH path
+# (run scripts/update_brain.sh by hand) keeps working either way.
+# ─────────────────────────────────────────────────────────────────────────────
+import subprocess
+
+BRAIN_HOST_DIR = os.getenv("BRAIN_HOST_DIR", "/home/hbar/brain")
+
+
+def _update_preflight() -> Optional[str]:
+    """Return None if /admin/update can run, or a string describing what's missing."""
+    if not os.path.isdir(BRAIN_HOST_DIR):
+        return (
+            f"BRAIN_HOST_DIR={BRAIN_HOST_DIR} is not visible inside the api container. "
+            f"Mount the brain repo into the api service at the same path as on the host "
+            f"(see docker-compose.yml volumes). Until then, run scripts/update_brain.sh via SSH."
+        )
+    script = os.path.join(BRAIN_HOST_DIR, "scripts", "update_brain.sh")
+    if not os.path.isfile(script):
+        return f"update_brain.sh not found at {script}. Pull a newer template, then retry."
+    if not os.path.exists("/var/run/docker.sock"):
+        return (
+            "/var/run/docker.sock is not mounted into the api container. "
+            "Add the bind mount in docker-compose.yml, or run scripts/update_brain.sh via SSH."
+        )
+    return None
+
+
+@app.get("/admin/version-info")
+def admin_version_info(api_key: str = Depends(get_api_key)):
+    """Current commit (baked at build) plus latest available on origin/main.
+
+    Best-effort: 'latest' may be null if the host dir or git aren't reachable
+    from inside the container — the UI degrades gracefully when that happens.
+    """
+    current = os.getenv("BRAIN_GIT_COMMIT", "unknown")
+    latest = None
+    behind_by = None
+    error = None
+
+    try:
+        if os.path.isdir(os.path.join(BRAIN_HOST_DIR, ".git")):
+            # Fetch quietly; if offline this still returns something usable from cached refs.
+            try:
+                subprocess.run(
+                    ["git", "fetch", "origin", "--quiet"],
+                    cwd=BRAIN_HOST_DIR, timeout=10, check=False,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+            r = subprocess.run(
+                ["git", "rev-parse", "origin/main"],
+                cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                latest = r.stdout.strip()
+            r2 = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD..origin/main"],
+                cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
+            )
+            if r2.returncode == 0:
+                try:
+                    behind_by = int(r2.stdout.strip())
+                except ValueError:
+                    pass
+        else:
+            error = f"BRAIN_HOST_DIR={BRAIN_HOST_DIR} is not a git checkout (or not mounted)."
+    except FileNotFoundError:
+        # git binary missing inside the container — treat as soft failure.
+        error = "git CLI not available in api container."
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+
+    return {
+        "current": current,
+        "latest": latest,
+        "behind_by": behind_by,
+        "brain_version": BRAIN_VERSION,
+        "preflight_error": _update_preflight(),
+        "error": error,
+    }
+
+
+@app.post("/admin/update")
+def admin_update(api_key: str = Depends(get_api_key)):
+    """Run scripts/update_brain.sh and stream its stdout/stderr as SSE.
+
+    Caveat: the script's final step is `docker compose up -d --build`, which
+    rebuilds and restarts the api container — so this stream WILL drop mid-way.
+    The UI is responsible for treating the drop as expected and polling /health
+    + /admin/version-info to confirm the new version is up.
+    """
+    err = _update_preflight()
+    if err:
+        # Synchronous error response (not SSE) — UI surfaces this directly.
+        raise HTTPException(status_code=503, detail=err)
+
+    script = os.path.join(BRAIN_HOST_DIR, "scripts", "update_brain.sh")
+
+    def event_stream():
+        # Frame helper: SSE wants "data: ...\n\n" per event; we json-encode the
+        # payload so newlines/quotes inside log lines don't break the protocol.
+        def frame(obj):
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+        yield frame({"type": "start", "cwd": BRAIN_HOST_DIR})
+
+        try:
+            proc = subprocess.Popen(
+                ["bash", script],
+                cwd=BRAIN_HOST_DIR,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR},
+            )
+        except Exception as e:
+            yield frame({"type": "error", "message": f"failed to spawn: {type(e).__name__}: {e}"})
+            yield "data: [DONE]\n\n"
+            return
+
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                # Each iteration is one log line — flush as a separate SSE event
+                # so the UI can render it immediately.
+                yield frame({"type": "log", "line": line.rstrip("\n")})
+            proc.wait(timeout=600)
+            yield frame({"type": "done", "returncode": proc.returncode})
+        except Exception as e:
+            yield frame({"type": "error", "message": f"{type(e).__name__}: {e}"})
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 app.include_router(router)
