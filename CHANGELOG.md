@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-05-02 — substrate floor (Layer 1) live
+
+**Federation membership now gated on substrate-depth.** The
+`/v1/federation/assertion` handler runs an additive precondition after
+sig/replay/jti: it fetches the issuer's `/v1/federation/substrate-depth`
+and checks `artifact_count >= 50`, `first_person_count >= 25`,
+`source_diversity >= 2`, `(now - oldest_artifact_ts).days >= 7`. The
+depth payload is signed by the issuer and verified against the same
+pinned pubkey from `known_peers.toml` that gates the handshake itself —
+no self-attesting trust. Failure returns HTTP 403 with a
+machine-readable `{ok, code, details}` body.
+
+Verified live 2026-05-02: `hbar → yury` assertion returned `403
+substrate_floor_not_met` with full per-check breakdown (artifact_count
+0/50, first_person 0/25, diversity 0/2, age null/7d) — gate path
+exercised end-to-end.
+
+New:
+
+- `api/substrate.py` — Postgres-backed `artifact_attestations` ledger,
+  ED25519 signing of the depth payload, threshold check, peer
+  fetch+cache (5-minute TTL).
+- Public unauthenticated `GET /v1/federation/substrate-depth` —
+  returns metrics over the local attestation ledger (counts, hashes,
+  byte sizes, source-type diversity, oldest/newest timestamps),
+  signed by the brain's federation keypair. Cached 5 minutes.
+- Auto-attestation hooks in `/chat/sessions/{id}/consolidate` and
+  `/documents/upload` — every newly-ingested artifact writes a row
+  with `backfilled=false` containing a sha256 hash over the full
+  source text (not per-chunk), source_type, byte size,
+  `first_person_attestation` (default `authored_by_owner`), and an
+  ED25519 signature over the canonical row payload.
+- `scripts/substrate_backfill.py` — DRY-RUN by default, `--commit`
+  applies. Reconstructs documents from `document_embeddings`, groups
+  chunks by `document_name`, generates one attestation per document
+  with `backfilled=true`. Operators that ingested scraped material
+  pass `--label-derived <pattern>`.
+
+Federation registry (`api/identity/known_peers.toml`) populated on
+yury, hbar, e2e — each pinning the other three with verified pubkeys.
+nous registry pending operator-run cleanup of a pre-existing orphan
+directory.
+
+Env (all defaults baked in):
+
+- `FEDERATION_SUBSTRATE_GATE` — set `off` to disable the gate; the
+  endpoint serves regardless. Default `on`.
+- `FEDERATION_SUBSTRATE_MIN_ARTIFACTS` (50)
+- `FEDERATION_SUBSTRATE_MIN_FIRST_PERSON` (25)
+- `FEDERATION_SUBSTRATE_MIN_DIVERSITY` (2)
+- `FEDERATION_SUBSTRATE_MIN_AGE_DAYS` (7)
+- `SUBSTRATE_DEPTH_CACHE_SECONDS` (300)
+- `SUBSTRATE_PEER_CACHE_SECONDS` (300)
+
+13 unit/integration tests in `tests/test_substrate.py` (12 pass, 1
+opt-in live-DB via `SUBSTRATE_PG_TEST=1`).
+
+No breaking changes. Federation DM (`/v1/federation/dm/*`) is
+unaffected — it uses a separate signature-only path that does not go
+through `/v1/federation/assertion`.
+
 ## 2026-04-14 — federation live
 
 **First bidirectional cross-brain HTTPS federation handshake proven in
