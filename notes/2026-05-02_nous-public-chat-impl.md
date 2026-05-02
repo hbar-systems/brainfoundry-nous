@@ -256,3 +256,74 @@ pipeline), the new brain will inherit Nous's persona and need
 `personalize_persona.py` re-run with its own brain/owner names. The
 rsync exclusion only protects nous's already-personalized file from
 being clobbered by a re-deploy from this laptop.
+
+---
+
+## 2026-05-03 follow-up — SSE streaming + white-border fix
+
+Two changes shipped after the corpus upload + adversarial verification.
+Linked prompt: `ops/prompts/2026-05-03_nous-sse-streaming-and-white-border.md`.
+
+### What changed
+
+- **`/v1/public/chat` now streams.** Pre-stream gates (rate limit, input
+  validation) still return JSON 4xx/429 unchanged. Once gates pass the
+  endpoint emits Server-Sent Events: `data: {"token":"..."}\n\n` per
+  chunk, `data: {"done": true}\n\n` final, `data: {"error":"..."}\n\n`
+  on mid-stream failure (generic message; provider details only logged
+  server-side). Reuses the `_providers.stream(...)` async generator
+  that `/chat/rag` has used since #34 — same helper, simpler payload.
+  Headers: `text/event-stream`, `Cache-Control: no-cache`,
+  `Connection: keep-alive`, `X-Accel-Buffering: no` (belt-and-braces;
+  Caddy 2 already streams SSE without buffering).
+
+- **Next.js relay (`pages/api/chat.js`) is content-type-aware.** When
+  upstream is `text/event-stream` it pipes the body through chunk-by-
+  chunk via `Response.body.getReader()` + `res.write()` + `res.flush()`.
+  When upstream is JSON (errors, 429) it forwards status + JSON
+  unchanged. Added `export const config = { api: { responseLimit: false } }`
+  so Next.js doesn't truncate the long-running stream.
+
+- **Frontend (`pages/index.js`) consumes SSE.** Detects content-type;
+  non-stream responses fall through to the existing JSON error path.
+  Streams via `body.getReader()` + `TextDecoder`, splits on `\n\n`,
+  parses `data:` lines. Defers pushing the assistant bubble until the
+  *first* token arrives — so the existing "thinking..." bubble stays
+  visible during prompt-eval (60-90s on cold) and is replaced by the
+  growing assistant bubble once tokens flow.
+
+- **White-border fix in `pages/_app.js`** — `<style jsx global>`
+  resets `html, body { margin: 0; padding: 0; background: #0e0c0b }`.
+  The brown wrapper now sits flush against the viewport edge.
+
+### Acceptance results
+
+Verified live on nous post-deploy:
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | No white border | confirmed in rendered HTML |
+| 2 | First token within 30s | warm: yes (~5-10s); cold: no — see caveat |
+| 3 | Token-stream smooth | ~10 tok/s through Caddy + relay, no buffering |
+| 4 | 4 adversarial probes still pass | all 4 pass (private-journal refused, layer-override ignored, no employer name, rate-limit fires at req 11) |
+| 5 | Rate limit returns JSON 429 | confirmed (10 succeed, 11-20 → 429) |
+| 6 | Mid-stream error path | code path identical to `/chat/rag`; not exercised in production smoke |
+
+### Caveat — SSE doesn't fix cold-start prompt-eval
+
+The streaming change shortens the time *between* tokens, not the time
+*before* the first one. On `llama3.2:1b` with a 3-chunk RAG prompt
+(~2-3K tokens) on CAX21 ARM64, prompt-eval is ~60-90s before any token
+can be emitted. So a true-cold visitor still waits ~60-90s with the
+"thinking..." bubble before seeing tokens flow. Warm visitors see
+tokens within ~5-10s. This is a perceived-latency improvement, not a
+cold-start fix. Hardware swap (GPU) is the only thing that would move
+prompt-eval; that decision is in `FOCUS.md` "Future-perf path".
+
+### Caddy
+
+No Caddyfile change. Caddy 2 streams `text/event-stream` content-type
+without buffering even with `encode gzip` enabled (gzip skips that
+content-type by default). Verified with `curl -N` against both
+`api.nous.brainfoundry.ai/v1/public/chat` and the relay at
+`nous.brainfoundry.ai/api/chat`.

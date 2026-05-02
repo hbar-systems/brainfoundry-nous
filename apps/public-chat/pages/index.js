@@ -28,21 +28,75 @@ export default function Home() {
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({
           message: text,
           history: messages,
         }),
       })
-      if (r.status === 429) {
+
+      const ct = r.headers.get('content-type') || ''
+      if (!r.ok || !ct.includes('text/event-stream')) {
         const data = await r.json().catch(() => ({}))
-        setError(data.error || 'Too many requests. Please wait a minute and try again.')
-      } else if (!r.ok) {
-        const data = await r.json().catch(() => ({}))
-        setError(data.error || `Error ${r.status}`)
-      } else {
-        const data = await r.json()
-        setMessages([...next, { role: 'assistant', content: data.reply || '' }].slice(-MAX_HISTORY))
+        if (r.status === 429) {
+          setError(data.error || 'Too many requests. Please wait a minute and try again.')
+        } else {
+          setError(data.error || `Error ${r.status}`)
+        }
+        return
+      }
+
+      // SSE consume: append tokens to the assistant message as they arrive.
+      const reader = r.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let assembled = ''
+      let assistantPushed = false
+
+      const upsertAssistant = (content) => {
+        if (!assistantPushed) {
+          assistantPushed = true
+          setLoading(false)
+          setMessages((prev) => [...prev, { role: 'assistant', content }].slice(-MAX_HISTORY))
+        } else {
+          setMessages((prev) => {
+            const out = prev.slice()
+            out[out.length - 1] = { role: 'assistant', content }
+            return out
+          })
+        }
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        // SSE events are separated by a blank line (\n\n).
+        const events = buffer.split('\n\n')
+        buffer = events.pop() // last (possibly incomplete) event stays buffered
+        for (const evt of events) {
+          const dataLine = evt.split('\n').find((l) => l.startsWith('data: '))
+          if (!dataLine) continue
+          let payload
+          try {
+            payload = JSON.parse(dataLine.slice(6))
+          } catch {
+            continue
+          }
+          if (typeof payload.token === 'string') {
+            assembled += payload.token
+            upsertAssistant(assembled)
+          } else if (payload.done) {
+            // Final marker — nothing to render, the stream will close.
+          } else if (payload.error) {
+            const msg = `Error: ${payload.error}`
+            if (assistantPushed) {
+              upsertAssistant(`${assembled}${assembled ? '\n\n' : ''}${msg}`)
+            } else {
+              setError(msg)
+            }
+          }
+        }
       }
     } catch (e) {
       setError(`Network error: ${e.message}`)

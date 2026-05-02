@@ -1417,7 +1417,12 @@ async def public_chat(request: dict, http_request: Request):
     """Public chat endpoint backing nous.brainfoundry.ai (bare domain).
 
     No API key. Per-IP rate limit. Hard-coded layers=["public"] for RAG.
-    Returns plain {"reply": "..."}.
+    Streams the reply as Server-Sent Events:
+      data: {"token": "..."}     # one per chunk
+      data: {"done": true}       # final
+      data: {"error": "..."}     # on mid-stream failure (then stream ends)
+    Pre-stream gates (rate limit, input validation) still return JSON
+    error responses with the appropriate status code.
     """
     # ── Per-IP rate limit (Redis, fail-closed) ────────────────────────
     ip = _public_client_ip(http_request)
@@ -1480,24 +1485,38 @@ async def public_chat(request: dict, http_request: Request):
 
     prompt = _build_public_prompt(message, history, relevant_docs)
 
-    # ── Generate reply ────────────────────────────────────────────────
-    # Default to llama3.2:1b: the public path stuffs ~5 RAG chunks (~16KB) into
-    # the prompt, and 3b's prompt-eval on ARM64 (CAX21) blows past the 120s
-    # httpx read timeout in providers.complete. 1b stays well under that.
-    # Operator-side chat keeps using DEFAULT_MODEL as before.
+    # ── Stream reply as SSE ───────────────────────────────────────────
+    # Default to llama3.2:1b on this hardware (see model-choice notes in
+    # SERVERS.md — 3b's prompt-eval on ARM64 blows past the read timeout
+    # on a 3-chunk RAG prompt). Operator-side chat keeps DEFAULT_MODEL.
     model = os.getenv("PUBLIC_CHAT_MODEL") or "llama3.2:1b"
-    try:
-        reply = await _providers.complete(
-            model,
-            [{"role": "user", "content": prompt}],
-            max_tokens=_PUBLIC_MAX_TOKENS_OUT,
-        )
-    except Exception as e:
-        print(f"public_chat completion error: {e}")
-        return JSONResponse(status_code=502, content={"error": "Upstream model error. Please try again."})
 
-    # Return ONLY {reply}. No document_name, no metadata, no sources, no usage.
-    return {"reply": reply}
+    async def event_stream():
+        try:
+            async for text in _providers.stream(
+                model,
+                [{"role": "user", "content": prompt}],
+                max_tokens=_PUBLIC_MAX_TOKENS_OUT,
+            ):
+                yield f"data: {json.dumps({'token': text}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except Exception as stream_err:
+            # Don't leak provider internals to strangers; log server-side.
+            print(f"public_chat stream error: {stream_err}")
+            err_payload = {"error": "Upstream model error. Please try again."}
+            yield f"data: {json.dumps(err_payload)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Tell any intermediate proxy not to buffer (Caddy 2 already
+            # streams text/event-stream by default; this is belt-and-braces).
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, source_refs: dict = None) -> dict:
