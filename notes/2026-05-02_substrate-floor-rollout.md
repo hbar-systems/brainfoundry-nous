@@ -205,6 +205,126 @@ federation will 404 on `/v1/*` paths until they update config.
   legitimate brains trip the floor in unexpected ways, surface and
   decide rather than silently lower.
 
+## Principles & FAQ (recorded post-rollout for future operators)
+
+### Why a substrate floor at all?
+
+The federation primitives (DM, assertion) are open by design. Without
+a check, an attacker spins up 10,000 empty fake brains, floods the
+network with junk DMs and fake assertions, and federation becomes
+worthless — same problem email had with spam. The floor is the
+cost-to-attack: a spammer would have to ingest real artifacts on each
+fake brain across 7+ days, which is infeasible at scale. Layer 1
+closes the spam hole before someone notices it's there.
+
+### Doesn't checking another brain's substrate violate sovereignty?
+
+No. The check is metadata-only and mutual-choice on both sides.
+
+**What the substrate-depth payload reveals:** `artifact_count`,
+`total_bytes`, `oldest_artifact_ts`, `newest_artifact_ts`,
+`source_diversity`, `first_person_count`, `computed_at`, `signature`.
+
+**What it does not reveal:** the artifacts themselves, content hashes,
+hashes of any content, the operator's identity, ingestion patterns,
+artifact titles, or any link to the operator's life.
+
+**Sovereign choices preserved:**
+
+- **Receiving brain decides** whether to publish the endpoint at all
+  (the gate is env-toggleable; the endpoint is also operator-disable-able).
+- **Issuing brain decides** whether to publish substrate-depth (a brain
+  that doesn't is simply rejected by peers using gates — that is the
+  brain's sovereign right to refuse disclosure).
+- **Each receiver decides** their own thresholds. Different peers can
+  set different floors. No central authority dictates.
+
+It's the credit-score model, not bank-statement disclosure. The
+metadata is the language; both sides choose whether and how to use it.
+
+### Why is the manual `known_peers.toml` not just a UX bug to fix?
+
+Because the *whole point* of the file is that pubkeys arrive
+out-of-band — phone, signed message, in person — *before* federation
+begins. Auto-populating from a peer's `/identity` HTTP endpoint
+re-introduces the **T1 flaw** (issuer impersonation) the file is
+specifically designed to prevent: an attacker who controls DNS or
+hijacks B's URL serves a fake `/identity` with the attacker's pubkey,
+and A trusts it. The whole trust model collapses.
+
+Manual = trust. Friction is the security feature, not a wart.
+
+This is the federation analogue of SSH `known_hosts` (which itself
+grew an auto-add-on-first-use prompt only with explicit fingerprint
+disclosure, not blind trust).
+
+### What does the substrate floor actually count?
+
+Only ingested artifacts attested in the local ledger. Two paths
+populate it automatically today:
+
+| Action | Source type | First-person tag |
+|--------|-------------|------------------|
+| Chat session consolidated (`/chat/sessions/{id}/consolidate`) | `conversation` | `authored_by_owner` |
+| Document uploaded (`/documents/upload`) | `document` | `authored_by_owner` |
+
+Defined source types in the schema (for future hooks): `journal`,
+`note`, `document`, `conversation`, `work_output`, `other`. Currently
+only `conversation` and `document` are wired up automatically; the
+others would need new ingestion paths or manual recording.
+
+To cross the floor (50 / 25 / 2 / 7d) a brain needs:
+
+- ≥50 total ingestions (any mix of chats + uploads)
+- ≥25 of those tagged `authored_by_owner` (default for owner-driven ingests)
+- At least 2 distinct source types (1 chat + 1 doc satisfies)
+- Oldest attestation ≥7 days old (real-world clock)
+
+Practical: use the brain ~weekly for ~7 days, do ~50 things, mix
+chats and docs.
+
+### How does friend-onboarding work?
+
+Three steps, universal for any new brain joining the network in
+Layer 1:
+
+1. **Provision the brain** via `brainfoundry-provisioner-01`. The new
+   brain comes online with its own ED25519 keypair and `/identity`
+   endpoint.
+2. **Out-of-band pubkey exchange.** Friend tells operator their
+   `brain_id` and `public_key` over a channel the operator trusts
+   (signal, voice, in person, signed email). This is the trust step.
+3. **Mutual `known_peers.toml` edit.** Operator adds a 4-line
+   `[[peer]]` block on each of their brains; friend adds entries for
+   each of operator's brains. `peers.py` re-reads on every request —
+   no restart needed.
+
+After step 3: federation DM works immediately between them.
+Federation Assertion (the substrate-floor-gated path) works once each
+brain has crossed the floor (≥50/25/2/7d).
+
+### Why doesn't this scale beyond trust circles?
+
+It doesn't scale to internet-mesh today, by design. v0 (Layer 1) is
+**deliberately** trust-circle scale — friends, colleagues, family —
+because that's what's safe to ship without sponsor staking and
+probationary minting.
+
+Layer 2 (probationary minting cap) and Layer 3 (vouching with sponsor
+stake) are the scaling answer:
+
+- **Layer 2:** new brains join on probation with capped minting
+  power, full power earned by substrate accrual + behavior.
+- **Layer 3:** existing brains stake reputation to admit new ones;
+  bad sponsorship has cost.
+
+Both designs live in `hbar.world/discussions/2026-05-01_federation-trust-mechanisms.md`.
+Both are designed but not yet built; implementation lives in
+`hbar.economy`, a separate repo. Layer 1 (this rollout) is a
+**prerequisite** for Layers 2 and 3 — they both need a "what counts
+as real substrate" answer to build on. Today's work is foundational
+to the scaling answer, not a permanent ceiling.
+
 ## Links
 
 - Implementation note: `notes/2026-05-01_substrate-floor-impl.md`
