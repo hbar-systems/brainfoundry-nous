@@ -34,6 +34,8 @@ services:
       - BRAIN_ENV=${BRAIN_ENV:-dev}
       - KERNEL_RATE_LIMIT_MAX=30
       - KERNEL_RATE_LIMIT_WINDOW=60
+      - PUBLIC_RATE_LIMIT_MAX=${PUBLIC_RATE_LIMIT_MAX:-10}
+      - PUBLIC_RATE_LIMIT_WINDOW=${PUBLIC_RATE_LIMIT_WINDOW:-60}
       - REDIS_URL=redis://redis:6379/0
       - DEV_ENABLE_MEMORY_APPEND=0
       - BRAIN_ID=${BRAIN_ID:-my-brain-01}
@@ -138,6 +140,24 @@ services:
     depends_on:
       - api
       - nodeos
+    networks:
+      - llm-network
+    restart: unless-stopped
+
+  # Public chat surface — backs nous.brainfoundry.ai (bare domain).
+  # No API key, no operator console nav. Calls the api service's
+  # /v1/public/chat endpoint via the docker network. Per-IP rate limit
+  # is enforced server-side on api, not here.
+  public-chat:
+    build:
+      context: ./apps/public-chat
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3020:3000"
+    environment:
+      API_INTERNAL_URL: "http://api:8000"
+    depends_on:
+      - api
     networks:
       - llm-network
     restart: unless-stopped

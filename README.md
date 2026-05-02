@@ -194,6 +194,75 @@ docker compose up -d --build
 
 ---
 
+## Public chat surface (optional)
+
+If your brain is the public demo node (e.g. `nous.brainfoundry.ai`) and you
+want strangers to be able to chat with it without exposing the operator
+console, deploy the split-surface layout. The repo ships a minimal Next.js
+chat app at `apps/public-chat/` (port 3020) and a brain endpoint
+`POST /v1/public/chat` that takes no API key.
+
+### Three-vhost layout
+
+```
+https://your-domain/             → :3020  (public chat, no auth, IP rate-limited)
+https://console.your-domain/     → :3010  (operator console, basicauth)
+https://api.your-domain/         → :8010  (brain API, X-API-Key)
+```
+
+The `console` and `api` subdomains keep their existing auth — only the bare
+domain is publicly reachable. The Caddyfile blocks for the public-facing
+vhosts must include `trusted_proxies private_ranges` so Caddy overwrites
+client-supplied `X-Forwarded-For` with the real client IP. The brain reads
+the *last hop* of XFF for per-IP rate limiting; without `trusted_proxies`,
+strangers can rotate fake XFF values to defeat the limit.
+
+### Public RAG namespace
+
+`/v1/public/chat` hard-codes `layers=["public"]`. Only documents tagged
+`metadata.layer = "public"` are visible — every other document is
+default-deny. Seed the public corpus by uploading docs to the brain with
+`metadata.layer="public"` set; the operator console upload UI does **not**
+expose this layer (intentional — out of scope for v0). Recommended seed
+docs ship in `docs/public/`.
+
+### Rate limit
+
+Defaults: **10 requests / 60 seconds / IP**. Configure via env:
+
+```
+PUBLIC_RATE_LIMIT_MAX=10
+PUBLIC_RATE_LIMIT_WINDOW=60
+```
+
+The limiter is Redis-backed and fail-closed (Redis down → 429, not 200).
+
+### Auth model
+
+The public chat path **does not use `BRAIN_API_KEY`**. Auth is rate-limit-only.
+The relay (`apps/public-chat/pages/api/chat.js`) does not forward any
+`Authorization` header. The endpoint is intentionally unauthenticated and
+intentionally read-only — no permits, no DB writes, no session persistence.
+Operator console and the rest of the brain API still require `X-API-Key`
+exactly as before.
+
+### Persona
+
+Public chat injects `api/brain_persona_nous.md` as its system prompt instead
+of `api/brain_persona.md` (the operator's personal persona). The personal
+persona must never leak onto a public surface — the two are deliberately
+separate files.
+
+### Operational note for CLI users
+
+If you're running the brain at a domain that previously exposed the API on
+the bare hostname, switching to the three-vhost layout is a **breaking
+change**: any CLI tool whose config still points at the bare domain will
+hit the public chat app and 404 on `/v1/*` paths. Move CLI defaults to
+`api.your-domain` before flipping the Caddyfile.
+
+---
+
 ## Upgrading your brain (you own the deploy)
 
 Your brain is a `git clone` of this repo. There is no vendor upgrade channel,

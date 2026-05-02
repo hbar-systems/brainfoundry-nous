@@ -1323,6 +1323,175 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG chat completion error: {str(e)}")
 
+
+# ============================================================================
+# Public chat surface — /v1/public/chat
+# ----------------------------------------------------------------------------
+# Stranger-facing chat endpoint that backs the bare nous.brainfoundry.ai
+# domain. Differs from /chat/rag in three load-bearing ways:
+#
+#   1. NO API key. Auth = "rate-limit-only" per IP. The auth-differs-by-route
+#      precedent is api/federation_dm.py /receive (signature-only).
+#   2. RAG is hard-scoped to layer="public". The request body cannot
+#      override; only documents tagged metadata.layer = "public" are visible.
+#   3. Persona is brain_persona_nous.md (the public-demo persona), not the
+#      operator's brain_persona.md. The personal persona must never leak
+#      onto the public surface.
+#
+# The endpoint reads the LAST hop of X-Forwarded-For (the IP Caddy itself
+# appended) — not the first, which is client-controlled and trivially spoofed.
+# ============================================================================
+
+try:
+    from api.kernel.rate_limiter import PublicRateLimiter
+except ModuleNotFoundError:
+    from kernel.rate_limiter import PublicRateLimiter
+
+_PUBLIC_PERSONA_PATH = APP_DIR / "brain_persona_nous.md"
+
+def _load_public_persona() -> str:
+    try:
+        return _PUBLIC_PERSONA_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+PUBLIC_PERSONA = _load_public_persona()
+
+_public_rate_limiter = PublicRateLimiter()
+
+# Defense-in-depth caps — also enforced by the relay, but the brain endpoint
+# is publicly reachable on api.nous.brainfoundry.ai and must defend itself.
+_PUBLIC_MAX_MESSAGE_CHARS = 4000
+_PUBLIC_MAX_HISTORY = 10
+_PUBLIC_MAX_HISTORY_CHARS = 12000  # ~3000 tokens at 4 chars/token
+_PUBLIC_SEARCH_LIMIT = 5
+_PUBLIC_MAX_TOKENS_OUT = 1024
+
+
+def _public_client_ip(request: Request) -> str:
+    """Return the IP Caddy itself appended to X-Forwarded-For (last hop).
+
+    Earlier entries in the XFF chain are client-controlled and can be
+    spoofed. Caddy's trusted_proxies block must be configured upstream so
+    Caddy adds the real client IP as the LAST entry; this function reads
+    that entry. Falls back to request.client.host if the header is absent
+    (direct local hits).
+    """
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        last = xff.split(",")[-1].strip()
+        if last:
+            return last
+    return request.client.host if request.client else "unknown"
+
+
+def _build_public_prompt(user_message: str, history: list, relevant_docs: list) -> str:
+    """Assemble the public-chat prompt: nous persona + RAG context + history + turn."""
+    prompt = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a public demonstration brain."
+    prompt += "\n\nUse the provided documents to answer accurately. If the documents don't cover the question, answer from general knowledge but never invent personal facts about the operator or any private brain."
+
+    if relevant_docs:
+        prompt += "\n\nRelevant documents:\n"
+        for i, doc in enumerate(relevant_docs, 1):
+            # Use index-only labels — never leak document_name on the public surface.
+            prompt += f"\n[Document {i}]\n{doc.get('content', '')}\n"
+
+    prompt += "\n\nConversation:\n"
+    for msg in history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "user":
+            prompt += f"User: {content}\n"
+        elif role == "assistant":
+            prompt += f"Assistant: {content}\n"
+    prompt += f"User: {user_message}\nAssistant: "
+    return prompt
+
+
+@app.post("/v1/public/chat")
+async def public_chat(request: dict, http_request: Request):
+    """Public chat endpoint backing nous.brainfoundry.ai (bare domain).
+
+    No API key. Per-IP rate limit. Hard-coded layers=["public"] for RAG.
+    Returns plain {"reply": "..."}.
+    """
+    # ── Per-IP rate limit (Redis, fail-closed) ────────────────────────
+    ip = _public_client_ip(http_request)
+    rl = _public_rate_limiter.check(ip)
+    if rl:
+        if rl.get("error") == "RATE_LIMITED":
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Rate limited. Please wait a minute and try again.",
+                    "retry_after": rl.get("retry_after"),
+                },
+            )
+        # FAILURE (Redis down or not configured) → fail closed.
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limiter unavailable. Please try again shortly."},
+        )
+
+    # ── Input validation (defense-in-depth; relay also caps) ─────────
+    if not isinstance(request, dict):
+        return JSONResponse(status_code=400, content={"error": "invalid request body"})
+
+    message = request.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return JSONResponse(status_code=400, content={"error": "message is required"})
+    message = message.strip()
+    if len(message) > _PUBLIC_MAX_MESSAGE_CHARS:
+        return JSONResponse(status_code=400, content={"error": f"message too long (max {_PUBLIC_MAX_MESSAGE_CHARS} chars)"})
+
+    raw_history = request.get("history") or []
+    if not isinstance(raw_history, list):
+        return JSONResponse(status_code=400, content={"error": "history must be a list"})
+
+    history = []
+    total_chars = 0
+    for m in raw_history[-_PUBLIC_MAX_HISTORY:]:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        total_chars += len(content)
+        if total_chars > _PUBLIC_MAX_HISTORY_CHARS:
+            break
+        history.append({"role": role, "content": content})
+
+    # ── RAG retrieval — HARD-CODED layers=["public"], no client override ─
+    try:
+        relevant_docs = search_similar_documents(
+            message,
+            limit=_PUBLIC_SEARCH_LIMIT,
+            layers=["public"],
+        )
+    except Exception as e:
+        # RAG failure is non-fatal — answer without context rather than 500.
+        print(f"public_chat RAG error: {e}")
+        relevant_docs = []
+
+    prompt = _build_public_prompt(message, history, relevant_docs)
+
+    # ── Generate reply ────────────────────────────────────────────────
+    model = os.getenv("DEFAULT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+    try:
+        reply = await _providers.complete(
+            model,
+            [{"role": "user", "content": prompt}],
+            max_tokens=_PUBLIC_MAX_TOKENS_OUT,
+        )
+    except Exception as e:
+        print(f"public_chat completion error: {e}")
+        return JSONResponse(status_code=502, content={"error": "Upstream model error. Please try again."})
+
+    # Return ONLY {reply}. No document_name, no metadata, no sources, no usage.
+    return {"reply": reply}
+
+
 def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, source_refs: dict = None) -> dict:
     """Propose a memory write to NodeOS. Returns proposal dict or raises."""
     try:

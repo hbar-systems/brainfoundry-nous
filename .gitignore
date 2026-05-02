@@ -12,6 +12,16 @@ ui/npm-debug.log*
 ui/yarn-debug.log*
 ui/yarn-error.log*
 
+apps/*/node_modules/
+apps/*/.next/
+apps/*/.env.local
+apps/*/.env.development.local
+apps/*/.env.test.local
+apps/*/.env.production.local
+apps/*/npm-debug.log*
+apps/*/yarn-debug.log*
+apps/*/yarn-error.log*
+
 # Python
 __pycache__/
 *.py[cod]
