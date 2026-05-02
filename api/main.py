@@ -326,10 +326,21 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
     cache. A duplicate jti within the TTL window is rejected with 401
     replay_detected before verified:true is returned. Tokens without a
     jti are rejected with 400 missing_jti.
+
+    Substrate floor (Layer 1): after the assertion verifies, the issuer's
+    `/v1/federation/substrate-depth` is fetched and gated against
+    FEDERATION_SUBSTRATE_MIN_* thresholds. The depth payload's signature
+    is verified against the same pinned pubkey (not /identity). Failure
+    returns 403 substrate_floor_not_met with per-check details. The
+    candidate can keep ingesting and retry — no operator unblock needed.
+    Disable by setting FEDERATION_SUBSTRATE_GATE=off (rolls back to the
+    pre-Layer-1 behavior). See:
+      hbar.world/discussions/2026-05-01_federation-trust-mechanisms.md
     """
     from api.identity.core import verify_federation_assertion
     from api.identity.peers import find_peer_by_endpoint
     from api.identity.replay_cache import record, seen_before
+    from api import substrate
 
     this_brain_id = os.getenv("BRAIN_ID")
     if not this_brain_id:
@@ -356,7 +367,36 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
         raise HTTPException(401, "replay_detected")
     record(jti, exp=claims["exp"])
 
+    if os.getenv("FEDERATION_SUBSTRATE_GATE", "on").lower() != "off":
+        floor = await substrate.fetch_and_check_peer(
+            peer_endpoint=req.issuer_endpoint,
+            pinned_pubkey_b64=peer["public_key"],
+        )
+        if not floor.ok:
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "code": floor.code, "details": floor.details},
+            )
+
     return {"verified": True, "issuer": peer["brain_id"], "audience": this_brain_id, "claims": claims}
+
+
+@app.get("/v1/federation/substrate-depth")
+def get_substrate_depth():
+    """Public, unauthenticated substrate-depth signal (Layer 1 of federation trust).
+
+    Returns metrics over the local artifact attestation ledger — never content,
+    never the artifact text. Federating peers query this to decide whether to
+    accept assertions from this brain.
+
+    The payload is signed with this brain's federation keypair (BRAIN_PRIVATE_KEY).
+    Verifying peers look up this brain in their local known_peers registry to
+    obtain the pinned public key — they do NOT trust the brain_pubkey field.
+
+    Cached for SUBSTRATE_DEPTH_CACHE_SECONDS (default 300).
+    """
+    from api import substrate
+    return substrate.signed_depth_payload_cached()
 
 
 # ---------------------------------------------------------------------------
@@ -443,11 +483,15 @@ def settings_get_federation(api_key: str = Depends(get_api_key)):
             public_key = ident.get("public_key")
         except Exception:
             public_key = None
+    from api import substrate
     return {
         "brain_id": brain_id,
         "public_key": public_key,
         "api_key_configured": bool(os.getenv("BRAIN_API_KEY")),
         "federation_route": "/v1/federation/assertion",
+        "substrate_depth_route": "/v1/federation/substrate-depth",
+        "substrate_floor_thresholds": substrate.thresholds(),
+        "substrate_floor_gate": os.getenv("FEDERATION_SUBSTRATE_GATE", "on").lower() != "off",
     }
 
 
@@ -587,6 +631,13 @@ def _ensure_runtime_indexes() -> None:
         federation_dm.init_tables()
     except Exception as e:
         print(f"[startup] federation_dm init skipped: {e}", flush=True)
+
+    # Substrate floor (Layer 1) — artifact_attestations table
+    try:
+        from api import substrate
+        substrate.init_tables()
+    except Exception as e:
+        print(f"[startup] substrate init skipped: {e}", flush=True)
 
 
 # Mount federation DM router
@@ -1063,6 +1114,16 @@ Summary:"""
         cursor.close()
         conn.close()
 
+        # Substrate-floor attestation: one row per consolidated artifact.
+        from api import substrate as _substrate
+        _substrate.record_attestation_safe(
+            content_hash=_substrate.content_hash_of(summary),
+            source_type="conversation",
+            byte_size=len(summary.encode("utf-8")),
+            first_person_attestation="authored_by_owner",
+            document_name=doc_name,
+        )
+
         return {
             "session_id": session_id,
             "doc_name": doc_name,
@@ -1537,11 +1598,23 @@ async def upload_document(
                 )
             )
             stored_chunks += 1
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
+        # Substrate-floor attestation: one row per uploaded document.
+        # first_person_attestation defaults to authored_by_owner (Q1 option a:
+        # owner-trust marking). Override path TBD when ingestion-source labels exist.
+        from api import substrate as _substrate
+        _substrate.record_attestation_safe(
+            content_hash=_substrate.content_hash_of(text),
+            source_type="document",
+            byte_size=len(text.encode("utf-8")),
+            first_person_attestation="authored_by_owner",
+            document_name=file.filename,
+        )
+
         return {
             "filename": file.filename,
             "size": len(content),

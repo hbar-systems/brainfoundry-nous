@@ -238,6 +238,58 @@ BrainFoundry reviews your request and crafts your brain personally.
 
 ---
 
+## Federation trust — substrate floor (Layer 1)
+
+A federating peer cannot accept assertions from this brain until the brain's
+substrate-depth signal clears the configured thresholds. The substrate floor
+is a federation-membership precondition — it does not gate ingestion, only
+cross-brain trust. Design rationale:
+[discussions/2026-05-01_federation-trust-mechanisms.md](https://github.com/hbar-systems/hbar.world/blob/main/discussions/2026-05-01_federation-trust-mechanisms.md).
+
+**Endpoints:**
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET`  | `/v1/federation/substrate-depth`  | none   | Public signed depth signal (5-min cache). |
+| `POST` | `/v1/federation/assertion`     | pinned-peer ED25519 | Adds a substrate-floor gate after sig + replay checks. |
+
+**Default thresholds (env-tunable):**
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `FEDERATION_SUBSTRATE_MIN_ARTIFACTS`     | 50  | Minimum total attestation rows. |
+| `FEDERATION_SUBSTRATE_MIN_FIRST_PERSON`  | 25  | Minimum non-`derived` rows. |
+| `FEDERATION_SUBSTRATE_MIN_DIVERSITY`     | 2   | Minimum distinct `source_type` values. |
+| `FEDERATION_SUBSTRATE_MIN_AGE_DAYS`      | 7   | Minimum (now − oldest_artifact_ts).days. |
+| `SUBSTRATE_DEPTH_CACHE_SECONDS`          | 300 | Server-side cache of the signed payload. |
+| `SUBSTRATE_PEER_CACHE_SECONDS`           | 300 | Per-peer fetch+gate cache. |
+| `FEDERATION_SUBSTRATE_GATE`              | on  | Set `off` to disable the gate (endpoint still served). |
+
+These are the prompt's starting points, untested. Operators may need to seed
+test brains rather than weaken the floor — see the discussions doc.
+
+**Backfill:** brains with pre-existing RAG corpus need attestations generated
+for the historical chunks. Use `scripts/substrate_backfill.py` (DRY-RUN
+default, pass `--commit` to apply). Read the script docstring before running.
+
+**Failure response shape** (HTTP 403):
+
+```json
+{
+  "ok": false,
+  "code": "substrate_floor_not_met",
+  "details": {
+    "artifact_count": { "got": 12, "required": 50 },
+    "first_person_count": { "got": 4, "required": 25 }
+  }
+}
+```
+
+Other codes: `signature_invalid`, `substrate_depth_unreachable`. Tests:
+`pytest tests/test_substrate.py -v`.
+
+---
+
 ## Protocol
 
 This node implements the BrainFoundryOS node contract.
