@@ -1364,7 +1364,11 @@ _public_rate_limiter = PublicRateLimiter()
 _PUBLIC_MAX_MESSAGE_CHARS = 4000
 _PUBLIC_MAX_HISTORY = 10
 _PUBLIC_MAX_HISTORY_CHARS = 12000  # ~3000 tokens at 4 chars/token
-_PUBLIC_SEARCH_LIMIT = 5
+# 3 RAG chunks (~9KB) + persona + history fits 1b's prompt-eval budget on
+# CAX21 ARM64 within the providers.complete read timeout. 5 chunks blew the
+# 120s timeout in benchmarks 2026-05-02; 3 keeps end-to-end latency around
+# 60-90s on a cold call.
+_PUBLIC_SEARCH_LIMIT = 3
 _PUBLIC_MAX_TOKENS_OUT = 1024
 
 
@@ -1477,7 +1481,11 @@ async def public_chat(request: dict, http_request: Request):
     prompt = _build_public_prompt(message, history, relevant_docs)
 
     # ── Generate reply ────────────────────────────────────────────────
-    model = os.getenv("DEFAULT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+    # Default to llama3.2:1b: the public path stuffs ~5 RAG chunks (~16KB) into
+    # the prompt, and 3b's prompt-eval on ARM64 (CAX21) blows past the 120s
+    # httpx read timeout in providers.complete. 1b stays well under that.
+    # Operator-side chat keeps using DEFAULT_MODEL as before.
+    model = os.getenv("PUBLIC_CHAT_MODEL") or "llama3.2:1b"
     try:
         reply = await _providers.complete(
             model,

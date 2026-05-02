@@ -195,7 +195,7 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
         return r.choices[0].message.content
 
     else:  # ollama
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=120)) as http:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=180)) as http:
             system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
             user_msgs = [m for m in messages if m.get("role") != "system"]
             payload = {"model": actual_model, "messages": user_msgs, "stream": False}
