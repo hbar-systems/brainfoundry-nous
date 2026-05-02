@@ -39,9 +39,10 @@ New:
   pass `--label-derived <pattern>`.
 
 Federation registry (`api/identity/known_peers.toml`) populated on
-yury, hbar, e2e — each pinning the other three with verified pubkeys.
-nous registry pending operator-run cleanup of a pre-existing orphan
-directory.
+all four brains (yury, hbar, e2e, nous) — each pinning the other
+three with verified pubkeys. Verified live: `hbar → yury` and
+`hbar → nous` both return `403 substrate_floor_not_met` with full
+per-check details.
 
 Env (all defaults baked in):
 

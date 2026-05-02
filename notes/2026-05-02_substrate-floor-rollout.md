@@ -66,7 +66,7 @@ closure preserved) → `check_floor` → 403 with structured body.
 | yury  | https://yury.brainfoundry.ai | 1 | 1 | 1 | 2026-04-15 | FAIL | populated (3 peers) |
 | e2e   | https://e2e.brainfoundry.ai  | 0 | 0 | 0 | — | FAIL | populated (3 peers) |
 | hbar  | https://hbar.brainfoundry.ai | 0 | 0 | 0 | — | FAIL | populated (3 peers) |
-| nous  | https://api.nous.brainfoundry.ai | (not queried — separate session) | ? | ? | ? | ? | **pending sudo cleanup** |
+| nous  | https://api.nous.brainfoundry.ai | (separate session) | ? | ? | ? | ? | populated (3 peers) |
 
 All four brains run with `FEDERATION_SUBSTRATE_GATE=on` (default).
 
@@ -137,33 +137,26 @@ Coordination steps:
 
 ## Operational debt — surfaced for follow-up
 
-### nous — sudo cleanup needed
+### nous — orphan directory resolved
 
 Pre-existing condition (timestamp Apr 19, before either Claude
 session): an empty root-owned directory at
 `/home/hbar/brain/api/identity/known_peers.toml` got baked into nous's
-docker image at some earlier build. Renders the registry as `[]`
-(empty list — fail-closed correct behavior, but blocks federation).
+docker image at some earlier build. Rendered the registry as `[]`.
 
-**Operator action:**
+**Resolved this session.** `rmdir` from the `hbar` user worked without
+sudo — the directory was empty and the parent was hbar-owned, so the
+rmdir was governed by parent-directory write permission. No password
+needed. Then `scp` the populated TOML to the freed path and rebuild
+the api image (`docker compose up -d --build api`) to bake the new
+file in place of the old empty-dir layer. Verified via
+`hbar → nous` curl test: `403 substrate_floor_not_met` with
+per-check details — registry working, gate path live, ring complete.
 
-```bash
-ssh -i ~/.ssh/id_ed25519_brainfoundry_automation hbar@62.238.4.20
-sudo rm -rf /home/hbar/brain/api/identity/known_peers.toml
-exit
-
-# Then from laptop:
-scp -i ~/.ssh/id_ed25519_brainfoundry_automation \
-  /tmp/known-peers/nous.toml \
-  hbar@62.238.4.20:/home/hbar/brain/api/identity/known_peers.toml
-
-ssh -i ~/.ssh/id_ed25519_brainfoundry_automation hbar@62.238.4.20 \
-  'cd /home/hbar/brain && docker compose cp api/identity/known_peers.toml api:/app/api/identity/known_peers.toml && docker compose restart api'
-```
-
-After: nous joins the federation registry; the gate works in all four
-directions of the ring. (`/tmp/known-peers/nous.toml` was generated
-this session; recreate from scratch if `/tmp` is cleared.)
+Lesson for future docker-compose work on this fleet: never let
+docker-compose create a missing bind-mount source as a directory.
+Always `touch` the file first or remove the bind-mount line if the
+file is supposed to be image-baked.
 
 ### Dockerfile — `COPY scripts /app/scripts/` missing
 
