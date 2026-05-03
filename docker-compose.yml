@@ -9,6 +9,8 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - llm-network
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     restart: unless-stopped
 
   # Brain API
