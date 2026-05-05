@@ -193,10 +193,15 @@ export default function Upload() {
     const r = await fetch(`${API_BASE}/documents/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, limit: 5 }),
+      body: JSON.stringify({ query, limit: 20 }),
     });
     const j = await r.json();
     setResults(j.results || []);
+  };
+
+  const forgetFromSearch = async (name) => {
+    await forgetDoc(name);
+    if (query.trim()) runSearch();
   };
 
   return (
@@ -356,7 +361,17 @@ export default function Upload() {
           <div style={{ marginTop: 16 }}>
             {results.map((r, i) => (
               <div key={i} style={{ padding: 12, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
-                <div style={{ fontSize: 12, color: ACCENT, fontFamily: "DM Mono, monospace" }}>{r.document_name}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 12, color: ACCENT, fontFamily: "DM Mono, monospace", overflow: "hidden", textOverflow: "ellipsis" }}>{r.document_name}</div>
+                  <button
+                    onClick={() => forgetFromSearch(r.document_name)}
+                    title={`Forget "${r.document_name}"`}
+                    aria-label={`Forget ${r.document_name}`}
+                    style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1, flexShrink: 0 }}
+                  >
+                    ×
+                  </button>
+                </div>
                 <div style={{ fontSize: 13, color: TEXT, marginTop: 6, lineHeight: 1.6 }}>{r.content}</div>
               </div>
             ))}
