@@ -68,6 +68,7 @@ export default function App({ Component, pageProps }) {
           }
           @media (max-width: 480px) {
             .bf-brand-name { display: none; }
+            .bf-chat-input-bar { padding-left: 12px !important; padding-right: 12px !important; }
           }
         `}</style>
       </Head>
@@ -77,6 +78,14 @@ export default function App({ Component, pageProps }) {
         display: 'flex',
         alignItems: 'center',
         height: '52px',
+        // PWA safe-area: in standalone mode the iOS status bar / dynamic
+        // island sits at the top of the viewport. Pad the nav by the
+        // OS-reported inset so the nav content drops below it. In browser
+        // mode env() resolves to 0 — no impact. content-box override is
+        // required because the global * { box-sizing: border-box } would
+        // otherwise eat the padding into the 52px height.
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        boxSizing: 'content-box',
         position: 'fixed',
         top: 0,
         left: 0,
@@ -114,7 +123,10 @@ export default function App({ Component, pageProps }) {
         </div>
       </nav>
       <div style={{
-        paddingTop: '52px',
+        // Match the nav's actual rendered height (52px content + safe-area
+        // padding-top) so page content starts below the fixed nav in both
+        // browser mode and PWA standalone mode.
+        paddingTop: 'calc(52px + env(safe-area-inset-top, 0px))',
         minHeight: '100vh',
         backgroundColor: '#0e0c0b',
         color: '#e8e0d5',

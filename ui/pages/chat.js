@@ -351,7 +351,9 @@ export default function Chat() {
 
   return (
     <div style={{
-      height: 'calc(100vh - 52px)',
+      // Subtract nav height (52px content + PWA safe-area-top) so the
+      // chat column fills exactly the viewport below the nav.
+      height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
       backgroundColor: '#0e0c0b',
       color: '#e8e0d5',
       fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -608,7 +610,7 @@ export default function Chat() {
         </div>
 
         {/* Input */}
-        <div style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)' }}>
+        <div className="bf-chat-input-bar" style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
           {attachedImages.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px', padding: '10px 12px', backgroundColor: '#1c1814', border: '1px solid #2a2420', borderRadius: '8px' }}>
               <div style={{ width: '100%', fontSize: '11px', color: '#8b7d6e', fontFamily: 'DM Mono, monospace', marginBottom: '4px' }}>
@@ -664,7 +666,15 @@ export default function Chat() {
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={selectedModel ? (attachedImages.length > 0 ? `Ask about the image${attachedImages.length > 1 ? 's' : ''}...` : 'Message... (Enter to send, drop images here)') : 'Select a model first'}
+              placeholder={
+                selectedModel
+                  ? (attachedImages.length > 0
+                      ? `Ask about the image${attachedImages.length > 1 ? 's' : ''}...`
+                      : (typeof window !== 'undefined' && window.matchMedia('(max-width: 480px)').matches
+                          ? 'Message...'
+                          : 'Message... (Enter to send, drop images here)'))
+                  : 'Select a model first'
+              }
               disabled={!selectedModel || isLoading}
               rows={1}
               style={{
