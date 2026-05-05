@@ -28,6 +28,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy ONLY the api package from repo root into /app/api
 COPY api /app/api
 
+# VERSION file is the single source of truth for BRAIN_VERSION (read at
+# api startup). Lives at /app/VERSION so api.main can resolve it via
+# Path(__file__).parent.parent / "VERSION".
+COPY VERSION /app/VERSION
+
 RUN ls -la /app/api && echo "----" && (ls -la /app/api/identity || true)
 
 EXPOSE 8000

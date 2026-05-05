@@ -1,6 +1,10 @@
 # Changelog
 
-## 2026-05-02 — substrate floor (Layer 1) live
+The single source of truth for the running version is the `VERSION` file
+at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
+Older entries below carry only their date — semver tagging starts at 0.8.2.
+
+## 0.8.2 — 2026-05-02 — substrate floor (Layer 1) live
 
 **Federation membership now gated on substrate-depth.** The
 `/v1/federation/assertion` handler runs an additive precondition after

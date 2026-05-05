@@ -108,8 +108,15 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI, HTTPException, Security
 
-# Version constant
-BRAIN_VERSION = "0.5.0"
+# Version: read from the repo-root VERSION file so the constant doesn't
+# go stale in code review. Build-time and runtime both resolve to the
+# same string. Fall back to "0.0.0-unknown" only if the file is missing
+# (broken image).
+_VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+try:
+    BRAIN_VERSION = _VERSION_FILE.read_text(encoding="utf-8").strip()
+except OSError:
+    BRAIN_VERSION = "0.0.0-unknown"
 
 APP_DIR = Path(__file__).resolve().parent
 PERSONA_PATH = APP_DIR / "brain_persona.md"
