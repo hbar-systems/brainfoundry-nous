@@ -275,6 +275,10 @@ def get_identity():
     if not isinstance(data, dict):
         raise HTTPException(status_code=500, detail=f"brain_identity.yaml must parse to a mapping/object, got {type(data).__name__}")
 
+    # Stamp the running brainfoundry-nous version so peers (and unauthenticated
+    # smoke tests) can see what they're talking to. Federation-handshake-adjacent.
+    data["version"] = BRAIN_VERSION
+
     return data
 
 @app.get("/capabilities")
