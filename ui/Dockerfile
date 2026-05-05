@@ -14,6 +14,12 @@ RUN npm run build
 # ✅ CRITICAL: Next standalone server expects .next/static under .next/standalone/.next/static
 RUN mkdir -p .next/standalone/.next && cp -r .next/static .next/standalone/.next/static
 
+# Same trap for /public — standalone build doesn't include it. Without this
+# manifest.json, sw.js, icon.svg etc. would 404 even though the files exist
+# in source. The `[ -d public ] || ...` guard keeps the build green if /public
+# is ever absent.
+RUN [ -d public ] && cp -r public .next/standalone/public || true
+
 EXPOSE 3000
 CMD ["node", ".next/standalone/server.js"]
 
