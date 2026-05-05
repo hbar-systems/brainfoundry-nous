@@ -10,6 +10,13 @@ export default function Chat() {
   const [sessions, setSessions] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // On phone-width viewports default the sidebar closed so the message column
+  // gets the full screen. Operator can still toggle via the existing button.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
+      setSidebarOpen(false)
+    }
+  }, [])
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [showNameModal, setShowNameModal] = useState(false)
   const [newChatName, setNewChatName] = useState('')
