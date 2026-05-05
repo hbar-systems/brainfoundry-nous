@@ -1875,16 +1875,22 @@ def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_k
 
 @app.post("/documents/search")
 def search_documents(request: dict, api_key: str = Depends(get_api_key)):
-    """Search documents using semantic similarity"""
+    """Search documents using semantic similarity.
+
+    Optional `layers: [str]` in the request body restricts the search to
+    chunks whose `metadata.layer` is in that list — used by the Knowledge
+    UI's click-to-filter affordance.
+    """
     try:
         query = request.get("query", "")
         limit = request.get("limit", 5)
-        
+        layers = request.get("layers")  # optional list[str]
+
         if not query.strip():
             raise HTTPException(status_code=400, detail="Query cannot be empty")
-        
-        results = search_similar_documents(query, limit)
-        
+
+        results = search_similar_documents(query, limit, layers=layers if layers else None)
+
         return {
             "query": query,
             "results_count": len(results),
@@ -1911,23 +1917,30 @@ def get_document_stats(api_key: str = Depends(get_api_key)):
         )
         stats = cursor.fetchone()
         
-        # Get recent documents
+        # Get recent documents — also surface every distinct layer present
+        # in any chunk of each doc so the Knowledge UI can render layer
+        # badges (and click-to-filter). A doc with chunks across multiple
+        # layers comes back with every applicable layer; the UI shows them
+        # all per Fix 1.5's multi-layer-fallback requirement.
         cursor.execute(
             """
-            SELECT DISTINCT document_name, 
+            SELECT document_name,
                    COUNT(*) as chunks,
-                   MAX(created_at) as last_updated
-            FROM document_embeddings 
-            GROUP BY document_name 
-            ORDER BY last_updated DESC 
+                   MAX(created_at) as last_updated,
+                   ARRAY_AGG(DISTINCT metadata->>'layer')
+                       FILTER (WHERE metadata->>'layer' IS NOT NULL
+                               AND metadata->>'layer' <> '') as layers
+            FROM document_embeddings
+            GROUP BY document_name
+            ORDER BY last_updated DESC
             LIMIT 10
             """
         )
         recent_docs = cursor.fetchall()
-        
+
         cursor.close()
         conn.close()
-        
+
         return {
             "total_chunks": stats[0],
             "unique_documents": stats[1],
@@ -1935,7 +1948,8 @@ def get_document_stats(api_key: str = Depends(get_api_key)):
                 {
                     "name": doc[0],
                     "chunks": doc[1],
-                    "last_updated": doc[2].isoformat() if doc[2] else None
+                    "last_updated": doc[2].isoformat() if doc[2] else None,
+                    "layers": doc[3] or [],
                 }
                 for doc in recent_docs
             ]

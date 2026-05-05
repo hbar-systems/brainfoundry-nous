@@ -11,6 +11,19 @@ const ACCENT = "#c9a96e";
 const APPROVE = "#7a9e6e";
 const REJECT = "#a96e6e";
 
+// Layer-tier color mapping (Fix 1.5). Locked semantic association:
+// identity=amber (brand-aligned), thinking=slate-blue, projects=sage-green,
+// writing=mauve, episodic=warm-muted-gray. Anything outside the canonical
+// five layers falls back to LAYER_DEFAULT so unknown layers still render.
+const LAYER_COLORS = {
+  identity: "#c9a96e",
+  thinking: "#6b8eb3",
+  projects: "#88a878",
+  writing:  "#b78dad",
+  episodic: "#6b5f52",
+};
+const LAYER_DEFAULT = "#6b5f52";
+
 const INPUT = {
   background: "#0e0c0b",
   border: `1px solid ${BORDER}`,
@@ -41,8 +54,45 @@ export default function Upload() {
   const [layer, setLayer] = useState("");
   const [stats, setStats] = useState(null);
   const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
+  const [layerFilter, setLayerFilter] = useState(null); // null = no filter; click a badge to set, click again to clear
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
+
+  // LayerBadge — pill rendering of a memory-tier label. Clicking toggles
+  // the active filter for the whole Knowledge tab (recent-docs panel +
+  // search). Active state inverts colors so the chosen filter is obvious.
+  const LayerBadge = ({ layer, active, onClick }) => {
+    const color = LAYER_COLORS[layer] || LAYER_DEFAULT;
+    return (
+      <span
+        onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+        role={onClick ? "button" : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        title={onClick ? (active ? `Clear filter: ${layer}` : `Filter by ${layer}`) : layer}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          background: active ? color : color + "22",
+          color: active ? "#0e0c0b" : color,
+          fontFamily: "DM Mono, monospace",
+          fontSize: 10,
+          fontWeight: active ? 700 : 500,
+          padding: "2px 8px",
+          borderRadius: 999,
+          border: `1px solid ${color}66`,
+          cursor: onClick ? "pointer" : "default",
+          textTransform: "lowercase",
+          letterSpacing: "0.05em",
+          userSelect: "none",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {layer}
+      </span>
+    );
+  };
+
+  const toggleLayerFilter = (l) => setLayerFilter(prev => prev === l ? null : l);
 
   // Set the folder-mode attributes via DOM after mount — React strips unknown
   // HTML attributes like `webkitdirectory` in some versions.
@@ -190,14 +240,23 @@ export default function Upload() {
 
   const runSearch = async () => {
     setResults([]);
+    const body = { query, limit: 20 };
+    if (layerFilter) body.layers = [layerFilter];
     const r = await fetch(`${API_BASE}/documents/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, limit: 20 }),
+      body: JSON.stringify(body),
     });
     const j = await r.json();
     setResults(j.results || []);
   };
+
+  // When the layer filter changes, re-run any active search so results
+  // narrow to the chosen tier without operator re-typing the query.
+  useEffect(() => {
+    if (query.trim() && results.length) runSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerFilter]);
 
   const forgetFromSearch = async (name) => {
     await forgetDoc(name);
@@ -313,34 +372,56 @@ export default function Upload() {
       {/* What your brain knows */}
       {stats && (
         <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
             <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>What your brain knows</h2>
-            <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
-              {stats.unique_documents ?? 0} docs · {stats.total_chunks ?? 0} chunks
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              {layerFilter && (
+                <button
+                  onClick={() => setLayerFilter(null)}
+                  title="Clear layer filter"
+                  style={{ background: "transparent", border: `1px solid ${BORDER}`, color: MUTED, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+                >
+                  filter: {layerFilter} ×
+                </button>
+              )}
+              <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
+                {stats.unique_documents ?? 0} docs · {stats.total_chunks ?? 0} chunks
+              </div>
             </div>
           </div>
-          {stats.recent_documents?.length ? (
-            <div>
-              {stats.recent_documents.map((d, i) => (
-                <div key={i} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                  <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>{d.name}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                    <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
-                    <button
-                      onClick={() => forgetDoc(d.name)}
-                      title={`Forget "${d.name}"`}
-                      aria-label={`Forget ${d.name}`}
-                      style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
-                    >
-                      ×
-                    </button>
+          {(() => {
+            const recent = stats.recent_documents || [];
+            const filtered = layerFilter ? recent.filter(d => (d.layers || []).includes(layerFilter)) : recent;
+            if (!recent.length) {
+              return <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>Nothing ingested yet. Upload a file above.</div>;
+            }
+            if (!filtered.length) {
+              return <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>No recent docs in layer &quot;{layerFilter}&quot;. Search may surface more — every chunk is still queryable.</div>;
+            }
+            return (
+              <div>
+                {filtered.map((d, i) => (
+                  <div key={i} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0 }}>{d.name}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                      {(d.layers || []).map(l => (
+                        <LayerBadge key={l} layer={l} active={layerFilter === l} onClick={() => toggleLayerFilter(l)} />
+                      ))}
+                      <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
+                      <button
+                        onClick={() => forgetDoc(d.name)}
+                        title={`Forget "${d.name}"`}
+                        aria-label={`Forget ${d.name}`}
+                        style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>Nothing ingested yet. Upload a file above.</div>
-          )}
+                ))}
+              </div>
+            );
+          })()}
         </section>
       )}
 
@@ -359,22 +440,34 @@ export default function Upload() {
 
         {!!results.length && (
           <div style={{ marginTop: 16 }}>
-            {results.map((r, i) => (
-              <div key={i} style={{ padding: 12, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                  <div style={{ fontSize: 12, color: ACCENT, fontFamily: "DM Mono, monospace", overflow: "hidden", textOverflow: "ellipsis" }}>{r.document_name}</div>
-                  <button
-                    onClick={() => forgetFromSearch(r.document_name)}
-                    title={`Forget "${r.document_name}"`}
-                    aria-label={`Forget ${r.document_name}`}
-                    style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1, flexShrink: 0 }}
-                  >
-                    ×
-                  </button>
+            {results.map((r, i) => {
+              const resultLayer = r.metadata?.layer || null;
+              return (
+                <div key={i} style={{ padding: 12, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 12, color: ACCENT, fontFamily: "DM Mono, monospace", overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0 }}>{r.document_name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      {resultLayer && (
+                        <LayerBadge
+                          layer={resultLayer}
+                          active={layerFilter === resultLayer}
+                          onClick={() => toggleLayerFilter(resultLayer)}
+                        />
+                      )}
+                      <button
+                        onClick={() => forgetFromSearch(r.document_name)}
+                        title={`Forget "${r.document_name}"`}
+                        aria-label={`Forget ${r.document_name}`}
+                        style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13, color: TEXT, marginTop: 6, lineHeight: 1.6 }}>{r.content}</div>
                 </div>
-                <div style={{ fontSize: 13, color: TEXT, marginTop: 6, lineHeight: 1.6 }}>{r.content}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
