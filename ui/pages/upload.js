@@ -24,6 +24,17 @@ const LAYER_COLORS = {
 };
 const LAYER_DEFAULT = "#6b5f52";
 
+// Resolve a layer name to a color. Lowercase + strip trailing 's' so
+// operator-defined plurals (observed: "writings" instead of "writing")
+// still hit the canonical mapping without us listing every variant.
+// Unknown layers fall back to LAYER_DEFAULT (the same warm gray as
+// episodic — visually unobtrusive when the tier isn't recognized).
+const layerColor = (l) => {
+  if (!l) return LAYER_DEFAULT;
+  const norm = String(l).toLowerCase().replace(/s$/, "");
+  return LAYER_COLORS[norm] || LAYER_DEFAULT;
+};
+
 const INPUT = {
   background: "#0e0c0b",
   border: `1px solid ${BORDER}`,
@@ -62,7 +73,7 @@ export default function Upload() {
   // the active filter for the whole Knowledge tab (recent-docs panel +
   // search). Active state inverts colors so the chosen filter is obvious.
   const LayerBadge = ({ layer, active, onClick }) => {
-    const color = LAYER_COLORS[layer] || LAYER_DEFAULT;
+    const color = layerColor(layer);
     return (
       <span
         onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
