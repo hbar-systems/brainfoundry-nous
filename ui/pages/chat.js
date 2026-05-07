@@ -203,11 +203,32 @@ export default function Chat() {
     fetchSessions()
   }, [])
 
+  // Scroll-along: while sticking to bottom, creep toward the latest content
+  // at human reading pace (~130 px/sec) instead of teleporting to the
+  // bottom on every streamed token. Operator can read along as the brain
+  // writes. If content grows more than a viewport ahead (e.g. a giant
+  // code-block lands), accelerate proportionally so we don't fall absurdly
+  // behind. The rAF loop reads scrollHeight every frame so it naturally
+  // tracks growing content without depending on `messages` in the deps.
   useEffect(() => {
     if (!stickToBottom) return
     const c = messagesContainerRef.current
-    if (c) c.scrollTop = c.scrollHeight
-  }, [messages, isLoading, stickToBottom])
+    if (!c) return
+    let raf
+    const tick = () => {
+      const target = c.scrollHeight - c.clientHeight
+      const dist = target - c.scrollTop
+      if (dist > 0) {
+        const step = dist > c.clientHeight
+          ? Math.max(3, dist * 0.05)
+          : 2.2
+        c.scrollTop = Math.min(target, c.scrollTop + step)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [stickToBottom])
 
   const fetchSessions = () => {
     fetch('/api/bf/sessions')
@@ -843,6 +864,10 @@ export default function Chat() {
               }
               disabled={!selectedModel || isLoading}
               rows={1}
+              // Operator-controlled height: drag the bottom-right grip to
+              // resize. minHeight covers single-line, maxHeight 60vh keeps
+              // it from eating the whole viewport. No auto-grow on input
+              // because that would fight the manual drag every keystroke.
               style={{
                 flex: 1,
                 padding: '12px 16px',
@@ -851,16 +876,12 @@ export default function Chat() {
                 backgroundColor: 'var(--surface)',
                 color: 'var(--text)',
                 fontSize: '14px',
-                resize: 'none',
+                resize: 'vertical',
                 fontFamily: 'inherit',
                 outline: 'none',
                 minHeight: '44px',
-                maxHeight: '140px',
+                maxHeight: '60vh',
                 lineHeight: '1.5',
-              }}
-              onInput={e => {
-                e.target.style.height = 'auto'
-                e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'
               }}
             />
             <button
