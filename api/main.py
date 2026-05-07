@@ -1368,6 +1368,73 @@ def _load_public_persona() -> str:
 
 PUBLIC_PERSONA = _load_public_persona()
 
+# Vendor-disavowal: when a stranger asks "are you ChatGPT?" / "are you Claude?"
+# / etc., the 1b model unreliably defends the brainfoundry identity from the
+# persona alone. To guarantee a disavowal regardless of model behavior, we
+# detect identity questions naming a centralized-AI vendor and prepend a
+# turn-scoped instruction forcing the model to begin its reply with a literal
+# "No, I am not [vendor]. I am Nous, ..." sentence.
+#
+# Order in this list does not matter for correctness — _detect_named_vendors
+# de-dupes by canonical name.
+_VENDOR_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bchatgpt\b", re.IGNORECASE), "ChatGPT"),
+    (re.compile(r"\bopenai\b", re.IGNORECASE), "OpenAI"),
+    (re.compile(r"\bgpt[\s\-]?[0-9]+(?:\.[0-9]+)?\b", re.IGNORECASE), "GPT"),
+    (re.compile(r"\bclaude\b", re.IGNORECASE), "Claude"),
+    (re.compile(r"\banthropic\b", re.IGNORECASE), "Anthropic"),
+    (re.compile(r"\bgemini\b", re.IGNORECASE), "Gemini"),
+    (re.compile(r"\bbard\b", re.IGNORECASE), "Bard"),
+    (re.compile(r"\bgoogle\b", re.IGNORECASE), "Google"),
+    (re.compile(r"\bcopilot\b", re.IGNORECASE), "Copilot"),
+    (re.compile(r"\bmicrosoft\b", re.IGNORECASE), "Microsoft"),
+    (re.compile(r"\bmeta\b", re.IGNORECASE), "Meta"),
+    (re.compile(r"\bgrok\b", re.IGNORECASE), "Grok"),
+    (re.compile(r"\bdeepseek\b", re.IGNORECASE), "DeepSeek"),
+    (re.compile(r"\bperplexity\b", re.IGNORECASE), "Perplexity"),
+    (re.compile(r"\bmistral\b", re.IGNORECASE), "Mistral"),
+]
+
+# "are you" / "you are" / "is this" / "is nous" + variants, including SMS-style.
+_IDENTITY_QUESTION_RE = re.compile(
+    r"\b(?:are\s+you|are\s+u|r\s+you|r\s+u|you\s+are|is\s+this|is\s+nous|"
+    r"is\s+your\s+brain|am\s+i\s+talking\s+to|who\s+are\s+you|what\s+are\s+you)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_named_vendors(user_message: str) -> list[str]:
+    """If `user_message` is an identity question naming centralized AI vendors,
+    return the list of canonical vendor names mentioned (de-duplicated, in
+    pattern-list order). Empty list if not an identity question or no vendor
+    is named.
+    """
+    if not _IDENTITY_QUESTION_RE.search(user_message or ""):
+        return []
+    seen: list[str] = []
+    for pattern, name in _VENDOR_PATTERNS:
+        if name not in seen and pattern.search(user_message):
+            seen.append(name)
+    return seen
+
+
+def _vendor_disavowal_instruction(vendors: list[str]) -> str:
+    """Build the turn-scoped prepend instruction for a vendor-identity question."""
+    if len(vendors) == 1:
+        phrase = vendors[0]
+    elif len(vendors) == 2:
+        phrase = f"{vendors[0]} or {vendors[1]}"
+    else:
+        phrase = ", ".join(vendors[:-1]) + f", or {vendors[-1]}"
+    return (
+        f"\nINSTRUCTION FOR THIS TURN ONLY: The user has asked an identity "
+        f"question naming {phrase}. You MUST begin your reply with EXACTLY "
+        f"these words and nothing else first: \"No, I am not {phrase}. I am "
+        f"Nous, the public-facing brain of the brainfoundry federation.\" "
+        f"After that literal sentence you may continue with whatever further "
+        f"answer is appropriate, but the disavowal must come first.\n"
+    )
+
 _public_rate_limiter = PublicRateLimiter()
 
 # Defense-in-depth caps — also enforced by the relay, but the brain endpoint
@@ -1419,6 +1486,13 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
             prompt += f"User: {content}\n"
         elif role == "assistant":
             prompt += f"Assistant: {content}\n"
+
+    # Turn-scoped vendor-disavowal prepend. Placed immediately before the
+    # current user turn so it is the most recent instruction the model sees.
+    vendors = _detect_named_vendors(user_message)
+    if vendors:
+        prompt += _vendor_disavowal_instruction(vendors)
+
     prompt += f"User: {user_message}\nAssistant: "
     return prompt
 
