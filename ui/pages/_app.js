@@ -1,20 +1,8 @@
-import Link from 'next/link'
-import { useRouter } from 'next/router'
 import Head from 'next/head'
 import { useEffect } from 'react'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
-
-const NAV = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/chat', label: 'Chat' },
-  { href: '/upload', label: 'Knowledge' },
-  { href: '/federation', label: 'Federation' },
-  { href: '/trace', label: 'Trace' },
-  { href: '/settings', label: 'Settings' },
-  { href: '/update', label: 'Update' },
-  { href: '/future', label: 'Future' },
-]
+import Nav from '../components/Nav'
 
 // Warm academic palette
 // bg: #0e0c0b — aged paper in darkness
@@ -26,8 +14,6 @@ const NAV = [
 // border: #2a2420 — warm dark border
 
 export default function App({ Component, pageProps }) {
-  const router = useRouter()
-
   // Service worker registration (PWA). Best-effort — silent if unavailable.
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -74,56 +60,7 @@ export default function App({ Component, pageProps }) {
           }
         `}</style>
       </Head>
-      <nav className="bf-nav" style={{
-        backgroundColor: '#0e0c0b',
-        borderBottom: '1px solid #2a2420',
-        display: 'flex',
-        alignItems: 'center',
-        height: '52px',
-        // PWA safe-area: in standalone mode the iOS status bar / dynamic
-        // island sits at the top of the viewport. Pad the nav by the
-        // OS-reported inset so the nav content drops below it. In browser
-        // mode env() resolves to 0 — no impact. content-box override is
-        // required because the global * { box-sizing: border-box } would
-        // otherwise eat the padding into the 52px height.
-        paddingTop: 'env(safe-area-inset-top, 0px)',
-        boxSizing: 'content-box',
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 100,
-      }}>
-        <Link href="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          <span style={{ fontSize: '18px', color: '#c9a96e', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
-          <span className="bf-brand-name" style={{
-            fontFamily: 'Lora, Georgia, serif',
-            fontWeight: 600,
-            fontSize: '15px',
-            color: '#e8e0d5',
-            letterSpacing: '0.01em',
-          }}>
-            {process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
-          </span>
-        </Link>
-        <div className="bf-nav-links">
-          {NAV.map(n => (
-            <Link key={n.href} href={n.href} className="bf-nav-link" style={{
-              padding: '6px 14px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              textDecoration: 'none',
-              fontFamily: 'system-ui, sans-serif',
-              color: router.pathname === n.href ? '#e8e0d5' : '#6b5f52',
-              backgroundColor: router.pathname === n.href ? '#1c1814' : 'transparent',
-              fontWeight: router.pathname === n.href ? 600 : 400,
-              transition: 'color 0.15s ease',
-            }}>
-              {n.label}
-            </Link>
-          ))}
-        </div>
-      </nav>
+      <Nav />
       <div style={{
         // Match the nav's actual rendered height (52px content + safe-area
         // padding-top) so page content starts below the fixed nav in both
