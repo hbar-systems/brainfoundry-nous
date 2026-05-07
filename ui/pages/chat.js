@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import MessageRenderer from '../lib/MessageRenderer'
 
 export default function Chat() {
   const [models, setModels] = useState([])
@@ -120,6 +121,8 @@ export default function Chat() {
     if (e.dataTransfer?.files?.length) ingestImageFiles(e.dataTransfer.files)
   }
   const messagesEndRef = useRef(null)
+  const messagesContainerRef = useRef(null)
+  const [stickToBottom, setStickToBottom] = useState(true)
 
   useEffect(() => {
     fetch('/api/bf/models')
@@ -136,8 +139,10 @@ export default function Chat() {
   }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading])
+    if (!stickToBottom) return
+    const c = messagesContainerRef.current
+    if (c) c.scrollTop = c.scrollHeight
+  }, [messages, isLoading, stickToBottom])
 
   const fetchSessions = () => {
     fetch('/api/bf/sessions')
@@ -207,6 +212,8 @@ export default function Chat() {
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || !selectedModel || isLoading) return
+
+    setStickToBottom(true)
 
     let sessionId = currentSessionId
     if (!sessionId) {
@@ -443,6 +450,35 @@ export default function Chat() {
             ))
           )}
         </div>
+
+        <div style={{
+          padding: '10px 12px',
+          borderTop: '1px solid #2a2420',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: '1px solid #2a2420',
+              color: '#6b5f52',
+              padding: '8px 10px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+            }}
+            onMouseOver={e => { e.currentTarget.style.backgroundColor = '#1c1814'; e.currentTarget.style.color = '#c4b8a8' }}
+            onMouseOut={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#6b5f52' }}
+          >
+            <span>◀</span>
+            <span>Hide sidebar</span>
+          </button>
+        </div>
       </div>
 
       {/* Main */}
@@ -525,6 +561,12 @@ export default function Chat() {
 
         {/* Messages — also the drop zone for images */}
         <div
+          ref={messagesContainerRef}
+          onScroll={e => {
+            const el = e.currentTarget
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+            setStickToBottom(nearBottom)
+          }}
           onDragOver={handleChatDragOver}
           onDragLeave={handleChatDragLeave}
           onDrop={handleChatDrop}
@@ -568,7 +610,7 @@ export default function Chat() {
                 border: msg.role === 'user' ? 'none' : '1px solid #2a2420',
                 fontSize: '14px',
                 lineHeight: '1.6',
-                whiteSpace: 'pre-wrap',
+                whiteSpace: msg.role === 'user' ? 'pre-wrap' : 'normal',
                 wordBreak: 'break-word',
               }}>
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px', fontWeight: '500' }}>
@@ -586,7 +628,9 @@ export default function Chat() {
                     ))}
                   </div>
                 )}
-                {msg.content}
+                {msg.role === 'assistant'
+                  ? <MessageRenderer content={msg.content} />
+                  : msg.content}
               </div>
             </div>
           ))}
@@ -608,6 +652,40 @@ export default function Chat() {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {!stickToBottom && (
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            padding: '6px 0',
+            backgroundColor: '#0e0c0b',
+            borderTop: '1px solid #2a2420',
+            flexShrink: 0,
+          }}>
+            <button
+              onClick={() => {
+                setStickToBottom(true)
+                const c = messagesContainerRef.current
+                if (c) c.scrollTop = c.scrollHeight
+              }}
+              style={{
+                background: '#13100e',
+                border: '1px solid #2a2420',
+                color: '#c9a96e',
+                padding: '6px 14px',
+                borderRadius: '999px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <span>↓</span>
+              <span>Jump to latest</span>
+            </button>
+          </div>
+        )}
 
         {/* Input */}
         <div className="bf-chat-input-bar" style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>

@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
 import { useEffect } from 'react'
+import 'katex/dist/katex.min.css'
+import 'highlight.js/styles/atom-one-dark.css'
 
 const NAV = [
   { href: '/', label: 'Dashboard' },
