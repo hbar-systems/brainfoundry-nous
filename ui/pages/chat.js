@@ -1,5 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageRenderer from '../lib/MessageRenderer'
+import CustomSelect from '../lib/CustomSelect'
+
+const THEME_OPTIONS = [
+  { value: 'gold', label: 'gold', swatch: '#c9a96e' },
+  { value: 'paper', label: 'paper', swatch: '#8a6e3c' },
+  { value: 'sapphire', label: 'sapphire', swatch: '#6b8cce' },
+  { value: 'forest', label: 'forest', swatch: '#88a868' },
+  { value: 'crimson', label: 'crimson', swatch: '#c87878' },
+  { value: 'mono', label: 'mono', swatch: '#b0b0b0' },
+]
+
+// Each option's optionStyle previews the font in the dropdown row itself,
+// so the operator can see what they're picking before they apply it.
+const FONT_OPTIONS = [
+  { value: 'system', label: 'System sans', optionStyle: { fontFamily: 'system-ui, -apple-system, sans-serif' } },
+  { value: 'inter', label: 'Inter', optionStyle: { fontFamily: '"Inter", system-ui, sans-serif' } },
+  { value: 'lora', label: 'Lora', optionStyle: { fontFamily: 'Lora, Georgia, serif' } },
+  { value: 'crimson', label: 'Crimson Pro', optionStyle: { fontFamily: '"Crimson Pro", Georgia, serif' } },
+  { value: 'dm-mono', label: 'DM Mono', optionStyle: { fontFamily: '"DM Mono", ui-monospace, monospace' } },
+  { value: 'jetbrains', label: 'JetBrains Mono', optionStyle: { fontFamily: '"JetBrains Mono", ui-monospace, monospace' } },
+]
+
+const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 
 export default function Chat() {
   const [models, setModels] = useState([])
@@ -31,11 +54,12 @@ export default function Chat() {
   // from localStorage on mount; change handlers write through to both
   // dataset and localStorage so any other page picks them up on next paint.
   const [theme, setTheme] = useState('gold')
-  const [font, setFont] = useState('ui')
+  const [font, setFont] = useState('system')
   useEffect(() => {
     if (typeof window === 'undefined') return
     setTheme(localStorage.getItem('bf-theme') || 'gold')
-    setFont(localStorage.getItem('bf-font') || 'ui')
+    const stored = localStorage.getItem('bf-font') || 'system'
+    setFont(FONT_MIGRATION[stored] || stored)
   }, [])
   const applyTheme = (val) => {
     setTheme(val)
@@ -526,72 +550,35 @@ export default function Chat() {
             {sidebarOpen ? '◀' : '▶'}
           </button>
 
-          <select
+          <CustomSelect
             value={selectedModel}
-            onChange={e => setSelectedModel(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)',
-              fontSize: '13px',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            <option value="">Select model</option>
-            {models.map(m => (
-              <option key={m.name} value={m.name}>
-                {m.name}{m.size ? ` (${(m.size / 1e9).toFixed(1)}GB)` : ''}
-              </option>
-            ))}
-          </select>
+            onChange={setSelectedModel}
+            title="Model"
+            minWidth={180}
+            options={[
+              { value: '', label: 'Select model' },
+              ...models.map(m => ({
+                value: m.name,
+                label: m.name + (m.size ? ` (${(m.size / 1e9).toFixed(1)}GB)` : ''),
+              })),
+            ]}
+          />
 
-          <select
+          <CustomSelect
             value={theme}
-            onChange={e => applyTheme(e.target.value)}
+            onChange={applyTheme}
             title="Theme"
-            style={{
-              padding: '8px 10px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)',
-              fontSize: '12px',
-              outline: 'none',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            <option value="gold">gold</option>
-            <option value="paper">paper</option>
-            <option value="sapphire">sapphire</option>
-            <option value="forest">forest</option>
-            <option value="crimson">crimson</option>
-            <option value="mono">mono</option>
-          </select>
+            minWidth={120}
+            options={THEME_OPTIONS}
+          />
 
-          <select
+          <CustomSelect
             value={font}
-            onChange={e => applyFont(e.target.value)}
+            onChange={applyFont}
             title="Font"
-            style={{
-              padding: '8px 10px',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              color: 'var(--text)',
-              fontSize: '12px',
-              outline: 'none',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            <option value="ui">ui</option>
-            <option value="serif">serif</option>
-            <option value="mono">mono</option>
-          </select>
+            minWidth={160}
+            options={FONT_OPTIONS}
+          />
 
           {currentSessionId && messages.length >= 2 && (
             <button

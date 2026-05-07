@@ -19,11 +19,15 @@ export default function App({ Component, pageProps }) {
   }, [])
 
   // Theme + font init: read localStorage, apply to <html> dataset before paint.
-  // Switcher in chat header keeps these in sync on change.
+  // Switcher in chat header keeps these in sync on change. Old font tokens
+  // (ui/serif/mono) migrate to new names on read.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const theme = localStorage.getItem('bf-theme') || 'gold'
-    const font = localStorage.getItem('bf-font') || 'ui'
+    const fontMigration = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
+    const stored = localStorage.getItem('bf-font') || 'system'
+    const font = fontMigration[stored] || stored
+    if (font !== stored) localStorage.setItem('bf-font', font)
     document.documentElement.dataset.theme = theme
     document.documentElement.dataset.font = font
   }, [])
@@ -41,7 +45,7 @@ export default function App({ Component, pageProps }) {
         <link rel="apple-touch-icon" href="/icon-192.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400;1,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+        <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600&family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet" />
         <style>{`
           /* Theme tokens — six palettes selectable via [data-theme] on <html>.
              Token names: --bg page, --surface card, --surface2 lifted card,
@@ -152,14 +156,39 @@ export default function App({ Component, pageProps }) {
             --code-fg: #c0c0c0;
           }
 
-          [data-font="serif"] {
+          /* Six font sets — three sans/serif body fonts, one each from
+             two mono families. --font-display follows body for serif/mono
+             so headings feel cohesive; for sans body it stays Lora so
+             markdown headings still read as book chapters. */
+
+          [data-font="system"] {
+            --font-body: system-ui, -apple-system, sans-serif;
+            --font-display: Lora, Georgia, serif;
+          }
+
+          [data-font="inter"] {
+            --font-body: "Inter", system-ui, sans-serif;
+            --font-display: Lora, Georgia, serif;
+          }
+
+          [data-font="lora"] {
             --font-body: Lora, Georgia, serif;
             --font-display: Lora, Georgia, serif;
           }
 
-          [data-font="mono"] {
+          [data-font="crimson"] {
+            --font-body: "Crimson Pro", Georgia, serif;
+            --font-display: "Crimson Pro", Georgia, serif;
+          }
+
+          [data-font="dm-mono"] {
             --font-body: "DM Mono", ui-monospace, monospace;
             --font-display: "DM Mono", ui-monospace, monospace;
+          }
+
+          [data-font="jetbrains"] {
+            --font-body: "JetBrains Mono", ui-monospace, monospace;
+            --font-display: "JetBrains Mono", ui-monospace, monospace;
           }
 
           * { box-sizing: border-box; }
