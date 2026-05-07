@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from jsonschema import Draft7Validator
 from pydantic import BaseModel, Field
 
@@ -216,8 +216,8 @@ def install_preview(req: InstallRequest) -> PreviewResponse:
 
 
 @router.post("/install", response_model=InstallResponse)
-def install_app(req: InstallRequest) -> InstallResponse:
-    """Install an app: validate, clone permanently, register in installed.json, mint token."""
+def install_app(req: InstallRequest, request: Request) -> InstallResponse:
+    """Install an app: validate, clone permanently, register in installed.json, mount live."""
     state = _load_installed()
     existing = state.get("apps", [])
 
@@ -266,6 +266,15 @@ def install_app(req: InstallRequest) -> InstallResponse:
     state["apps"] = existing
     _save_installed(state)
 
+    # Hot-mount the app on the live process so the next request hits the new
+    # routes without a restart. Failures are logged but don't fail the install
+    # — installed.json is the source of truth and a restart will pick it up.
+    try:
+        from api.apps_mount import mount_app as _mount_app
+        _mount_app(request.app, entry)
+    except Exception as e:
+        print(f"[brain-apps] hot-mount failed for {app_id}: {e}", flush=True)
+
     return InstallResponse(
         id=app_id,
         manifest=manifest,
@@ -298,7 +307,7 @@ def list_apps() -> dict:
 
 
 @router.post("/{app_id}/uninstall")
-def uninstall_app(app_id: str) -> dict:
+def uninstall_app(app_id: str, request: Request) -> dict:
     state = _load_installed()
     apps = state.get("apps", [])
     target = next((a for a in apps if a["id"] == app_id), None)
@@ -309,6 +318,11 @@ def uninstall_app(app_id: str) -> dict:
     app_dir = BRAIN_APPS_DIR / app_id
     if app_dir.exists():
         shutil.rmtree(app_dir, ignore_errors=True)
+    try:
+        from api.apps_mount import unmount_app as _unmount_app
+        _unmount_app(request.app, app_id)
+    except Exception as e:
+        print(f"[brain-apps] hot-unmount failed for {app_id}: {e}", flush=True)
     return {"id": app_id, "uninstalled": True}
 
 

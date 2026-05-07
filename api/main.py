@@ -666,6 +666,15 @@ try:
 except Exception as e:
     print(f"[startup] brain_apps router mount skipped: {e}", flush=True)
 
+# Mount every previously-installed app's UI bundle and (optional) API router.
+# Reads brain-apps/installed.json and walks each enabled entry. Failures are
+# logged per app and do not block startup.
+try:
+    from api.apps_mount import mount_installed_apps as _mount_installed_apps
+    _mount_installed_apps(app)
+except Exception as e:
+    print(f"[startup] brain_apps mount_installed_apps skipped: {e}", flush=True)
+
 def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file"""
     try:

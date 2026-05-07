@@ -27,6 +27,31 @@ export default function Chat() {
   const [consolidating, setConsolidating] = useState(false)
   const [consolidateStatus, setConsolidateStatus] = useState(null) // {ok: bool, message: string} | null
 
+  // Theme + font: state mirrors document.documentElement.dataset. Seeded
+  // from localStorage on mount; change handlers write through to both
+  // dataset and localStorage so any other page picks them up on next paint.
+  const [theme, setTheme] = useState('gold')
+  const [font, setFont] = useState('ui')
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setTheme(localStorage.getItem('bf-theme') || 'gold')
+    setFont(localStorage.getItem('bf-font') || 'ui')
+  }, [])
+  const applyTheme = (val) => {
+    setTheme(val)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('bf-theme', val)
+      document.documentElement.dataset.theme = val
+    }
+  }
+  const applyFont = (val) => {
+    setFont(val)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('bf-font', val)
+      document.documentElement.dataset.font = val
+    }
+  }
+
   const consolidateSession = async () => {
     if (!currentSessionId || consolidating) return
     if (messages.length < 2) { setConsolidateStatus({ ok: false, message: 'Chat too short to save (need at least one exchange).' }); return }
@@ -361,9 +386,9 @@ export default function Chat() {
       // Subtract nav height (52px content + PWA safe-area-top) so the
       // chat column fills exactly the viewport below the nav.
       height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
-      backgroundColor: '#0e0c0b',
-      color: '#e8e0d5',
-      fontFamily: 'system-ui, -apple-system, sans-serif',
+      backgroundColor: 'var(--bg)',
+      color: 'var(--text)',
+      fontFamily: 'var(--font-body)',
       display: 'flex',
     }}>
 
@@ -371,8 +396,8 @@ export default function Chat() {
       <div style={{
         width: sidebarOpen ? '280px' : '0',
         flexShrink: 0,
-        backgroundColor: '#13100e',
-        borderRight: '1px solid #2a2420',
+        backgroundColor: 'var(--surface)',
+        borderRight: '1px solid var(--border)',
         display: 'flex',
         flexDirection: 'column',
         transition: 'width 0.2s ease',
@@ -380,21 +405,21 @@ export default function Chat() {
       }}>
         <div style={{
           padding: '16px',
-          borderBottom: '1px solid #2a2420',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexShrink: 0,
         }}>
-          <span style={{ fontSize: '11px', fontWeight: '600', color: '#4a3f36', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
             Sessions
           </span>
           <button
             onClick={() => { setNewChatName(''); setShowNameModal(true) }}
             disabled={isCreatingSession || !selectedModel}
             style={{
-              background: '#c9a96e',
-              color: '#0e0c0b',
+              background: 'var(--accent)',
+              color: 'var(--bg)',
               border: 'none',
               borderRadius: '6px',
               padding: '5px 10px',
@@ -410,8 +435,8 @@ export default function Chat() {
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
           {sessions.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px 16px' }}>
-              <div style={{ fontSize: '22px', marginBottom: '8px', color: '#c9a96e', opacity: 0.4 }}>ℏ</div>
-              <div style={{ fontSize: '12px', color: '#4a3f36', lineHeight: 1.6 }}>No sessions yet.<br />Click + New to begin.</div>
+              <div style={{ fontSize: '22px', marginBottom: '8px', color: 'var(--accent)', opacity: 0.4 }}>ℏ</div>
+              <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6 }}>No sessions yet.<br />Click + New to begin.</div>
             </div>
           ) : (
             sessions.map(s => (
@@ -427,23 +452,23 @@ export default function Chat() {
                   border: `1px solid ${currentSessionId === s.session_id ? 'rgba(201,169,110,0.2)' : 'transparent'}`,
                   transition: 'all 0.15s ease',
                 }}
-                onMouseOver={e => { if (currentSessionId !== s.session_id) e.currentTarget.style.backgroundColor = '#1c1814' }}
+                onMouseOver={e => { if (currentSessionId !== s.session_id) e.currentTarget.style.backgroundColor = 'var(--surface2)' }}
                 onMouseOut={e => { if (currentSessionId !== s.session_id) e.currentTarget.style.backgroundColor = 'transparent' }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: '500', color: '#c4b8a8', flex: 1, marginRight: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', flex: 1, marginRight: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {s.title || 'Untitled'}
                   </div>
                   <button
                     onClick={e => { e.stopPropagation(); deleteSession(s.session_id) }}
-                    style={{ background: 'none', border: 'none', color: '#3a2e26', cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+                    style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
                     onMouseOver={e => e.target.style.color = '#c96e6e'}
-                    onMouseOut={e => e.target.style.color = '#3a2e26'}
+                    onMouseOut={e => e.target.style.color = 'var(--muted)'}
                   >
                     ×
                   </button>
                 </div>
-                <div style={{ fontSize: '11px', color: '#4a3f36' }}>
+                <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
                   {s.message_count || 0} msgs &middot; {formatDate(s.created_at)}
                 </div>
               </div>
@@ -453,7 +478,7 @@ export default function Chat() {
 
         <div style={{
           padding: '10px 12px',
-          borderTop: '1px solid #2a2420',
+          borderTop: '1px solid var(--border)',
           flexShrink: 0,
         }}>
           <button
@@ -461,8 +486,8 @@ export default function Chat() {
             style={{
               width: '100%',
               background: 'none',
-              border: '1px solid #2a2420',
-              color: '#6b5f52',
+              border: '1px solid var(--border)',
+              color: 'var(--muted)',
               padding: '8px 10px',
               borderRadius: '6px',
               cursor: 'pointer',
@@ -472,8 +497,8 @@ export default function Chat() {
               justifyContent: 'center',
               gap: '8px',
             }}
-            onMouseOver={e => { e.currentTarget.style.backgroundColor = '#1c1814'; e.currentTarget.style.color = '#c4b8a8' }}
-            onMouseOut={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#6b5f52' }}
+            onMouseOver={e => { e.currentTarget.style.backgroundColor = 'var(--surface2)'; e.currentTarget.style.color = 'var(--text)' }}
+            onMouseOut={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--muted)' }}
           >
             <span>◀</span>
             <span>Hide sidebar</span>
@@ -486,8 +511,8 @@ export default function Chat() {
 
         {/* Chat header */}
         <div style={{
-          backgroundColor: '#13100e',
-          borderBottom: '1px solid #2a2420',
+          backgroundColor: 'var(--surface)',
+          borderBottom: '1px solid var(--border)',
           padding: '12px 20px',
           display: 'flex',
           alignItems: 'center',
@@ -496,7 +521,7 @@ export default function Chat() {
         }}>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            style={{ background: 'none', border: '1px solid #2a2420', color: '#6b5f52', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
+            style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
           >
             {sidebarOpen ? '◀' : '▶'}
           </button>
@@ -507,9 +532,9 @@ export default function Chat() {
             style={{
               padding: '8px 12px',
               borderRadius: '8px',
-              border: '1px solid #2a2420',
-              backgroundColor: '#161310',
-              color: '#e8e0d5',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface)',
+              color: 'var(--text)',
               fontSize: '13px',
               outline: 'none',
               cursor: 'pointer',
@@ -523,6 +548,51 @@ export default function Chat() {
             ))}
           </select>
 
+          <select
+            value={theme}
+            onChange={e => applyTheme(e.target.value)}
+            title="Theme"
+            style={{
+              padding: '8px 10px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface)',
+              color: 'var(--text)',
+              fontSize: '12px',
+              outline: 'none',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <option value="gold">gold</option>
+            <option value="paper">paper</option>
+            <option value="sapphire">sapphire</option>
+            <option value="forest">forest</option>
+            <option value="crimson">crimson</option>
+            <option value="mono">mono</option>
+          </select>
+
+          <select
+            value={font}
+            onChange={e => applyFont(e.target.value)}
+            title="Font"
+            style={{
+              padding: '8px 10px',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--surface)',
+              color: 'var(--text)',
+              fontSize: '12px',
+              outline: 'none',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <option value="ui">ui</option>
+            <option value="serif">serif</option>
+            <option value="mono">mono</option>
+          </select>
+
           {currentSessionId && messages.length >= 2 && (
             <button
               onClick={consolidateSession}
@@ -531,13 +601,13 @@ export default function Chat() {
               style={{
                 marginLeft: 'auto',
                 padding: '8px 14px',
-                background: consolidating ? '#161310' : 'transparent',
-                color: consolidating ? '#6b5f52' : '#c9a96e',
-                border: '1px solid #c9a96e60',
+                background: consolidating ? 'var(--surface)' : 'transparent',
+                color: consolidating ? 'var(--muted)' : 'var(--accent)',
+                border: '1px solid rgba(201, 169, 110, 0.38)',
                 borderRadius: '8px',
                 cursor: consolidating ? 'wait' : 'pointer',
                 fontSize: '12px',
-                fontFamily: 'DM Mono, monospace',
+                fontFamily: 'var(--font-mono)',
                 letterSpacing: '0.04em',
               }}
             >
@@ -552,8 +622,8 @@ export default function Chat() {
             backgroundColor: consolidateStatus.ok ? '#1e3a26' : '#3a1e1e',
             color: consolidateStatus.ok ? '#7fc99c' : '#c98080',
             fontSize: '12px',
-            borderBottom: '1px solid #2a2420',
-            fontFamily: 'DM Mono, monospace',
+            borderBottom: '1px solid var(--border)',
+            fontFamily: 'var(--font-mono)',
           }}>
             {consolidateStatus.message}
           </div>
@@ -578,7 +648,7 @@ export default function Chat() {
             flexDirection: 'column',
             gap: '16px',
             position: 'relative',
-            outline: dragActive ? '2px dashed #c9a96e' : 'none',
+            outline: dragActive ? '2px dashed var(--accent)' : 'none',
             outlineOffset: '-12px',
             backgroundColor: dragActive ? 'rgba(201,169,110,0.04)' : 'transparent',
             transition: 'background 0.15s ease',
@@ -586,12 +656,12 @@ export default function Chat() {
         >
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', marginTop: '100px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '20px', color: '#c9a96e', opacity: 0.25 }}>ℏ</div>
+              <div style={{ fontSize: '32px', marginBottom: '20px', color: 'var(--accent)', opacity: 0.25 }}>ℏ</div>
               <div style={{
-                fontFamily: 'Lora, Georgia, serif',
+                fontFamily: 'var(--font-display)',
                 fontStyle: 'italic',
                 fontSize: '17px',
-                color: '#4a3f36',
+                color: 'var(--muted)',
                 letterSpacing: '0.01em',
               }}>
                 {currentSessionId ? 'Session ready.' : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
@@ -605,9 +675,9 @@ export default function Chat() {
                 maxWidth: '72%',
                 padding: '14px 18px',
                 borderRadius: '16px',
-                background: msg.role === 'user' ? '#e8d5b0' : '#13100e',
-                color: msg.role === 'user' ? '#1a1210' : '#c4b8a8',
-                border: msg.role === 'user' ? 'none' : '1px solid #2a2420',
+                background: msg.role === 'user' ? 'var(--user-bg)' : 'var(--assistant-bg)',
+                color: msg.role === 'user' ? 'var(--user-text)' : 'var(--assistant-text)',
+                border: msg.role === 'user' ? 'none' : '1px solid var(--border)',
                 fontSize: '14px',
                 lineHeight: '1.6',
                 whiteSpace: msg.role === 'user' ? 'pre-wrap' : 'normal',
@@ -637,7 +707,7 @@ export default function Chat() {
 
           {isLoading && (
             <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-              <div style={{ padding: '14px 18px', borderRadius: '16px', backgroundColor: '#13100e', border: '1px solid #2a2420', color: '#4a3f36', fontSize: '14px' }}>
+              <div style={{ padding: '14px 18px', borderRadius: '16px', backgroundColor: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)', fontSize: '14px' }}>
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px' }}>{selectedModel || 'Brain'}</div>
                 <span>thinking...</span>
               </div>
@@ -658,8 +728,8 @@ export default function Chat() {
             display: 'flex',
             justifyContent: 'center',
             padding: '6px 0',
-            backgroundColor: '#0e0c0b',
-            borderTop: '1px solid #2a2420',
+            backgroundColor: 'var(--bg)',
+            borderTop: '1px solid var(--border)',
             flexShrink: 0,
           }}>
             <button
@@ -669,9 +739,9 @@ export default function Chat() {
                 if (c) c.scrollTop = c.scrollHeight
               }}
               style={{
-                background: '#13100e',
-                border: '1px solid #2a2420',
-                color: '#c9a96e',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--accent)',
                 padding: '6px 14px',
                 borderRadius: '999px',
                 cursor: 'pointer',
@@ -688,10 +758,10 @@ export default function Chat() {
         )}
 
         {/* Input */}
-        <div className="bf-chat-input-bar" style={{ backgroundColor: '#13100e', borderTop: '1px solid #2a2420', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
+        <div className="bf-chat-input-bar" style={{ backgroundColor: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
           {attachedImages.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px', padding: '10px 12px', backgroundColor: '#1c1814', border: '1px solid #2a2420', borderRadius: '8px' }}>
-              <div style={{ width: '100%', fontSize: '11px', color: '#8b7d6e', fontFamily: 'DM Mono, monospace', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px', padding: '10px 12px', backgroundColor: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px' }}>
+              <div style={{ width: '100%', fontSize: '11px', color: 'var(--muted)', fontFamily: 'var(--font-mono)', marginBottom: '4px' }}>
                 {attachedImages.length} image{attachedImages.length > 1 ? 's' : ''} attached ({MAX_IMAGES} max)
               </div>
               {attachedImages.map((img, i) => (
@@ -720,11 +790,11 @@ export default function Chat() {
               title="Attach image (uses vision-capable model — Claude / GPT-4o)"
               style={{
                 padding: '12px 14px',
-                backgroundColor: '#161310',
-                border: '1px solid #2a2420',
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '10px',
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                color: '#8b7d6e',
+                color: 'var(--muted)',
                 fontSize: '16px',
                 userSelect: 'none',
                 flexShrink: 0,
@@ -759,9 +829,9 @@ export default function Chat() {
                 flex: 1,
                 padding: '12px 16px',
                 borderRadius: '10px',
-                border: '1px solid #2a2420',
-                backgroundColor: '#161310',
-                color: '#e8e0d5',
+                border: '1px solid var(--border)',
+                backgroundColor: 'var(--surface)',
+                color: 'var(--text)',
                 fontSize: '14px',
                 resize: 'none',
                 fontFamily: 'inherit',
@@ -780,9 +850,9 @@ export default function Chat() {
               disabled={!inputMessage.trim() || !selectedModel || isLoading}
               style={{
                 padding: '12px 20px',
-                background: (!inputMessage.trim() || !selectedModel || isLoading) ? '#161310' : '#c9a96e',
-                color: (!inputMessage.trim() || !selectedModel || isLoading) ? '#3a2e26' : '#0e0c0b',
-                border: '1px solid #2a2420',
+                background: (!inputMessage.trim() || !selectedModel || isLoading) ? 'var(--surface)' : 'var(--accent)',
+                color: (!inputMessage.trim() || !selectedModel || isLoading) ? 'var(--muted)' : 'var(--bg)',
+                border: '1px solid var(--border)',
                 borderRadius: '10px',
                 cursor: (!inputMessage.trim() || !selectedModel || isLoading) ? 'not-allowed' : 'pointer',
                 fontSize: '14px',
@@ -807,16 +877,16 @@ export default function Chat() {
           zIndex: 200,
         }}>
           <div style={{
-            backgroundColor: '#13100e',
-            border: '1px solid #2a2420',
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
             borderRadius: '14px',
             padding: '28px',
             width: '380px',
             maxWidth: '90vw',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#e8e0d5' }}>New session</h2>
-              <button onClick={() => setShowNameModal(false)} style={{ background: 'none', border: 'none', color: '#4a3f36', fontSize: '20px', cursor: 'pointer' }}>×</button>
+              <h2 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: 'var(--text)' }}>New session</h2>
+              <button onClick={() => setShowNameModal(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '20px', cursor: 'pointer' }}>×</button>
             </div>
             <form onSubmit={async e => {
               e.preventDefault()
@@ -833,10 +903,10 @@ export default function Chat() {
                 style={{
                   width: '100%',
                   padding: '10px 14px',
-                  backgroundColor: '#161310',
-                  border: '1px solid #2a2420',
+                  backgroundColor: 'var(--surface)',
+                  border: '1px solid var(--border)',
                   borderRadius: '8px',
-                  color: '#e8e0d5',
+                  color: 'var(--text)',
                   fontSize: '14px',
                   outline: 'none',
                   boxSizing: 'border-box',
@@ -844,10 +914,10 @@ export default function Chat() {
                 }}
               />
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                <button type="button" onClick={() => setShowNameModal(false)} style={{ padding: '8px 16px', backgroundColor: 'transparent', border: '1px solid #2a2420', borderRadius: '8px', color: '#6b5f52', cursor: 'pointer', fontSize: '14px' }}>
+                <button type="button" onClick={() => setShowNameModal(false)} style={{ padding: '8px 16px', backgroundColor: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--muted)', cursor: 'pointer', fontSize: '14px' }}>
                   Cancel
                 </button>
-                <button type="submit" style={{ padding: '8px 16px', background: '#c9a96e', border: 'none', borderRadius: '8px', color: '#0e0c0b', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>
+                <button type="submit" style={{ padding: '8px 16px', background: 'var(--accent)', border: 'none', borderRadius: '8px', color: 'var(--bg)', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>
                   Create
                 </button>
               </div>

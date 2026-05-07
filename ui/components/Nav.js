@@ -21,8 +21,8 @@ export default function Nav() {
 
   return (
     <nav className="bf-nav" style={{
-      backgroundColor: '#0e0c0b',
-      borderBottom: '1px solid #2a2420',
+      backgroundColor: 'var(--bg)',
+      borderBottom: '1px solid var(--border)',
       display: 'flex',
       alignItems: 'center',
       height: '52px',
@@ -41,12 +41,12 @@ export default function Nav() {
       zIndex: 100,
     }}>
       <Link href="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-        <span style={{ fontSize: '18px', color: '#c9a96e', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
+        <span style={{ fontSize: '18px', color: 'var(--accent)', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
         <span className="bf-brand-name" style={{
-          fontFamily: 'Lora, Georgia, serif',
+          fontFamily: 'var(--font-display)',
           fontWeight: 600,
           fontSize: '15px',
-          color: '#e8e0d5',
+          color: 'var(--text)',
           letterSpacing: '0.01em',
         }}>
           {process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
@@ -59,9 +59,9 @@ export default function Nav() {
             borderRadius: '6px',
             fontSize: '13px',
             textDecoration: 'none',
-            fontFamily: 'system-ui, sans-serif',
-            color: router.pathname === n.href ? '#e8e0d5' : '#6b5f52',
-            backgroundColor: router.pathname === n.href ? '#1c1814' : 'transparent',
+            fontFamily: 'var(--font-body)',
+            color: router.pathname === n.href ? 'var(--text)' : 'var(--muted)',
+            backgroundColor: router.pathname === n.href ? 'var(--surface2)' : 'transparent',
             fontWeight: router.pathname === n.href ? 600 : 400,
             transition: 'color 0.15s ease',
           }}>
