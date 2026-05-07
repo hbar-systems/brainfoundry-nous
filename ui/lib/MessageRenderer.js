@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
+import DiagramBlock from './DiagramBlock'
 
 const components = {
   p: ({ children }) => (
@@ -55,12 +56,20 @@ const components = {
   td: ({ children }) => (
     <td style={{ borderBottom: '1px solid var(--border)', padding: '4px 10px', opacity: 0.92 }}>{children}</td>
   ),
-  code: ({ className, children, ...props }) => {
+  code: ({ node, className, children, ...props }) => {
     // react-markdown v10 removed the `inline` prop. Convention: fenced code
     // gets a `language-*` className from rehype-highlight; inline code does
     // not. Use that to branch.
     const isBlock = typeof className === 'string' && className.startsWith('language-')
     if (isBlock) {
+      const lang = className.replace(/^language-/, '')
+      if (lang === 'mermaid' || lang === 'svg') {
+        // Pull RAW source from the hast node, before rehype-highlight
+        // wrapped it in <span> elements. DiagramBlock needs un-highlighted
+        // text to feed mermaid/DOMPurify.
+        const raw = node?.children?.[0]?.value ?? String(children).replace(/\n$/, '')
+        return <DiagramBlock kind={lang} source={raw} />
+      }
       return <code className={className} {...props}>{children}</code>
     }
     return (
@@ -73,20 +82,25 @@ const components = {
       }} {...props}>{children}</code>
     )
   },
-  pre: ({ children }) => (
-    <pre style={{
-      background: 'var(--code-bg)',
-      color: 'var(--code-fg)',
-      border: '1px solid var(--border)',
-      borderRadius: '8px',
-      padding: '12px 14px',
-      margin: '0.5em 0',
-      overflowX: 'auto',
-      fontFamily: 'var(--font-mono)',
-      fontSize: '0.88em',
-      lineHeight: 1.5,
-    }}>{children}</pre>
-  ),
+  pre: ({ children }) => {
+    // Diagram code components return DiagramBlock directly. Skip the <pre>
+    // wrapper for those — DiagramBlock has its own outer styling.
+    if (children?.type !== 'code') return children
+    return (
+      <pre style={{
+        background: 'var(--code-bg)',
+        color: 'var(--code-fg)',
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        padding: '12px 14px',
+        margin: '0.5em 0',
+        overflowX: 'auto',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.88em',
+        lineHeight: 1.5,
+      }}>{children}</pre>
+    )
+  },
 }
 
 export default function MessageRenderer({ content }) {
