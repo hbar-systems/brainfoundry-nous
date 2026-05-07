@@ -198,6 +198,27 @@ export default function App({ Component, pageProps }) {
           ::-webkit-scrollbar-track { background: var(--bg); }
           ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+          /* Resize handle for react-resizable-panels — visible bar between
+             panels, brightens on hover and while actively dragged. */
+          .bf-resize-handle {
+            width: 4px;
+            background: var(--border);
+            transition: background 0.15s ease;
+            position: relative;
+          }
+          .bf-resize-handle:hover,
+          .bf-resize-handle[data-resize-handle-active] {
+            background: var(--accent);
+          }
+          .bf-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -4px;
+            right: -4px;
+          }
+
           .bf-nav { padding: 0 24px; gap: 32px; }
           .bf-nav-links { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
           .bf-nav-links::-webkit-scrollbar { display: none; }

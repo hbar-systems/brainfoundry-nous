@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import MessageRenderer from '../lib/MessageRenderer'
 import CustomSelect from '../lib/CustomSelect'
 
@@ -34,12 +35,27 @@ export default function Chat() {
   const [sessions, setSessions] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  // On phone-width viewports default the sidebar closed so the message column
-  // gets the full screen. Operator can still toggle via the existing button.
+  // Ref to the resizable sidebar panel. Used by the chat-header toggle and
+  // the in-sidebar Hide button to collapse/expand. The panel's onCollapse /
+  // onExpand callbacks keep `sidebarOpen` in sync for any code that still
+  // reads it (e.g. arrow direction on the toggle button).
+  const sidebarPanelRef = useRef(null)
+  const toggleSidebar = () => {
+    const p = sidebarPanelRef.current
+    if (!p) return
+    if (p.isCollapsed()) p.expand()
+    else p.collapse()
+  }
+  // On phone-width viewports default the sidebar collapsed so the message
+  // column gets the full screen. Operator can still toggle via the button.
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches) {
-      setSidebarOpen(false)
-    }
+    if (typeof window === 'undefined') return
+    if (!window.matchMedia('(max-width: 768px)').matches) return
+    // Defer until the Panel ref is attached on first paint.
+    const id = requestAnimationFrame(() => {
+      sidebarPanelRef.current?.collapse()
+    })
+    return () => cancelAnimationFrame(id)
   }, [])
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [showNameModal, setShowNameModal] = useState(false)
@@ -406,27 +422,39 @@ export default function Chat() {
   }
 
   return (
-    <div style={{
-      // Subtract nav height (52px content + PWA safe-area-top) so the
-      // chat column fills exactly the viewport below the nav.
-      height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
-      backgroundColor: 'var(--bg)',
-      color: 'var(--text)',
-      fontFamily: 'var(--font-body)',
-      display: 'flex',
-    }}>
+    <>
+    <PanelGroup
+      direction="horizontal"
+      autoSaveId="bf-chat-panels"
+      style={{
+        // Subtract nav height (52px content + PWA safe-area-top) so the
+        // chat column fills exactly the viewport below the nav.
+        height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
+        backgroundColor: 'var(--bg)',
+        color: 'var(--text)',
+        fontFamily: 'var(--font-body)',
+      }}
+    >
 
-      {/* Sidebar */}
-      <div style={{
-        width: sidebarOpen ? '280px' : '0',
-        flexShrink: 0,
-        backgroundColor: 'var(--surface)',
-        borderRight: '1px solid var(--border)',
-        display: 'flex',
-        flexDirection: 'column',
-        transition: 'width 0.2s ease',
-        overflow: 'hidden',
-      }}>
+      {/* Sidebar — drag the handle to resize, double-click to collapse,
+          or click the toggle in the chat header / footer button. */}
+      <Panel
+        ref={sidebarPanelRef}
+        collapsible
+        collapsedSize={0}
+        defaultSize={22}
+        minSize={15}
+        maxSize={40}
+        onCollapse={() => setSidebarOpen(false)}
+        onExpand={() => setSidebarOpen(true)}
+        style={{
+          backgroundColor: 'var(--surface)',
+          borderRight: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
         <div style={{
           padding: '16px',
           borderBottom: '1px solid var(--border)',
@@ -506,7 +534,7 @@ export default function Chat() {
           flexShrink: 0,
         }}>
           <button
-            onClick={() => setSidebarOpen(false)}
+            onClick={() => sidebarPanelRef.current?.collapse()}
             style={{
               width: '100%',
               background: 'none',
@@ -528,10 +556,12 @@ export default function Chat() {
             <span>Hide sidebar</span>
           </button>
         </div>
-      </div>
+      </Panel>
+
+      <PanelResizeHandle className="bf-resize-handle" />
 
       {/* Main */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Panel defaultSize={78} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Chat header */}
         <div style={{
@@ -544,7 +574,8 @@ export default function Chat() {
           flexShrink: 0,
         }}>
           <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            onClick={toggleSidebar}
+            title={sidebarOpen ? 'Collapse sidebar' : 'Show sidebar'}
             style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
           >
             {sidebarOpen ? '◀' : '▶'}
@@ -853,7 +884,8 @@ export default function Chat() {
             </button>
           </div>
         </div>
-      </div>
+      </Panel>
+      </PanelGroup>
 
       {/* New session modal */}
       {showNameModal && (
@@ -912,6 +944,6 @@ export default function Chat() {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
