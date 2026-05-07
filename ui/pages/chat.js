@@ -25,6 +25,17 @@ const FONT_OPTIONS = [
 
 const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 
+// Scroll-pace presets — operator-controlled. 'instant' restores the old
+// teleport behavior. The rAF loop reads pxPerFrame each tick. Acceleration
+// kicks in when the operator is more than a viewport behind the writing
+// edge so a giant code-block dump doesn't leave us absurdly far behind.
+const SCROLL_PACE_OPTIONS = [
+  { value: 'instant', label: 'instant', pxPerFrame: Infinity },
+  { value: 'slow', label: 'slow read', pxPerFrame: 1.0 },
+  { value: 'normal', label: 'normal', pxPerFrame: 2.2 },
+  { value: 'fast', label: 'fast', pxPerFrame: 5 },
+]
+
 export default function Chat() {
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
@@ -66,17 +77,52 @@ export default function Chat() {
   const [consolidating, setConsolidating] = useState(false)
   const [consolidateStatus, setConsolidateStatus] = useState(null) // {ok: bool, message: string} | null
 
+  // Inline session-title rename. editingSessionId == null means no row is in
+  // edit mode. Enter (or blur) saves via PUT /api/bf/sessions/{id}/title;
+  // Escape cancels. Pencil icon or double-click on the title starts edit.
+  const [editingSessionId, setEditingSessionId] = useState(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const startRename = (id, currentTitle) => {
+    setEditingSessionId(id)
+    setEditingTitle(currentTitle || '')
+  }
+  const cancelRename = () => {
+    setEditingSessionId(null)
+    setEditingTitle('')
+  }
+  const saveSessionTitle = async (id) => {
+    const newTitle = editingTitle.trim()
+    if (!newTitle) { cancelRename(); return }
+    try {
+      const res = await fetch(`/api/bf/sessions/${id}/title`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      })
+      if (res.ok) fetchSessions()
+    } catch (e) {
+      // Swallow — keep UI responsive. Operator can retry.
+    }
+    cancelRename()
+  }
+
   // Theme + font: state mirrors document.documentElement.dataset. Seeded
   // from localStorage on mount; change handlers write through to both
   // dataset and localStorage so any other page picks them up on next paint.
   const [theme, setTheme] = useState('gold')
   const [font, setFont] = useState('system')
+  const [scrollPace, setScrollPace] = useState('normal')
   useEffect(() => {
     if (typeof window === 'undefined') return
     setTheme(localStorage.getItem('bf-theme') || 'gold')
     const stored = localStorage.getItem('bf-font') || 'system'
     setFont(FONT_MIGRATION[stored] || stored)
+    setScrollPace(localStorage.getItem('bf-scroll-pace') || 'normal')
   }, [])
+  const applyScrollPace = (val) => {
+    setScrollPace(val)
+    if (typeof window !== 'undefined') localStorage.setItem('bf-scroll-pace', val)
+  }
   const applyTheme = (val) => {
     setTheme(val)
     if (typeof window !== 'undefined') {
@@ -204,31 +250,34 @@ export default function Chat() {
   }, [])
 
   // Scroll-along: while sticking to bottom, creep toward the latest content
-  // at human reading pace (~130 px/sec) instead of teleporting to the
-  // bottom on every streamed token. Operator can read along as the brain
-  // writes. If content grows more than a viewport ahead (e.g. a giant
-  // code-block lands), accelerate proportionally so we don't fall absurdly
-  // behind. The rAF loop reads scrollHeight every frame so it naturally
-  // tracks growing content without depending on `messages` in the deps.
+  // at the operator's chosen pace (instant / slow / normal / fast). When
+  // content grows more than a viewport ahead, accelerate proportionally so
+  // we don't fall absurdly behind. The rAF reads scrollHeight every frame.
   useEffect(() => {
     if (!stickToBottom) return
     const c = messagesContainerRef.current
     if (!c) return
+    const paceObj = SCROLL_PACE_OPTIONS.find(p => p.value === scrollPace) || SCROLL_PACE_OPTIONS[2]
+    const pace = paceObj.pxPerFrame
     let raf
     const tick = () => {
       const target = c.scrollHeight - c.clientHeight
       const dist = target - c.scrollTop
       if (dist > 0) {
-        const step = dist > c.clientHeight
-          ? Math.max(3, dist * 0.05)
-          : 2.2
-        c.scrollTop = Math.min(target, c.scrollTop + step)
+        if (pace === Infinity) {
+          c.scrollTop = target
+        } else {
+          const step = dist > c.clientHeight
+            ? Math.max(pace * 1.4, dist * 0.05)
+            : pace
+          c.scrollTop = Math.min(target, c.scrollTop + step)
+        }
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [stickToBottom])
+  }, [stickToBottom, scrollPace])
 
   const fetchSessions = () => {
     fetch('/api/bf/sessions')
@@ -528,18 +577,63 @@ export default function Chat() {
                 onMouseOver={e => { if (currentSessionId !== s.session_id) e.currentTarget.style.backgroundColor = 'var(--surface2)' }}
                 onMouseOut={e => { if (currentSessionId !== s.session_id) e.currentTarget.style.backgroundColor = 'transparent' }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', flex: 1, marginRight: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {s.title || 'Untitled'}
-                  </div>
-                  <button
-                    onClick={e => { e.stopPropagation(); deleteSession(s.session_id) }}
-                    style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
-                    onMouseOver={e => e.target.style.color = '#c96e6e'}
-                    onMouseOut={e => e.target.style.color = 'var(--muted)'}
-                  >
-                    ×
-                  </button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px', gap: '4px' }}>
+                  {editingSessionId === s.session_id ? (
+                    <input
+                      autoFocus
+                      value={editingTitle}
+                      onChange={e => setEditingTitle(e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { e.preventDefault(); saveSessionTitle(s.session_id) }
+                        else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                      }}
+                      onBlur={() => saveSessionTitle(s.session_id)}
+                      style={{
+                        flex: 1,
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        padding: '2px 6px',
+                        border: '1px solid var(--accent)',
+                        borderRadius: '4px',
+                        background: 'var(--bg)',
+                        color: 'var(--text)',
+                        outline: 'none',
+                        fontFamily: 'inherit',
+                        minWidth: 0,
+                      }}
+                    />
+                  ) : (
+                    <div
+                      onDoubleClick={e => { e.stopPropagation(); startRename(s.session_id, s.title) }}
+                      title="Double-click to rename"
+                      style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', flex: 1, marginRight: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {s.title || 'Untitled'}
+                    </div>
+                  )}
+                  {editingSessionId !== s.session_id && (
+                    <>
+                      <button
+                        onClick={e => { e.stopPropagation(); startRename(s.session_id, s.title) }}
+                        title="Rename"
+                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '13px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                        onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); deleteSession(s.session_id) }}
+                        title="Delete"
+                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+                        onMouseOver={e => e.currentTarget.style.color = '#c96e6e'}
+                        onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
                   {s.message_count || 0} msgs &middot; {formatDate(s.created_at)}
@@ -632,6 +726,14 @@ export default function Chat() {
             options={FONT_OPTIONS}
           />
 
+          <CustomSelect
+            value={scrollPace}
+            onChange={applyScrollPace}
+            title="Scroll pace while streaming"
+            minWidth={130}
+            options={SCROLL_PACE_OPTIONS}
+          />
+
           {currentSessionId && messages.length >= 2 && (
             <button
               onClick={consolidateSession}
@@ -667,6 +769,12 @@ export default function Chat() {
             {consolidateStatus.message}
           </div>
         )}
+
+        {/* Vertical split — drag the handle below the messages list to
+            allocate any chunk of the column to the composer. autoSaveId
+            persists sizes per browser. */}
+        <PanelGroup direction="vertical" autoSaveId="bf-chat-main-vertical" style={{ flex: 1, overflow: 'hidden' }}>
+        <Panel defaultSize={78} minSize={20} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Messages — also the drop zone for images */}
         <div
@@ -796,8 +904,14 @@ export default function Chat() {
           </div>
         )}
 
+        </Panel>
+
+        <PanelResizeHandle className="bf-resize-handle bf-resize-handle--horizontal" />
+
+        <Panel defaultSize={22} minSize={10} maxSize={70} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
         {/* Input */}
-        <div className="bf-chat-input-bar" style={{ backgroundColor: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '16px 20px', flexShrink: 0, boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}>
+        <div className="bf-chat-input-bar" style={{ backgroundColor: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '16px 20px', boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))', height: '100%', display: 'flex', flexDirection: 'column' }}>
           {attachedImages.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px', padding: '10px 12px', backgroundColor: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '8px' }}>
               <div style={{ width: '100%', fontSize: '11px', color: 'var(--muted)', fontFamily: 'var(--font-mono)', marginBottom: '4px' }}>
@@ -823,7 +937,7 @@ export default function Chat() {
               ))}
             </div>
           )}
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
             <label
               htmlFor="image-upload-input"
               title="Attach image (uses vision-capable model — Claude / GPT-4o)"
@@ -837,6 +951,7 @@ export default function Chat() {
                 fontSize: '16px',
                 userSelect: 'none',
                 flexShrink: 0,
+                alignSelf: 'flex-end',
                 lineHeight: '1',
               }}
             >📎</label>
@@ -864,10 +979,9 @@ export default function Chat() {
               }
               disabled={!selectedModel || isLoading}
               rows={1}
-              // Operator-controlled height: drag the bottom-right grip to
-              // resize. minHeight covers single-line, maxHeight 60vh keeps
-              // it from eating the whole viewport. No auto-grow on input
-              // because that would fight the manual drag every keystroke.
+              // Height is controlled by the vertical resize handle above
+              // the input panel. Textarea fills its panel via flex stretch;
+              // own resize grip is disabled to avoid fighting the handle.
               style={{
                 flex: 1,
                 padding: '12px 16px',
@@ -876,12 +990,11 @@ export default function Chat() {
                 backgroundColor: 'var(--surface)',
                 color: 'var(--text)',
                 fontSize: '14px',
-                resize: 'vertical',
+                resize: 'none',
                 fontFamily: 'inherit',
                 outline: 'none',
-                minHeight: '44px',
-                maxHeight: '60vh',
                 lineHeight: '1.5',
+                minHeight: 0,
               }}
             />
             <button
@@ -899,12 +1012,16 @@ export default function Chat() {
                 transition: 'all 0.15s ease',
                 whiteSpace: 'nowrap',
                 flexShrink: 0,
+                alignSelf: 'flex-end',
               }}
             >
               {isLoading ? '...' : 'Send'}
             </button>
           </div>
         </div>
+
+        </Panel>
+        </PanelGroup>
       </Panel>
       </PanelGroup>
 

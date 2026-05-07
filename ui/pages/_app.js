@@ -199,12 +199,19 @@ export default function App({ Component, pageProps }) {
           ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
           /* Resize handle for react-resizable-panels — visible bar between
-             panels, brightens on hover and while actively dragged. */
+             panels, brightens on hover and while actively dragged. Default
+             is vertical (column resize, 4px wide). The --horizontal modifier
+             swaps axes for row resize (4px tall). The ::after pseudo extends
+             the hit zone ±4px on the cross axis without changing visuals. */
           .bf-resize-handle {
             width: 4px;
             background: var(--border);
             transition: background 0.15s ease;
             position: relative;
+          }
+          .bf-resize-handle--horizontal {
+            width: auto;
+            height: 4px;
           }
           .bf-resize-handle:hover,
           .bf-resize-handle[data-resize-handle-active] {
@@ -217,6 +224,12 @@ export default function App({ Component, pageProps }) {
             bottom: 0;
             left: -4px;
             right: -4px;
+          }
+          .bf-resize-handle--horizontal::after {
+            top: -4px;
+            bottom: -4px;
+            left: 0;
+            right: 0;
           }
 
           .bf-nav { padding: 0 24px; gap: 32px; }
