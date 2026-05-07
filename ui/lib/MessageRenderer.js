@@ -60,19 +60,23 @@ const components = {
   td: ({ children }) => (
     <td style={{ borderBottom: `1px solid ${CODE_BORDER}40`, padding: '4px 10px' }}>{children}</td>
   ),
-  code: ({ inline, className, children, ...props }) => {
-    if (inline) {
-      return (
-        <code style={{
-          fontFamily: '"DM Mono", ui-monospace, monospace',
-          fontSize: '0.9em',
-          padding: '1px 5px',
-          borderRadius: '4px',
-          background: 'rgba(0,0,0,0.18)',
-        }} {...props}>{children}</code>
-      )
+  code: ({ className, children, ...props }) => {
+    // react-markdown v10 removed the `inline` prop. Convention: fenced code
+    // gets a `language-*` className from rehype-highlight; inline code does
+    // not. Use that to branch.
+    const isBlock = typeof className === 'string' && className.startsWith('language-')
+    if (isBlock) {
+      return <code className={className} {...props}>{children}</code>
     }
-    return <code className={className} {...props}>{children}</code>
+    return (
+      <code style={{
+        fontFamily: '"DM Mono", ui-monospace, monospace',
+        fontSize: '0.9em',
+        padding: '1px 5px',
+        borderRadius: '4px',
+        background: 'rgba(0,0,0,0.18)',
+      }} {...props}>{children}</code>
+    )
   },
   pre: ({ children }) => (
     <pre style={{
