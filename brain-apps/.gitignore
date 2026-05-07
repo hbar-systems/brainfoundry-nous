@@ -1,0 +1,7 @@
+# Installed app clones — landed at install time, not part of the template.
+*/
+
+# Track the registry, README, and this gitignore itself.
+!installed.json
+!README.md
+!.gitignore

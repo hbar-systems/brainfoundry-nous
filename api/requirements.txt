@@ -12,6 +12,7 @@ requests>=2.31.0
 httpx>=0.27.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
+jsonschema>=4.21.0
 
 # Storage / rate limiting
 psycopg2-binary>=2.9.9

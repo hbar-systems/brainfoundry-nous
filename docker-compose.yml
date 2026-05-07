@@ -79,6 +79,7 @@ services:
     volumes:
       - ./input_samples:/app/input_samples:ro
       - ./extensions/brain:/app/extensions/brain:rw
+      - ./brain-apps:/app/brain-apps:rw
       - ./prepared_docs:/app/prepared_docs:rw
       - api_data:/app/data
       - api_runtime:/app/runtime

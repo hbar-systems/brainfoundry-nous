@@ -1,0 +1,193 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hbar.systems/schemas/brain/app.schema.json",
+  "title": "Brain App Manifest Schema",
+  "description": "Frontmatter schema for brain-app.yaml — the manifest declared by an installable brain app. A brain app runs as a sandboxed iframe inside a BrainFoundry brain, addressing brain memory and endpoints through a postMessage bridge gated by manifest-declared permissions. Validates the YAML manifest at the root of any installable brain-app repo.",
+  "type": "object",
+  "required": ["dialect", "id", "name", "version", "description", "license", "author", "repo", "tab", "entries"],
+  "properties": {
+    "dialect": {
+      "type": "string",
+      "const": "brain-app/v1",
+      "description": "Schema dialect this manifest conforms to. Bumped when the schema changes incompatibly."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$",
+      "description": "Kebab-case identifier for this app. Must be unique within a brain's installed apps. Used as the local mount id (URL path /apps/<id>/, app dir brain-apps/<id>/)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Human-readable app name. May contain dots and capitals (e.g., 'hbar.ink')."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.-]+)?$",
+      "description": "Semver. Bumped on each release. The brain pins a specific commit SHA at install; the version is informational."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "One-line description. Shown to operator on the install approval screen."
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SPDX license identifier (e.g., 'AGPL-3.0', 'MIT', 'Apache-2.0'). Apps installed into a brain must be open-source-compatible with the brain's own license."
+    },
+    "author": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "contact": { "type": "string", "description": "Email or other contact string." },
+        "url": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false,
+      "description": "Who wrote the app. Shown to operator on install approval screen."
+    },
+    "repo": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://(github\\.com|gitlab\\.com|codeberg\\.org)/",
+      "description": "Canonical git repository URL the brain clones from on install. Currently restricted to public-readable forges. Federation/private-repo install is a v2 question."
+    },
+    "tab": {
+      "type": "object",
+      "required": ["label", "route"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Text shown in the brain nav."
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/[a-z0-9][a-z0-9-]*$",
+          "description": "URL path the tab links to in the brain UI. Must not collide with built-in routes (/, /chat, /upload, /federation, /trace, /settings, /update, /future). Collision is a runtime install-time check, not a schema check."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "default": 100,
+          "description": "Sort key in the nav. Built-ins use 10/20/30/...; installed apps default to 100. Lower numbers render first."
+        }
+      },
+      "additionalProperties": false,
+      "description": "How this app appears in the brain UI nav."
+    },
+    "entries": {
+      "type": "object",
+      "properties": {
+        "ui_bundle": {
+          "type": "string",
+          "description": "Path (relative to manifest) to a pre-built static bundle directory. Must contain index.html. Served by the brain at /apps/<id>/. Pre-built (not built-at-install) because brain hosts are RAM-constrained."
+        },
+        "api": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_./-]+\\.py$",
+          "description": "Path (relative to manifest) to a Python module exporting an APIRouter named 'router'. Mounted by the brain at /apps/<id>/api/. Inherits brain's Python deps; do NOT bundle conflicting versions."
+        },
+        "dev": {
+          "type": "object",
+          "properties": {
+            "ui_url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Dev-mode escape hatch. If set AND the brain is running with BRAIN_DEV_MODE=true, the iframe points here instead of the bundle. Lets app authors iterate without rebuilding on every change."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "Where the runtime artifacts live in the app repo. At least one of ui_bundle or api must be set; an api-only app has no tab UI and contributes only endpoints (rare; usually paired with another app).",
+      "anyOf": [
+        { "required": ["ui_bundle"] },
+        { "required": ["api"] }
+      ]
+    },
+    "requires_layers": {
+      "type": "array",
+      "description": "Brain memory layers this app reads or writes. Operator approves on install. Empty/absent = app cannot touch memory through the bridge.",
+      "items": {
+        "type": "object",
+        "required": ["layer", "mode"],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "enum": ["episodic", "semantic", "procedural"],
+            "description": "Memory layer per the cognitive-architecture taxonomy (D37). Episodic = events/drops; semantic = stable facts; procedural = how-to/skills."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["read", "write", "append"],
+            "description": "read = query only; write = create/update/delete; append = write-only without overwrite (audit-friendly default for drops)."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "requires_endpoints": {
+      "type": "array",
+      "description": "Brain core HTTP endpoints this app calls through the bridge. Informational in v0; in v1 the bridge enforces this as an allowlist.",
+      "items": {
+        "type": "string",
+        "pattern": "^(GET|POST|PUT|PATCH|DELETE) /"
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Coarse permission tokens the app must hold to be useful. Operator approves the full set on install; uninstall revokes all. v0 enforcement is server-side at the bridge.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "memory.read",
+          "memory.write",
+          "federation.send",
+          "federation.receive",
+          "secrets.read",
+          "network.outbound"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "engines": {
+      "type": "object",
+      "properties": {
+        "brainfoundry-nous": {
+          "type": "string",
+          "description": "Semver range (e.g., '>=0.6.0', '^0.7.0'). Install fails if the brain's brainfoundry-nous version does not satisfy this range."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Compatibility requirements. brainfoundry-nous version is the only engine in v1."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "permissions": { "contains": { "const": "memory.write" } } }
+      },
+      "then": {
+        "required": ["requires_layers"],
+        "description": "If the app declares memory.write, it MUST declare which layers (with mode write or append) so the operator sees the scope on install."
+      }
+    },
+    {
+      "if": {
+        "properties": { "permissions": { "contains": { "const": "memory.read" } } }
+      },
+      "then": {
+        "required": ["requires_layers"],
+        "description": "If the app declares memory.read, it MUST declare which layers (with mode read) so the operator sees the scope on install."
+      }
+    }
+  ],
+  "additionalProperties": false
+}

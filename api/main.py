@@ -658,6 +658,14 @@ try:
 except Exception as e:
     print(f"[startup] federation_dm router mount skipped: {e}", flush=True)
 
+# Mount brain-apps router (install / list / uninstall / enable / disable).
+# All endpoints gated by the existing api_key dep — same posture as /settings.
+try:
+    from api.apps import router as _brain_apps_router
+    app.include_router(_brain_apps_router, dependencies=[Depends(get_api_key)])
+except Exception as e:
+    print(f"[startup] brain_apps router mount skipped: {e}", flush=True)
+
 def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file"""
     try:
