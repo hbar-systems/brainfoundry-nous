@@ -22,7 +22,34 @@ async function api(path, opts = {}) {
     cache: 'no-store',
     ...opts,
   })
-  if (!r.ok) throw new Error(`${path} ${r.status}`)
+  if (!r.ok) {
+    let detail = ''
+    try {
+      const text = await r.text()
+      try {
+        const body = JSON.parse(text)
+        // Brain wraps HTTPException(detail) as body.error.details.detail.
+        // Plain FastAPI errors arrive as body.detail. Try both.
+        const inner = body?.error?.details?.detail ?? body?.detail
+        if (typeof inner === 'string') {
+          detail = inner
+        } else if (inner && typeof inner === 'object') {
+          const code = inner.error || inner.code || ''
+          const msg = inner.stderr || inner.message
+            || (Array.isArray(inner.issues) && JSON.stringify(inner.issues))
+          detail = code && msg ? `${code}: ${msg}` : (code || msg || JSON.stringify(inner))
+        } else {
+          detail = body?.error?.message || text
+        }
+      } catch {
+        detail = text
+      }
+      detail = String(detail).replace(/\s+/g, ' ').trim().slice(0, 400)
+    } catch {
+      // network error reading body — fall through to bare status
+    }
+    throw new Error(detail ? `${path} ${r.status}: ${detail}` : `${path} ${r.status}`)
+  }
   return r.json()
 }
 
