@@ -5,6 +5,18 @@ import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import DiagramBlock from './DiagramBlock'
 
+// Walk a React children tree to collect plain text. Used to pull the
+// raw source out of a fenced code block after rehype-highlight has wrapped
+// each token in span elements.
+const extractText = (node) => {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (typeof node === 'object' && node.props) return extractText(node.props.children)
+  return ''
+}
+
 const components = {
   p: ({ children }) => (
     <p style={{ margin: '0 0 0.7em 0', lineHeight: 1.6 }}>{children}</p>
@@ -57,18 +69,21 @@ const components = {
     <td style={{ borderBottom: '1px solid var(--border)', padding: '4px 10px', opacity: 0.92 }}>{children}</td>
   ),
   code: ({ node, className, children, ...props }) => {
-    // react-markdown v10 removed the `inline` prop. Convention: fenced code
-    // gets a `language-*` className from rehype-highlight; inline code does
-    // not. Use that to branch.
-    const isBlock = typeof className === 'string' && className.startsWith('language-')
-    if (isBlock) {
-      const lang = className.replace(/^language-/, '')
+    // react-markdown v10 removed the `inline` prop. We branch by className:
+    // fenced code carries `language-*`; inline code has no className.
+    // rehype-highlight may add `hljs` and other tokens, so we match against
+    // any whitespace-separated class, not just the prefix of the string.
+    const cls = typeof className === 'string' ? className : ''
+    const langMatch = cls.match(/(?:^|\s)language-([\w+-]+)/)
+    if (langMatch) {
+      const lang = langMatch[1]
       if (lang === 'mermaid' || lang === 'svg') {
-        // Pull RAW source from the hast node, before rehype-highlight
-        // wrapped it in <span> elements. DiagramBlock needs un-highlighted
-        // text to feed mermaid/DOMPurify.
-        const raw = node?.children?.[0]?.value ?? String(children).replace(/\n$/, '')
-        return <DiagramBlock kind={lang} source={raw} />
+        // DiagramBlock wants raw source. After rehype-highlight runs, the
+        // hast children become highlighted <span>s; walk children to collect
+        // text. Falls back to node.children[0].value when un-highlighted
+        // (rehype-highlight skips unknown languages like mermaid/svg).
+        const raw = extractText(children) || node?.children?.[0]?.value || ''
+        return <DiagramBlock kind={lang} source={raw.replace(/\n$/, '')} />
       }
       return <code className={className} {...props}>{children}</code>
     }
