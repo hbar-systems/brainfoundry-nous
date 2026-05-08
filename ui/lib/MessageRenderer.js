@@ -83,9 +83,15 @@ const components = {
     )
   },
   pre: ({ children }) => {
-    // Diagram code components return DiagramBlock directly. Skip the <pre>
-    // wrapper for those — DiagramBlock has its own outer styling.
-    if (children?.type !== 'code') return children
+    // react-markdown v10 may pass children as a single element or an array
+    // (text whitespace + element). Find the meaningful child and inspect
+    // its props. Our code component returns <DiagramBlock kind={lang} ...>
+    // for mermaid/svg fences — skip the <pre> wrapper for those because
+    // DiagramBlock has its own outer styling. For everything else, wrap.
+    const arr = Array.isArray(children) ? children : [children]
+    const elt = arr.find(c => c && typeof c === 'object' && c.type !== undefined)
+    const kind = elt?.props?.kind
+    if (kind === 'mermaid' || kind === 'svg') return elt
     return (
       <pre style={{
         background: 'var(--code-bg)',
