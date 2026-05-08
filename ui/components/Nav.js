@@ -9,6 +9,8 @@ const NAV = [
   { href: '/', label: 'Dashboard' },
   { href: '/chat', label: 'Chat' },
   { href: '/upload', label: 'Knowledge' },
+  { href: '/architecture', label: 'Architecture' },
+  { href: '/cli', label: 'CLI' },
   { href: '/federation', label: 'Federation' },
   { href: '/trace', label: 'Trace' },
   { href: '/settings', label: 'Settings' },
