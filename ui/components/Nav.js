@@ -6,16 +6,14 @@ import { useEffect, useState } from 'react'
 // the brain stays usable even if the api is unreachable. Keep in sync with
 // BUILTIN_TABS in api/apps.py — drift = a visible flicker on first paint.
 const FALLBACK_NAV = [
-  { id: '_dashboard',    href: '/',             label: 'Dashboard',    builtin: true },
-  { id: '_chat',         href: '/chat',         label: 'Chat',         builtin: true },
-  { id: '_knowledge',    href: '/upload',       label: 'Knowledge',    builtin: true },
-  { id: '_architecture', href: '/architecture', label: 'Architecture', builtin: true },
-  { id: '_cli',          href: '/cli',          label: 'CLI',          builtin: true },
-  { id: '_federation',   href: '/federation',   label: 'Federation',   builtin: true },
-  { id: '_trace',        href: '/trace',        label: 'Trace',        builtin: true },
-  { id: '_settings',     href: '/settings',     label: 'Settings',     builtin: true },
-  { id: '_update',       href: '/update',       label: 'Update',       builtin: true },
-  { id: '_future',       href: '/future',       label: 'Future',       builtin: true },
+  { id: '_dashboard',  href: '/',           label: 'Dashboard',  builtin: true },
+  { id: '_chat',       href: '/chat',       label: 'Chat',       builtin: true },
+  { id: '_knowledge',  href: '/upload',     label: 'Knowledge',  builtin: true },
+  { id: '_federation', href: '/federation', label: 'Federation', builtin: true },
+  { id: '_trace',      href: '/trace',      label: 'Trace',      builtin: true },
+  { id: '_settings',   href: '/settings',   label: 'Settings',   builtin: true },
+  { id: '_update',     href: '/update',     label: 'Update',     builtin: true },
+  { id: '_future',     href: '/future',     label: 'Future',     builtin: true },
 ]
 
 // The /apps/list response shape:

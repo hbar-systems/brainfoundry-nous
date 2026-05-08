@@ -50,8 +50,6 @@ BUILTIN_TABS: list[dict[str, Any]] = [
     {"id": "_dashboard",    "label": "Dashboard",    "route": "/",             "order": 10, "builtin": True},
     {"id": "_chat",         "label": "Chat",         "route": "/chat",         "order": 20, "builtin": True},
     {"id": "_knowledge",    "label": "Knowledge",    "route": "/upload",       "order": 30, "builtin": True},
-    {"id": "_architecture", "label": "Architecture", "route": "/architecture", "order": 35, "builtin": True},
-    {"id": "_cli",          "label": "CLI",          "route": "/cli",          "order": 38, "builtin": True},
     {"id": "_federation",   "label": "Federation",   "route": "/federation",   "order": 40, "builtin": True},
     {"id": "_trace",        "label": "Trace",        "route": "/trace",        "order": 50, "builtin": True},
     {"id": "_settings",     "label": "Settings",     "route": "/settings",     "order": 60, "builtin": True},
