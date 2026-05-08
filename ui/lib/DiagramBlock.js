@@ -96,31 +96,64 @@ export default function DiagramBlock({ kind, source }) {
   const savePng = async () => {
     if (!svg) return
     try {
-      // Encode SVG → data URL → <img> → canvas → PNG. 2x scale for retina.
-      const blob = new Blob([svg], { type: 'image/svg+xml' })
+      // Mermaid (and many SVG sources) declare a viewBox but no width/height
+      // attributes. Browsers render those into <img> at zero pixels, which
+      // then rasterizes to an empty canvas. Parse the SVG, extract dimensions
+      // from viewBox if needed, and force explicit width/height attrs before
+      // rasterizing.
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(svg, 'image/svg+xml')
+      const svgEl = doc.documentElement
+      const parseErr = doc.querySelector('parsererror')
+      if (parseErr) throw new Error('SVG parse error')
+
+      let w = parseFloat(svgEl.getAttribute('width')) || 0
+      let h = parseFloat(svgEl.getAttribute('height')) || 0
+      if (!w || !h) {
+        const vb = (svgEl.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number)
+        if (vb.length === 4 && vb.every(n => !isNaN(n))) {
+          w = w || vb[2]
+          h = h || vb[3]
+        }
+      }
+      if (!w || !h) { w = 800; h = 600 }
+      svgEl.setAttribute('width', String(w))
+      svgEl.setAttribute('height', String(h))
+      if (!svgEl.getAttribute('xmlns')) {
+        svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+      }
+      const serialized = new XMLSerializer().serializeToString(svgEl)
+      const blob = new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n', serialized], { type: 'image/svg+xml;charset=utf-8' })
       const objectUrl = URL.createObjectURL(blob)
+
       const img = new window.Image()
       await new Promise((resolve, reject) => {
         img.onload = resolve
-        img.onerror = () => reject(new Error('Failed to rasterize SVG'))
+        img.onerror = () => reject(new Error('Failed to load SVG into <img>'))
         img.src = objectUrl
       })
-      const w = img.naturalWidth || 800
-      const h = img.naturalHeight || 600
+
       const scale = 2
       const canvas = document.createElement('canvas')
-      canvas.width = w * scale
-      canvas.height = h * scale
+      canvas.width = Math.ceil(w * scale)
+      canvas.height = Math.ceil(h * scale)
       const ctx = canvas.getContext('2d')
+      // White background — PNGs without bg look broken on light surfaces.
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.scale(scale, scale)
       ctx.drawImage(img, 0, 0, w, h)
       URL.revokeObjectURL(objectUrl)
-      canvas.toBlob(pngBlob => {
-        if (pngBlob) triggerDownload(pngBlob, `${kind}-${Date.now()}.png`, 'image/png')
-      }, 'image/png')
+
+      const pngBlob = await new Promise((resolve, reject) => {
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas.toBlob returned null')), 'image/png')
+      })
+      triggerDownload(pngBlob, `${kind}-${Date.now()}.png`, 'image/png')
     } catch (e) {
-      // Fallback: just download SVG.
-      saveSvg()
+      console.error('[bf] PNG export failed:', e)
+      if (typeof window !== 'undefined') {
+        window.alert('PNG export failed (see console). The SVG is still available via the SVG button.')
+      }
     }
   }
 
@@ -190,13 +223,6 @@ export default function DiagramBlock({ kind, source }) {
         <ToolButton onClick={saveSvg}>↓ SVG</ToolButton>
         <ToolButton onClick={savePng}>↓ PNG</ToolButton>
         <ToolButton onClick={copySource}>copy source</ToolButton>
-        <span style={{
-          marginLeft: 'auto',
-          fontSize: '10px',
-          color: 'var(--muted)',
-          fontFamily: 'var(--font-mono)',
-          letterSpacing: '0.05em',
-        }}>{kind}</span>
       </div>
     </div>
   )
