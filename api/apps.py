@@ -42,15 +42,21 @@ INSTALLED_JSON = BRAIN_APPS_DIR / "installed.json"
 # Built-in nav entries the brain ships with. The UI composes nav from these
 # plus installed apps. `builtin: True` is the marker the UI uses to know not
 # to render an iframe shell for these — they have native pages.
+#
+# Keep this list in sync with FALLBACK_NAV in ui/components/Nav.js. The
+# Nav fetches /apps/list at runtime; FALLBACK_NAV renders before the fetch
+# resolves and on fetch failure. Drift between the two = visible flicker.
 BUILTIN_TABS: list[dict[str, Any]] = [
-    {"id": "_dashboard",  "label": "Dashboard",  "route": "/",           "order": 10, "builtin": True},
-    {"id": "_chat",       "label": "Chat",       "route": "/chat",       "order": 20, "builtin": True},
-    {"id": "_knowledge",  "label": "Knowledge",  "route": "/upload",     "order": 30, "builtin": True},
-    {"id": "_federation", "label": "Federation", "route": "/federation", "order": 40, "builtin": True},
-    {"id": "_trace",      "label": "Trace",      "route": "/trace",      "order": 50, "builtin": True},
-    {"id": "_settings",   "label": "Settings",   "route": "/settings",   "order": 60, "builtin": True},
-    {"id": "_update",     "label": "Update",     "route": "/update",     "order": 70, "builtin": True},
-    {"id": "_future",     "label": "Future",     "route": "/future",     "order": 80, "builtin": True},
+    {"id": "_dashboard",    "label": "Dashboard",    "route": "/",             "order": 10, "builtin": True},
+    {"id": "_chat",         "label": "Chat",         "route": "/chat",         "order": 20, "builtin": True},
+    {"id": "_knowledge",    "label": "Knowledge",    "route": "/upload",       "order": 30, "builtin": True},
+    {"id": "_architecture", "label": "Architecture", "route": "/architecture", "order": 35, "builtin": True},
+    {"id": "_cli",          "label": "CLI",          "route": "/cli",          "order": 38, "builtin": True},
+    {"id": "_federation",   "label": "Federation",   "route": "/federation",   "order": 40, "builtin": True},
+    {"id": "_trace",        "label": "Trace",        "route": "/trace",        "order": 50, "builtin": True},
+    {"id": "_settings",     "label": "Settings",     "route": "/settings",     "order": 60, "builtin": True},
+    {"id": "_update",       "label": "Update",       "route": "/update",       "order": 70, "builtin": True},
+    {"id": "_future",       "label": "Future",       "route": "/future",       "order": 80, "builtin": True},
 ]
 
 # Routes that built-ins or the API itself occupy. Installed apps cannot use

@@ -1,25 +1,57 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
+import { useEffect, useState } from 'react'
 
-// Hardcoded nav for now. The brain-apps work replaces this with a fetch from
-// /api/bf/apps/list so installed apps and built-ins render through the same
-// path. Until then, behavior is byte-identical to the prior inline nav in
-// _app.js.
-const NAV = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/chat', label: 'Chat' },
-  { href: '/upload', label: 'Knowledge' },
-  { href: '/architecture', label: 'Architecture' },
-  { href: '/cli', label: 'CLI' },
-  { href: '/federation', label: 'Federation' },
-  { href: '/trace', label: 'Trace' },
-  { href: '/settings', label: 'Settings' },
-  { href: '/update', label: 'Update' },
-  { href: '/future', label: 'Future' },
+// Static fallback nav. Renders pre-fetch and on /apps/list fetch failure so
+// the brain stays usable even if the api is unreachable. Keep in sync with
+// BUILTIN_TABS in api/apps.py — drift = a visible flicker on first paint.
+const FALLBACK_NAV = [
+  { id: '_dashboard',    href: '/',             label: 'Dashboard',    builtin: true },
+  { id: '_chat',         href: '/chat',         label: 'Chat',         builtin: true },
+  { id: '_knowledge',    href: '/upload',       label: 'Knowledge',    builtin: true },
+  { id: '_architecture', href: '/architecture', label: 'Architecture', builtin: true },
+  { id: '_cli',          href: '/cli',          label: 'CLI',          builtin: true },
+  { id: '_federation',   href: '/federation',   label: 'Federation',   builtin: true },
+  { id: '_trace',        href: '/trace',        label: 'Trace',        builtin: true },
+  { id: '_settings',     href: '/settings',     label: 'Settings',     builtin: true },
+  { id: '_update',       href: '/update',       label: 'Update',       builtin: true },
+  { id: '_future',       href: '/future',       label: 'Future',       builtin: true },
 ]
+
+// The /apps/list response shape:
+//   { tabs: [{ id, label, route, order, builtin, ... }], apps: [...] }
+// For built-ins, href = tab.route. For installed apps, href = `/apps/${id}`
+// (the iframe host shell at ui/pages/apps/[id].js — landed in task #7).
+function tabsFromApi(apiTabs) {
+  return apiTabs.map(t => ({
+    id: t.id,
+    href: t.builtin ? t.route : `/apps/${t.id}`,
+    label: t.label,
+    builtin: !!t.builtin,
+  }))
+}
+
+function isActive(router, tab) {
+  if (tab.builtin) return router.pathname === tab.href
+  // Installed-app tab: pages/apps/[id].js handles all installed apps.
+  return router.pathname === '/apps/[id]' && router.query.id === tab.id
+}
 
 export default function Nav() {
   const router = useRouter()
+  const [tabs, setTabs] = useState(FALLBACK_NAV)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/bf/apps/list')
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return
+        if (data && Array.isArray(data.tabs)) setTabs(tabsFromApi(data.tabs))
+      })
+      .catch(() => { /* keep FALLBACK_NAV on any error */ })
+    return () => { cancelled = true }
+  }, [])
 
   return (
     <nav className="bf-nav" style={{
@@ -55,21 +87,24 @@ export default function Nav() {
         </span>
       </Link>
       <div className="bf-nav-links">
-        {NAV.map(n => (
-          <Link key={n.href} href={n.href} className="bf-nav-link" style={{
-            padding: '6px 14px',
-            borderRadius: '6px',
-            fontSize: '13px',
-            textDecoration: 'none',
-            fontFamily: 'var(--font-body)',
-            color: router.pathname === n.href ? 'var(--text)' : 'var(--muted)',
-            backgroundColor: router.pathname === n.href ? 'var(--surface2)' : 'transparent',
-            fontWeight: router.pathname === n.href ? 600 : 400,
-            transition: 'color 0.15s ease',
-          }}>
-            {n.label}
-          </Link>
-        ))}
+        {tabs.map(t => {
+          const active = isActive(router, t)
+          return (
+            <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={{
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontSize: '13px',
+              textDecoration: 'none',
+              fontFamily: 'var(--font-body)',
+              color: active ? 'var(--text)' : 'var(--muted)',
+              backgroundColor: active ? 'var(--surface2)' : 'transparent',
+              fontWeight: active ? 600 : 400,
+              transition: 'color 0.15s ease',
+            }}>
+              {t.label}
+            </Link>
+          )
+        })}
       </div>
     </nav>
   )
