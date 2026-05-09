@@ -39,17 +39,18 @@ BRAIN_APPS_DIR = Path(os.environ.get("BRAIN_APPS_DIR", "/app/brain-apps"))
 SCHEMA_PATH = Path(__file__).parent / "schemas" / "brain-app.schema.json"
 INSTALLED_JSON = BRAIN_APPS_DIR / "installed.json"
 
-# Built-in nav entries the brain ships with. The UI composes nav from these
-# plus installed apps. `builtin: True` is the marker the UI uses to know not
-# to render an iframe shell for these — they have native pages.
+# Built-in nav entries the brain ships with. The UI Nav renders ONLY these —
+# installed apps live behind the single `_apps` hub at /apps, which lists
+# them as cards. This keeps the nav clean as the install count grows.
 #
-# Keep this list in sync with FALLBACK_NAV in ui/components/Nav.js. The
-# Nav fetches /apps/list at runtime; FALLBACK_NAV renders before the fetch
-# resolves and on fetch failure. Drift between the two = visible flicker.
+# Keep this list in sync with FALLBACK_NAV in ui/components/Nav.js. The Nav
+# fetches /apps/list at runtime; FALLBACK_NAV renders before the fetch
+# resolves and on fetch failure. Drift = visible flicker.
 BUILTIN_TABS: list[dict[str, Any]] = [
     {"id": "_dashboard",    "label": "Dashboard",    "route": "/",             "order": 10, "builtin": True},
     {"id": "_chat",         "label": "Chat",         "route": "/chat",         "order": 20, "builtin": True},
     {"id": "_knowledge",    "label": "Knowledge",    "route": "/upload",       "order": 30, "builtin": True},
+    {"id": "_apps",         "label": "Apps",         "route": "/apps",         "order": 35, "builtin": True},
     {"id": "_federation",   "label": "Federation",   "route": "/federation",   "order": 40, "builtin": True},
     {"id": "_trace",        "label": "Trace",        "route": "/trace",        "order": 50, "builtin": True},
     {"id": "_settings",     "label": "Settings",     "route": "/settings",     "order": 60, "builtin": True},
@@ -59,7 +60,7 @@ BUILTIN_TABS: list[dict[str, Any]] = [
 
 # Routes that built-ins or the API itself occupy. Installed apps cannot use
 # any of these for their tab.route.
-RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/apps", "/api"}
+RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api"}
 
 
 # ---------- pydantic models ----------
@@ -289,24 +290,16 @@ def install_app(req: InstallRequest, request: Request) -> InstallResponse:
 
 @router.get("/list")
 def list_apps() -> dict:
-    """Return tab registry: built-ins + installed apps. Used by the UI nav."""
+    """Return the tab registry plus the installed-apps registry.
+
+    `tabs` are the top-nav entries — built-ins only. The Nav renders these.
+    `apps` is the installed apps list — surfaced by /apps (the hub page)
+    which renders them as cards. Each enabled app is reachable at /apps/<id>
+    via the dynamic-route iframe host shell.
+    """
     state = _load_installed()
     apps = state.get("apps", [])
-    installed_tabs = [
-        {
-            "id": a["id"],
-            "label": a["tab"]["label"],
-            "route": a["tab"]["route"],
-            "order": a["tab"].get("order", 100),
-            "builtin": False,
-            "enabled": a.get("enabled", True),
-            "version": a["version"],
-            "description": a["description"],
-        }
-        for a in apps
-    ]
-    tabs = BUILTIN_TABS + installed_tabs
-    tabs.sort(key=lambda t: (t.get("order", 100), t["label"]))
+    tabs = sorted(BUILTIN_TABS, key=lambda t: (t.get("order", 100), t["label"]))
     return {"tabs": tabs, "apps": apps}
 
 

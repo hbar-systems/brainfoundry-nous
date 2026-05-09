@@ -6,33 +6,33 @@ import { useEffect, useState } from 'react'
 // the brain stays usable even if the api is unreachable. Keep in sync with
 // BUILTIN_TABS in api/apps.py — drift = a visible flicker on first paint.
 const FALLBACK_NAV = [
-  { id: '_dashboard',  href: '/',           label: 'Dashboard',  builtin: true },
-  { id: '_chat',       href: '/chat',       label: 'Chat',       builtin: true },
-  { id: '_knowledge',  href: '/upload',     label: 'Knowledge',  builtin: true },
-  { id: '_federation', href: '/federation', label: 'Federation', builtin: true },
-  { id: '_trace',      href: '/trace',      label: 'Trace',      builtin: true },
-  { id: '_settings',   href: '/settings',   label: 'Settings',   builtin: true },
-  { id: '_update',     href: '/update',     label: 'Update',     builtin: true },
-  { id: '_future',     href: '/future',     label: 'Future',     builtin: true },
+  { id: '_dashboard',  href: '/',           label: 'Dashboard'  },
+  { id: '_chat',       href: '/chat',       label: 'Chat'       },
+  { id: '_knowledge',  href: '/upload',     label: 'Knowledge'  },
+  { id: '_apps',       href: '/apps',       label: 'Apps'       },
+  { id: '_federation', href: '/federation', label: 'Federation' },
+  { id: '_trace',      href: '/trace',      label: 'Trace'      },
+  { id: '_settings',   href: '/settings',   label: 'Settings'   },
+  { id: '_update',     href: '/update',     label: 'Update'     },
+  { id: '_future',     href: '/future',     label: 'Future'     },
 ]
 
 // The /apps/list response shape:
-//   { tabs: [{ id, label, route, order, builtin, ... }], apps: [...] }
-// For built-ins, href = tab.route. For installed apps, href = `/apps/${id}`
-// (the iframe host shell at ui/pages/apps/[id].js — landed in task #7).
+//   { tabs: [{ id, label, route, order, builtin }, ...], apps: [...] }
+// Nav renders only `tabs` (built-ins). Installed apps live behind the
+// `_apps` hub at /apps which lists them as cards; each is reachable at
+// /apps/<id> via ui/pages/apps/[id].js.
 function tabsFromApi(apiTabs) {
-  return apiTabs.map(t => ({
-    id: t.id,
-    href: t.builtin ? t.route : `/apps/${t.id}`,
-    label: t.label,
-    builtin: !!t.builtin,
-  }))
+  return apiTabs.map(t => ({ id: t.id, href: t.route, label: t.label }))
 }
 
 function isActive(router, tab) {
-  if (tab.builtin) return router.pathname === tab.href
-  // Installed-app tab: pages/apps/[id].js handles all installed apps.
-  return router.pathname === '/apps/[id]' && router.query.id === tab.id
+  if (tab.href === '/apps') {
+    // The Apps hub is "active" both at /apps (the index) and inside any
+    // installed-app iframe shell at /apps/<id>.
+    return router.pathname === '/apps' || router.pathname === '/apps/[id]'
+  }
+  return router.pathname === tab.href
 }
 
 export default function Nav() {

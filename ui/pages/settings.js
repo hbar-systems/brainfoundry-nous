@@ -620,10 +620,11 @@ function AppsPanel() {
   return (
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
-        Apps are sandboxed iframes that add tabs to your brain. Each app declares
+        Apps are sandboxed iframes installed into your brain. Each app declares
         which memory layers and permissions it needs in its manifest; you approve
-        the scope on install. Apps live at <code style={{ color: '#c9a96e' }}>/apps/&lt;id&gt;</code> in
-        the nav after install.
+        the scope on install. Installed apps appear in the
+        {' '}<a href="/apps" style={{ color: '#c9a96e', textDecoration: 'none' }}>Apps</a>{' '}
+        tab and are reachable at <code style={{ color: '#c9a96e' }}>/apps/&lt;id&gt;</code>.
       </p>
 
       {/* Install form */}
