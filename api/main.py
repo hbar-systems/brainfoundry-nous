@@ -3647,4 +3647,88 @@ def admin_update(api_key: str = Depends(get_api_key)):
     )
 
 
+# --- /memory/append — brain-app memory write surface ---
+#
+# Generic single-shot memory write used by installed brain apps via the
+# postMessage bridge memory.write intent. The bridge in ui/pages/apps/[id].js
+# checks the calling app's manifest declares 'memory.write' before
+# proxying here. v0.7 adopts the same document_embeddings table the chat
+# consolidate endpoint writes to; layer lives in metadata.
+
+class MemoryAppendRequest(BaseModel):
+    layer: str  # episodic | semantic | procedural
+    content: str
+    source: Optional[str] = None     # which app wrote this (e.g. "hbar-ink")
+    metadata: Optional[dict] = None  # passthrough — stored alongside layer
+
+
+@app.post("/memory/append")
+def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key)) -> dict:
+    if req.layer not in ("episodic", "semantic", "procedural"):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_layer", "allowed": ["episodic", "semantic", "procedural"]},
+        )
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail={"error": "empty_content"})
+
+    source = (req.source or "unknown").strip() or "unknown"
+    source_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", source).strip("-").lower() or "unknown"
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    rand = uuid.uuid4().hex[:8]
+    doc_name = f"app-{source_slug}-{date_str}-{rand}.md"
+
+    chunks = chunk_text(content)
+    if not chunks:
+        raise HTTPException(status_code=422, detail={"error": "chunking_produced_nothing"})
+    embeddings = generate_embeddings(chunks)
+
+    metadata_base = {
+        "layer": req.layer,
+        "source": source,
+        "appended_at": datetime.utcnow().isoformat(),
+    }
+    if isinstance(req.metadata, dict):
+        # Don't let caller overwrite layer / source / appended_at — they're load-bearing.
+        for k, v in req.metadata.items():
+            if k not in metadata_base:
+                metadata_base[k] = v
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    stored_ids = []
+    try:
+        for chunk, emb in zip(chunks, embeddings):
+            emb_str = "[" + ",".join(map(str, emb)) + "]"
+            cursor.execute(
+                """
+                INSERT INTO document_embeddings (document_name, content, embedding, metadata)
+                VALUES (%s, %s, %s::vector, %s)
+                RETURNING id
+                """,
+                (doc_name, chunk, emb_str, json.dumps(metadata_base)),
+            )
+            row = cursor.fetchone()
+            if row:
+                stored_ids.append(str(row[0]))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail={"error": "db_write_failed", "message": str(e)[:300]})
+    finally:
+        cursor.close()
+        conn.close()
+
+    # Return the first chunk's id as the "drop id" — the iframe stores this
+    # against its localStorage entry so the user can see "in brain" status.
+    return {
+        "ok": True,
+        "id": stored_ids[0] if stored_ids else None,
+        "chunk_ids": stored_ids,
+        "doc_name": doc_name,
+        "layer": req.layer,
+    }
+
+
 app.include_router(router)

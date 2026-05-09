@@ -27,10 +27,12 @@ import { useEffect, useRef, useState } from 'react'
 //   ping              -> result = 'pong'  (sanity)
 //   meta.app_info     -> { id, name, version }
 //   meta.brain_info   -> { name }         (reads NEXT_PUBLIC_BRAIN_NAME)
+//   memory.write      -> { layer, content, source?, metadata? }
+//                        gated by manifest permissions + requires_layers;
+//                        proxies to brain POST /memory/append.
 //
 // Reserved-but-unimplemented intents (will land when first app needs them):
 //   memory.read       -> { layer, query, limit? }
-//   memory.write      -> { layer, content, metadata? }
 //   federation.query  -> { peer, path, body? }
 //   federation.send   -> { peer, message }
 //
@@ -94,13 +96,45 @@ export default function AppHost() {
           result: { name: process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain' },
         })
       }
-      // Permission-gated intents land here in follow-on commits. The pattern:
-      //   1. Look up appInfo.permissions + appInfo.requires_layers.
-      //   2. Check the intent against them (e.g. memory.write requires
-      //      'memory.write' permission AND a matching layer in
-      //      requires_layers with mode 'write' or 'append').
-      //   3. If allowed: call /api/bf/<brain-endpoint> with payload.
-      //   4. Return { ok: true, result } or { ok: false, error }.
+      // memory.write — append a chunk into the brain's memory layer. Requires
+      // permissions: ['memory.write'] AND a matching layer in requires_layers
+      // with mode 'write' or 'append'. Permission gate runs server-side too;
+      // this is the first-line check.
+      if (type === 'memory.write') {
+        const perms = appInfo.permissions || []
+        if (!perms.includes('memory.write')) {
+          return Promise.resolve({ ok: false, error: { code: 'permission_denied', detail: 'app did not declare memory.write' } })
+        }
+        const layer = msg.payload && msg.payload.layer
+        if (!layer) {
+          return Promise.resolve({ ok: false, error: { code: 'missing_layer' } })
+        }
+        const layerOk = (appInfo.requires_layers || []).some(l =>
+          l.layer === layer && (l.mode === 'write' || l.mode === 'append')
+        )
+        if (!layerOk) {
+          return Promise.resolve({ ok: false, error: { code: 'layer_not_declared', detail: `app did not declare ${layer}:write/append` } })
+        }
+        return fetch('/api/bf/memory/append', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            layer,
+            content: msg.payload.content,
+            source: msg.payload.source || appInfo.id,
+            metadata: msg.payload.metadata || {},
+          }),
+        })
+          .then(r => r.json().then(body => ({ status: r.status, ok: r.ok, body })))
+          .then(({ status, ok, body }) => {
+            if (!ok) {
+              return { ok: false, error: { code: 'memory_append_failed', status, body } }
+            }
+            return { ok: true, result: { id: body.id, doc_name: body.doc_name } }
+          })
+          .catch(e => ({ ok: false, error: { code: 'memory_append_network_error', detail: String(e) } }))
+      }
+
       return Promise.resolve({ ok: false, error: { code: 'unknown_intent', type } })
     }
 
