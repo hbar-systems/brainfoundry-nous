@@ -172,6 +172,7 @@
   "allOf": [
     {
       "if": {
+        "required": ["permissions"],
         "properties": { "permissions": { "contains": { "const": "memory.write" } } }
       },
       "then": {
@@ -181,6 +182,7 @@
     },
     {
       "if": {
+        "required": ["permissions"],
         "properties": { "permissions": { "contains": { "const": "memory.read" } } }
       },
       "then": {
