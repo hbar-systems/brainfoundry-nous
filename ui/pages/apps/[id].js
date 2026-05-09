@@ -189,7 +189,13 @@ export default function AppHost() {
     <iframe
       ref={iframeRef}
       title={appInfo.name}
-      src={`/api/bf/apps/${appInfo.id}/`}
+      // Point at index.html explicitly. The directory-form URL
+      // (/api/bf/apps/<id>/) gets 308'd by Next.js to the no-slash form,
+      // which breaks relative URLs like ./styles.css inside the iframe
+      // (they'd resolve to /api/bf/apps/styles.css — wrong directory).
+      // Pointing at /index.html keeps the iframe document.location
+      // anchored in the app's directory so relative URLs resolve right.
+      src={`/api/bf/apps/${appInfo.id}/index.html`}
       sandbox="allow-scripts allow-same-origin"
       style={{
         // Fill the viewport below the fixed nav (52px + safe-area inset).
