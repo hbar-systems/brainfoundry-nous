@@ -186,25 +186,42 @@ export default function AppHost() {
   }
 
   return (
-    <iframe
-      ref={iframeRef}
-      title={appInfo.name}
-      // Point at index.html explicitly. The directory-form URL
-      // (/api/bf/apps/<id>/) gets 308'd by Next.js to the no-slash form,
-      // which breaks relative URLs like ./styles.css inside the iframe
-      // (they'd resolve to /api/bf/apps/styles.css — wrong directory).
-      // Pointing at /index.html keeps the iframe document.location
-      // anchored in the app's directory so relative URLs resolve right.
-      src={`/api/bf/apps/${appInfo.id}/index.html`}
-      sandbox="allow-scripts allow-same-origin"
+    // The wrapper is fixed to the viewport below the nav and clips any
+    // overflow. Without this, the brain UI's outer page (with its own
+    // theme bg) shows through below the iframe whenever the brain is in
+    // a different theme than the app inside — visible as a colored stripe
+    // when scrolled. Fixed-position wrapper guarantees the iframe owns
+    // the entire below-nav area edge-to-edge.
+    <div
       style={{
-        // Fill the viewport below the fixed nav (52px + safe-area inset).
-        width: '100%',
-        height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
-        border: 'none',
+        position: 'fixed',
+        top: 'calc(52px + env(safe-area-inset-top, 0px))',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        overflow: 'hidden',
         backgroundColor: 'var(--bg)',
-        display: 'block',
       }}
-    />
+    >
+      <iframe
+        ref={iframeRef}
+        title={appInfo.name}
+        // Point at index.html explicitly. The directory-form URL
+        // (/api/bf/apps/<id>/) gets 308'd by Next.js to the no-slash form,
+        // which breaks relative URLs like ./styles.css inside the iframe
+        // (they'd resolve to /api/bf/apps/styles.css — wrong directory).
+        // Pointing at /index.html keeps the iframe document.location
+        // anchored in the app's directory so relative URLs resolve right.
+        src={`/api/bf/apps/${appInfo.id}/index.html`}
+        sandbox="allow-scripts allow-same-origin"
+        style={{
+          width: '100%',
+          height: '100%',
+          border: 'none',
+          backgroundColor: 'var(--bg)',
+          display: 'block',
+        }}
+      />
+    </div>
   )
 }
