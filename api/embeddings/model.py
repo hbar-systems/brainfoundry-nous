@@ -11,7 +11,7 @@ _model: Optional[SentenceTransformer] = None
 _model_error: Optional[str] = None
 
 def _model_name() -> str:
-    return os.environ.get("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+    return os.environ.get("EMBEDDING_MODEL_NAME", "BAAI/bge-large-en-v1.5")
 
 def is_model_loaded() -> bool:
     return _model is not None
