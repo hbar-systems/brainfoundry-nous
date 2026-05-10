@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import CustomSelect from "../lib/CustomSelect";
 
 const API_BASE = "/api/bf";
 
@@ -311,20 +312,43 @@ export default function Upload() {
         )}
 
         <div style={{ marginTop: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ fontSize: 13, color: MUTED }}>Memory layer:</label>
-          <select value={layer} onChange={e => setLayer(e.target.value)} style={INPUT}>
-            <option value="">(unscoped)</option>
-            {layers.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
-          </select>
-          <button
-            onClick={propose}
-            disabled={busy || !files.length}
-            style={{ ...BTN, opacity: (busy || !files.length) ? 0.4 : 1, cursor: (busy || !files.length) ? "not-allowed" : "pointer" }}
-          >
-            {busy ? "Proposing…" : "Propose for ingestion"}
-          </button>
+          <label style={{ fontSize: 13, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>Memory layer:</label>
+          <CustomSelect
+            value={layer}
+            onChange={setLayer}
+            title="Memory layer"
+            minWidth={160}
+            options={[
+              { value: "", label: "(unscoped)" },
+              ...layers.map(l => ({ value: l.name, label: l.name })),
+            ]}
+          />
+          {(() => {
+            const disabled = busy || !files.length;
+            return (
+              <button
+                onClick={propose}
+                disabled={disabled}
+                style={{
+                  padding: "12px 20px",
+                  background: disabled ? "var(--surface)" : "var(--accent)",
+                  color: disabled ? "var(--muted)" : "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "10px",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  transition: "all 0.15s ease",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {busy ? "Proposing…" : "Propose for ingestion"}
+              </button>
+            );
+          })()}
         </div>
-        <div style={{ marginTop: 10, fontSize: 11, color: MUTED, fontStyle: "italic", lineHeight: 1.6 }}>
+        <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", fontStyle: "italic", lineHeight: 1.6 }}>
           Uploads go through the governance kernel: propose first, then you approve below.
           This is what sovereignty looks like — nothing enters your brain&apos;s long-term memory
           without your explicit consent, and every ingestion is logged.
