@@ -4,6 +4,31 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## 0.8.3 — 2026-05-11 — public-chat persona stability on 1b
+
+**Fix only.** Public chat surface (`/v1/public/chat`) on llama3.2:1b was
+drifting on plain self-intros — verification probes today returned
+generic safety refusals ("I cannot provide information on illegal
+activities") and word-salad on "what model are you running". The persona
+file was already comprehensive; 1b just can't follow long instructions
+without in-context examples.
+
+Changes:
+
+- `api/main.py` — `_build_public_prompt` now injects a 1-shot
+  introduce-yourself example between the RAG documents block and the
+  conversation history. Style anchor only; the model is told not to
+  literally repeat it.
+- `api/brain_persona_nous.md` — added explicit off-topic redirect
+  instruction ("I'm Nous — I discuss brainfoundry…") so generic safety
+  refusals no longer fire on benign weird questions. Also added an
+  anti-hallucination guardrail forbidding invented implementation
+  details beyond what the persona already authorises.
+
+No schema, no new endpoints, no env. PATCH-class fix. Operator-side
+chat (`/chat/rag`) and BYOK paths are untouched. 3b model upgrade is
+not viable on CAX21 ARM (prompt-eval timeout on RAG context).
+
 ## 0.8.2 — 2026-05-02 — substrate floor (Layer 1) live
 
 **Federation membership now gated on substrate-depth.** The
