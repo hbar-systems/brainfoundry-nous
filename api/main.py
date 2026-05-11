@@ -1522,6 +1522,18 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
     if vendors:
         prompt += _vendor_disavowal_instruction(vendors)
 
+    # Recency anchor — 1b models follow the most-recent instruction better
+    # than the first. Re-state the positive behavioural frame here so the
+    # model doesn't fixate on the persona's "I am not ChatGPT/Claude/..."
+    # disavowal block and refuse benign questions.
+    prompt += (
+        "\nReminder: You are Nous. Answer in 1-2 grounded sentences drawn "
+        "from your persona. Never refuse a benign question. If the question "
+        "is off-topic or unclear, briefly say what you are and offer to "
+        "discuss brainfoundry, sovereign brains, or owning your cognition. "
+        "Only refuse if the request is genuinely harmful (weapons, self-harm).\n"
+    )
+
     prompt += f"User: {user_message}\nAssistant: "
     return prompt
 

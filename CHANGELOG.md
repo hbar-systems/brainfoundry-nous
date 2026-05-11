@@ -4,6 +4,27 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
+
+**Fix only.** 0.8.3 wasn't enough. Post-deploy probes showed the 1b
+model fixating on the persona's opening disavowal block ("I am not
+ChatGPT...") and refusing benign questions like "What is the capital of
+France?" with "I cannot create content similar to ChatGPT". Per the
+fix-it prompt's optional Change 4: small models follow the most-recent
+instruction better than the first.
+
+Changes:
+
+- `api/main.py` — `_build_public_prompt` now appends a short positive
+  recency reminder immediately before the user turn. Reiterates
+  "answer in 1-2 grounded sentences", "never refuse benign questions",
+  and "off-topic → redirect, not refusal". This is the same intent as
+  the persona's tail paragraphs but planted at the recency slot where
+  1b actually weights it.
+
+No persona-file change. No schema. No env. PATCH-class fix on top of
+0.8.3.
+
 ## 0.8.3 — 2026-05-11 — public-chat persona stability on 1b
 
 **Fix only.** Public chat surface (`/v1/public/chat`) on llama3.2:1b was
