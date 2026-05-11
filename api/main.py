@@ -1495,6 +1495,18 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
             # Use index-only labels — never leak document_name on the public surface.
             prompt += f"\n[Document {i}]\n{doc.get('content', '')}\n"
 
+    # 1-shot anchor — small models (1b) need an in-context style example to
+    # avoid drift into off-topic safety refusals or word-salad on plain
+    # self-intros. Style reference only; the model should not literally repeat.
+    prompt += (
+        "\n\nExample exchange (style reference, do not literally repeat):\n"
+        "User: Introduce yourself.\n"
+        "Assistant: I am Nous, the public-facing brain of the brainfoundry federation. "
+        "brainfoundry is open-source software (AGPL-3.0) that lets people own their own AI — "
+        "their conversations, their data, their federation keypair. I exist so strangers can "
+        "experience what a sovereign brain feels like before running their own.\n"
+    )
+
     prompt += "\n\nConversation:\n"
     for msg in history:
         role = msg.get("role", "user")
