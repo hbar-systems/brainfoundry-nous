@@ -189,7 +189,8 @@ export default function Upload() {
     }
   };
 
-  // Step 2: approve → re-upload with proposal_id → chunks land.
+  // Step 2: approve → tell the server to persist (no file re-upload — text was
+  // saved server-side on propose, keyed by proposal_id).
   const decide = async (idx, decision) => {
     setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: true } : x));
     const prop = pending[idx];
@@ -208,7 +209,6 @@ export default function Upload() {
 
       if (decision === "APPROVE") {
         const fd = new FormData();
-        fd.append("file", prop.file);
         fd.append("proposal_id", prop.proposal_id);
         if (prop.layer) fd.append("layer", prop.layer);
         const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
@@ -467,7 +467,7 @@ export default function Upload() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runSearch()}
-            placeholder='Search… (e.g., "VQE regularization")'
+            placeholder="Search this brain…"
             style={{ ...INPUT, flex: 1, fontFamily: "system-ui, sans-serif", fontSize: 14 }}
           />
           <button onClick={runSearch} style={BTN}>Search</button>
