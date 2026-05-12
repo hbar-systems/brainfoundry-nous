@@ -1837,6 +1837,33 @@ def _delete_proposal_text(proposal_id: str) -> None:
             p.unlink()
 
 
+@app.get("/memory/proposals")
+def list_memory_proposals(
+    status: Optional[str] = None,
+    limit: int = 100,
+    api_key: str = Depends(get_api_key),
+):
+    """List memory proposals from NodeOS.
+
+    Brain-api proxy for NodeOS's GET /v1/memory/proposals. NodeOS listens only
+    on 127.0.0.1 inside the docker network, so external surfaces (operator UI
+    fetch-on-mount, MCP write-side workers that propose but can't observe their
+    own proposal back) can't see proposals without going through this endpoint.
+
+    Query params match NodeOS: `status` (PENDING|APPROVED|REJECTED), `limit`.
+    Response shape is whatever NodeOS returns — kept as a thin passthrough.
+    """
+    params = {"limit": limit}
+    if status:
+        params["status"] = status
+    try:
+        r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params=params, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"NodeOS proposals query failed: {str(e)}")
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: Optional[UploadFile] = File(None),

@@ -116,6 +116,40 @@ export default function Upload() {
     }
   }, []);
 
+  // Hydrate the Pending panel from the server on mount. Proposals created by
+  // external surfaces (MCP write-side workers, the CLI, another browser tab)
+  // are not in this component's local state — without this fetch the operator
+  // would never see them and the MCP write-side chat would block forever
+  // waiting for an approval that has no visible button.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/memory/proposals?status=PENDING&limit=100`, { cache: "no-store" });
+        if (!r.ok) return;
+        const data = await r.json();
+        const items = Array.isArray(data?.proposals) ? data.proposals : [];
+        const docs = items
+          .filter(p => p.memory_type === "document_embedding")
+          .map(p => ({
+            proposal_id: p.proposal_id,
+            filename: p.source_refs?.filename || "(unnamed)",
+            layer: p.source_refs?.layer || "",
+            deciding: false,
+          }));
+        if (cancelled || docs.length === 0) return;
+        setPending(prev => {
+          const seen = new Set(prev.map(x => x.proposal_id));
+          const fresh = docs.filter(d => !seen.has(d.proposal_id));
+          return [...prev, ...fresh];
+        });
+      } catch {
+        // Silent — pending panel just stays empty if the proxy can't reach NodeOS.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Filter hidden files (.git, .env, .DS_Store, etc.) and obvious binaries we
   // don't want indexing into a memory layer. Buyers folder-uploading hbar.world
   // would otherwise drag the entire .git history in.
