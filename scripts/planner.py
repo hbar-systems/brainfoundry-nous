@@ -421,7 +421,7 @@ def main():
         epilog="""
 Examples:
   # RAG query
-  python scripts/planner.py "summarize my notes on VQE"
+  python scripts/planner.py "summarize my recent notes"
   
   # Web fetch
   python scripts/planner.py "fetch https://example.com"

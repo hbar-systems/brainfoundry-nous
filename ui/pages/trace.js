@@ -422,15 +422,6 @@ export default function Trace() {
               )}
             </div>
 
-            <p style={{
-              color: COLORS.dim,
-              fontSize: '11px',
-              fontFamily: 'DM Mono, monospace',
-              textAlign: 'center',
-              marginTop: '40px',
-            }}>
-              spirit-cousin to hbar.you · operator&rsquo;s own corpus made visible
-            </p>
           </>
         )}
       </div>
