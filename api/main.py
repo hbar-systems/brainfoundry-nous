@@ -1800,9 +1800,46 @@ def request_upload_permit(api_key: str = Depends(get_api_key)):
         raise HTTPException(502, f"permit request failed: {e}")
 
 
+# Path A extracts text from the uploaded file and saves it under the proposal_id
+# so Path B (post-approval) does NOT have to re-upload the file or re-parse the
+# PDF. This is the cohort-blocker fix: for a 62MB/900-page textbook the double-
+# parse pushed the synchronous Path B past Node undici's 5-min headers timeout
+# in the Next.js BFF (ui/pages/api/bf/[...path].js:41), surfacing as a 502
+# "TypeError: fetch failed" toast. Persisting text shaves the pypdf re-parse
+# (~60s) AND avoids re-sending 62MB of bytes over the wire on approve.
+PROPOSAL_TEXT_DIR = Path("/app/runtime/proposal_texts")
+PROPOSAL_TEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _save_proposal_text(proposal_id: str, text: str, *, filename: str, content_type: str, size: int) -> None:
+    (PROPOSAL_TEXT_DIR / f"{proposal_id}.txt").write_text(text, encoding="utf-8")
+    (PROPOSAL_TEXT_DIR / f"{proposal_id}.meta.json").write_text(
+        json.dumps({"filename": filename, "content_type": content_type, "size": size}),
+        encoding="utf-8",
+    )
+
+
+def _load_proposal_text(proposal_id: str) -> Optional[Dict[str, Any]]:
+    text_path = PROPOSAL_TEXT_DIR / f"{proposal_id}.txt"
+    meta_path = PROPOSAL_TEXT_DIR / f"{proposal_id}.meta.json"
+    if not text_path.exists() or not meta_path.exists():
+        return None
+    return {
+        "text": text_path.read_text(encoding="utf-8"),
+        **json.loads(meta_path.read_text(encoding="utf-8")),
+    }
+
+
+def _delete_proposal_text(proposal_id: str) -> None:
+    for suffix in (".txt", ".meta.json"):
+        p = PROPOSAL_TEXT_DIR / f"{proposal_id}{suffix}"
+        if p.exists():
+            p.unlink()
+
+
 @app.post("/documents/upload")
 async def upload_document(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
     proposal_id: Optional[str] = Form(None),
     permit_id: Optional[str] = Form(None),
     layer: Optional[str] = Form(None),
@@ -1811,8 +1848,11 @@ async def upload_document(
     """Upload and process document for embeddings and RAG.
 
     Memory governance (deny-by-default):
-    - Without proposal_id: proposes memory to NodeOS, returns 202 PENDING. No embeddings written.
-    - With proposal_id: verifies APPROVED status via NodeOS before writing embeddings.
+    - Without proposal_id: requires a file. Extracts text, saves it under the
+      proposal_id, proposes memory to NodeOS, returns 202 PENDING.
+    - With proposal_id: file is OPTIONAL — the previously extracted text is
+      loaded from disk. Verifies APPROVED status via NodeOS, then chunks +
+      embeds + stores.
     - Requires permit_id for initial proposal (loop permit from NodeOS).
 
     Layer scoping (v0.8):
@@ -1828,31 +1868,75 @@ async def upload_document(
                 detail=f"Unknown layer '{layer}'. Defined layers: {valid_layers or '(none — define one in Settings → Memory layers)'}",
             )
     try:
-        content = await file.read()
-        
-        # Extract text based on file type
+        # ── Phase 1: obtain text + file metadata ───────────────────────
+        # Path A: file required, extract now.
+        # Path B: prefer persisted text under proposal_id; fall back to file if
+        # caller still sent it (older clients, or if disk text went missing).
         text = ""
-        if file.content_type == "application/pdf":
-            text = extract_text_from_pdf(content)
-        elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            text = extract_text_from_docx(content)
-        elif file.content_type.startswith("image/"):
-            text = extract_text_from_image(content)
+        filename = ""
+        content_type = ""
+        size = 0
+
+        if proposal_id is None:
+            if file is None:
+                raise HTTPException(status_code=400, detail="file is required when proposing a new document (no proposal_id).")
+            content = await file.read()
+            size = len(content)
+            filename = file.filename
+            content_type = file.content_type or ""
+            print(f"[upload] propose path: filename={filename} content_type={content_type} bytes={size}", flush=True)
+
+            if content_type == "application/pdf":
+                text = extract_text_from_pdf(content)
+            elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                text = extract_text_from_docx(content)
+            elif content_type.startswith("image/"):
+                text = extract_text_from_image(content)
+            else:
+                try:
+                    text = content.decode("utf-8")
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Unsupported file type")
+            print(f"[upload] extracted text_len={len(text)} from {filename}", flush=True)
         else:
-            # Try to decode as text
-            try:
-                text = content.decode("utf-8")
-            except:
-                raise HTTPException(status_code=400, detail="Unsupported file type")
-        
+            saved = _load_proposal_text(proposal_id)
+            if saved is not None:
+                text = saved["text"]
+                filename = saved["filename"]
+                content_type = saved["content_type"]
+                size = saved["size"]
+                print(f"[upload] approve path: loaded persisted text for proposal={proposal_id} filename={filename} text_len={len(text)}", flush=True)
+            elif file is not None:
+                content = await file.read()
+                size = len(content)
+                filename = file.filename
+                content_type = file.content_type or ""
+                print(f"[upload] approve path (fallback): re-parsing file for proposal={proposal_id} filename={filename} bytes={size}", flush=True)
+                if content_type == "application/pdf":
+                    text = extract_text_from_pdf(content)
+                elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    text = extract_text_from_docx(content)
+                elif content_type.startswith("image/"):
+                    text = extract_text_from_image(content)
+                else:
+                    try:
+                        text = content.decode("utf-8")
+                    except Exception:
+                        raise HTTPException(status_code=400, detail="Unsupported file type")
+            else:
+                raise HTTPException(
+                    status_code=410,
+                    detail=f"Persisted text for proposal_id {proposal_id} not found. The proposal may predate the persisted-text rollout, or the file was cleaned up. Please re-propose the document.",
+                )
+
         if not text.strip():
             raise HTTPException(status_code=400, detail="No text content extracted from file")
-        
+
         # ── Memory governance gate (deny-by-default) ──────────────────
         # Document embeddings are long-term memory. They require NodeOS approval.
-        
+
         if proposal_id is None:
-            # Path A: No proposal yet — propose to NodeOS, return 202 PENDING.
+            # Path A: No proposal yet — propose to NodeOS, persist text, return 202 PENDING.
             if not permit_id:
                 raise HTTPException(
                     status_code=400,
@@ -1862,20 +1946,22 @@ async def upload_document(
             layer_suffix = f" [layer={layer}]" if layer else ""
             proposal = _nodeos_propose_memory(
                 memory_type="document_embedding",
-                content=f"Document upload: {file.filename} ({len(text)} chars, {file.content_type}){layer_suffix}",
+                content=f"Document upload: {filename} ({len(text)} chars, {content_type}){layer_suffix}",
                 permit_id=permit_id,
-                source_refs={"filename": file.filename, "content_type": file.content_type, "size": len(content), "layer": layer},
+                source_refs={"filename": filename, "content_type": content_type, "size": size, "layer": layer},
             )
+            _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size)
+            print(f"[upload] proposed proposal_id={proposal['proposal_id']} (text persisted)", flush=True)
             return JSONResponse(
                 status_code=202,
                 content={
-                    "filename": file.filename,
+                    "filename": filename,
                     "status": "PENDING",
                     "proposal_id": proposal["proposal_id"],
-                    "message": "Memory proposal submitted to NodeOS. Approve the proposal, then re-upload with proposal_id to persist embeddings.",
+                    "message": "Memory proposal submitted to NodeOS. Approve the proposal — no file re-upload needed.",
                 },
             )
-        
+
         # Path B: proposal_id provided — verify it is APPROVED before writing.
         proposal_status = _nodeos_check_proposal(proposal_id)
         if proposal_status != "APPROVED":
@@ -1883,35 +1969,35 @@ async def upload_document(
                 status_code=403,
                 detail=f"Memory proposal {proposal_id} is {proposal_status}, not APPROVED. Embeddings write denied."
             )
-        
+
         # ── Approved — proceed to write embeddings ────────────────────
-        
-        # Split into chunks
+
+        t_chunk = time.time()
         chunks = chunk_text(text)
-        
-        # Generate embeddings
+        print(f"[upload] proposal={proposal_id} chunks={len(chunks)} chunk_time={time.time()-t_chunk:.2f}s", flush=True)
+
+        t_embed = time.time()
         embeddings = generate_embeddings(chunks)
-        
-        # Store in database
+        print(f"[upload] proposal={proposal_id} embed_time={time.time()-t_embed:.2f}s", flush=True)
+
+        t_store = time.time()
         conn = get_db_connection()
         cursor = conn.cursor()
-        
         stored_chunks = 0
         for chunk, embedding in zip(chunks, embeddings):
             embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-            
             cursor.execute(
                 """
-                INSERT INTO document_embeddings (document_name, content, embedding, metadata) 
+                INSERT INTO document_embeddings (document_name, content, embedding, metadata)
                 VALUES (%s, %s, %s::vector, %s)
                 """,
                 (
-                    file.filename,
+                    filename,
                     chunk,
                     embedding_str,
                     json.dumps({
-                        "file_size": len(content),
-                        "content_type": file.content_type,
+                        "file_size": size,
+                        "content_type": content_type,
                         "upload_timestamp": datetime.utcnow().isoformat(),
                         "chunk_index": stored_chunks,
                         "proposal_id": proposal_id,
@@ -1920,10 +2006,10 @@ async def upload_document(
                 )
             )
             stored_chunks += 1
-
         conn.commit()
         cursor.close()
         conn.close()
+        print(f"[upload] proposal={proposal_id} stored_chunks={stored_chunks} store_time={time.time()-t_store:.2f}s", flush=True)
 
         # Substrate-floor attestation: one row per uploaded document.
         # first_person_attestation defaults to authored_by_owner (Q1 option a:
@@ -1934,13 +2020,15 @@ async def upload_document(
             source_type="document",
             byte_size=len(text.encode("utf-8")),
             first_person_attestation="authored_by_owner",
-            document_name=file.filename,
+            document_name=filename,
         )
 
+        _delete_proposal_text(proposal_id)
+
         return {
-            "filename": file.filename,
-            "size": len(content),
-            "content_type": file.content_type,
+            "filename": filename,
+            "size": size,
+            "content_type": content_type,
             "text_length": len(text),
             "chunks_created": len(chunks),
             "embeddings_stored": stored_chunks,
