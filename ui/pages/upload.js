@@ -246,13 +246,64 @@ export default function Upload() {
         fd.append("proposal_id", prop.proposal_id);
         if (prop.layer) fd.append("layer", prop.layer);
         const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
-        const body = await r.text();
-        if (r.ok) {
-          const j = JSON.parse(body);
-          const scope = j.layer ? ` → layer=${j.layer}` : " (unscoped)";
-          pushLog(`INGESTED ${prop.filename}: ${j?.chunks_created ?? 0} chunk(s)${scope}`);
-        } else {
+
+        if (!r.ok) {
+          const body = await r.text();
           pushLog(`FAIL ingest ${prop.filename}: ${r.status} — ${body.slice(0, 200)}`);
+        } else {
+          // Server streams Server-Sent Events: started, chunked, progress*, done|error.
+          // Update p.progress in pending state so the Approve button shows live N/total.
+          pushLog(`INGESTING ${prop.filename}: starting…`);
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let donePayload = null;
+          let errorDetail = null;
+          let lastLoggedDone = -1;
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let sep;
+            while ((sep = buffer.indexOf("\n\n")) !== -1) {
+              const block = buffer.slice(0, sep);
+              buffer = buffer.slice(sep + 2);
+              const lines = block.split("\n");
+              let evName = "message";
+              let dataRaw = "";
+              for (const line of lines) {
+                if (line.startsWith("event:")) evName = line.slice(6).trim();
+                else if (line.startsWith("data:")) dataRaw += line.slice(5).trim();
+              }
+              let data = null;
+              try { data = JSON.parse(dataRaw); } catch { data = dataRaw; }
+              if (evName === "chunked" && data?.total != null) {
+                pushLog(`INGESTING ${prop.filename}: ${data.total} chunks queued`);
+                setPending(p => p.map((x, j) => j === idx ? { ...x, progress: { done: 0, total: data.total } } : x));
+              } else if (evName === "progress" && data?.done != null) {
+                setPending(p => p.map((x, j) => j === idx ? { ...x, progress: { done: data.done, total: data.total, batch_seconds: data.batch_seconds } } : x));
+                // Throttle log spam: log every 5 batches (or every batch when total <= 5).
+                const stride = data.total <= 5 ? 1 : 5;
+                if (data.done - lastLoggedDone >= stride * 32 || data.done === data.total) {
+                  pushLog(`INGESTING ${prop.filename}: ${data.done}/${data.total} chunks (${data.batch_seconds}s/batch)`);
+                  lastLoggedDone = data.done;
+                }
+              } else if (evName === "done") {
+                donePayload = data;
+              } else if (evName === "error") {
+                errorDetail = data?.detail || JSON.stringify(data);
+              }
+            }
+          }
+          if (donePayload) {
+            const scope = donePayload.layer ? ` → layer=${donePayload.layer}` : " (unscoped)";
+            const total = donePayload.total_seconds != null ? ` in ${donePayload.total_seconds}s` : "";
+            pushLog(`INGESTED ${prop.filename}: ${donePayload.chunks_created ?? 0} chunk(s)${scope}${total}`);
+          } else if (errorDetail) {
+            pushLog(`FAIL ingest ${prop.filename}: ${errorDetail}`);
+          } else {
+            pushLog(`FAIL ingest ${prop.filename}: stream ended without done event`);
+          }
         }
       } else {
         pushLog(`REJECTED ${prop.filename}`);
@@ -422,7 +473,9 @@ export default function Upload() {
                     disabled={p.deciding}
                     style={{ ...BTN, background: APPROVE, color: "#fff", opacity: p.deciding ? 0.4 : 1 }}
                   >
-                    {p.deciding ? "…" : "Approve & ingest"}
+                    {p.deciding
+                      ? (p.progress ? `embedding ${p.progress.done}/${p.progress.total}…` : "…")
+                      : "Approve & ingest"}
                   </button>
                   <button
                     onClick={() => decide(i, "DENY")}

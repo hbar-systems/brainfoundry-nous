@@ -1837,6 +1837,116 @@ def _delete_proposal_text(proposal_id: str) -> None:
             p.unlink()
 
 
+# Path B yields SSE so a friend uploading a 900-page textbook sees live
+# "embedding 320/660 chunks" instead of a 17+ minute spinner. The undici-
+# powered Next.js BFF (ui/pages/api/bf/[...path].js:48-60) already passes
+# text/event-stream through unbuffered; the first byte arrives in <1s so
+# headersTimeout (300s) is not a concern, and one progress event per ~36s
+# batch keeps bodyTimeout (300s between bytes) satisfied. Sync generator
+# is fine here: Starlette runs sync iterators in a threadpool and flushes
+# per yield, and the brain is single-operator so serializing one Path B
+# at a time is acceptable.
+def _stream_ingest_path_b(
+    *,
+    text: str,
+    filename: str,
+    content_type: str,
+    size: int,
+    proposal_id: str,
+    layer: Optional[str],
+):
+    def sse(event: str, payload: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+    yield sse("started", {"proposal_id": proposal_id, "filename": filename, "text_length": len(text)})
+
+    t_chunk = time.time()
+    chunks = chunk_text(text)
+    chunk_seconds = round(time.time() - t_chunk, 2)
+    print(f"[upload] proposal={proposal_id} chunks={len(chunks)} chunk_time={chunk_seconds}s (stream)", flush=True)
+    yield sse("chunked", {"total": len(chunks), "chunk_seconds": chunk_seconds})
+
+    if len(chunks) == 0:
+        yield sse("error", {"detail": "no chunks produced from text"})
+        return
+
+    BATCH = 32
+    stored_chunks = 0
+    t_total = time.time()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for batch_start in range(0, len(chunks), BATCH):
+            batch_chunks = chunks[batch_start:batch_start + BATCH]
+            t_batch = time.time()
+            batch_embeddings = generate_embeddings(batch_chunks)
+            for chunk, embedding in zip(batch_chunks, batch_embeddings):
+                embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+                cursor.execute(
+                    """
+                    INSERT INTO document_embeddings (document_name, content, embedding, metadata)
+                    VALUES (%s, %s, %s::vector, %s)
+                    """,
+                    (
+                        filename,
+                        chunk,
+                        embedding_str,
+                        json.dumps({
+                            "file_size": size,
+                            "content_type": content_type,
+                            "upload_timestamp": datetime.utcnow().isoformat(),
+                            "chunk_index": stored_chunks,
+                            "proposal_id": proposal_id,
+                            "layer": layer,
+                        }),
+                    ),
+                )
+                stored_chunks += 1
+            conn.commit()
+            batch_seconds = round(time.time() - t_batch, 2)
+            print(f"[upload] proposal={proposal_id} progress {stored_chunks}/{len(chunks)} batch_seconds={batch_seconds}s", flush=True)
+            yield sse("progress", {
+                "done": stored_chunks,
+                "total": len(chunks),
+                "batch_seconds": batch_seconds,
+            })
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[upload] proposal={proposal_id} stream ERROR: {e}", flush=True)
+        yield sse("error", {"detail": f"embed/store failed: {str(e)}"})
+        return
+
+    try:
+        from api import substrate as _substrate
+        _substrate.record_attestation_safe(
+            content_hash=_substrate.content_hash_of(text),
+            source_type="document",
+            byte_size=len(text.encode("utf-8")),
+            first_person_attestation="authored_by_owner",
+            document_name=filename,
+        )
+    except Exception as e:
+        print(f"[upload] proposal={proposal_id} attestation skipped: {e}", flush=True)
+
+    _delete_proposal_text(proposal_id)
+
+    total_seconds = round(time.time() - t_total, 2)
+    print(f"[upload] proposal={proposal_id} DONE total_seconds={total_seconds}s stored={stored_chunks}", flush=True)
+    yield sse("done", {
+        "filename": filename,
+        "size": size,
+        "content_type": content_type,
+        "text_length": len(text),
+        "chunks_created": len(chunks),
+        "embeddings_stored": stored_chunks,
+        "proposal_id": proposal_id,
+        "layer": layer,
+        "total_seconds": total_seconds,
+        "status": "success",
+    })
+
+
 @app.get("/memory/proposals")
 def list_memory_proposals(
     status: Optional[str] = None,
@@ -1997,73 +2107,20 @@ async def upload_document(
                 detail=f"Memory proposal {proposal_id} is {proposal_status}, not APPROVED. Embeddings write denied."
             )
 
-        # ── Approved — proceed to write embeddings ────────────────────
-
-        t_chunk = time.time()
-        chunks = chunk_text(text)
-        print(f"[upload] proposal={proposal_id} chunks={len(chunks)} chunk_time={time.time()-t_chunk:.2f}s", flush=True)
-
-        t_embed = time.time()
-        embeddings = generate_embeddings(chunks)
-        print(f"[upload] proposal={proposal_id} embed_time={time.time()-t_embed:.2f}s", flush=True)
-
-        t_store = time.time()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        stored_chunks = 0
-        for chunk, embedding in zip(chunks, embeddings):
-            embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-            cursor.execute(
-                """
-                INSERT INTO document_embeddings (document_name, content, embedding, metadata)
-                VALUES (%s, %s, %s::vector, %s)
-                """,
-                (
-                    filename,
-                    chunk,
-                    embedding_str,
-                    json.dumps({
-                        "file_size": size,
-                        "content_type": content_type,
-                        "upload_timestamp": datetime.utcnow().isoformat(),
-                        "chunk_index": stored_chunks,
-                        "proposal_id": proposal_id,
-                        "layer": layer,
-                    })
-                )
-            )
-            stored_chunks += 1
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print(f"[upload] proposal={proposal_id} stored_chunks={stored_chunks} store_time={time.time()-t_store:.2f}s", flush=True)
-
-        # Substrate-floor attestation: one row per uploaded document.
-        # first_person_attestation defaults to authored_by_owner (Q1 option a:
-        # owner-trust marking). Override path TBD when ingestion-source labels exist.
-        from api import substrate as _substrate
-        _substrate.record_attestation_safe(
-            content_hash=_substrate.content_hash_of(text),
-            source_type="document",
-            byte_size=len(text.encode("utf-8")),
-            first_person_attestation="authored_by_owner",
-            document_name=filename,
+        # ── Approved — stream progress batch-by-batch ─────────────────
+        # See _stream_ingest_path_b for the SSE event shape and rationale.
+        return StreamingResponse(
+            _stream_ingest_path_b(
+                text=text,
+                filename=filename,
+                content_type=content_type,
+                size=size,
+                proposal_id=proposal_id,
+                layer=layer,
+            ),
+            media_type="text/event-stream",
+            headers={"x-accel-buffering": "no", "cache-control": "no-cache, no-transform"},
         )
-
-        _delete_proposal_text(proposal_id)
-
-        return {
-            "filename": filename,
-            "size": size,
-            "content_type": content_type,
-            "text_length": len(text),
-            "chunks_created": len(chunks),
-            "embeddings_stored": stored_chunks,
-            "proposal_id": proposal_id,
-            "layer": layer,
-            "status": "success",
-            "message": f"Document processed and ready for RAG! Created {stored_chunks} searchable chunks."
-        }
     except HTTPException:
         raise
     except Exception as e:
