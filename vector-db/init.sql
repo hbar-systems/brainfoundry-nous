@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS document_embeddings (
     id SERIAL PRIMARY KEY,
     document_name VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
-    embedding vector(384), -- OpenAI/similar embeddings are typically 1536 dimensions
+    embedding vector(1024), -- matches BAAI/bge-large-en-v1.5 (1024-dim); see api/embeddings/model.py
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
