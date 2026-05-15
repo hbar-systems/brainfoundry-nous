@@ -3,6 +3,12 @@ import Head from 'next/head'
 
 const MAX_HISTORY = 10
 
+const SUGGESTED_PROMPTS = [
+  'What is a brain, and how is it different from a chatbot?',
+  'Why would I want to own my own cognition?',
+  'How do I get a brain of my own?',
+]
+
 export default function Home() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -15,8 +21,8 @@ export default function Home() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (presetText) => {
+    const text = (typeof presetText === 'string' ? presetText : input).trim()
     if (!text || loading) return
 
     const next = [...messages, { role: 'user', content: text }].slice(-MAX_HISTORY)
@@ -150,15 +156,76 @@ export default function Home() {
           gap: '16px',
         }}>
           {messages.length === 0 && !loading && (
-            <div style={{ textAlign: 'center', marginTop: '80px' }}>
+            <div style={{ marginTop: '56px', textAlign: 'center' }}>
               <div style={{ fontSize: '40px', marginBottom: '20px', color: '#c9a96e', opacity: 0.3 }}>ℏ</div>
               <div style={{
                 fontFamily: 'Lora, Georgia, serif',
                 fontStyle: 'italic',
-                fontSize: '18px',
-                color: '#6b5f52',
+                fontSize: '19px',
+                color: '#9a8b78',
+                marginBottom: '14px',
               }}>
-                Ask me anything about brains, BrainFoundry, or what it means to own your cognition.
+                You're talking to a brain.
+              </div>
+              <div style={{
+                fontSize: '14px',
+                lineHeight: '1.7',
+                color: '#6b5f52',
+                maxWidth: '480px',
+                margin: '0 auto 10px',
+              }}>
+                Nous is the public brain that runs on BrainFoundry — sovereign,
+                federated, the owner of its own memory. Not a chatbot bolted onto a
+                product: a mind you can hold a conversation with.
+              </div>
+              <div style={{
+                fontSize: '12px',
+                lineHeight: '1.6',
+                color: '#4a3f36',
+                fontFamily: 'DM Mono, monospace',
+                maxWidth: '480px',
+                margin: '0 auto 26px',
+              }}>
+                Nous is an AI running on a small model. It thinks for a moment
+                before it replies — give it up to a minute.
+              </div>
+
+              <div style={{
+                fontSize: '11px',
+                letterSpacing: '0.16em',
+                textTransform: 'uppercase',
+                color: '#4a3f36',
+                marginBottom: '12px',
+              }}>
+                Try asking
+              </div>
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '8px',
+                justifyContent: 'center',
+                maxWidth: '520px',
+                margin: '0 auto',
+              }}>
+                {SUGGESTED_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => send(p)}
+                    style={{
+                      padding: '9px 14px',
+                      borderRadius: '999px',
+                      border: '1px solid #2a2420',
+                      background: '#161310',
+                      color: '#c4b8a8',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      cursor: 'pointer',
+                      lineHeight: '1.4',
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -255,7 +322,7 @@ export default function Home() {
             }}
           />
           <button
-            onClick={send}
+            onClick={() => send()}
             disabled={!input.trim() || loading}
             style={{
               padding: '12px 18px',
