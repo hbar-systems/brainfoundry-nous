@@ -1,6 +1,6 @@
 # The first conversation
 
-*Created 2026-05-15.*
+*Created 2026-05-15. Updated 2026-05-16 — Track J1 persona file split.*
 
 This is the example first conversation that ships with every brain. It is the
 cold-start fix: a fresh brain has an empty Knowledge tab and a persona that
@@ -32,9 +32,19 @@ canonical long-form copy — keep the two in sync when either changes.
 
 ## After naming
 
-Once named, the brain's persona document (`api/brain_persona.md`) is its
-system prompt on every turn. The owner is encouraged to keep editing it —
-the template leaves clear sections for:
+The persona is split across two files (Track J1):
+
+- `api/brain_persona.template.md` — the tracked blank template. Always carries
+  the `[BRAIN_NAME]` / `[OWNER_NAME]` placeholders. A `git pull` updates it;
+  it never holds a brain's real identity.
+- `api/brain_persona.local.md` — the personalized copy, written by the **Name
+  your brain** button (or `scripts/personalize_persona.py`). Gitignored and
+  rsync-excluded, so updating the brain can never overwrite its identity.
+
+The runtime loads `.local.md` if it exists, otherwise the template. Once
+named, `api/brain_persona.local.md` is the brain's system prompt on every
+turn — keep editing *that* file. The owner is encouraged to do so; the
+template leaves clear sections for:
 
 - **Who you are** — background, work, what you're building.
 - **Cognitive style** — how you think, how you want answers shaped.

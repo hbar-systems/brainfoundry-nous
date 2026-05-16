@@ -119,11 +119,69 @@ except OSError:
     BRAIN_VERSION = "0.0.0-unknown"
 
 APP_DIR = Path(__file__).resolve().parent
-PERSONA_PATH = APP_DIR / "brain_persona.md"
+
+# Track J1 — the persona is split into a tracked blank template and a
+# gitignored personalized copy, so a `git pull` (Track J) can never overwrite
+# a brain's identity. The runtime loads .local.md if present, else .template.md.
+PERSONA_TEMPLATE_PATH = APP_DIR / "brain_persona.template.md"
+PERSONA_LOCAL_PATH = APP_DIR / "brain_persona.local.md"
+# Pre-J1 single-file path. Migrated into .local.md on startup, then removed.
+PERSONA_LEGACY_PATH = APP_DIR / "brain_persona.md"
+
+
+def _host_api_dir():
+    """The api/ directory inside the host brain repo (bind-mounted at
+    BRAIN_HOST_DIR), or None when there is no distinct host mount (dev installs
+    where /app/api is already the working copy)."""
+    host_dir = os.getenv("BRAIN_HOST_DIR", "")
+    if not host_dir:
+        return None
+    host_api = Path(host_dir) / "api"
+    try:
+        if host_api.resolve() == APP_DIR.resolve():
+            return None
+    except Exception:
+        return None
+    return host_api
+
+
+def _run_persona_migration() -> None:
+    """Run the J1 legacy-persona migration in both the running container's
+    api/ dir and the host brain repo, so an already-personalized brain's
+    identity is preserved durably into the gitignored .local.md. Idempotent —
+    safe on every startup."""
+    from api.persona_tools import migrate_legacy_persona
+    dirs = [APP_DIR]
+    host_api = _host_api_dir()
+    if host_api and host_api.is_dir():
+        dirs.append(host_api)
+    for d in dirs:
+        try:
+            result = migrate_legacy_persona(
+                d / "brain_persona.template.md",
+                d / "brain_persona.local.md",
+                d / "brain_persona.md",
+            )
+            if result in ("migrated", "removed-redundant"):
+                # flush=True — this one-time migration runs at import time,
+                # before uvicorn sets up, and Python buffers stdout off a tty.
+                print(f"persona migration ({d}): {result}", flush=True)
+        except Exception as e:
+            print(f"WARNING: persona migration failed for {d}: {e}", flush=True)
+
+
+_run_persona_migration()
+
+
+def active_persona_path() -> Path:
+    """The persona file the runtime loads — the personalized .local.md if it
+    exists, otherwise the tracked blank template."""
+    return PERSONA_LOCAL_PATH if PERSONA_LOCAL_PATH.exists() else PERSONA_TEMPLATE_PATH
+
 
 def load_persona_text() -> str:
     try:
-        return PERSONA_PATH.read_text(encoding="utf-8").strip()
+        return active_persona_path().read_text(encoding="utf-8").strip()
     except Exception:
         return ""  # safe fallback
 
@@ -315,18 +373,19 @@ def get_persona(api_key: str = Depends(get_api_key)):
 
 @app.get("/persona/status")
 def get_persona_status(api_key: str = Depends(get_api_key)):
-    """Report whether the persona is still the unconfigured brand template.
+    """Report whether the brain has been personalized yet.
 
-    The console chat page polls this on mount: while placeholders remain it
-    surfaces an in-chat "name your brain" prompt instead of letting the
-    operator talk to a brain that doesn't know its own name yet.
+    A brain is "configured" once a personalized brain_persona.local.md exists;
+    until then it runs the tracked blank template and the console chat
+    surfaces the in-chat "name your brain" onboarding. (Track J1: presence of
+    .local.md is the signal — not text inspection of the persona.)
     """
-    from api.persona_tools import detect_placeholders, is_template, is_configured
-    text = BRAIN_PERSONA
+    from api.persona_tools import detect_placeholders
+    local_exists = PERSONA_LOCAL_PATH.exists()
     return {
-        "configured": is_configured(text),
-        "is_template": is_template(text),
-        "placeholders": detect_placeholders(text),
+        "configured": local_exists,
+        "is_template": not local_exists,
+        "placeholders": detect_placeholders(BRAIN_PERSONA),
     }
 
 
@@ -339,11 +398,12 @@ class PersonalizePersonaRequest(BaseModel):
 def post_persona_personalize(req: PersonalizePersonaRequest, api_key: str = Depends(get_api_key)):
     """Run the persona personalization the provisioner normally does by hand.
 
-    Substitutes [BRAIN_NAME]/[OWNER_NAME], strips the TEMPLATE banner, reloads
-    the result as the live system prompt, and persists it to the brain repo on
-    the host so a future `docker compose up --build` keeps the named persona.
-    Lets a fresh operator name their brain from the console — no SSH, no
-    terminal step. Same logic as scripts/personalize_persona.py.
+    Substitutes [BRAIN_NAME]/[OWNER_NAME] into the tracked blank template,
+    strips the TEMPLATE banner, and writes the result to the gitignored
+    brain_persona.local.md — never a tracked file (Track J1), so a later
+    `git pull` cannot overwrite the brain's identity. Reloads it as the live
+    system prompt and persists it to the host brain repo so a rebuild keeps
+    the named persona. Same logic as scripts/personalize_persona.py.
     """
     global BRAIN_PERSONA
     from api.persona_tools import personalize_text
@@ -355,32 +415,33 @@ def post_persona_personalize(req: PersonalizePersonaRequest, api_key: str = Depe
     if len(brain_name) > 80 or len(owner_name) > 80:
         raise HTTPException(status_code=400, detail="brain_name and owner_name must each be 80 characters or fewer")
 
+    # Always personalize from the tracked blank template, so re-naming an
+    # already-named brain works (the template still carries the placeholders).
     try:
-        current = PERSONA_PATH.read_text(encoding="utf-8")
+        template_text = PERSONA_TEMPLATE_PATH.read_text(encoding="utf-8")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not read persona file: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not read persona template: {e}")
 
-    updated = personalize_text(current, brain_name, owner_name)
+    updated = personalize_text(template_text, brain_name, owner_name)
 
-    # Write the running container's copy so /persona reflects it immediately.
+    # Write the personalized identity to the gitignored .local.md ONLY. The
+    # running container's copy is updated so /persona reflects it immediately.
     try:
-        PERSONA_PATH.write_text(updated, encoding="utf-8")
+        PERSONA_LOCAL_PATH.write_text(updated, encoding="utf-8")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not write persona file: {e}")
 
-    # Also write the brain repo on the host (bind-mounted at BRAIN_HOST_DIR) so
-    # the named persona survives a rebuild. Best-effort: dev installs may not
-    # have the host mount, in which case the in-container write above is enough
-    # until the next deploy. The rsync deploy excludes api/brain_persona.md, so
-    # this host file is never clobbered by the template.
-    host_dir = os.getenv("BRAIN_HOST_DIR", "")
-    if host_dir:
-        host_persona = Path(host_dir) / "api" / "brain_persona.md"
+    # Also write the host brain repo (bind-mounted at BRAIN_HOST_DIR) so the
+    # named persona survives a `docker compose up --build`. Best-effort: dev
+    # installs may not have a distinct host mount. .local.md is gitignored and
+    # rsync-excluded, so it is never clobbered by a deploy or a git pull.
+    host_api = _host_api_dir()
+    if host_api:
         try:
-            if host_persona.resolve() != PERSONA_PATH.resolve():
-                host_persona.write_text(updated, encoding="utf-8")
+            host_api.mkdir(parents=True, exist_ok=True)
+            (host_api / "brain_persona.local.md").write_text(updated, encoding="utf-8")
         except Exception as e:
-            print(f"WARNING: could not persist persona to host path {host_persona}: {e}")
+            print(f"WARNING: could not persist persona to host path {host_api}: {e}")
 
     BRAIN_PERSONA = updated.strip()
     return {
@@ -728,6 +789,13 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] substrate init skipped: {e}", flush=True)
 
+    # hbar.harmonics — coherence_events ledger
+    try:
+        from api import harmonics
+        harmonics.init_tables()
+    except Exception as e:
+        print(f"[startup] harmonics init skipped: {e}", flush=True)
+
 
 # Mount federation DM router
 try:
@@ -735,6 +803,13 @@ try:
     app.include_router(_federation_dm_router)
 except Exception as e:
     print(f"[startup] federation_dm router mount skipped: {e}", flush=True)
+
+# Mount hbar.harmonics router
+try:
+    from api.harmonics import router as _harmonics_router
+    app.include_router(_harmonics_router)
+except Exception as e:
+    print(f"[startup] harmonics router mount skipped: {e}", flush=True)
 
 # Mount brain-apps router (install / list / uninstall / enable / disable).
 # All endpoints gated by the existing api_key dep — same posture as /settings.
@@ -1441,7 +1516,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
 #   2. RAG is hard-scoped to layer="public". The request body cannot
 #      override; only documents tagged metadata.layer = "public" are visible.
 #   3. Persona is brain_persona_nous.md (the public-demo persona), not the
-#      operator's brain_persona.md. The personal persona must never leak
+#      operator's brain_persona.local.md. The personal persona must never leak
 #      onto the public surface.
 #
 # The endpoint reads the LAST hop of X-Forwarded-For (the IP Caddy itself
