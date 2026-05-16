@@ -26,16 +26,20 @@ import json
 import math
 import os
 import time
+import uuid
 from typing import Any, Dict, Optional, Tuple
 
+import httpx
 import numpy as np
 import psycopg2
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from api.federation_dm import _operator_auth
 
 
 # ─── Constants ──────────────────────────────────────────────────────────────
@@ -303,3 +307,183 @@ def get_standing():
                                 half_life_days=HALF_LIFE_DAYS)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Bilateral cross-brain exchange (SPEC s4 — the federation layer) ─────────
+#
+# A coherence event is recorded by BOTH brains. The contributor brain calls
+# POST /harmonics/contribute, which posts the contribution to the receiver
+# brain's POST /harmonics/exchange. The receiver computes its own context R,
+# scores the event, records its role='receiver' row, and returns the scored
+# event. The contributor then records the matching role='contributor' row.
+# Both rows share (cos, sin, score, content_hash, event_timestamp); each is
+# signed by its own brain's key, so the pair cross-verifies.
+
+
+def _fetch_peer(handle: str) -> Tuple[str, str]:
+    """Resolve a peer brain's (public_key, endpoint) from its /identity."""
+    endpoint = f"https://{handle}.brainfoundry.ai"
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{endpoint}/identity")
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"peer {handle} unreachable: {e}")
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"peer {handle} /identity returned {resp.status_code}")
+    pubkey = resp.json().get("public_key")
+    if not pubkey:
+        raise HTTPException(status_code=502,
+                            detail=f"peer {handle} /identity has no public_key")
+    return pubkey, endpoint
+
+
+def _receiver_context(contribution: str, conn=None) -> Optional[str]:
+    """Compute R — this brain's relevant prior knowledge for a contribution.
+
+    Searches this brain's own document_embeddings for the nearest chunk.
+    Returns None when the brain has no corpus to receive the contribution
+    against — a brain with no knowledge cannot have a contribution land.
+    """
+    from api.embeddings.model import get_model
+
+    vec = get_model().encode(contribution, normalize_embeddings=True)
+    vec_literal = "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
+
+    owns_conn = conn is None
+    if owns_conn:
+        if not os.getenv("DATABASE_URL"):
+            return None
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "SELECT content FROM document_embeddings "
+                    "ORDER BY embedding <=> %s::vector LIMIT 1",
+                    (vec_literal,),
+                )
+                row = cur.fetchone()
+            except psycopg2.errors.UndefinedTable:
+                conn.rollback()
+                row = None
+    finally:
+        if owns_conn:
+            conn.close()
+    return row[0] if row and row[0] else None
+
+
+class ExchangeRequest(BaseModel):
+    from_brain: str
+    from_pubkey: str
+    contribution: str
+    ts: int
+    nonce: str
+    signature: str
+
+
+@router.post("/harmonics/exchange")
+def harmonics_exchange(req: ExchangeRequest):
+    """Receiver side of a bilateral coherence event (SPEC s4). Public.
+
+    Verifies the contributor's signature, computes this brain's receiver
+    context R, scores the event, records the role='receiver' row, and returns
+    the scored event so the contributor can record the matching row.
+    """
+    now = int(time.time())
+    if abs(now - req.ts) > 300:
+        raise HTTPException(status_code=401, detail="ts outside 5-minute window")
+
+    sig_payload = {
+        "from_brain": req.from_brain,
+        "from_pubkey": req.from_pubkey,
+        "contribution": req.contribution,
+        "ts": req.ts,
+        "nonce": req.nonce,
+    }
+    if not verify_with_pubkey(req.from_pubkey, req.signature, sig_payload):
+        raise HTTPException(status_code=401, detail="signature verification failed")
+
+    R = _receiver_context(req.contribution)
+    if R is None:
+        return {"recorded": False,
+                "reason": "receiver has no corpus context to receive against"}
+
+    cos, sin, score = coherence(req.contribution, R)
+    ch = content_hash(req.contribution, R)
+    event_id = record_event(
+        peer_pubkey=req.from_pubkey, role="receiver",
+        cos=cos, sin=sin, score=score, content_hash=ch,
+        event_timestamp=req.ts,
+    )
+    return {
+        "recorded": True,
+        "event_id": event_id,
+        "cos": cos, "sin": sin, "score": score,
+        "content_hash": ch,
+        "event_timestamp": req.ts,
+        "receiver_pubkey": os.getenv("BRAIN_PUBLIC_KEY", ""),
+    }
+
+
+class ContributeRequest(BaseModel):
+    to: str = Field(..., description="peer brain handle, e.g. 'yury'")
+    contribution: str = Field(..., description="the contribution artifact c")
+
+
+@router.post("/harmonics/contribute")
+def harmonics_contribute(req: ContributeRequest,
+                         _auth: str = Depends(_operator_auth)):
+    """Contributor side of a bilateral coherence event (SPEC s4). Operator-only.
+
+    Signs and posts a contribution to the peer brain's /harmonics/exchange,
+    then records the matching role='contributor' row from the peer's scored
+    response. Both brains end up with a signed row for the same event.
+    """
+    my_brain = os.getenv("BRAIN_ID", "")
+    my_pubkey = os.getenv("BRAIN_PUBLIC_KEY", "")
+    if not my_brain or not my_pubkey:
+        raise HTTPException(status_code=500,
+                            detail="BRAIN_ID or BRAIN_PUBLIC_KEY not configured")
+
+    peer_pubkey, peer_endpoint = _fetch_peer(req.to)
+
+    payload = {
+        "from_brain": my_brain,
+        "from_pubkey": my_pubkey,
+        "contribution": req.contribution,
+        "ts": int(time.time()),
+        "nonce": uuid.uuid4().hex,
+    }
+    body = {**payload, "signature": sign_with_brain_key(payload)}
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(f"{peer_endpoint}/harmonics/exchange", json=body)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"peer unreachable: {e}")
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"peer /harmonics/exchange returned {resp.status_code}: "
+                   f"{resp.text[:200]}")
+
+    result = resp.json()
+    if not result.get("recorded"):
+        return {"recorded": False,
+                "reason": result.get("reason", "peer did not record the event")}
+
+    event_id = record_event(
+        peer_pubkey=peer_pubkey, role="contributor",
+        cos=result["cos"], sin=result["sin"], score=result["score"],
+        content_hash=result["content_hash"],
+        event_timestamp=result["event_timestamp"],
+    )
+    return {
+        "recorded": True,
+        "event_id": event_id,
+        "peer": req.to,
+        "cos": result["cos"], "sin": result["sin"], "score": result["score"],
+    }
