@@ -25,16 +25,89 @@ const FONT_OPTIONS = [
 
 const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 
-// Scroll-pace presets — operator-controlled. 'instant' restores the old
-// teleport behavior. The rAF loop reads pxPerFrame each tick. Acceleration
-// kicks in when the operator is more than a viewport behind the writing
-// edge so a giant code-block dump doesn't leave us absurdly far behind.
+// Reading-pace presets — operator-controlled. One control governs two things
+// while the brain is streaming:
+//   pxPerFrame — how fast the view scrolls toward the writing edge.
+//   cps        — how fast the assistant's text is *revealed* (chars/second).
+// The provider streams in bursts; releasing the text at a steady cps turns
+// those bursts into a calm, deliberate reading cadence. 'instant' restores
+// the old behavior: text appears the moment it arrives, view teleports.
+// Acceleration kicks in for both when we fall far behind (giant code dump)
+// so a slow pace never strands the operator minutes behind the brain.
 const SCROLL_PACE_OPTIONS = [
-  { value: 'instant', label: 'instant', pxPerFrame: Infinity },
-  { value: 'slow', label: 'slow read', pxPerFrame: 1.0 },
-  { value: 'normal', label: 'normal', pxPerFrame: 2.2 },
-  { value: 'fast', label: 'fast', pxPerFrame: 5 },
+  { value: 'instant', label: 'instant', pxPerFrame: Infinity, cps: Infinity },
+  { value: 'slow', label: 'slow read', pxPerFrame: 1.0, cps: 26 },
+  { value: 'normal', label: 'normal', pxPerFrame: 2.2, cps: 70 },
+  { value: 'fast', label: 'fast', pxPerFrame: 5, cps: 190 },
 ]
+
+// The example first conversation — shipped with the template, rendered as the
+// chat empty-state while the brain is still the unconfigured persona. This is
+// the cold-start fix: it walks a brand-new owner through giving the brain an
+// identity before they face an empty Knowledge tab. Canonical long-form copy
+// lives in docs/first-conversation.md — keep the two in sync.
+function IdentityOnboarding({ onStart }) {
+  const lines = [
+    "Welcome. I'm your brain — but I don't have a name yet.",
+    "Right now I'm running the unedited template persona.",
+    'Two things define me before we really start: my name, and your name — the person I belong to and answer to.',
+    'Use the button below. It writes both into my persona document, strips the template banner, and reloads me as a named brain.',
+    "It's the same step the provisioner runs by hand — you just don't need a terminal for it.",
+  ]
+  return (
+    <div style={{ maxWidth: '640px', width: '100%', margin: '32px auto' }}>
+      <div style={{ textAlign: 'center', marginBottom: '22px' }}>
+        <div style={{ fontSize: '34px', color: 'var(--accent)', opacity: 0.35 }}>ℏ</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: '19px', color: 'var(--text)', marginTop: '10px' }}>
+          Welcome. Let's give this brain an identity.
+        </div>
+      </div>
+
+      {/* The brain's scripted first message. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+        <div style={{
+          maxWidth: '100%',
+          padding: '16px 20px',
+          borderRadius: '16px',
+          background: 'var(--assistant-bg)',
+          color: 'var(--assistant-text)',
+          border: '1px solid var(--border)',
+          fontSize: '14px',
+          lineHeight: 1.6,
+        }}>
+          <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '8px', fontWeight: 500 }}>Your brain</div>
+          {lines.map((l, i) => (
+            <div key={i} style={{ marginBottom: i < lines.length - 1 ? '8px' : 0 }}>{l}</div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'center', margin: '22px 0 14px' }}>
+        <button
+          onClick={onStart}
+          style={{
+            padding: '11px 22px',
+            background: 'var(--accent)',
+            color: 'var(--bg)',
+            border: 'none',
+            borderRadius: '10px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 600,
+          }}
+        >
+          Name your brain
+        </button>
+      </div>
+
+      <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.7, textAlign: 'center' }}>
+        <div>After naming, keep editing the persona document — it is the brain's system prompt on every turn.</div>
+        <div>Then feed it: upload writing and notes in the Knowledge tab.</div>
+        <div>Every chat can be saved back into memory with Save to memory.</div>
+      </div>
+    </div>
+  )
+}
 
 export default function Chat() {
   const [models, setModels] = useState([])
@@ -233,7 +306,74 @@ export default function Chat() {
   }
   const messagesEndRef = useRef(null)
   const messagesContainerRef = useRef(null)
+  const textareaRef = useRef(null)
   const [stickToBottom, setStickToBottom] = useState(true)
+
+  // Typewriter reveal: while streaming, deltas accumulate in revealRef.full
+  // and a rAF releases them into the visible message at the chosen cps.
+  const revealRef = useRef({ full: '', shown: 0, done: true, last: 0 })
+  const revealRafRef = useRef(null)
+
+  // Persona configuration state. /persona/status tells us whether the brain
+  // is still the unedited template ([BRAIN_NAME]/[OWNER_NAME] unfilled). When
+  // it is, the chat surfaces a "name your brain" onboarding flow — the
+  // cold-start fix get-a-brain depends on.
+  const [personaStatus, setPersonaStatus] = useState(null)
+  const [showPersonalize, setShowPersonalize] = useState(false)
+  const [personaBrainName, setPersonaBrainName] = useState('')
+  const [personaOwnerName, setPersonaOwnerName] = useState('')
+  const [personalizing, setPersonalizing] = useState(false)
+  const [personaError, setPersonaError] = useState(null)
+
+  const personaUnconfigured = personaStatus && personaStatus.configured === false
+
+  const personalizeBrain = async () => {
+    const brainName = personaBrainName.trim()
+    const ownerName = personaOwnerName.trim()
+    if (!brainName || !ownerName) { setPersonaError('Both a brain name and an owner name are required.'); return }
+    setPersonalizing(true)
+    setPersonaError(null)
+    try {
+      const r = await fetch('/api/bf/persona/personalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brain_name: brainName, owner_name: ownerName }),
+      })
+      if (r.ok) {
+        setPersonaStatus({ configured: true, is_template: false, placeholders: [] })
+        setShowPersonalize(false)
+        setPersonaBrainName('')
+        setPersonaOwnerName('')
+      } else {
+        const err = await r.json().catch(() => ({}))
+        setPersonaError(err.detail || `Failed (${r.status})`)
+      }
+    } catch (e) {
+      setPersonaError(e.message)
+    } finally {
+      setPersonalizing(false)
+    }
+  }
+
+  // Wrap the current textarea selection in markdown markers (toolbar buttons +
+  // Cmd/Ctrl-B / -I / -E shortcuts). The composer stays plain markdown text —
+  // no rich-text model — so typing **x** by hand works identically.
+  const applyMarkdown = (before, after = before) => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const start = ta.selectionStart ?? inputMessage.length
+    const end = ta.selectionEnd ?? inputMessage.length
+    const selected = inputMessage.slice(start, end)
+    const next = inputMessage.slice(0, start) + before + selected + after + inputMessage.slice(end)
+    setInputMessage(next)
+    // Restore a sensible selection after React re-renders the textarea: keep
+    // the wrapped text selected, or drop the caret between the markers.
+    requestAnimationFrame(() => {
+      ta.focus()
+      if (selected) ta.setSelectionRange(start + before.length, end + before.length)
+      else { const caret = start + before.length; ta.setSelectionRange(caret, caret) }
+    })
+  }
 
   useEffect(() => {
     fetch('/api/bf/models')
@@ -247,6 +387,12 @@ export default function Chat() {
       .catch(e => setError(`Models: ${e.message}`))
 
     fetchSessions()
+
+    // Is the brain still the unconfigured template? Drives the onboarding flow.
+    fetch('/api/bf/persona/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setPersonaStatus(d) })
+      .catch(() => {})
   }, [])
 
   // Scroll-along: while sticking to bottom, creep toward the latest content
@@ -430,13 +576,50 @@ export default function Chat() {
         setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content }])
         fetchSessions()
       } else {
-        // Streaming path consumes SSE
+        // Streaming path — consume SSE into a typewriter buffer. Deltas land
+        // in revealRef.full the moment they arrive; a rAF reveals them at the
+        // chosen cps, turning the provider's bursty stream into a calm, even
+        // reading cadence. 'instant' pace skips the typewriter entirely.
         setMessages([...updated, { role: 'assistant', content: '' }])
+
+        const paceObj = SCROLL_PACE_OPTIONS.find(p => p.value === scrollPace) || SCROLL_PACE_OPTIONS[2]
+        const cps = paceObj.cps
+        revealRef.current = { full: '', shown: 0, done: false, last: 0 }
+        if (revealRafRef.current) cancelAnimationFrame(revealRafRef.current)
+
+        const writeShown = () => {
+          const st = revealRef.current
+          const text = st.full.slice(0, Math.floor(st.shown))
+          setMessages(prev => {
+            const next = [...prev]
+            next[next.length - 1] = { role: 'assistant', content: text }
+            return next
+          })
+        }
+
+        const reveal = ts => {
+          const st = revealRef.current
+          if (cps === Infinity) {
+            st.shown = st.full.length
+          } else {
+            if (!st.last) st.last = ts
+            const dt = Math.min(0.25, (ts - st.last) / 1000) // clamp tab-away jumps
+            st.last = ts
+            const behind = st.full.length - st.shown
+            // Accelerate when far behind so a slow pace can't strand the
+            // reader minutes behind a long answer.
+            const rate = behind > 400 ? cps * (1 + behind / 400) : cps
+            st.shown = Math.min(st.full.length, st.shown + rate * dt)
+          }
+          writeShown()
+          if (st.done && st.shown >= st.full.length) { revealRafRef.current = null; return }
+          revealRafRef.current = requestAnimationFrame(reveal)
+        }
+        revealRafRef.current = requestAnimationFrame(reveal)
 
         const reader = r.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
-        let assistantContent = ''
 
         while (true) {
           const { value, done } = await reader.read()
@@ -453,21 +636,15 @@ export default function Chat() {
             try {
               const parsed = JSON.parse(data)
               const delta = parsed.choices?.[0]?.delta?.content
-              if (delta) {
-                assistantContent += delta
-                setMessages(prev => {
-                  const next = [...prev]
-                  next[next.length - 1] = { role: 'assistant', content: assistantContent }
-                  return next
-                })
-              } else if (parsed.error) {
-                setError(`Stream error: ${parsed.error}`)
-              }
+              if (delta) revealRef.current.full += delta
+              else if (parsed.error) setError(`Stream error: ${parsed.error}`)
             } catch {
               // Skip malformed frames silently.
             }
           }
         }
+        // Stream finished — let the reveal loop drain the remaining buffer.
+        revealRef.current.done = true
         fetchSessions()
       }
     } catch (e) {
@@ -478,8 +655,21 @@ export default function Chat() {
   }
 
   const handleKeyDown = e => {
+    // Cmd/Ctrl-B / -I / -E wrap the current selection in markdown markers.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+      const k = e.key.toLowerCase()
+      if (k === 'b') { e.preventDefault(); applyMarkdown('**'); return }
+      if (k === 'i') { e.preventDefault(); applyMarkdown('*'); return }
+      if (k === 'e') { e.preventDefault(); applyMarkdown('`'); return }
+    }
+    // Enter sends; Shift-Enter inserts a newline.
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
   }
+
+  // Cancel any in-flight typewriter rAF when the page unmounts.
+  useEffect(() => () => {
+    if (revealRafRef.current) cancelAnimationFrame(revealRafRef.current)
+  }, [])
 
   const formatDate = dateString => {
     if (!dateString) return ''
@@ -729,7 +919,7 @@ export default function Chat() {
           <CustomSelect
             value={scrollPace}
             onChange={applyScrollPace}
-            title="Scroll pace while streaming"
+            title="Reading pace — scroll speed + text-reveal cadence while streaming"
             minWidth={130}
             options={SCROLL_PACE_OPTIONS}
           />
@@ -801,19 +991,51 @@ export default function Chat() {
             transition: 'background 0.15s ease',
           }}
         >
-          {messages.length === 0 && (
-            <div style={{ textAlign: 'center', marginTop: '100px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '20px', color: 'var(--accent)', opacity: 0.25 }}>ℏ</div>
-              <div style={{
-                fontFamily: 'var(--font-display)',
-                fontStyle: 'italic',
-                fontSize: '17px',
-                color: 'var(--muted)',
-                letterSpacing: '0.01em',
-              }}>
-                {currentSessionId ? 'Session ready.' : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
-              </div>
+          {/* In-chat notice while the brain is still the unconfigured
+              template — visible once a conversation is already underway. */}
+          {personaUnconfigured && messages.length > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '12px',
+              padding: '10px 14px',
+              background: 'rgba(201,169,110,0.08)',
+              border: '1px solid rgba(201,169,110,0.28)',
+              borderRadius: '10px',
+              fontSize: '12px',
+              color: 'var(--text)',
+            }}>
+              <span style={{ flex: 1 }}>This brain hasn't been named yet — it's still running the template persona.</span>
+              <button
+                onClick={() => { setPersonaError(null); setShowPersonalize(true) }}
+                style={{
+                  flexShrink: 0,
+                  padding: '6px 12px',
+                  background: 'var(--accent)', color: 'var(--bg)',
+                  border: 'none', borderRadius: '7px', cursor: 'pointer',
+                  fontSize: '12px', fontWeight: 600,
+                }}
+              >
+                Name your brain
+              </button>
             </div>
+          )}
+
+          {messages.length === 0 && (
+            personaUnconfigured ? (
+              <IdentityOnboarding onStart={() => { setPersonaError(null); setShowPersonalize(true) }} />
+            ) : (
+              <div style={{ textAlign: 'center', marginTop: '100px' }}>
+                <div style={{ fontSize: '32px', marginBottom: '20px', color: 'var(--accent)', opacity: 0.25 }}>ℏ</div>
+                <div style={{
+                  fontFamily: 'var(--font-display)',
+                  fontStyle: 'italic',
+                  fontSize: '17px',
+                  color: 'var(--muted)',
+                  letterSpacing: '0.01em',
+                }}>
+                  {currentSessionId ? 'Session ready.' : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
+                </div>
+              </div>
+            )
           )}
 
           {messages.map((msg, i) => (
@@ -937,6 +1159,37 @@ export default function Chat() {
               ))}
             </div>
           )}
+          {/* Markdown formatting toolbar — wraps the selection in markers.
+              The composer stays plain markdown text (no rich-text model), so
+              typing the syntax by hand works identically to the buttons. */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center', flexShrink: 0 }}>
+            {[
+              { label: 'B', title: 'Bold  (Cmd/Ctrl-B)', wrap: '**', extra: { fontWeight: 700 } },
+              { label: 'I', title: 'Italic  (Cmd/Ctrl-I)', wrap: '*', extra: { fontStyle: 'italic' } },
+              { label: '</>', title: 'Inline code  (Cmd/Ctrl-E)', wrap: '`', extra: { fontFamily: 'var(--font-mono)', fontSize: '11px' } },
+            ].map(b => (
+              <button
+                key={b.label}
+                type="button"
+                onClick={() => applyMarkdown(b.wrap)}
+                disabled={!selectedModel || isLoading}
+                title={b.title}
+                style={{
+                  minWidth: '30px', height: '26px', padding: '0 7px',
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  borderRadius: '6px', color: 'var(--muted)', lineHeight: 1,
+                  cursor: (!selectedModel || isLoading) ? 'not-allowed' : 'pointer',
+                  fontSize: '13px',
+                  ...b.extra,
+                }}
+                onMouseOver={e => { if (selectedModel && !isLoading) e.currentTarget.style.color = 'var(--accent)' }}
+                onMouseOut={e => { e.currentTarget.style.color = 'var(--muted)' }}
+              >{b.label}</button>
+            ))}
+            <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+              markdown
+            </span>
+          </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
             <label
               htmlFor="image-upload-input"
@@ -965,6 +1218,7 @@ export default function Chat() {
               style={{ display: 'none' }}
             />
             <textarea
+              ref={textareaRef}
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -1076,6 +1330,99 @@ export default function Chat() {
                 </button>
                 <button type="submit" style={{ padding: '8px 16px', background: 'var(--accent)', border: 'none', borderRadius: '8px', color: 'var(--bg)', cursor: 'pointer', fontSize: '14px', fontWeight: '600' }}>
                   Create
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Name-your-brain modal — runs persona personalization (the step the
+          provisioner does by hand) from the console. */}
+      {showPersonalize && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 200,
+        }}>
+          <div style={{
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: '14px',
+            padding: '28px',
+            width: '420px',
+            maxWidth: '90vw',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <h2 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: 'var(--text)' }}>Name your brain</h2>
+              <button onClick={() => setShowPersonalize(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '20px', cursor: 'pointer' }}>×</button>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6, margin: '0 0 18px' }}>
+              This fills the brain's persona document, strips the template banner, and reloads it as a named brain. You can keep editing the persona afterwards.
+            </p>
+            <form onSubmit={e => { e.preventDefault(); personalizeBrain() }}>
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '5px' }}>
+                Brain name
+              </label>
+              <input
+                type="text"
+                value={personaBrainName}
+                onChange={e => setPersonaBrainName(e.target.value)}
+                placeholder="what you'll call it — e.g. Hbar"
+                autoFocus
+                maxLength={80}
+                style={{
+                  width: '100%', padding: '10px 14px',
+                  backgroundColor: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: '8px', color: 'var(--text)', fontSize: '14px',
+                  outline: 'none', boxSizing: 'border-box', marginBottom: '14px',
+                  fontFamily: 'inherit',
+                }}
+              />
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '5px' }}>
+                Owner name
+              </label>
+              <input
+                type="text"
+                value={personaOwnerName}
+                onChange={e => setPersonaOwnerName(e.target.value)}
+                placeholder="who it belongs to — e.g. Yury"
+                maxLength={80}
+                style={{
+                  width: '100%', padding: '10px 14px',
+                  backgroundColor: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: '8px', color: 'var(--text)', fontSize: '14px',
+                  outline: 'none', boxSizing: 'border-box', marginBottom: '14px',
+                  fontFamily: 'inherit',
+                }}
+              />
+              {personaError && (
+                <div style={{
+                  backgroundColor: '#3a1e1e', color: '#c98080',
+                  fontSize: '12px', padding: '8px 12px', borderRadius: '8px',
+                  marginBottom: '14px', fontFamily: 'var(--font-mono)',
+                }}>
+                  {personaError}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setShowPersonalize(false)} style={{ padding: '8px 16px', backgroundColor: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--muted)', cursor: 'pointer', fontSize: '14px' }}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={personalizing || !personaBrainName.trim() || !personaOwnerName.trim()}
+                  style={{
+                    padding: '8px 16px',
+                    background: (personalizing || !personaBrainName.trim() || !personaOwnerName.trim()) ? 'var(--surface2)' : 'var(--accent)',
+                    border: 'none', borderRadius: '8px',
+                    color: (personalizing || !personaBrainName.trim() || !personaOwnerName.trim()) ? 'var(--muted)' : 'var(--bg)',
+                    cursor: (personalizing || !personaBrainName.trim() || !personaOwnerName.trim()) ? 'not-allowed' : 'pointer',
+                    fontSize: '14px', fontWeight: '600',
+                  }}
+                >
+                  {personalizing ? 'Naming...' : 'Name brain'}
                 </button>
               </div>
             </form>

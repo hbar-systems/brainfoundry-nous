@@ -73,6 +73,92 @@ function StatCard({ label, value, sub, accent }) {
   )
 }
 
+// Status badge for a retrieval architecture — live / coming / locked.
+function ArchBadge({ status }) {
+  const map = {
+    live: { text: 'Live · default', color: '#00d4aa', bg: 'rgba(0,212,170,0.1)', border: '#00d4aa40' },
+    coming: { text: 'Coming', color: '#888', bg: '#1a1a1a', border: '#2a2a2a' },
+    locked: { text: 'Locked', color: '#888', bg: '#1a1a1a', border: '#2a2a2a' },
+  }
+  const s = map[status] || map.coming
+  return (
+    <span style={{
+      fontSize: '10px', fontWeight: 600,
+      textTransform: 'uppercase', letterSpacing: '0.06em',
+      color: s.color, background: s.bg,
+      border: `1px solid ${s.border}`,
+      borderRadius: '999px', padding: '3px 8px',
+      whiteSpace: 'nowrap', flexShrink: 0,
+    }}>
+      {s.text}
+    </span>
+  )
+}
+
+// Front-page section beneath Chat and Knowledge. Lists the retrieval
+// architectures the brain can run. Descriptive only for now — the cards
+// document each strategy; functional switching is not yet wired.
+function MindArchitecture() {
+  const architectures = [
+    {
+      name: 'Tiered Retrieval',
+      status: 'live',
+      desc: 'Identity tier always on, then the thinking / projects / writing tiers, then episodic memory. The current production retrieval path.',
+    },
+    {
+      name: 'Flat Similarity',
+      status: 'coming',
+      desc: 'A single cosine-similarity sweep across every memory layer at once, with no tier weighting.',
+    },
+    {
+      name: 'Layer-Scoped',
+      status: 'coming',
+      desc: 'Retrieval restricted to a chosen subset of memory layers, selected per query.',
+    },
+    {
+      name: 'Hybrid + Routed',
+      status: 'locked',
+      desc: 'A router classifies each query, then picks the retrieval strategy turn by turn.',
+    },
+  ]
+  return (
+    <div style={{ marginBottom: '48px' }}>
+      <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#e5e5e5', margin: '0 0 4px 0' }}>
+        Mind Architecture
+      </h2>
+      <p style={{ fontSize: '13px', color: '#555', margin: '0 0 16px 0', lineHeight: 1.6 }}>
+        How the brain retrieves from memory. Tiered Retrieval is live; the rest are described here and not yet selectable.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+        {architectures.map(a => (
+          <div
+            key={a.name}
+            style={{
+              backgroundColor: '#111',
+              border: '1px solid #1e1e1e',
+              borderRadius: '12px',
+              padding: '24px',
+              height: '100%',
+              boxSizing: 'border-box',
+              opacity: a.status === 'live' ? 1 : 0.62,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ fontSize: '14px', fontWeight: '600', color: '#e5e5e5' }}>
+                {a.name}
+              </div>
+              <ArchBadge status={a.status} />
+            </div>
+            <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.6' }}>
+              {a.desc}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const [health, setHealth] = useState(null)
   const [models, setModels] = useState([])
@@ -175,6 +261,8 @@ export default function Dashboard() {
           </a>
         ))}
       </div>
+
+      <MindArchitecture />
 
       {health && (
         <details style={{ marginTop: '8px' }}>

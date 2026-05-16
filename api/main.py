@@ -313,6 +313,84 @@ def get_persona(api_key: str = Depends(get_api_key)):
     return {"persona": BRAIN_PERSONA}
 
 
+@app.get("/persona/status")
+def get_persona_status(api_key: str = Depends(get_api_key)):
+    """Report whether the persona is still the unconfigured brand template.
+
+    The console chat page polls this on mount: while placeholders remain it
+    surfaces an in-chat "name your brain" prompt instead of letting the
+    operator talk to a brain that doesn't know its own name yet.
+    """
+    from api.persona_tools import detect_placeholders, is_template, is_configured
+    text = BRAIN_PERSONA
+    return {
+        "configured": is_configured(text),
+        "is_template": is_template(text),
+        "placeholders": detect_placeholders(text),
+    }
+
+
+class PersonalizePersonaRequest(BaseModel):
+    brain_name: str
+    owner_name: str
+
+
+@app.post("/persona/personalize")
+def post_persona_personalize(req: PersonalizePersonaRequest, api_key: str = Depends(get_api_key)):
+    """Run the persona personalization the provisioner normally does by hand.
+
+    Substitutes [BRAIN_NAME]/[OWNER_NAME], strips the TEMPLATE banner, reloads
+    the result as the live system prompt, and persists it to the brain repo on
+    the host so a future `docker compose up --build` keeps the named persona.
+    Lets a fresh operator name their brain from the console — no SSH, no
+    terminal step. Same logic as scripts/personalize_persona.py.
+    """
+    global BRAIN_PERSONA
+    from api.persona_tools import personalize_text
+
+    brain_name = (req.brain_name or "").strip()
+    owner_name = (req.owner_name or "").strip()
+    if not brain_name or not owner_name:
+        raise HTTPException(status_code=400, detail="brain_name and owner_name are both required")
+    if len(brain_name) > 80 or len(owner_name) > 80:
+        raise HTTPException(status_code=400, detail="brain_name and owner_name must each be 80 characters or fewer")
+
+    try:
+        current = PERSONA_PATH.read_text(encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read persona file: {e}")
+
+    updated = personalize_text(current, brain_name, owner_name)
+
+    # Write the running container's copy so /persona reflects it immediately.
+    try:
+        PERSONA_PATH.write_text(updated, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not write persona file: {e}")
+
+    # Also write the brain repo on the host (bind-mounted at BRAIN_HOST_DIR) so
+    # the named persona survives a rebuild. Best-effort: dev installs may not
+    # have the host mount, in which case the in-container write above is enough
+    # until the next deploy. The rsync deploy excludes api/brain_persona.md, so
+    # this host file is never clobbered by the template.
+    host_dir = os.getenv("BRAIN_HOST_DIR", "")
+    if host_dir:
+        host_persona = Path(host_dir) / "api" / "brain_persona.md"
+        try:
+            if host_persona.resolve() != PERSONA_PATH.resolve():
+                host_persona.write_text(updated, encoding="utf-8")
+        except Exception as e:
+            print(f"WARNING: could not persist persona to host path {host_persona}: {e}")
+
+    BRAIN_PERSONA = updated.strip()
+    return {
+        "ok": True,
+        "brain_name": brain_name,
+        "owner_name": owner_name,
+        "configured": True,
+    }
+
+
 class FederationAssertionRequest(BaseModel):
     token: str
     issuer_endpoint: str
