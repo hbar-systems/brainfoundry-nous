@@ -44,4 +44,22 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS chat_messages_session_id_idx ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS chat_messages_created_at_idx ON chat_messages(created_at);
-CREATE INDEX IF NOT EXISTS chat_sessions_created_at_idx ON chat_sessions(created_at); 
+CREATE INDEX IF NOT EXISTS chat_sessions_created_at_idx ON chat_sessions(created_at);
+
+-- hbar.harmonics coherence ledger (SPEC s4). Append-only: rows are never
+-- updated or deleted. Standing is derived on read, never stored.
+-- Existing brains also get this table via api/harmonics.init_tables() on boot.
+CREATE TABLE IF NOT EXISTS coherence_events (
+    id              SERIAL PRIMARY KEY,
+    peer_pubkey     TEXT NOT NULL,
+    role            TEXT NOT NULL,            -- 'contributor' | 'receiver'
+    cos             DOUBLE PRECISION NOT NULL,
+    sin             DOUBLE PRECISION NOT NULL,
+    score           DOUBLE PRECISION NOT NULL,
+    content_hash    TEXT NOT NULL,
+    sig             TEXT,                     -- ed25519:<b64url> over the event
+    event_timestamp BIGINT NOT NULL,          -- unix epoch seconds, UTC
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ce_role_idx ON coherence_events (role);
+CREATE INDEX IF NOT EXISTS ce_peer_idx ON coherence_events (peer_pubkey);
