@@ -21,15 +21,25 @@ TS=$(date +%Y%m%d-%H%M%S)
 
 cd "$BRAIN_DIR"
 
+# git's dubious-ownership guard blocks all git commands when this script runs
+# as root in-container against the uid-1000-owned bind-mounted repo. Mark it
+# safe. (The api Dockerfile also does this system-wide — belt and suspenders.)
+git config --global --add safe.directory "$BRAIN_DIR" 2>/dev/null || true
+
 echo ""
 echo "==> Brain update — $TS"
 echo "==> Working directory: $BRAIN_DIR"
 echo ""
 
-# Confirm we're in a git repo with a remote
-if ! git rev-parse --git-dir > /dev/null 2>&1; then
-    echo "✗ Not a git repository. This brain wasn't provisioned with update support."
-    echo "  See docs to retrofit, or contact support."
+# Confirm git can operate on this repo. Capture stderr so a real failure
+# (ownership guard, permissions) is reported accurately rather than being
+# misdiagnosed as "not a git repository".
+if ! git_dir_err=$(git rev-parse --git-dir 2>&1 >/dev/null); then
+    echo "✗ git cannot operate on the repository at $BRAIN_DIR"
+    echo "  git said: ${git_dir_err:-(no detail)}"
+    echo "  An ownership or permission error here is a deploy bug, not a"
+    echo "  missing repo. A genuine non-git directory needs the retrofit"
+    echo "  (scripts/retrofit_git.sh)."
     exit 1
 fi
 
