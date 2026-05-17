@@ -8,9 +8,11 @@ import { useEffect, useState } from 'react'
 const FALLBACK_NAV = [
   { id: '_dashboard',  href: '/',           label: 'Dashboard'  },
   { id: '_chat',       href: '/chat',       label: 'Chat'       },
+  { id: '_persona',    href: '/persona',    label: 'Persona'    },
   { id: '_knowledge',  href: '/upload',     label: 'Knowledge'  },
   { id: '_apps',       href: '/apps',       label: 'Apps'       },
   { id: '_federation', href: '/federation', label: 'Federation' },
+  { id: '_economy',    href: '/economy',    label: 'Economy'    },
   { id: '_trace',      href: '/trace',      label: 'Trace'      },
   { id: '_settings',   href: '/settings',   label: 'Settings'   },
   { id: '_update',     href: '/update',     label: 'Update'     },

@@ -101,7 +101,11 @@ function IdentityOnboarding({ onStart }) {
       </div>
 
       <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.7, textAlign: 'center' }}>
-        <div>After naming, keep editing the persona document — it is the brain's system prompt on every turn.</div>
+        <div>
+          After naming, keep editing the{' '}
+          <a href="/persona" style={{ color: 'var(--accent)' }}>persona document</a>
+          {' '}— it is the brain's system prompt on every turn.
+        </div>
         <div>Then feed it: upload writing and notes in the Knowledge tab.</div>
         <div>Every chat can be saved back into memory with Save to memory.</div>
       </div>
@@ -149,6 +153,9 @@ export default function Chat() {
   const MAX_IMAGES = 10
   const [consolidating, setConsolidating] = useState(false)
   const [consolidateStatus, setConsolidateStatus] = useState(null) // {ok: bool, message: string} | null
+  // Which memory layer "Save to memory" consolidates into (episodic / semantic
+  // / procedural). Default episodic — a saved conversation is an episodic memory.
+  const [saveLayer, setSaveLayer] = useState('episodic')
 
   // Inline session-title rename. editingSessionId == null means no row is in
   // edit mode. Enter (or blur) saves via PUT /api/bf/sessions/{id}/title;
@@ -229,13 +236,14 @@ export default function Chat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: selectedModel,
+          layer: saveLayer,
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
         }),
       })
       if (r.ok) {
         const data = await r.json()
-        setConsolidateStatus({ ok: true, message: `Saved to memory: ${data.chunks_stored} chunks in episodic layer.` })
+        setConsolidateStatus({ ok: true, message: `Saved to memory: ${data.chunks_stored} chunks in the ${data.layer || saveLayer} layer.` })
       } else {
         const err = await r.json().catch(() => ({}))
         setConsolidateStatus({ ok: false, message: err.detail || `Failed (${r.status})` })
@@ -925,25 +933,49 @@ export default function Chat() {
           />
 
           {currentSessionId && messages.length >= 2 && (
-            <button
-              onClick={consolidateSession}
-              disabled={consolidating}
-              title="Save this conversation into your brain's long-term memory (episodic layer). Future chats will retrieve from it via RAG."
-              style={{
-                marginLeft: 'auto',
-                padding: '8px 14px',
-                background: consolidating ? 'var(--surface)' : 'transparent',
-                color: consolidating ? 'var(--muted)' : 'var(--accent)',
-                border: '1px solid rgba(201, 169, 110, 0.38)',
-                borderRadius: '8px',
-                cursor: consolidating ? 'wait' : 'pointer',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                letterSpacing: '0.04em',
-              }}
-            >
-              {consolidating ? 'saving...' : 'Save to memory'}
-            </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {/* Memory layer this chat consolidates into — episodic / semantic
+                  / procedural. The status line confirms where it landed. */}
+              <select
+                value={saveLayer}
+                onChange={e => setSaveLayer(e.target.value)}
+                disabled={consolidating}
+                title="Which memory layer Save to memory consolidates this chat into"
+                style={{
+                  padding: '7px 8px',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)',
+                  cursor: consolidating ? 'not-allowed' : 'pointer',
+                  outline: 'none',
+                }}
+              >
+                <option value="episodic">episodic</option>
+                <option value="semantic">semantic</option>
+                <option value="procedural">procedural</option>
+              </select>
+              <button
+                onClick={consolidateSession}
+                disabled={consolidating}
+                title="Save this conversation into your brain's long-term memory, in the selected layer. Future chats retrieve from it via RAG."
+                style={{
+                  padding: '8px 14px',
+                  background: consolidating ? 'var(--surface)' : 'transparent',
+                  color: consolidating ? 'var(--muted)' : 'var(--accent)',
+                  border: '1px solid rgba(201, 169, 110, 0.38)',
+                  borderRadius: '8px',
+                  cursor: consolidating ? 'wait' : 'pointer',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                {consolidating ? 'saving...' : 'Save to memory'}
+              </button>
+            </div>
           )}
         </div>
 

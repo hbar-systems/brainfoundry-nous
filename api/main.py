@@ -367,8 +367,41 @@ def capabilities():
 
 @app.get("/persona")
 def get_persona(api_key: str = Depends(get_api_key)):
-    """Return the loaded brain persona text (debug/verification)."""
+    """Return the loaded brain persona text — backs the console persona editor."""
     return {"persona": BRAIN_PERSONA}
+
+
+class PersonaUpdateRequest(BaseModel):
+    persona: str
+
+
+@app.put("/persona")
+def put_persona(req: PersonaUpdateRequest, api_key: str = Depends(get_api_key)):
+    """Overwrite the brain's persona — the system prompt injected on every turn.
+
+    Writes the gitignored brain_persona.local.md ONLY, never the tracked
+    template (Track J1), so a `git pull` can't clobber it; also persists to the
+    host brain repo so a rebuild keeps it. Reloads it live — the next chat turn
+    uses the edited persona.
+    """
+    global BRAIN_PERSONA
+    text = req.persona or ""
+
+    try:
+        PERSONA_LOCAL_PATH.write_text(text, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not write persona file: {e}")
+
+    host_api = _host_api_dir()
+    if host_api:
+        try:
+            host_api.mkdir(parents=True, exist_ok=True)
+            (host_api / "brain_persona.local.md").write_text(text, encoding="utf-8")
+        except Exception as e:
+            print(f"WARNING: could not persist persona to host path {host_api}: {e}")
+
+    BRAIN_PERSONA = text.strip()
+    return {"ok": True, "persona": BRAIN_PERSONA}
 
 
 @app.get("/persona/status")
@@ -1287,6 +1320,15 @@ async def consolidate_session(session_id: str, request: dict, api_key: str = Dep
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
 
+        # Memory layer the consolidated chat lands in (the episodic / semantic /
+        # procedural model). The console "Save to memory" control lets the
+        # operator choose; default episodic — a saved conversation is, by
+        # nature, an episodic memory.
+        layer = (request.get("layer") or "episodic").strip().lower()
+        if layer not in ("episodic", "semantic", "procedural"):
+            raise HTTPException(400, f"Invalid memory layer: {layer!r} "
+                                     f"(expected episodic, semantic, or procedural)")
+
         # Read session messages + session title (for human-readable doc name)
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1356,7 +1398,7 @@ Summary:"""
                     "session_id": session_id,
                     "consolidated_at": datetime.utcnow().isoformat(),
                     "chunk_index": stored,
-                    "layer": "episodic",
+                    "layer": layer,
                     "source": "consolidation_v0.5",
                 }))
             )
@@ -1380,7 +1422,7 @@ Summary:"""
             "doc_name": doc_name,
             "chunks_stored": stored,
             "summary_preview": summary[:300] + ("..." if len(summary) > 300 else ""),
-            "layer": "episodic",
+            "layer": layer,
         }
     except HTTPException:
         raise

@@ -830,6 +830,18 @@ export default function Settings() {
         </p>
       </Section>
 
+      <Section title="Persona" subtitle="The brain's system prompt — who it is, how it thinks.">
+        <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.7 }}>
+          <div>Your persona is the document loaded on every chat turn.</div>
+          <div>Edit it freely — saving takes effect on the next message.</div>
+          <a href="/persona" style={{
+            display: 'inline-block', marginTop: 12, padding: '8px 16px',
+            color: '#0e0c0b', background: '#c9a96e', borderRadius: 8,
+            textDecoration: 'none', fontSize: 13, fontWeight: 600,
+          }}>Open the persona editor</a>
+        </div>
+      </Section>
+
       <Section title="Keys" subtitle="Bring your own — Anthropic, OpenAI, Gemini, and more.">
         <KeysPanel />
       </Section>

@@ -309,6 +309,57 @@ def get_standing():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class LedgerEvent(BaseModel):
+    id: int
+    peer_pubkey: str
+    role: str
+    cos: float
+    sin: float
+    score: float
+    content_hash: str
+    sig: Optional[str] = None
+    event_timestamp: int
+
+
+class LedgerResponse(BaseModel):
+    events: list[LedgerEvent]
+    count: int
+
+
+@router.get("/harmonics/ledger", response_model=LedgerResponse)
+def get_ledger(limit: int = 100):
+    """This brain's coherence-event ledger — the signed, append-only record of
+    the exchanges it took part in (SPEC s2.5). Newest first. Read-only; rows
+    are never updated or deleted."""
+    try:
+        if not os.getenv("DATABASE_URL"):
+            return LedgerResponse(events=[], count=0)
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        "SELECT id, peer_pubkey, role, cos, sin, score, "
+                        "content_hash, sig, event_timestamp FROM coherence_events "
+                        "ORDER BY event_timestamp DESC, id DESC LIMIT %s",
+                        (max(1, min(limit, 500)),),
+                    )
+                    rows = cur.fetchall()
+                except psycopg2.errors.UndefinedTable:
+                    conn.rollback()
+                    rows = []
+        finally:
+            conn.close()
+        events = [
+            LedgerEvent(id=r[0], peer_pubkey=r[1], role=r[2], cos=r[3], sin=r[4],
+                        score=r[5], content_hash=r[6], sig=r[7], event_timestamp=r[8])
+            for r in rows
+        ]
+        return LedgerResponse(events=events, count=len(events))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Bilateral cross-brain exchange (SPEC s4 — the federation layer) ─────────
 #
 # A coherence event is recorded by BOTH brains. The contributor brain calls
