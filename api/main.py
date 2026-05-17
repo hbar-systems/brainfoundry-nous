@@ -574,6 +574,13 @@ class SetMemoryLayersRequest(BaseModel):
     layers: List[MemoryLayer]
 
 
+class SetRetrievalArchitectureRequest(BaseModel):
+    architecture: str
+    # Only meaningful for the 'layer_scoped' architecture. None = leave the
+    # stored scope unchanged; [] = scope to all declared layers.
+    layer_scope: Optional[List[str]] = None
+
+
 @app.get("/settings/keys")
 def settings_get_keys(api_key: str = Depends(get_api_key)):
     """Return masked key state per provider. Never returns full secrets."""
@@ -619,6 +626,39 @@ def settings_get_memory_layers(api_key: str = Depends(get_api_key)):
 def settings_set_memory_layers(req: SetMemoryLayersRequest, api_key: str = Depends(get_api_key)):
     settings_store.set_memory_layers([l.model_dump() for l in req.layers])
     return {"ok": True, "layers": settings_store.get_memory_layers()}
+
+
+@app.get("/settings/retrieval-architecture")
+def settings_get_retrieval_architecture(api_key: str = Depends(get_api_key)):
+    """The active "Mind Architecture" — which retrieval strategy /chat/rag uses.
+
+    The console front page renders this as the selectable Mind Architecture
+    section (Track C3).
+    """
+    return {
+        "active": settings_store.get_retrieval_architecture(),
+        "available": list(settings_store.RETRIEVAL_ARCHITECTURES),
+        "layer_scope": settings_store.get_layer_scope(),
+        "declared_layers": settings_store.get_layer_names(),
+    }
+
+
+@app.post("/settings/retrieval-architecture")
+def settings_set_retrieval_architecture(req: SetRetrievalArchitectureRequest,
+                                        api_key: str = Depends(get_api_key)):
+    """Switch the active retrieval architecture. Persisted to the settings
+    sidecar — the choice survives restarts and rebuilds."""
+    try:
+        settings_store.set_retrieval_architecture(req.architecture)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if req.layer_scope is not None:
+        settings_store.set_layer_scope(req.layer_scope)
+    return {
+        "ok": True,
+        "active": settings_store.get_retrieval_architecture(),
+        "layer_scope": settings_store.get_layer_scope(),
+    }
 
 
 @app.get("/settings/federation")
@@ -885,15 +925,17 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
 
-def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None,
+                              architecture: Optional[str] = None) -> List[Dict[str, Any]]:
     """Search for similar documents.
 
-    Two modes:
-    - **Layer-filtered (v0.8):** if `layers` is non-empty, run a single
-      similarity query restricted to chunks whose `metadata->>'layer'` is in
-      that list. Tier logic is bypassed — layers are an explicit user-driven
-      scoping mechanism and shouldn't be silently mixed with auto-injection.
-    - **Tier-weighted (legacy):** if `layers` is None or empty, run the
+    Retrieval modes (Track C3 — "Mind Architecture"):
+    - **Flat similarity:** `architecture='flat'` — one cosine-similarity sweep
+      over the whole corpus, no tier weighting, no layer filter.
+    - **Layer-scoped / layer-filtered (v0.8):** if `layers` is non-empty, run a
+      single similarity query restricted to chunks whose `metadata->>'layer'`
+      is in that list. Tier logic is bypassed.
+    - **Tiered (default):** if `layers` is None/empty and not flat, run the
       original tier1/tier2/tier3 folder-based behavior described below.
 
 
@@ -920,6 +962,34 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         conn = get_db_connection()
         cursor = conn.cursor()
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+
+        # ── Flat similarity path (C3) ────────────────────────────────
+        # One similarity sweep across the entire corpus — no tiers, no layer
+        # filter. The simplest retrieval architecture.
+        if architecture == "flat":
+            cursor.execute(
+                """
+                SELECT document_name, content, metadata,
+                       embedding <-> %s::vector as distance
+                FROM document_embeddings
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <-> %s::vector
+                LIMIT %s
+                """,
+                (embedding_str, embedding_str, limit),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            return [
+                {
+                    "document_name": r[0],
+                    "content": r[1],
+                    "metadata": r[2] or {},
+                    "similarity_score": float(1 - r[3]),
+                }
+                for r in rows
+            ]
 
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
@@ -1343,8 +1413,27 @@ def _persist_chat_turn(session_id: str, messages: list, reply: str):
 
 
 def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int):
-    """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs)."""
-    relevant_docs = search_similar_documents(user_query, limit=search_limit, layers=layers)
+    """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs).
+
+    Track C3: the retrieval architecture is a persisted brain setting (the
+    "Mind Architecture"). The legacy `layers` argument is retained for API
+    compatibility but the configured architecture governs retrieval.
+    """
+    arch = settings_store.get_retrieval_architecture()
+    if arch == "flat":
+        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
+    elif arch == "layer_scoped":
+        # Restrict to the configured layer subset; an empty subset means
+        # "all declared layers". With no declared layers at all, there is
+        # nothing to scope to — fall back to a flat sweep.
+        scope = settings_store.get_layer_scope() or settings_store.get_layer_names()
+        if scope:
+            relevant_docs = search_similar_documents(
+                user_query, limit=search_limit, layers=scope, architecture="layer_scoped")
+        else:
+            relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
+    else:  # 'tiered' — the default folder-weighted retrieval
+        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered")
     context = ""
     if relevant_docs:
         context = "\n\nRelevant documents:\n"
@@ -1462,6 +1551,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                         "documents_used": len(relevant_docs),
                         "search_query": user_query,
                         "sources": sources,
+                        "architecture": settings_store.get_retrieval_architecture(),
                     },
                 }
                 yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
@@ -1497,7 +1587,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture()},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 

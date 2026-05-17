@@ -123,6 +123,46 @@ def get_layer_names() -> list:
     return [l.get("name") for l in get_memory_layers() if l.get("name")]
 
 
+# ── Retrieval architecture — Track C3, "Mind Architecture" ───────────────────
+# Which retrieval strategy /chat/rag uses to pull context from memory. The
+# choice is persisted in the sidecar so it survives restarts and rebuilds
+# (/app/runtime is volume-mounted). 'hybrid_routed' is described in the UI but
+# not yet selectable — it needs a query router and is intentionally deferred.
+RETRIEVAL_ARCHITECTURES = ("tiered", "flat", "layer_scoped")
+DEFAULT_RETRIEVAL_ARCHITECTURE = "tiered"
+
+
+def get_retrieval_architecture() -> str:
+    """The active retrieval architecture. Falls back to the default when unset
+    or set to an unrecognized value."""
+    arch = _load().get("retrieval_architecture")
+    return arch if arch in RETRIEVAL_ARCHITECTURES else DEFAULT_RETRIEVAL_ARCHITECTURE
+
+
+def set_retrieval_architecture(arch: str) -> None:
+    if arch not in RETRIEVAL_ARCHITECTURES:
+        raise ValueError(f"Unknown retrieval architecture: {arch!r}")
+    with _LOCK:
+        data = _load()
+        data["retrieval_architecture"] = arch
+        _save(data)
+
+
+def get_layer_scope() -> list:
+    """Memory layers the `layer_scoped` architecture restricts retrieval to.
+    An empty list means 'all declared layers'."""
+    scope = _load().get("layer_scope", [])
+    return scope if isinstance(scope, list) else []
+
+
+def set_layer_scope(layers: list) -> None:
+    """Replace the layer_scoped subset. Each entry is a layer name string."""
+    with _LOCK:
+        data = _load()
+        data["layer_scope"] = [str(x) for x in (layers or [])]
+        _save(data)
+
+
 MEMORY_LAYER_PRESETS = [
     {
         "name": "identity",

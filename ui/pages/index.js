@@ -74,13 +74,14 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 // Status badge for a retrieval architecture — live / coming / locked.
-function ArchBadge({ status }) {
+// Status badge for a retrieval architecture card.
+function ArchBadge({ kind }) {
   const map = {
-    live: { text: 'Live · default', color: '#00d4aa', bg: 'rgba(0,212,170,0.1)', border: '#00d4aa40' },
+    active: { text: 'Active', color: '#00d4aa', bg: 'rgba(0,212,170,0.1)', border: '#00d4aa40' },
+    select: { text: 'Select', color: '#888', bg: '#161616', border: '#2a2a2a' },
     coming: { text: 'Coming', color: '#888', bg: '#1a1a1a', border: '#2a2a2a' },
-    locked: { text: 'Locked', color: '#888', bg: '#1a1a1a', border: '#2a2a2a' },
   }
-  const s = map[status] || map.coming
+  const s = map[kind] || map.select
   return (
     <span style={{
       fontSize: '10px', fontWeight: 600,
@@ -95,65 +96,151 @@ function ArchBadge({ status }) {
   )
 }
 
-// Front-page section beneath Chat and Knowledge. Lists the retrieval
-// architectures the brain can run. Descriptive only for now — the cards
-// document each strategy; functional switching is not yet wired.
+// The four retrieval architectures. `key` matches the backend setting; only
+// `selectable` ones can be switched to. 'hybrid_routed' is described but not
+// yet wired (it needs a query router) — it stays a Coming card.
+const ARCHITECTURES = [
+  { key: 'tiered', name: 'Tiered Retrieval', selectable: true,
+    desc: 'Identity tier always on, then the thinking / projects / writing tiers, then the rest of the corpus. The default.' },
+  { key: 'flat', name: 'Flat Similarity', selectable: true,
+    desc: 'A single cosine-similarity sweep across the whole corpus at once, with no tier weighting.' },
+  { key: 'layer_scoped', name: 'Layer-Scoped', selectable: true,
+    desc: 'Retrieval restricted to a chosen subset of your memory layers.' },
+  { key: 'hybrid_routed', name: 'Hybrid + Routed', selectable: false,
+    desc: 'A router classifies each query, then picks the retrieval strategy turn by turn. Coming later.' },
+]
+
+// Front-page section beneath Chat and Knowledge — the brain's retrieval
+// architecture (Track C3). Selecting one persists the choice (it survives
+// restarts) and applies from the next chat turn.
 function MindArchitecture() {
-  const architectures = [
-    {
-      name: 'Tiered Retrieval',
-      status: 'live',
-      desc: 'Identity tier always on, then the thinking / projects / writing tiers, then episodic memory. The current production retrieval path.',
-    },
-    {
-      name: 'Flat Similarity',
-      status: 'coming',
-      desc: 'A single cosine-similarity sweep across every memory layer at once, with no tier weighting.',
-    },
-    {
-      name: 'Layer-Scoped',
-      status: 'coming',
-      desc: 'Retrieval restricted to a chosen subset of memory layers, selected per query.',
-    },
-    {
-      name: 'Hybrid + Routed',
-      status: 'locked',
-      desc: 'A router classifies each query, then picks the retrieval strategy turn by turn.',
-    },
-  ]
+  const [active, setActive] = useState(null)
+  const [layerScope, setLayerScope] = useState([])
+  const [declaredLayers, setDeclaredLayers] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    fetch('/api/bf/settings/retrieval-architecture')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return
+        setActive(d.active)
+        setLayerScope(d.layer_scope || [])
+        setDeclaredLayers(d.declared_layers || [])
+      })
+      .catch(() => {})
+  }, [])
+
+  const post = async body => {
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await fetch('/api/bf/settings/retrieval-architecture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (r.ok) {
+        const d = await r.json()
+        setActive(d.active)
+        setLayerScope(d.layer_scope || [])
+      } else {
+        const e = await r.json().catch(() => ({}))
+        setError(e.detail || `Failed (${r.status})`)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selectArch = key => { if (!busy && key !== active) post({ architecture: key }) }
+  const toggleLayer = name => {
+    if (busy) return
+    const next = layerScope.includes(name)
+      ? layerScope.filter(x => x !== name)
+      : [...layerScope, name]
+    post({ architecture: 'layer_scoped', layer_scope: next })
+  }
+
   return (
     <div style={{ marginBottom: '48px' }}>
       <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#e5e5e5', margin: '0 0 4px 0' }}>
         Mind Architecture
       </h2>
       <p style={{ fontSize: '13px', color: '#555', margin: '0 0 16px 0', lineHeight: 1.6 }}>
-        How the brain retrieves from memory. Tiered Retrieval is live; the rest are described here and not yet selectable.
+        How the brain retrieves from memory. Pick an architecture — the choice persists and applies from the next chat turn.
       </p>
+      {error && (
+        <div style={{
+          backgroundColor: '#1a0a0a', border: '1px solid #ff6b6b30', borderRadius: '8px',
+          padding: '8px 12px', marginBottom: '12px', color: '#ff6b6b', fontSize: '12px',
+        }}>{error}</div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
-        {architectures.map(a => (
-          <div
-            key={a.name}
-            style={{
-              backgroundColor: '#111',
-              border: '1px solid #1e1e1e',
-              borderRadius: '12px',
-              padding: '24px',
-              height: '100%',
-              boxSizing: 'border-box',
-              opacity: a.status === 'live' ? 1 : 0.62,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-              <div style={{ fontSize: '14px', fontWeight: '600', color: '#e5e5e5' }}>
-                {a.name}
+        {ARCHITECTURES.map(a => {
+          const isActive = a.key === active
+          const clickable = a.selectable && !isActive && !busy
+          return (
+            <div
+              key={a.key}
+              onClick={clickable ? () => selectArch(a.key) : undefined}
+              style={{
+                backgroundColor: '#111',
+                border: `1px solid ${isActive ? '#00d4aa55' : '#1e1e1e'}`,
+                borderRadius: '12px',
+                padding: '24px',
+                boxSizing: 'border-box',
+                cursor: clickable ? 'pointer' : 'default',
+                opacity: a.selectable ? 1 : 0.6,
+                transition: 'border-color 0.15s ease',
+              }}
+              onMouseOver={clickable ? e => { e.currentTarget.style.borderColor = '#00d4aa55' } : undefined}
+              onMouseOut={clickable ? e => { e.currentTarget.style.borderColor = '#1e1e1e' } : undefined}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: '#e5e5e5' }}>{a.name}</div>
+                <ArchBadge kind={!a.selectable ? 'coming' : isActive ? 'active' : 'select'} />
               </div>
-              <ArchBadge status={a.status} />
+              <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.6' }}>{a.desc}</div>
+
+              {a.key === 'layer_scoped' && isActive && (
+                <div style={{ marginTop: '14px' }} onClick={e => e.stopPropagation()}>
+                  <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '8px' }}>
+                    Layers in scope{layerScope.length === 0 ? ' — all' : ''}
+                  </div>
+                  {declaredLayers.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.6 }}>
+                      No memory layers defined yet — Layer-Scoped behaves like Flat Similarity until you add layers in Settings.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {declaredLayers.map(name => {
+                        const on = layerScope.includes(name)
+                        return (
+                          <button
+                            key={name}
+                            onClick={() => toggleLayer(name)}
+                            disabled={busy}
+                            style={{
+                              fontSize: '11px', padding: '4px 10px', borderRadius: '999px',
+                              cursor: busy ? 'wait' : 'pointer',
+                              border: `1px solid ${on ? '#00d4aa55' : '#2a2a2a'}`,
+                              background: on ? 'rgba(0,212,170,0.1)' : '#161616',
+                              color: on ? '#00d4aa' : '#888',
+                            }}
+                          >{name}</button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.6' }}>
-              {a.desc}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
