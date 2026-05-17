@@ -383,6 +383,30 @@ export default function Chat() {
     })
   }
 
+  // Prefix the current line — or every line the selection touches — with a
+  // markdown marker (the List toolbar button: "- "). Line-level, not a wrap;
+  // the composer stays plain markdown. Lines already prefixed are left alone.
+  const applyLinePrefix = (prefix) => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const val = inputMessage
+    const selStart = ta.selectionStart ?? val.length
+    const selEnd = ta.selectionEnd ?? val.length
+    const lineStart = val.lastIndexOf('\n', selStart - 1) + 1
+    let lineEnd = val.indexOf('\n', selEnd)
+    if (lineEnd === -1) lineEnd = val.length
+    const prefixed = val.slice(lineStart, lineEnd)
+      .split('\n')
+      .map(l => (l.startsWith(prefix) ? l : prefix + l))
+      .join('\n')
+    const next = val.slice(0, lineStart) + prefixed + val.slice(lineEnd)
+    setInputMessage(next)
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(lineStart, lineStart + prefixed.length)
+    })
+  }
+
   useEffect(() => {
     fetch('/api/bf/models')
       .then(r => r.ok ? r.json() : null)
@@ -1199,11 +1223,12 @@ export default function Chat() {
               { label: 'B', title: 'Bold  (Cmd/Ctrl-B)', wrap: '**', extra: { fontWeight: 700 } },
               { label: 'I', title: 'Italic  (Cmd/Ctrl-I)', wrap: '*', extra: { fontStyle: 'italic' } },
               { label: '</>', title: 'Inline code  (Cmd/Ctrl-E)', wrap: '`', extra: { fontFamily: 'var(--font-mono)', fontSize: '11px' } },
+              { label: '≡', title: 'Bullet list  (prefixes lines with - )', prefix: '- ', extra: { fontSize: '15px' } },
             ].map(b => (
               <button
                 key={b.label}
                 type="button"
-                onClick={() => applyMarkdown(b.wrap)}
+                onClick={() => (b.wrap ? applyMarkdown(b.wrap) : applyLinePrefix(b.prefix))}
                 disabled={!selectedModel || isLoading}
                 title={b.title}
                 style={{
