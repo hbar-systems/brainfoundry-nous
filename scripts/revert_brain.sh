@@ -82,11 +82,23 @@ fi
 echo "==> Resetting code to $(git rev-parse --short "$PREV")..."
 git reset --hard "$PREV"
 
-# Rebuild
+# Rebuild. Same constraint as update_brain.sh: this script runs inside the api
+# container, so `docker compose up -d --build` would kill itself when it
+# recreates api. Build everything, recreate non-api here, hand the api recreate
+# to a detached helper container that outlives the api container being replaced.
 echo ""
 echo "==> Rebuilding services (this can take 1-3 minutes)..."
 echo "    Your chats, documents, and models persist — only code is rebuilt."
-docker compose up -d --build
+docker compose build
+docker compose up -d --no-deps --no-build nodeos ui public-chat
+echo "==> Recreating the api container via a detached helper..."
+docker run -d --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
+    "$(basename "$BRAIN_DIR")-api" \
+    docker compose up -d --no-deps --no-build api
+echo "    api is restarting on the new image — the live log stops here if you"
+echo "    ran this from the Update tab; that is expected."
 
 # Health check
 echo ""

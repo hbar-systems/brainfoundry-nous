@@ -99,11 +99,29 @@ fi
 echo "$LOCAL" > "$BRAIN_DIR/.update-prev-commit"
 echo "✓ Rollback point recorded: $(git rev-parse --short "$LOCAL")"
 
-# Rebuild
+# Rebuild.
+#
+# The Update endpoint runs this script INSIDE the api container. A plain
+# `docker compose up -d --build` would kill the script — and itself — the
+# instant it recreates the api container, leaving the new images built but the
+# containers never recreated onto them (the git pull lands, the rebuild does
+# not). So: build everything, recreate every service EXCEPT api here (the
+# script survives those), then hand the api recreate to a short-lived detached
+# helper container that outlives the api container being replaced.
 echo ""
 echo "==> Rebuilding services (this can take 1-3 minutes)..."
 echo "    Your chats, documents, and models persist — only code is rebuilt."
-docker compose up -d --build
+docker compose build
+docker compose up -d --no-deps --no-build nodeos ui public-chat
+echo "==> Recreating the api container via a detached helper..."
+docker run -d --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
+    "$(basename "$BRAIN_DIR")-api" \
+    docker compose up -d --no-deps --no-build api
+echo "    api is restarting on the new image. If you ran this from the brain's"
+echo "    Update tab, the live log stops here — that is expected; the tab polls"
+echo "    until the new version is up."
 
 # Health check
 echo ""
