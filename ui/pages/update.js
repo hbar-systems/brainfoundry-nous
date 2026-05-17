@@ -36,6 +36,7 @@ export default function Update() {
   const [logs, setLogs] = useState([]) // [{kind:'log'|'meta'|'error'|'done', text}]
   const [errorMsg, setErrorMsg] = useState(null)
   const [postUpdateCommit, setPostUpdateCommit] = useState(null)
+  const [jobKind, setJobKind] = useState('update') // 'update' | 'revert'
   const startCommitRef = useRef(null) // commit at click time, for "did it change?"
   const logBoxRef = useRef(null)
   const abortRef = useRef(null)
@@ -69,11 +70,15 @@ export default function Update() {
 
   const appendLog = (entry) => setLogs((prev) => [...prev, entry])
 
-  const startUpdate = async () => {
+  // Shared runner for both update and revert — both stream SSE from a script
+  // whose final `docker compose up --build` drops the connection, after which
+  // we poll version-info until the commit changes.
+  const runJob = async (endpoint, kind) => {
     if (phase === 'running' || phase === 'rebuilding' || phase === 'verifying') return
     setLogs([])
     setErrorMsg(null)
     setPostUpdateCommit(null)
+    setJobKind(kind)
     setPhase('running')
     startCommitRef.current = version?.current || null
 
@@ -82,7 +87,7 @@ export default function Update() {
 
     let r
     try {
-      r = await fetch('/api/bf/admin/update', {
+      r = await fetch(endpoint, {
         method: 'POST',
         signal: ctrl.signal,
         headers: { 'Accept': 'text/event-stream' },
@@ -170,6 +175,20 @@ export default function Update() {
       setErrorMsg('Stream closed unexpectedly without a rebuild signal.')
       setPhase('error')
     }
+  }
+
+  const startUpdate = () => runJob('/api/bf/admin/update', 'update')
+
+  const startRevert = () => {
+    const t = version?.rollback_to
+    if (!t) return
+    const label = t.subject ? `${t.short} — “${t.subject}”` : t.short
+    if (!window.confirm(
+      `Revert this brain to ${label}?\n\n` +
+      `This rebuilds the brain on the previous version. Your chats, documents, ` +
+      `and models stay intact — only the code changes.`
+    )) return
+    runJob('/api/bf/admin/revert', 'revert')
   }
 
   // Poll /admin/version-info every few seconds until either the commit
@@ -321,9 +340,9 @@ export default function Update() {
               transition: 'all 0.15s ease',
             }}
           >
-            {phase === 'running' ? 'Updating…'
+            {phase === 'running' ? (jobKind === 'revert' ? 'Reverting…' : 'Updating…')
               : phase === 'rebuilding' ? 'Rebuilding…'
-              : phase === 'verifying' ? 'Verifying new version…'
+              : phase === 'verifying' ? 'Verifying…'
               : phase === 'success' ? 'Pull latest from public template'
               : upToDate ? 'Pull latest (already up to date)'
               : 'Pull latest from public template'}
@@ -332,6 +351,34 @@ export default function Update() {
             <span style={{ color: COLORS.muted, fontSize: '13px', marginLeft: '14px', fontFamily: 'system-ui, sans-serif' }}>
               {version.behind_by} new {version.behind_by === 1 ? 'commit' : 'commits'} on origin/main.
             </span>
+          )}
+
+          {/* One-step revert — back to the version running before the last
+              update. Shown only when update_brain.sh has recorded a rollback
+              point that differs from the current commit. */}
+          {version?.rollback_to && (
+            <div style={{ marginTop: '14px' }}>
+              <button
+                onClick={startRevert}
+                disabled={buttonDisabled}
+                style={{
+                  padding: '9px 18px',
+                  fontSize: '13px',
+                  fontFamily: 'system-ui, sans-serif',
+                  color: buttonDisabled ? COLORS.mutedDim : COLORS.muted,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: '8px',
+                  cursor: buttonDisabled ? 'not-allowed' : 'pointer',
+                }}
+              >
+                ↩ Revert to previous version ({version.rollback_to.short})
+              </button>
+              <span style={{ color: COLORS.mutedDim, fontSize: '12px', marginLeft: '12px', fontFamily: 'system-ui, sans-serif' }}>
+                One-step undo of the last update
+                {version.rollback_to.subject ? ` — back to “${version.rollback_to.subject}”` : ''}.
+              </span>
+            </div>
           )}
         </div>
 
@@ -391,7 +438,8 @@ export default function Update() {
             marginBottom: '16px',
             fontFamily: 'system-ui, sans-serif',
           }}>
-            Updated to <strong style={{ fontFamily: 'DM Mono, monospace' }}>{shortSha(postUpdateCommit)}</strong>. Brain is healthy.
+            {jobKind === 'revert' ? 'Reverted to ' : 'Updated to '}
+            <strong style={{ fontFamily: 'DM Mono, monospace' }}>{shortSha(postUpdateCommit)}</strong>. Brain is healthy.
           </div>
         )}
 
@@ -426,7 +474,7 @@ export default function Update() {
         {(logs.length > 0 || phase === 'running' || phase === 'rebuilding') && (
           <div>
             <div style={{ color: COLORS.mutedDim, fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', marginBottom: '6px' }}>
-              update_brain.sh output
+              {jobKind === 'revert' ? 'revert_brain.sh' : 'update_brain.sh'} output
             </div>
             <div
               ref={logBoxRef}

@@ -117,3 +117,8 @@ api/brain_persona.local.md
 # removed. Ignored so a brain that has not yet restarted still gets a clean
 # `git status` after the J2 retrofit.
 api/brain_persona.md
+
+# Rollback point — the commit running before the last update. Written by
+# update_brain.sh, read by revert_brain.sh / the console Revert button.
+# Per-brain runtime state, never committed.
+.update-prev-commit

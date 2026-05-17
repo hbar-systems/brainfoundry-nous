@@ -3979,6 +3979,7 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
     latest = None
     behind_by = None
     error = None
+    rollback_to = None
 
     try:
         if os.path.isdir(os.path.join(BRAIN_HOST_DIR, ".git")):
@@ -4006,6 +4007,37 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
                     behind_by = int(r2.stdout.strip())
                 except ValueError:
                     pass
+
+            # Prefer the real checkout HEAD over the build-arg env: it survives
+            # button-triggered rebuilds (which don't pass BRAIN_GIT_COMMIT) and
+            # is what "currently running" actually means.
+            r3 = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
+            )
+            head_sha = r3.stdout.strip() if r3.returncode == 0 else None
+            if head_sha:
+                current = head_sha
+
+            # Rollback target — the commit update_brain.sh stamped before the
+            # last update. Surfaced so the console can offer a one-step revert.
+            try:
+                stamp = os.path.join(BRAIN_HOST_DIR, ".update-prev-commit")
+                if os.path.isfile(stamp):
+                    with open(stamp) as _fh:
+                        prev = _fh.read().strip()
+                    if prev and prev != head_sha:
+                        rs = subprocess.run(
+                            ["git", "log", "-1", "--format=%s", prev],
+                            cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
+                        )
+                        rollback_to = {
+                            "sha": prev,
+                            "short": prev[:7],
+                            "subject": rs.stdout.strip() if rs.returncode == 0 else None,
+                        }
+            except Exception:
+                pass
         else:
             error = f"BRAIN_HOST_DIR={BRAIN_HOST_DIR} is not a git checkout (or not mounted)."
     except FileNotFoundError:
@@ -4020,6 +4052,7 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
         "behind_by": behind_by,
         "brain_version": BRAIN_VERSION,
         "preflight_error": _update_preflight(),
+        "rollback_to": rollback_to,
         "error": error,
     }
 
@@ -4068,6 +4101,66 @@ def admin_update(api_key: str = Depends(get_api_key)):
             for line in proc.stdout:
                 # Each iteration is one log line — flush as a separate SSE event
                 # so the UI can render it immediately.
+                yield frame({"type": "log", "line": line.rstrip("\n")})
+            proc.wait(timeout=600)
+            yield frame({"type": "done", "returncode": proc.returncode})
+        except Exception as e:
+            yield frame({"type": "error", "message": f"{type(e).__name__}: {e}"})
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/admin/revert")
+def admin_revert(api_key: str = Depends(get_api_key)):
+    """Run scripts/revert_brain.sh and stream its output as SSE.
+
+    One-step undo of the last update — rolls the brain back to the commit
+    update_brain.sh recorded in .update-prev-commit. Like /admin/update, the
+    final `docker compose up -d --build` restarts the api container, so this
+    stream drops mid-way; the UI polls /admin/version-info to confirm.
+    """
+    err = _update_preflight()
+    if err:
+        raise HTTPException(status_code=503, detail=err)
+
+    script = os.path.join(BRAIN_HOST_DIR, "scripts", "revert_brain.sh")
+    if not os.path.isfile(script):
+        raise HTTPException(status_code=503,
+                            detail=f"revert_brain.sh not found at {script}. Pull a newer template, then retry.")
+
+    def event_stream():
+        def frame(obj):
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+        yield frame({"type": "start", "cwd": BRAIN_HOST_DIR})
+
+        try:
+            proc = subprocess.Popen(
+                ["bash", script],
+                cwd=BRAIN_HOST_DIR,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR},
+            )
+        except Exception as e:
+            yield frame({"type": "error", "message": f"failed to spawn: {type(e).__name__}: {e}"})
+            yield "data: [DONE]\n\n"
+            return
+
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
                 yield frame({"type": "log", "line": line.rstrip("\n")})
             proc.wait(timeout=600)
             yield frame({"type": "done", "returncode": proc.returncode})

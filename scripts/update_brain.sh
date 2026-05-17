@@ -92,6 +92,13 @@ if [ ! -f .env ] && [ -f ".env.bak-$TS" ]; then
     echo "✓ Restored .env from backup"
 fi
 
+# Record the pre-update commit as the rollback point. scripts/revert_brain.sh
+# (and the console "Revert to previous version" button) read this to undo
+# exactly one step — back to the version that was just running, the one known
+# to be database-compatible.
+echo "$LOCAL" > "$BRAIN_DIR/.update-prev-commit"
+echo "✓ Rollback point recorded: $(git rev-parse --short "$LOCAL")"
+
 # Rebuild
 echo ""
 echo "==> Rebuilding services (this can take 1-3 minutes)..."
