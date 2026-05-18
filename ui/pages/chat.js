@@ -960,27 +960,17 @@ export default function Chat() {
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Memory layer this chat consolidates into — episodic / semantic
                   / procedural. The status line confirms where it landed. */}
-              <select
+              <CustomSelect
                 value={saveLayer}
-                onChange={e => setSaveLayer(e.target.value)}
-                disabled={consolidating}
+                onChange={setSaveLayer}
                 title="Which memory layer Save to memory consolidates this chat into"
-                style={{
-                  padding: '7px 8px',
-                  background: 'var(--surface)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  cursor: consolidating ? 'not-allowed' : 'pointer',
-                  outline: 'none',
-                }}
-              >
-                <option value="episodic">episodic</option>
-                <option value="semantic">semantic</option>
-                <option value="procedural">procedural</option>
-              </select>
+                minWidth={124}
+                options={[
+                  { value: 'episodic', label: 'episodic' },
+                  { value: 'semantic', label: 'semantic' },
+                  { value: 'procedural', label: 'procedural' },
+                ]}
+              />
               <button
                 onClick={consolidateSession}
                 disabled={consolidating}

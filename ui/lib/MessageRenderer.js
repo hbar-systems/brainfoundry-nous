@@ -57,16 +57,20 @@ const components = {
   hr: () => (
     <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '0.9em 0' }} />
   ),
+  // The message bubble sets word-break: break-word; without table-layout +
+  // column widths that lets the browser squeeze a column to ~1 char and wrap
+  // a header letter-per-line. tableLayout:auto + th nowrap + a td minWidth
+  // keep columns intact; the wrapper scrolls horizontally on overflow.
   table: ({ children }) => (
-    <div style={{ overflowX: 'auto', margin: '0.5em 0' }}>
-      <table style={{ borderCollapse: 'collapse', fontSize: '0.95em' }}>{children}</table>
+    <div style={{ overflowX: 'auto', maxWidth: '100%', margin: '0.5em 0' }}>
+      <table style={{ borderCollapse: 'collapse', fontSize: '0.95em', tableLayout: 'auto', width: 'auto' }}>{children}</table>
     </div>
   ),
   th: ({ children }) => (
-    <th style={{ borderBottom: '1px solid var(--border)', padding: '4px 10px', textAlign: 'left', fontWeight: 600 }}>{children}</th>
+    <th style={{ borderBottom: '1px solid var(--border)', padding: '5px 12px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap' }}>{children}</th>
   ),
   td: ({ children }) => (
-    <td style={{ borderBottom: '1px solid var(--border)', padding: '4px 10px', opacity: 0.92 }}>{children}</td>
+    <td style={{ borderBottom: '1px solid var(--border)', padding: '5px 12px', opacity: 0.92, minWidth: '72px', wordBreak: 'normal' }}>{children}</td>
   ),
   code: ({ node, className, children, ...props }) => {
     // react-markdown v10 removed the `inline` prop. We branch by className:

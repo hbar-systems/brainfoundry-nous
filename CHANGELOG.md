@@ -18,6 +18,18 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   app-originated permits are attributable in the audit trail. Schema:
   `app.schema.json` adds `llm.invoke` to the `permissions` enum + an
   `allOf` rule requiring `requires_layers`. Non-streaming in v0.
+- providers: local Ollama models now win over name-prefix routing.
+  `_resolve` checks the live Ollama tag list (`GET /api/tags`, cached 60s,
+  fail-soft) before the prefix heuristics, so an open-weight model whose
+  name carries a foreign prefix (e.g. `gpt-oss:120b`) routes to local
+  Ollama instead of erroring "API key not configured".
+- ui: markdown tables in the chat no longer collapse. The message bubble's
+  `word-break: break-word` was squeezing columns to ~1 char and wrapping
+  header text letter-per-line; `MessageRenderer` now sets `table-layout`,
+  a header `nowrap`, and a cell min-width, with horizontal scroll on
+  overflow.
+- ui: the Save-to-memory layer dropdown is now the themed `CustomSelect`
+  instead of a native `<select>` — matches the rest of the chat header.
 
 ## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
 

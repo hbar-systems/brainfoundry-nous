@@ -13,6 +13,8 @@ mutating keys at runtime (e.g. via /settings/keys) so the change takes
 effect without a container restart.
 """
 import os
+import time
+
 import httpx
 
 from api import settings_store
@@ -133,6 +135,32 @@ def get_available_models() -> list:
     return models
 
 
+# Local-Ollama tag cache — keeps the per-call _resolve() check from hitting
+# the Ollama API on every message. Short TTL; tags change only on model pull.
+_ollama_tags_cache = {"at": 0.0, "tags": set()}
+_OLLAMA_TAGS_TTL = 60.0
+
+
+def _local_ollama_models() -> set:
+    """Set of model tags on the local Ollama, cached briefly. Fail-soft: on
+    any error returns the last good set (possibly empty) so the name-prefix
+    routing below still applies."""
+    now = time.time()
+    if _ollama_tags_cache["tags"] and now - _ollama_tags_cache["at"] < _OLLAMA_TAGS_TTL:
+        return _ollama_tags_cache["tags"]
+    try:
+        import requests as _req
+        r = _req.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        if r.ok:
+            tags = {m["name"] for m in r.json().get("models", []) if m.get("name")}
+            _ollama_tags_cache["at"] = now
+            _ollama_tags_cache["tags"] = tags
+            return tags
+    except Exception:
+        pass
+    return _ollama_tags_cache["tags"]
+
+
 def _resolve(model: str):
     """
     Return (client_type, client, actual_model_name) for a given model string.
@@ -146,7 +174,14 @@ def _resolve(model: str):
       together/*       → Together.ai (prefix stripped before API call)
       mistral-*        → Mistral
       anything else    → Ollama (local)
+
+    A model present on the local Ollama always wins over the name-prefix
+    heuristics — OpenAI's open-weight models (e.g. gpt-oss:120b) carry a
+    'gpt-' prefix but run locally, so they must route to Ollama, not the
+    OpenAI API.
     """
+    if model in _local_ollama_models():
+        return ("ollama", None, model)
     if model.startswith("claude-"):
         return ("anthropic", _anthropic_async, model)
     elif model.startswith(("gpt-", "o1-", "o3-", "o4-")):
