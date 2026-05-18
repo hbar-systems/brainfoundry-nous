@@ -1236,6 +1236,14 @@ export default function Chat() {
             <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
               markdown
             </span>
+            {/* Shift+Enter is a newline; plain Enter sends. Without this hint
+                that's invisible — you can't tell how to write a multi-line list. */}
+            <span
+              title="Enter sends the message · Shift+Enter starts a new line"
+              style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', opacity: 0.75 }}
+            >
+              ⇧↵ newline
+            </span>
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
             <label

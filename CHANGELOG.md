@@ -30,6 +30,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   overflow.
 - ui: the Save-to-memory layer dropdown is now the themed `CustomSelect`
   instead of a native `<select>` — matches the rest of the chat header.
+- ui: composer toolbar now shows a `⇧↵ newline` hint — plain Enter sends,
+  Shift+Enter starts a new line. Previously invisible, so multi-line input
+  (e.g. a bullet list built with the ≡ button) wasn't discoverable.
 
 ## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
 
