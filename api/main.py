@@ -1481,13 +1481,36 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
         context = "\n\nRelevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
             context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
-    prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
+    # Persona: only use it as the system prompt once it is actually
+    # configured. An unconfigured brain still loads the blank
+    # brain_persona.template.md — feeding that "# TEMPLATE — edit this file
+    # before first use" banner verbatim makes the brain recite setup text at
+    # a brand-new user (cohort feedback, 2026-05-17). Use a clean default
+    # until the owner sets a persona.
+    from api.persona_tools import is_template, detect_placeholders
+    persona_set = bool(BRAIN_PERSONA) and not is_template(BRAIN_PERSONA) \
+        and not detect_placeholders(BRAIN_PERSONA)
+    if persona_set:
+        prompt = BRAIN_PERSONA
+    else:
+        prompt = ("You are a personal brain — a private AI whose owner is "
+                  "still setting it up. You have not been given a persona "
+                  "yet. Answer helpfully and directly. Never recite setup, "
+                  "template, or configuration instructions back to the user.")
     prompt += ("\n\nUse the provided documents to answer questions "
                "accurately. When a document informs your answer, cite it "
                "inline by its name in square brackets — e.g. "
                "[projects/ops/FOCUS.md]. Cite every document you draw on.")
     if context:
         prompt += context
+    else:
+        # Empty corpus — no documents added yet. Tell the model to say so
+        # plainly instead of answering from the (possibly template) persona.
+        prompt += ("\n\nThis brain has no knowledge base yet — no documents "
+                   "have been added. If the question depends on stored "
+                   "knowledge, say plainly that you have no knowledge yet and "
+                   "that the owner can add documents in the Knowledge tab. "
+                   "Do not invent facts.")
     prompt += "\n\nConversation:\n"
     for msg in messages:
         role = msg.get("role", "user")

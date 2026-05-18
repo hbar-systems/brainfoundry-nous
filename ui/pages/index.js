@@ -1,54 +1,77 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 
-function FirstLoginTour() {
-  const [show, setShow] = useState(false)
+// First-run checklist — the cold-start fix. A live 3-step card on the
+// dashboard: set persona → add knowledge → start a chat. Each step reflects
+// real brain state and links to the right tab. Auto-hides once all three are
+// done; dismissible. Replaces the old static welcome modal.
+function FirstRunChecklist() {
+  const [steps, setSteps] = useState(null) // { persona, knowledge, chat }
+  const [dismissed, setDismissed] = useState(false)
+
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!localStorage.getItem('brain_tour_seen')) setShow(true)
+    if (localStorage.getItem('brain_firstrun_dismissed')) { setDismissed(true); return }
+    Promise.all([
+      fetch('/api/bf/persona/status').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/bf/documents/stats').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/bf/sessions').then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([p, d, s]) => {
+      setSteps({
+        persona: !!(p && p.configured),
+        knowledge: !!(d && ((d.total_chunks || 0) > 0 || (d.unique_documents || 0) > 0)),
+        chat: !!(s && Array.isArray(s.sessions) && s.sessions.length > 0),
+      })
+    })
   }, [])
+
   const dismiss = () => {
-    localStorage.setItem('brain_tour_seen', '1')
-    setShow(false)
+    if (typeof window !== 'undefined') localStorage.setItem('brain_firstrun_dismissed', '1')
+    setDismissed(true)
   }
-  if (!show) return null
+
+  if (dismissed || !steps) return null
+  if (steps.persona && steps.knowledge && steps.chat) return null
+
+  const rows = [
+    { key: 'persona', done: steps.persona, label: 'Set your brain’s persona',
+      sub: 'Who it is, how it thinks — the system prompt on every turn.', href: '/persona', cta: 'Persona' },
+    { key: 'knowledge', done: steps.knowledge, label: 'Add your first knowledge',
+      sub: 'Paste text or drop a file — the brain learns from what you give it.', href: '/upload', cta: 'Knowledge' },
+    { key: 'chat', done: steps.chat, label: 'Start a chat',
+      sub: 'Talk to your brain — it answers from your persona and knowledge.', href: '/chat', cta: 'Chat' },
+  ]
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 200,
-      background: 'rgba(0,0,0,0.7)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 20,
-    }}>
-      <div style={{
-        background: '#161310',
-        border: '1px solid #2a2420',
-        borderRadius: 12,
-        maxWidth: 520,
-        width: '100%',
-        padding: 32,
-        color: '#e8e0d5',
-      }}>
-        <div style={{ color: '#c9a96e', fontSize: 24, marginBottom: 8 }}>ℏ</div>
-        <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontSize: 24, margin: '0 0 14px 0' }}>
-          Welcome to your brain.
-        </h2>
-        <p style={{ color: '#e8e0d5', fontSize: 14, lineHeight: 1.7, margin: '0 0 12px 0' }}>
-          This isn't a chat product. It's an instance you own — running on your
-          server, remembering what you teach it, answering only to you.
-        </p>
-        <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: '0 0 16px 0' }}>
-          Three things to do first:
-        </p>
-        <ol style={{ color: '#e8e0d5', fontSize: 14, lineHeight: 1.8, paddingLeft: 20, margin: '0 0 20px 0' }}>
-          <li>Open <Link href="/settings" style={{ color: '#c9a96e' }}>Settings</Link> and add an API key (or skip — local Ollama works out of the box).</li>
-          <li>Set up your memory layers — start blank, or pick presets.</li>
-          <li>Upload something via <Link href="/upload" style={{ color: '#c9a96e' }}>Knowledge</Link>. Your brain learns from what you give it.</li>
-        </ol>
-        <button onClick={dismiss} style={{
-          background: '#c9a96e', color: '#0e0c0b',
-          border: 'none', borderRadius: 6, padding: '10px 20px',
-          fontSize: 13, fontWeight: 600, cursor: 'pointer',
-        }}>Got it</button>
+    <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: 24, marginBottom: 32 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: 0 }}>Get your brain started</h2>
+        <button onClick={dismiss} style={{ background: 'none', border: 'none', color: '#555', fontSize: 12, cursor: 'pointer' }}>
+          Dismiss
+        </button>
+      </div>
+      <p style={{ fontSize: 13, color: '#555', margin: '0 0 16px 0' }}>Three steps from a blank brain to a useful one.</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {rows.map(r => (
+          <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: r.done ? 0.55 : 1 }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+              border: `1px solid ${r.done ? '#00d4aa55' : '#2a2a2a'}`,
+              background: r.done ? 'rgba(0,212,170,0.12)' : 'transparent',
+              color: '#00d4aa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
+            }}>{r.done ? '✓' : ''}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, color: '#e5e5e5', textDecoration: r.done ? 'line-through' : 'none' }}>{r.label}</div>
+              <div style={{ fontSize: 12, color: '#555' }}>{r.sub}</div>
+            </div>
+            {!r.done && (
+              <a href={r.href} style={{
+                flexShrink: 0, fontSize: 12, fontWeight: 600, color: '#0e0c0b',
+                background: '#c9a96e', borderRadius: 6, padding: '6px 14px', textDecoration: 'none',
+              }}>{r.cta} &rarr;</a>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -274,8 +297,6 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: '40px 32px', maxWidth: '920px', margin: '0 auto' }}>
-      <FirstLoginTour />
-
       <div style={{ marginBottom: '40px' }}>
         <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: '#e5e5e5' }}>
           Console
@@ -284,6 +305,8 @@ export default function Dashboard() {
           {process.env.NEXT_PUBLIC_BRAIN_NODE_ID || 'brain-node'} &middot; {process.env.NEXT_PUBLIC_BRAIN_HOST || 'localhost'}
         </p>
       </div>
+
+      <FirstRunChecklist />
 
       {error && (
         <div style={{
