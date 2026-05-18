@@ -2,6 +2,12 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
   try {
+    // Optional caller attribution. Callers with no body (console chat,
+    // upload) keep the historical 'console' defaults. The brain-app bridge
+    // passes agent_id 'app:<id>' so app-originated permits are attributable
+    // in the NodeOS / BrainKernel audit trail.
+    const opts = (req.body && typeof req.body === 'object') ? req.body : {}
+
     const headers = { 'Content-Type': 'application/json' }
     if (process.env.NODEOS_INTERNAL_KEY) {
       headers['X-Internal-Key'] = process.env.NODEOS_INTERNAL_KEY
@@ -11,10 +17,10 @@ export default async function handler(req, res) {
       headers,
       body: JSON.stringify({
         node_id: process.env.BRAIN_ID || process.env.BRAIN_NODE_ID || 'my-brain-01',
-        agent_id: 'console',
-        loop_type: 'chat',
+        agent_id: opts.agent_id || 'console',
+        loop_type: opts.loop_type || 'chat',
         ttl_seconds: 300,
-        reason: 'console chat session',
+        reason: opts.reason || 'console chat session',
       }),
     })
 

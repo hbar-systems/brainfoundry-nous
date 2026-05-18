@@ -8,6 +8,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 - rag: /chat/rag prompt now instructs the model to cite source documents
   inline (Event 14 follow-up).
+- brain-apps: new `llm.complete` bridge intent. An installed app that
+  declares the `llm.invoke` permission can ask the brain to generate a
+  completion over its own corpus using the operator's selected (BYOK)
+  model. The host shell (`ui/pages/apps/[id].js`) mints + holds the loop
+  permit and proxies to `/chat/rag`; the iframe never sees the permit.
+  RAG retrieval is scoped to the app's `read`-mode `requires_layers`.
+  `ui/pages/api/permit.js` now accepts optional `agent_id` / `reason` so
+  app-originated permits are attributable in the audit trail. Schema:
+  `app.schema.json` adds `llm.invoke` to the `permissions` enum + an
+  `allOf` rule requiring `requires_layers`. Non-streaming in v0.
 
 ## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
 

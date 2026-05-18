@@ -149,6 +149,7 @@
         "enum": [
           "memory.read",
           "memory.write",
+          "llm.invoke",
           "federation.send",
           "federation.receive",
           "secrets.read",
@@ -188,6 +189,16 @@
       "then": {
         "required": ["requires_layers"],
         "description": "If the app declares memory.read, it MUST declare which layers (with mode read) so the operator sees the scope on install."
+      }
+    },
+    {
+      "if": {
+        "required": ["permissions"],
+        "properties": { "permissions": { "contains": { "const": "llm.invoke" } } }
+      },
+      "then": {
+        "required": ["requires_layers"],
+        "description": "If the app declares llm.invoke, it MUST declare which layers (with mode read) the brain may retrieve over when generating, so the operator sees the corpus scope on install. The bridge scopes /chat/rag retrieval to exactly the read-mode layers declared here — an app cannot generate over a layer the operator did not approve."
       }
     }
   ],
