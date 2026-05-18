@@ -1482,7 +1482,10 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
         for i, doc in enumerate(relevant_docs, 1):
             context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
     prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
-    prompt += "\n\nUse the provided documents to answer questions accurately."
+    prompt += ("\n\nUse the provided documents to answer questions "
+               "accurately. When a document informs your answer, cite it "
+               "inline by its name in square brackets — e.g. "
+               "[projects/ops/FOCUS.md]. Cite every document you draw on.")
     if context:
         prompt += context
     prompt += "\n\nConversation:\n"

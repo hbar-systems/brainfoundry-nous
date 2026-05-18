@@ -4,6 +4,11 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased
+
+- rag: /chat/rag prompt now instructs the model to cite source documents
+  inline (Event 14 follow-up).
+
 ## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
 
 **Fix only.** 0.8.3 wasn't enough. Post-deploy probes showed the 1b
