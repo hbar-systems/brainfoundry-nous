@@ -6,6 +6,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui/apps: brain-app install moved out of Settings onto the Apps page
+  (`/apps`). The GitHub-URL field, manifest preview, permission/layer
+  scope approval, just-installed token reveal, and per-app enable/disable
+  + uninstall now all live on `/apps`. Settings -> Apps is reduced to a
+  quiet, faded pointer back to the page (no controls there by design).
+- ui/chat: composer newline handling is now device-aware. On touch
+  devices (on-screen keyboard, no Shift) plain Enter inserts a newline and
+  the Send button is the only way to send; on a real keyboard Enter still
+  sends and Shift+Enter is the newline. The composer hint adapts to match
+  (`↵ new line · tap Send` vs `⇧↵ newline`).
 - rag: /chat/rag prompt now instructs the model to cite source documents
   inline (Event 14 follow-up).
 - brain-apps: new `llm.complete` bridge intent. An installed app that

@@ -317,6 +317,19 @@ export default function Chat() {
   const textareaRef = useRef(null)
   const [stickToBottom, setStickToBottom] = useState(true)
 
+  // On touch devices the on-screen keyboard has no Shift, so Shift+Enter
+  // cannot make a newline. There, plain Enter inserts a newline and the
+  // Send button is the only way to send — the messaging-app convention.
+  const [isTouch, setIsTouch] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(pointer: coarse)')
+    const update = () => setIsTouch(mq.matches)
+    update()
+    mq.addEventListener?.('change', update)
+    return () => mq.removeEventListener?.('change', update)
+  }, [])
+
   // Typewriter reveal: while streaming, deltas accumulate in revealRef.full
   // and a rAF releases them into the visible message at the chosen cps.
   const revealRef = useRef({ full: '', shown: 0, done: true, last: 0 })
@@ -694,8 +707,10 @@ export default function Chat() {
       if (k === 'i') { e.preventDefault(); applyMarkdown('*'); return }
       if (k === 'e') { e.preventDefault(); applyMarkdown('`'); return }
     }
-    // Enter sends; Shift-Enter inserts a newline.
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+    // Enter sends; Shift-Enter inserts a newline. On touch devices there
+    // is no Shift, so plain Enter falls through to a newline and the Send
+    // button is the only way to send.
+    if (e.key === 'Enter' && !e.shiftKey && !isTouch) { e.preventDefault(); sendMessage() }
   }
 
   // Cancel any in-flight typewriter rAF when the page unmounts.
@@ -1236,13 +1251,16 @@ export default function Chat() {
             <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
               markdown
             </span>
-            {/* Shift+Enter is a newline; plain Enter sends. Without this hint
-                that's invisible — you can't tell how to write a multi-line list. */}
+            {/* How to make a newline is invisible without a hint. It also
+                differs by device: desktop has Shift+Enter, touch has no
+                Shift so plain Enter is the newline and Send is the sender. */}
             <span
-              title="Enter sends the message · Shift+Enter starts a new line"
+              title={isTouch
+                ? 'Enter starts a new line · tap Send to send'
+                : 'Enter sends the message · Shift+Enter starts a new line'}
               style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', opacity: 0.75 }}
             >
-              ⇧↵ newline
+              {isTouch ? '↵ new line · tap Send' : '⇧↵ newline'}
             </span>
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>

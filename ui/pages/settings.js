@@ -546,240 +546,22 @@ const COPY_BTN = {
 
 // ---------- Advanced ----------
 // ---------- Apps ----------
-// Brain-app install UI. Paste a GitHub URL → preview manifest → approve →
-// app appears as a tab and is reachable at /apps/<id>. v0 surface only —
-// permission scope display + uninstall/disable. Future: pinned-version
-// updates, hot-disable mid-session.
+// Brain-apps are installed and managed on the Apps page (/apps). This panel
+// holds no controls by design — it is a quiet, faded pointer back there.
 function AppsPanel() {
-  const [list, setList] = useState({ apps: [] })
-  const [repoUrl, setRepoUrl] = useState('')
-  const [preview, setPreview] = useState(null)   // { manifest, commit_sha }
-  const [busy, setBusy] = useState(null)         // null | 'preview' | 'install' | 'uninstall:<id>' | 'toggle:<id>'
-  const [err, setErr] = useState(null)
-  const [justInstalled, setJustInstalled] = useState(null) // { id, app_token }
-
-  const load = () => api('/apps/list').then(setList).catch(e => setErr(String(e.message || e)))
-  useEffect(() => { load() }, [])
-
-  const doPreview = async () => {
-    if (!repoUrl.trim()) return
-    setBusy('preview'); setErr(null); setPreview(null)
-    try {
-      const p = await api('/apps/install/preview', {
-        method: 'POST',
-        body: JSON.stringify({ repo_url: repoUrl.trim() }),
-      })
-      setPreview(p)
-    } catch (e) {
-      setErr(`Preview failed: ${e.message}`)
-    }
-    setBusy(null)
-  }
-
-  const doInstall = async () => {
-    if (!preview) return
-    setBusy('install'); setErr(null)
-    try {
-      const r = await api('/apps/install', {
-        method: 'POST',
-        body: JSON.stringify({ repo_url: repoUrl.trim() }),
-      })
-      setJustInstalled({ id: r.id, app_token: r.app_token })
-      setPreview(null)
-      setRepoUrl('')
-      await load()
-    } catch (e) {
-      setErr(`Install failed: ${e.message}`)
-    }
-    setBusy(null)
-  }
-
-  const doUninstall = async (id) => {
-    if (!confirm(`Uninstall ${id}? This deletes the app's clone and removes it from the nav.`)) return
-    setBusy(`uninstall:${id}`); setErr(null)
-    try {
-      await api(`/apps/${id}/uninstall`, { method: 'POST' })
-      await load()
-    } catch (e) {
-      setErr(`Uninstall failed: ${e.message}`)
-    }
-    setBusy(null)
-  }
-
-  const doToggle = async (id, enabled) => {
-    setBusy(`toggle:${id}`); setErr(null)
-    try {
-      await api(`/apps/${id}/${enabled ? 'disable' : 'enable'}`, { method: 'POST' })
-      await load()
-    } catch (e) {
-      setErr(`Toggle failed: ${e.message}`)
-    }
-    setBusy(null)
-  }
-
   return (
-    <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
-        Apps are sandboxed iframes installed into your brain. Each app declares
-        which memory layers and permissions it needs in its manifest; you approve
-        the scope on install. Installed apps appear in the
-        {' '}<a href="/apps" style={{ color: '#c9a96e', textDecoration: 'none' }}>Apps</a>{' '}
-        tab and are reachable at <code style={{ color: '#c9a96e' }}>/apps/&lt;id&gt;</code>.
+    <div style={{ paddingTop: 16, opacity: 0.68 }}>
+      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+        <span style={{ color: '#c9a96e', fontSize: 15, marginRight: 8 }}>◇</span>
+        Brain-apps live on the{' '}
+        <a href="/apps" style={{ color: '#c9a96e', textDecoration: 'none' }}>Apps page</a>.
+        Install one from a GitHub repo, approve the memory layers and permissions
+        it asks for, enable or remove it &mdash; all in one place.
       </p>
-
-      {/* Install form */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-        <input
-          type="text"
-          value={repoUrl}
-          onChange={e => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/owner/app-repo"
-          style={{ ...INPUT, flex: 1 }}
-          onKeyDown={e => { if (e.key === 'Enter') doPreview() }}
-        />
-        <button
-          style={BTN}
-          disabled={busy === 'preview' || !repoUrl.trim()}
-          onClick={doPreview}
-        >
-          {busy === 'preview' ? '…' : 'Preview'}
-        </button>
-      </div>
-
-      {/* Preview / approval card */}
-      {preview && (
-        <div style={{
-          backgroundColor: '#0e0c0b',
-          border: '1px solid #2a2420',
-          borderRadius: 8,
-          padding: 16,
-          marginBottom: 16,
-        }}>
-          <div style={{ fontSize: 15, color: '#e8e0d5', marginBottom: 4 }}>
-            <b>{preview.manifest.name}</b> <span style={{ color: '#6b5f52', fontFamily: 'DM Mono, monospace', fontSize: 12 }}>v{preview.manifest.version}</span>
-          </div>
-          <div style={{ fontSize: 13, color: '#6b5f52', fontStyle: 'italic', marginBottom: 12 }}>
-            {preview.manifest.description}
-          </div>
-          <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 12, fontFamily: 'DM Mono, monospace' }}>
-            commit {preview.commit_sha.slice(0, 12)} · license {preview.manifest.license}
-          </div>
-
-          {Array.isArray(preview.manifest.permissions) && preview.manifest.permissions.length > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: '#c9a96e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Permissions</div>
-              <div style={{ fontSize: 13, color: '#e8e0d5', fontFamily: 'DM Mono, monospace' }}>
-                {preview.manifest.permissions.join(', ')}
-              </div>
-            </div>
-          )}
-
-          {Array.isArray(preview.manifest.requires_layers) && preview.manifest.requires_layers.length > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: '#c9a96e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Memory layers</div>
-              <div style={{ fontSize: 13, color: '#e8e0d5', fontFamily: 'DM Mono, monospace' }}>
-                {preview.manifest.requires_layers.map(l => `${l.layer}:${l.mode}`).join(', ')}
-              </div>
-            </div>
-          )}
-
-          {Array.isArray(preview.manifest.requires_endpoints) && preview.manifest.requires_endpoints.length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, color: '#c9a96e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Brain endpoints called</div>
-              <div style={{ fontSize: 12, color: '#e8e0d5', fontFamily: 'DM Mono, monospace' }}>
-                {preview.manifest.requires_endpoints.map((e, i) => <div key={i}>{e}</div>)}
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button style={BTN} disabled={busy === 'install'} onClick={doInstall}>
-              {busy === 'install' ? 'Installing…' : 'Approve & install'}
-            </button>
-            <button style={BTN_GHOST} disabled={busy === 'install'} onClick={() => setPreview(null)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Just-installed token reveal — shown ONCE, never again */}
-      {justInstalled && (
-        <div style={{
-          backgroundColor: '#1c1814',
-          border: '1px solid #c9a96e',
-          borderRadius: 8,
-          padding: 14,
-          marginBottom: 16,
-        }}>
-          <div style={{ fontSize: 13, color: '#e8e0d5', marginBottom: 8 }}>
-            <b>{justInstalled.id}</b> installed. App token (shown once, never again — copy if you need it for debugging):
-          </div>
-          <div style={{
-            fontFamily: 'DM Mono, monospace',
-            fontSize: 11,
-            color: '#c9a96e',
-            backgroundColor: '#0e0c0b',
-            padding: '8px 10px',
-            borderRadius: 4,
-            wordBreak: 'break-all',
-            marginBottom: 8,
-          }}>
-            {justInstalled.app_token}
-          </div>
-          <button style={BTN_GHOST} onClick={() => setJustInstalled(null)}>Dismiss</button>
-        </div>
-      )}
-
-      {/* Installed apps list */}
-      <div>
-        <div style={{ fontSize: 13, color: '#c9a96e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-          Installed ({list.apps?.length || 0})
-        </div>
-        {(!list.apps || list.apps.length === 0) ? (
-          <div style={{ fontSize: 13, color: '#6b5f52', fontStyle: 'italic', padding: '12px 0' }}>
-            No apps installed yet. Paste a GitHub URL above to install your first one.
-          </div>
-        ) : (
-          list.apps.map(a => (
-            <div key={a.id} style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr auto auto',
-              gap: 10,
-              alignItems: 'center',
-              padding: '12px 0',
-              borderBottom: '1px solid #1c1814',
-            }}>
-              <div>
-                <div style={{ fontSize: 14, color: '#e8e0d5' }}>
-                  <b>{a.name}</b> <span style={{ color: '#6b5f52', fontFamily: 'DM Mono, monospace', fontSize: 12 }}>v{a.version}</span>
-                  {a.enabled === false && <span style={{ color: '#d97777', fontSize: 11, marginLeft: 8 }}>disabled</span>}
-                </div>
-                <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>
-                  <a href={`/apps/${a.id}`} style={{ color: '#c9a96e', textDecoration: 'none' }}>/apps/{a.id}</a>
-                  <span style={{ marginLeft: 8 }}>· {a.repo}</span>
-                </div>
-              </div>
-              <button
-                style={BTN_GHOST}
-                disabled={busy === `toggle:${a.id}`}
-                onClick={() => doToggle(a.id, a.enabled !== false)}
-              >
-                {busy === `toggle:${a.id}` ? '…' : (a.enabled === false ? 'Enable' : 'Disable')}
-              </button>
-              <button
-                style={BTN_GHOST}
-                disabled={busy === `uninstall:${a.id}`}
-                onClick={() => doUninstall(a.id)}
-              >
-                {busy === `uninstall:${a.id}` ? '…' : 'Uninstall'}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-
-      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 14 }}>{err}</div>}
+      <a href="/apps" style={{
+        display: 'inline-block', marginTop: 12, fontSize: 13,
+        color: '#c9a96e', textDecoration: 'none',
+      }}>Open the Apps page &rarr;</a>
     </div>
   )
 }
@@ -854,7 +636,7 @@ export default function Settings() {
         <MemoryPanel />
       </Section>
 
-      <Section title="Apps" subtitle="Sandboxed iframe extensions that add tabs to your brain. Install from a GitHub URL.">
+      <Section title="Apps" subtitle="Sandboxed iframe extensions that add tabs to your brain. Installed and managed on the Apps page.">
         <AppsPanel />
       </Section>
 
