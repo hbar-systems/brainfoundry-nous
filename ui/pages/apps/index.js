@@ -82,6 +82,8 @@ export default function AppsIndex() {
   const [preview, setPreview] = useState(null)        // { manifest, commit_sha }
   const [busy, setBusy] = useState(null)              // 'preview' | 'install' | 'uninstall:<id>' | 'toggle:<id>'
   const [justInstalled, setJustInstalled] = useState(null) // { id, app_token }
+  const [updatePreview, setUpdatePreview] = useState(null) // re-approval card for a scope-changing update
+  const [notice, setNotice] = useState(null)               // { kind, text } — transient success line
 
   const load = () =>
     api('/apps/list')
@@ -132,6 +134,38 @@ export default function AppsIndex() {
       await api(`/apps/${id}/${enabled ? 'disable' : 'enable'}`, { method: 'POST' })
       await load()
     } catch (e) { setErr(`Toggle failed: ${e.message}`) }
+    setBusy(null)
+  }
+
+  // Update: check repo HEAD. Already-latest -> a notice. Scope unchanged ->
+  // apply silently (one click). Scope changed -> raise the re-approval card.
+  const doUpdate = async (id) => {
+    setBusy(`update:${id}`); setErr(null); setNotice(null); setUpdatePreview(null)
+    try {
+      const pv = await api(`/apps/${id}/update/preview`, { method: 'POST' })
+      if (pv.up_to_date) {
+        setNotice({ kind: 'ok', text: `${id} is already at the latest commit.` })
+      } else if (pv.scope_changed) {
+        setUpdatePreview(pv)
+      } else {
+        await applyUpdate(id, false)
+        return
+      }
+    } catch (e) { setErr(`Update check failed: ${e.message}`) }
+    setBusy(null)
+  }
+
+  const applyUpdate = async (id, acceptScope) => {
+    setBusy(`update:${id}`); setErr(null)
+    try {
+      const r = await api(`/apps/${id}/update`, {
+        method: 'POST',
+        body: JSON.stringify({ accept_scope_change: !!acceptScope }),
+      })
+      setUpdatePreview(null)
+      setNotice({ kind: 'ok', text: `${id} updated to ${r.commit_sha.slice(0, 12)}.` })
+      await load()
+    } catch (e) { setErr(`Update failed: ${e.message}`) }
     setBusy(null)
   }
 
@@ -241,6 +275,59 @@ export default function AppsIndex() {
         </div>
       )}
 
+      {/* Update re-approval card — shown only when an update changes scope */}
+      {updatePreview && (
+        <div style={{
+          backgroundColor: 'var(--surface)',
+          border: '1px solid var(--accent)',
+          borderRadius: 8,
+          padding: 16,
+          marginBottom: 16,
+        }}>
+          <div style={{ fontSize: 15, color: 'var(--text)', marginBottom: 4 }}>
+            Update <b>{updatePreview.manifest.name}</b>{' '}
+            <span style={{ color: 'var(--muted)', fontFamily: 'var(--font-mono, DM Mono, monospace)', fontSize: 12 }}>
+              v{updatePreview.manifest.version}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12, fontFamily: 'var(--font-mono, DM Mono, monospace)' }}>
+            {updatePreview.current_sha.slice(0, 12)} → {updatePreview.commit_sha.slice(0, 12)}
+          </div>
+          <div style={{ fontSize: 13, color: '#d9a066', marginBottom: 10 }}>
+            This update changes what the app can access. Review the scope below
+            before approving.
+          </div>
+          {updatePreview.scope_diff.added_permissions.length > 0 && (
+            <ScopeRow label="+ Permissions added" value={updatePreview.scope_diff.added_permissions.join(', ')} />
+          )}
+          {updatePreview.scope_diff.removed_permissions.length > 0 && (
+            <ScopeRow label="− Permissions removed" value={updatePreview.scope_diff.removed_permissions.join(', ')} />
+          )}
+          {updatePreview.scope_diff.added_layers.length > 0 && (
+            <ScopeRow label="+ Memory layers added" value={updatePreview.scope_diff.added_layers.join(', ')} />
+          )}
+          {updatePreview.scope_diff.removed_layers.length > 0 && (
+            <ScopeRow label="− Memory layers removed" value={updatePreview.scope_diff.removed_layers.join(', ')} />
+          )}
+          <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+            <button
+              style={{ ...BTN, opacity: busy === `update:${updatePreview.id}` ? 0.5 : 1 }}
+              disabled={busy === `update:${updatePreview.id}`}
+              onClick={() => applyUpdate(updatePreview.id, true)}
+            >
+              {busy === `update:${updatePreview.id}` ? 'Updating…' : 'Approve & update'}
+            </button>
+            <button style={GHOST_BTN} onClick={() => setUpdatePreview(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {notice && (
+        <div style={{ color: 'var(--accent)', fontSize: 13, marginBottom: 16 }}>
+          {notice.text}
+        </div>
+      )}
+
       {err && (
         <div style={{ color: '#d97777', fontSize: 13, marginBottom: 16 }}>
           {err}
@@ -284,6 +371,7 @@ export default function AppsIndex() {
                 key={app.id}
                 app={app}
                 busy={busy}
+                onUpdate={doUpdate}
                 onToggle={doToggle}
                 onUninstall={doUninstall}
               />
@@ -307,7 +395,7 @@ function ScopeRow({ label, value }) {
   )
 }
 
-function AppCard({ app, busy, onToggle, onUninstall }) {
+function AppCard({ app, busy, onUpdate, onToggle, onUninstall }) {
   const enabled = app.enabled !== false
   return (
     <div style={{
@@ -368,10 +456,18 @@ function AppCard({ app, busy, onToggle, onUninstall }) {
       <div style={{
         display: 'flex',
         gap: 8,
+        flexWrap: 'wrap',
         marginTop: 6,
         paddingTop: 10,
         borderTop: '1px solid var(--border)',
       }}>
+        <button
+          style={{ ...GHOST_BTN, opacity: busy === `update:${app.id}` ? 0.5 : 1 }}
+          disabled={busy === `update:${app.id}`}
+          onClick={() => onUpdate(app.id)}
+        >
+          {busy === `update:${app.id}` ? '…' : 'Update'}
+        </button>
         <button
           style={{ ...GHOST_BTN, opacity: busy === `toggle:${app.id}` ? 0.5 : 1 }}
           disabled={busy === `toggle:${app.id}`}

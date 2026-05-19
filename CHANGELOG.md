@@ -6,6 +6,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- brain-apps: an installed app can now be updated in place — no
+  uninstall/reinstall. `POST /apps/{id}/update/preview` clones the repo at
+  HEAD and reports whether it is up to date and whether the manifest
+  changes the app's permission/memory-layer scope; `POST /apps/{id}/update`
+  re-pins the SHA, swaps the served bundle (recoverable backup), refreshes
+  installed.json, and hot-remounts. The app token and install date
+  survive. A scope-changing update is refused unless `accept_scope_change`
+  is set, so an update can never silently widen access. The Apps page card
+  gets an Update button: silent one-click when scope is unchanged, a
+  re-approval card showing the added/removed scope when it changed.
 - ui/apps: brain-app install moved out of Settings onto the Apps page
   (`/apps`). The GitHub-URL field, manifest preview, permission/layer
   scope approval, just-installed token reveal, and per-app enable/disable

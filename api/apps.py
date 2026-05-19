@@ -91,6 +91,35 @@ class InstallResponse(BaseModel):
     )
 
 
+class UpdateRequest(BaseModel):
+    accept_scope_change: bool = Field(
+        False,
+        description=(
+            "Must be true to apply an update whose manifest changes the app's "
+            "permissions or required memory layers. A pure code/version bump "
+            "with unchanged scope updates without it."
+        ),
+    )
+
+
+class UpdatePreviewResponse(BaseModel):
+    id: str
+    manifest: dict
+    commit_sha: str          # HEAD of the repo right now
+    current_sha: str         # the SHA the installed app is pinned to
+    up_to_date: bool
+    scope_changed: bool
+    scope_diff: dict
+
+
+class UpdateResponse(BaseModel):
+    id: str
+    manifest: dict
+    commit_sha: str
+    previous_sha: str
+    scope_changed: bool
+
+
 # ---------- helpers ----------
 
 def _load_schema() -> dict:
@@ -201,6 +230,32 @@ def _now_iso() -> str:
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _layer_key(layer: dict) -> str:
+    return f"{layer.get('layer')}:{layer.get('mode')}"
+
+
+def _scope_diff(installed: dict, manifest: dict) -> dict:
+    """What the new manifest changes in the app's access scope vs the installed entry.
+
+    Permissions and required memory layers are the security-relevant surface:
+    a change here means the operator must re-approve before the update lands.
+    """
+    old_perms = set(installed.get("permissions") or [])
+    new_perms = set(manifest.get("permissions") or [])
+    old_layers = {_layer_key(l) for l in (installed.get("requires_layers") or [])}
+    new_layers = {_layer_key(l) for l in (manifest.get("requires_layers") or [])}
+    return {
+        "added_permissions": sorted(new_perms - old_perms),
+        "removed_permissions": sorted(old_perms - new_perms),
+        "added_layers": sorted(new_layers - old_layers),
+        "removed_layers": sorted(old_layers - new_layers),
+    }
+
+
+def _scope_changed(diff: dict) -> bool:
+    return any(diff[k] for k in diff)
 
 
 # ---------- router ----------
@@ -344,3 +399,142 @@ def _set_enabled(app_id: str, enabled: bool) -> dict:
     target["enabled"] = enabled
     _save_installed(state)
     return {"id": app_id, "enabled": enabled}
+
+
+@router.post("/{app_id}/update/preview", response_model=UpdatePreviewResponse)
+def update_preview(app_id: str) -> UpdatePreviewResponse:
+    """Clone the app's repo at HEAD, validate, and report what an update would do.
+
+    No state is written. The caller uses `up_to_date` / `scope_changed` to decide
+    between a silent one-click update and a re-approval prompt.
+    """
+    state = _load_installed()
+    entry = next((a for a in state.get("apps", []) if a["id"] == app_id), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail={"error": "app_not_found", "id": app_id})
+    repo_url = entry.get("repo")
+    if not repo_url:
+        raise HTTPException(status_code=400, detail={"error": "app_has_no_repo", "id": app_id})
+
+    BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_dir = BRAIN_APPS_DIR / f".update-preview-{secrets.token_hex(8)}"
+    try:
+        sha = _git_clone(repo_url, "HEAD", tmp_dir)
+        manifest = _read_manifest(tmp_dir)
+        _validate_manifest(manifest)
+        if manifest.get("id") != app_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "manifest_id_changed", "installed": app_id, "repo": manifest.get("id")},
+            )
+        diff = _scope_diff(entry, manifest)
+        return UpdatePreviewResponse(
+            id=app_id,
+            manifest=manifest,
+            commit_sha=sha,
+            current_sha=entry.get("commit_sha", ""),
+            up_to_date=(sha == entry.get("commit_sha")),
+            scope_changed=_scope_changed(diff),
+            scope_diff=diff,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.post("/{app_id}/update", response_model=UpdateResponse)
+def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateResponse:
+    """Re-fetch the app at repo HEAD, re-pin the SHA, swap the served bundle.
+
+    A convenience wrapper over the install pipeline — no uninstall/reinstall,
+    so the app token and install date survive. If the new manifest changes
+    permissions or memory layers, this refuses unless `accept_scope_change`
+    is set, so an update can never silently widen what an app can touch.
+    """
+    state = _load_installed()
+    apps = state.get("apps", [])
+    idx = next((i for i, a in enumerate(apps) if a["id"] == app_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail={"error": "app_not_found", "id": app_id})
+    entry = apps[idx]
+    repo_url = entry.get("repo")
+    if not repo_url:
+        raise HTTPException(status_code=400, detail={"error": "app_has_no_repo", "id": app_id})
+    previous_sha = entry.get("commit_sha", "")
+
+    BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
+    staging = BRAIN_APPS_DIR / f".update-staging-{secrets.token_hex(8)}"
+    try:
+        commit_sha = _git_clone(repo_url, "HEAD", staging)
+        manifest = _read_manifest(staging)
+        _validate_manifest(manifest)
+        if manifest.get("id") != app_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "manifest_id_changed", "installed": app_id, "repo": manifest.get("id")},
+            )
+        # The route may have moved; check it against the OTHER installed apps.
+        others = [a for a in apps if a["id"] != app_id]
+        _check_route_collision(manifest["tab"]["route"], others)
+
+        diff = _scope_diff(entry, manifest)
+        scope_changed = _scope_changed(diff)
+        if scope_changed and not req.accept_scope_change:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "scope_change_requires_approval", "id": app_id, "scope_diff": diff},
+            )
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    # Swap directories with a recoverable backup: rename the live dir aside,
+    # move staging into place, then drop the backup. On any failure, restore.
+    final_dir = BRAIN_APPS_DIR / app_id
+    backup_dir = BRAIN_APPS_DIR / f".update-backup-{app_id}-{secrets.token_hex(4)}"
+    try:
+        if final_dir.exists():
+            final_dir.rename(backup_dir)
+        staging.rename(final_dir)
+    except Exception:
+        shutil.rmtree(final_dir, ignore_errors=True)
+        if backup_dir.exists():
+            backup_dir.rename(final_dir)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    shutil.rmtree(backup_dir, ignore_errors=True)
+
+    # Refresh manifest-derived fields; id, installed_at, enabled, token_hash
+    # are identity and survive the update untouched.
+    entry.update({
+        "name": manifest["name"],
+        "version": manifest["version"],
+        "description": manifest["description"],
+        "license": manifest["license"],
+        "repo": manifest["repo"],
+        "commit_sha": commit_sha,
+        "updated_at": _now_iso(),
+        "tab": manifest["tab"],
+        "entries": manifest.get("entries", {}),
+        "permissions": manifest.get("permissions", []),
+        "requires_layers": manifest.get("requires_layers", []),
+        "requires_endpoints": manifest.get("requires_endpoints", []),
+    })
+    apps[idx] = entry
+    state["apps"] = apps
+    _save_installed(state)
+
+    # Hot-remount so the swapped bundle and routes serve without a restart.
+    try:
+        from api.apps_mount import mount_app as _mount_app, unmount_app as _unmount_app
+        _unmount_app(request.app, app_id)
+        _mount_app(request.app, entry)
+    except Exception as e:
+        print(f"[brain-apps] hot-remount failed for {app_id}: {e}", flush=True)
+
+    return UpdateResponse(
+        id=app_id,
+        manifest=manifest,
+        commit_sha=commit_sha,
+        previous_sha=previous_sha,
+        scope_changed=scope_changed,
+    )
