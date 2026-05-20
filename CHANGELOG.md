@@ -6,6 +6,21 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- brain-apps: install no longer leaves root-owned dirs on the host. The api
+  container clones as root, so `brain-apps/<id>/` used to land root-owned on
+  the bind-mounted host filesystem — the operator could not `rm` a stale dir
+  without sudo and `app_dir_exists` blocked reinstall. After every successful
+  `git clone` (install preview, install, update preview, update) the new
+  tree is now chown'd to the bind-mount owner (or to `BRAIN_USER_UID:GID` if
+  set). A one-shot startup migration in `mount_installed_apps` re-owns any
+  already-existing app dirs that were left root-owned by the old path.
+- brain-apps: `brain-apps/installed.json` is no longer tracked in git. It is
+  per-brain runtime state and `_load_installed()` creates it on first request;
+  tracking it as an empty stub meant every template-repo deploy could
+  overwrite a brain's populated registry ("apps gone"). The stub is removed
+  and `brain-apps/installed.json` is gitignored. The deploy rsync example in
+  SERVERS.md gains `--exclude='brain-apps/installed.json'` and
+  `--exclude='brain-apps/*/'` as defense in depth.
 - brain-apps: an installed app can now be updated in place — no
   uninstall/reinstall. `POST /apps/{id}/update/preview` clones the repo at
   HEAD and reports whether it is up to date and whether the manifest

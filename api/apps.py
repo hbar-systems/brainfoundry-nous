@@ -258,6 +258,61 @@ def _scope_changed(diff: dict) -> bool:
     return any(diff[k] for k in diff)
 
 
+def _chown_to_host_owner(path: Path) -> None:
+    """Re-own a tree to the bind-mount host owner.
+
+    The api container runs as root, so files written by `git clone` here land
+    root-owned on the host filesystem the operator sees. The operator then can
+    not `rm` a stale dir without sudo, and a stale dir blocks reinstall with
+    `app_dir_exists`. We re-own to either an explicit BRAIN_USER_UID/GID (env)
+    or to whoever owns BRAIN_APPS_DIR itself (default — the bind-mount root,
+    which on a normal brain is the host operator).
+
+    Best-effort: failures log but never raise. A missed chown is an
+    inconvenience, not a reason to fail an install.
+    """
+    try:
+        uid_env = os.environ.get("BRAIN_USER_UID")
+        gid_env = os.environ.get("BRAIN_USER_GID")
+        if uid_env and gid_env:
+            uid, gid = int(uid_env), int(gid_env)
+        else:
+            st = BRAIN_APPS_DIR.stat()
+            uid, gid = st.st_uid, st.st_gid
+        if not path.exists():
+            return
+        if path.is_symlink() or path.is_file():
+            os.chown(path, uid, gid, follow_symlinks=False)
+            return
+        for root, dirs, files in os.walk(path, followlinks=False):
+            try:
+                os.chown(root, uid, gid)
+            except OSError:
+                pass
+            for name in list(dirs) + list(files):
+                try:
+                    os.chown(os.path.join(root, name), uid, gid, follow_symlinks=False)
+                except OSError:
+                    pass
+    except Exception as e:
+        print(f"[brain-apps] chown skipped for {path}: {e}", flush=True)
+
+
+def _chown_existing_app_dirs() -> None:
+    """One-shot startup migration: re-own already-installed app dirs to the host.
+
+    Catches the legacy state where prior installs left root-owned dirs on the
+    bind mount. Iterates per-app subdirectories only; ignores dotfiles and the
+    top-level template files (installed.json, README.md, .gitignore).
+    """
+    if not BRAIN_APPS_DIR.exists():
+        return
+    for child in BRAIN_APPS_DIR.iterdir():
+        if child.name.startswith(".") or not child.is_dir():
+            continue
+        _chown_to_host_owner(child)
+
+
 # ---------- router ----------
 
 router = APIRouter(prefix="/apps", tags=["apps"])
@@ -270,6 +325,7 @@ def install_preview(req: InstallRequest) -> PreviewResponse:
     tmp_dir = BRAIN_APPS_DIR / f".preview-{secrets.token_hex(8)}"
     try:
         sha = _git_clone(req.repo_url, req.ref, tmp_dir)
+        _chown_to_host_owner(tmp_dir)
         manifest = _read_manifest(tmp_dir)
         _validate_manifest(manifest)
         return PreviewResponse(manifest=manifest, commit_sha=sha)
@@ -288,6 +344,7 @@ def install_app(req: InstallRequest, request: Request) -> InstallResponse:
     staging = BRAIN_APPS_DIR / f".staging-{secrets.token_hex(8)}"
     try:
         commit_sha = _git_clone(req.repo_url, req.ref, staging)
+        _chown_to_host_owner(staging)
         manifest = _read_manifest(staging)
         _validate_manifest(manifest)
 
@@ -420,6 +477,7 @@ def update_preview(app_id: str) -> UpdatePreviewResponse:
     tmp_dir = BRAIN_APPS_DIR / f".update-preview-{secrets.token_hex(8)}"
     try:
         sha = _git_clone(repo_url, "HEAD", tmp_dir)
+        _chown_to_host_owner(tmp_dir)
         manifest = _read_manifest(tmp_dir)
         _validate_manifest(manifest)
         if manifest.get("id") != app_id:
@@ -465,6 +523,7 @@ def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateRespo
     staging = BRAIN_APPS_DIR / f".update-staging-{secrets.token_hex(8)}"
     try:
         commit_sha = _git_clone(repo_url, "HEAD", staging)
+        _chown_to_host_owner(staging)
         manifest = _read_manifest(staging)
         _validate_manifest(manifest)
         if manifest.get("id") != app_id:
