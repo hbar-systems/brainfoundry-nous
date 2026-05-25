@@ -870,6 +870,51 @@ def _ensure_runtime_indexes() -> None:
         print(f"[startup] harmonics init skipped: {e}", flush=True)
 
 
+@app.on_event("startup")
+async def _prewarm_ollama() -> None:
+    # Hide the cold-start cliff. After every container restart the FIRST
+    # Ollama request pays a 60-200s prompt-eval cost on CAX21 ARM64 — the
+    # buyer's first chat on a freshly provisioned brain, every operator
+    # restart, every server reboot. Fire a 1-token generate in the
+    # background so the model is hot before any real chat lands.
+    #
+    # Scheduled with asyncio.create_task so api still advertises ready
+    # immediately. Fail-soft: missing Ollama / non-Ollama active model /
+    # network blip just skips with a log line, never blocks startup.
+    import asyncio
+    import httpx
+
+    async def _warm() -> None:
+        try:
+            model = (
+                os.getenv("OLLAMA_MODEL")
+                or os.getenv("DEFAULT_MODEL")
+                or "llama3.2:3b"
+            )
+            ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
+            async with httpx.AsyncClient(timeout=600.0) as http:
+                tags = await http.get(f"{ollama_url}/api/tags")
+                if tags.status_code != 200:
+                    print(f"[startup] ollama prewarm skipped: tags {tags.status_code}", flush=True)
+                    return
+                names = [m.get("name") for m in (tags.json().get("models") or [])]
+                if model not in names:
+                    print(f"[startup] ollama prewarm skipped: {model} not on Ollama (have {names})", flush=True)
+                    return
+                r = await http.post(
+                    f"{ollama_url}/api/generate",
+                    json={"model": model, "prompt": "ok", "stream": False, "options": {"num_predict": 1}},
+                )
+                if r.status_code == 200:
+                    print(f"[startup] ollama prewarm: {model} hot", flush=True)
+                else:
+                    print(f"[startup] ollama prewarm: generate {r.status_code}", flush=True)
+        except Exception as e:
+            print(f"[startup] ollama prewarm skipped: {type(e).__name__}: {e}", flush=True)
+
+    asyncio.create_task(_warm())
+
+
 # Mount federation DM router
 try:
     from api.federation_dm import router as _federation_dm_router
