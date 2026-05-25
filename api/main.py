@@ -2542,6 +2542,107 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
+@app.get("/documents")
+def list_documents(
+    layer: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+    api_key: str = Depends(get_api_key),
+):
+    """List every ingested document with its metadata for the Knowledge browse view.
+
+    Returns one row per distinct document_name with chunk count, last-updated
+    timestamp, layer tags, and source path. The Knowledge tab uses this to
+    render a read-out view of what's actually in the brain — pairs with
+    /documents/stats/by-layer for the per-layer aggregates that drive the
+    layer-grouped sidebar.
+
+    Filtering:
+      ?layer=<name>          show only docs that have at least one chunk in that layer
+      ?layer=__unlayered__   show docs whose chunks have no layer tag (or empty string)
+
+    Pagination: ?limit + ?offset over the document_name set, ordered by
+    last_updated DESC. Default limit 500 — a single brain seldom holds more
+    than a few hundred documents and the UI groups by layer so longer lists
+    stay scannable.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Layer filter is applied via HAVING on the aggregated layers array
+        # so a doc with chunks across multiple layers still shows when any
+        # one of its layers matches. The "__unlayered__" sentinel selects
+        # docs where every chunk lacks a layer tag.
+        layer_clause = ""
+        params: list = []
+        if layer == "__unlayered__":
+            layer_clause = """
+                HAVING bool_and(metadata->>'layer' IS NULL OR metadata->>'layer' = '')
+            """
+        elif layer:
+            layer_clause = """
+                HAVING bool_or(metadata->>'layer' = %s)
+            """
+            params.append(layer)
+
+        cursor.execute(
+            f"""
+            SELECT document_name,
+                   COUNT(*) AS chunks,
+                   MAX(created_at) AS last_updated,
+                   ARRAY_AGG(DISTINCT metadata->>'layer')
+                       FILTER (WHERE metadata->>'layer' IS NOT NULL
+                               AND metadata->>'layer' <> '') AS layers,
+                   MAX(metadata->>'source') AS source
+            FROM document_embeddings
+            GROUP BY document_name
+            {layer_clause}
+            ORDER BY MAX(created_at) DESC
+            LIMIT %s OFFSET %s
+            """,
+            params + [limit, offset],
+        )
+        rows = cursor.fetchall()
+
+        # Total count (post-filter) so the UI can show "X of Y" and paginate.
+        # Same HAVING clause, just COUNT(*) over the outer set.
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT document_name
+                FROM document_embeddings
+                GROUP BY document_name
+                {layer_clause}
+            ) sub
+            """,
+            params,
+        )
+        total = cursor.fetchone()[0]
+
+        cursor.close()
+        conn.close()
+
+        return {
+            "documents": [
+                {
+                    "name": r[0],
+                    "chunks": r[1],
+                    "last_updated": r[2].isoformat() if r[2] else None,
+                    "layers": r[3] or [],
+                    "source": r[4],
+                }
+                for r in rows
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "layer_filter": layer,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List failed: {str(e)}")
+
+
 @app.get("/documents/stats")
 def get_document_stats(api_key: str = Depends(get_api_key)):
     """Get statistics about stored documents"""

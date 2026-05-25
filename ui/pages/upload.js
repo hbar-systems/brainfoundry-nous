@@ -69,6 +69,19 @@ export default function Upload() {
   const [layerFilter, setLayerFilter] = useState(null); // null = no filter; click a badge to set, click again to clear
   const [pasteText, setPasteText] = useState("");   // paste-text path — alternative to file upload
   const [pasteTitle, setPasteTitle] = useState("");
+  // Browse view: full doc list grouped by memory layer + "unlayered" bucket.
+  // GET /documents returns up to LIMIT 500 — large enough that no realistic
+  // single-brain operator hits the cap. Reloaded after every ingest/forget.
+  const [allDocs, setAllDocs] = useState(null); // null = not loaded yet, [] = empty
+  const [allDocsLoading, setAllDocsLoading] = useState(false);
+  // Per-layer expand/collapse state. Default: collapsed; "(unlayered)" opens
+  // automatically because it's the operator's "needs organizing" queue.
+  const [expandedLayers, setExpandedLayers] = useState(new Set(["(unlayered)"]));
+  const toggleExpanded = (l) => setExpandedLayers(prev => {
+    const next = new Set(prev);
+    if (next.has(l)) next.delete(l); else next.add(l);
+    return next;
+  });
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -175,12 +188,26 @@ export default function Upload() {
       .catch(() => {});
   };
 
+  // Browse view loader: GET /documents returns every document with name,
+  // chunks, last_updated, layers array, source. We do the layer grouping
+  // client-side so the operator can expand/collapse a layer without
+  // re-fetching — backend stays simple, UI handles presentation.
+  const loadAllDocs = () => {
+    setAllDocsLoading(true);
+    fetch(`${API_BASE}/documents?limit=500`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setAllDocs(d?.documents || []))
+      .catch(() => setAllDocs([]))
+      .finally(() => setAllDocsLoading(false));
+  };
+
   useEffect(() => {
     fetch(`${API_BASE}/settings/memory-layers`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.layers) setLayers(d.layers); })
       .catch(() => {});
     loadStats();
+    loadAllDocs();
   }, []);
 
   const onSelect = (e) => setFiles(filterHidden(Array.from(e.target.files || [])));
@@ -328,6 +355,7 @@ export default function Upload() {
 
       setPending(p => p.filter((_, i) => i !== idx));
       loadStats();
+      loadAllDocs();
     } catch (err) {
       pushLog(`FAIL decide ${prop.filename}: ${err.message}`);
       setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: false } : x));
@@ -344,6 +372,7 @@ export default function Upload() {
         const j = JSON.parse(body);
         pushLog(`FORGOTTEN ${name}: ${j.chunks_deleted ?? 0} chunk(s) removed`);
         loadStats();
+        loadAllDocs();
       } else {
         pushLog(`FAIL forget ${name}: ${r.status} — ${body.slice(0, 200)}`);
       }
@@ -603,6 +632,110 @@ export default function Upload() {
                 ))}
               </div>
             );
+          })()}
+        </section>
+      )}
+
+      {/* Browse — full document list grouped by memory layer.
+          Pairs with "What your brain knows" preview above: that surface
+          is the at-a-glance recent-10; this is the deep view — every
+          ingested document, grouped by the memory layer it lives in,
+          with an explicit "(unlayered)" bucket for docs that were
+          ingested without a layer tag. The unlayered bucket is the
+          operator's "needs organizing" queue. */}
+      {allDocs && allDocs.length > 0 && (
+        <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>Browse — by memory layer</h2>
+            <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
+              {allDocs.length} {allDocs.length === 1 ? "doc" : "docs"} total
+            </div>
+          </div>
+
+          {(() => {
+            // Group docs by layer. A doc with chunks across multiple layers
+            // shows up under each one. Docs with no layer go under (unlayered).
+            const byLayer = new Map();
+            for (const doc of allDocs) {
+              const docLayers = doc.layers && doc.layers.length ? doc.layers : ["(unlayered)"];
+              for (const l of docLayers) {
+                if (!byLayer.has(l)) byLayer.set(l, []);
+                byLayer.get(l).push(doc);
+              }
+            }
+            // Order: canonical layers (matches LAYER_COLORS) first in fixed
+            // sequence, then operator-defined custom layers alphabetically,
+            // then (unlayered) at the bottom as the residual bucket.
+            const CANONICAL_ORDER = ["identity", "thinking", "projects", "writing", "episodic"];
+            const layerKeys = Array.from(byLayer.keys());
+            const canonical = CANONICAL_ORDER.filter(l => byLayer.has(l));
+            const custom = layerKeys
+              .filter(l => l !== "(unlayered)" && !CANONICAL_ORDER.includes(l))
+              .sort();
+            const unlayered = byLayer.has("(unlayered)") ? ["(unlayered)"] : [];
+            const orderedLayers = [...canonical, ...custom, ...unlayered];
+
+            return orderedLayers.map(layerName => {
+              const docs = byLayer.get(layerName);
+              const expanded = expandedLayers.has(layerName);
+              const isUnlayered = layerName === "(unlayered)";
+              return (
+                <div key={layerName} style={{ marginBottom: 10, border: `1px solid ${BORDER}`, borderRadius: 8, background: BG, overflow: "hidden" }}>
+                  <div
+                    onClick={() => toggleExpanded(layerName)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleExpanded(layerName); } }}
+                    style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", gap: 10, flexWrap: "wrap", userSelect: "none" }}
+                    title={expanded ? "Collapse" : "Expand"}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ color: MUTED, fontSize: 11, width: 12, display: "inline-block" }}>{expanded ? "▾" : "▸"}</span>
+                      {isUnlayered ? (
+                        <span style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace", fontStyle: "italic" }}>(unlayered)</span>
+                      ) : (
+                        <LayerBadge layer={layerName} />
+                      )}
+                      <span style={{ color: TEXT, fontSize: 13 }}>
+                        {docs.length} {docs.length === 1 ? "doc" : "docs"}
+                      </span>
+                    </div>
+                    {isUnlayered && (
+                      <span style={{ fontSize: 11, color: MUTED, fontStyle: "italic" }}>
+                        no memory layer assigned — re-ingest with a layer to organize
+                      </span>
+                    )}
+                  </div>
+                  {expanded && (
+                    <div style={{ borderTop: `1px solid ${BORDER}` }}>
+                      {docs.map((d, i) => (
+                        <div key={`${d.name}-${i}`} style={{ padding: "8px 14px", borderBottom: i < docs.length - 1 ? `1px solid ${BORDER}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0 }}>{d.name}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                            {/* Show OTHER layers this doc is in (the current
+                                layer is implicit from the group header). Click
+                                a badge to filter the rest of the Knowledge tab
+                                — same toggleLayerFilter as elsewhere. */}
+                            {(d.layers || []).filter(l => l !== layerName).map(l => (
+                              <LayerBadge key={l} layer={l} active={layerFilter === l} onClick={() => toggleLayerFilter(l)} />
+                            ))}
+                            <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
+                            <button
+                              onClick={() => forgetDoc(d.name)}
+                              title={`Forget "${d.name}"`}
+                              aria-label={`Forget ${d.name}`}
+                              style={{ background: "transparent", border: `1px solid ${BORDER}`, color: REJECT, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12, lineHeight: 1 }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            });
           })()}
         </section>
       )}
