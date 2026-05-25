@@ -344,6 +344,15 @@ export default function Chat() {
   // latest value without needing to be recreated on every session change.
   const currentSessionIdRef = useRef(null)
 
+  // AbortController for the in-flight /chat/rag request. The Stop button
+  // calls .abort() to cancel a streaming response mid-flight — for the
+  // "brain is generating too much, I want it to stop" case. Held in a ref
+  // so the button (in a different render scope from sendMessage) can reach it.
+  const abortControllerRef = useRef(null)
+  const stopMessage = () => {
+    if (abortControllerRef.current) abortControllerRef.current.abort()
+  }
+
   // "Store this" button state — Phase A of the memory capture flow.
   // storedMessages: indices of messages already stored (renders as ✓ Stored).
   // storingIndex: the message currently being POSTed (renders as ... saving).
@@ -640,9 +649,17 @@ export default function Chat() {
         return rest
       })
 
+      // Fresh AbortController for this send. The Stop button reads
+      // abortControllerRef.current and calls .abort() to cancel the stream;
+      // the fetch promise rejects with AbortError, the catch below treats
+      // that as a normal stop (not an error), and the partial response is
+      // flushed via revealRef.done so the operator keeps what was already
+      // generated.
+      abortControllerRef.current = new AbortController()
       const r = await fetch('/api/bf/chat/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortControllerRef.current.signal,
         body: JSON.stringify({
           model: selectedModel,
           messages: messagesForBackend,
@@ -767,9 +784,20 @@ export default function Chat() {
         fetchSessions()
       }
     } catch (e) {
-      setError(`Network error: ${e.message}`)
+      // Stop button abort: not an error — flush whatever streamed so far
+      // (mark the per-session reveal entry done so the typewriter drains
+      // the partial buffer into the visible message), refresh the session
+      // list, and exit quietly. Any other failure surfaces as before.
+      if (e.name === 'AbortError') {
+        const st = revealRef.current.get(sessionId)
+        if (st) st.done = true
+        fetchSessions()
+      } else {
+        setError(`Network error: ${e.message}`)
+      }
     } finally {
       setIsLoading(false)
+      abortControllerRef.current = null
     }
   }
 
@@ -1457,26 +1485,56 @@ export default function Chat() {
                 minHeight: 0,
               }}
             />
-            <button
-              onClick={sendMessage}
-              disabled={!inputMessage.trim() || !selectedModel || isLoading}
-              style={{
-                padding: '12px 20px',
-                background: (!inputMessage.trim() || !selectedModel || isLoading) ? 'var(--surface)' : 'var(--accent)',
-                color: (!inputMessage.trim() || !selectedModel || isLoading) ? 'var(--muted)' : 'var(--bg)',
-                border: '1px solid var(--border)',
-                borderRadius: '10px',
-                cursor: (!inputMessage.trim() || !selectedModel || isLoading) ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                fontWeight: '600',
-                transition: 'all 0.15s ease',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-                alignSelf: 'flex-end',
-              }}
-            >
-              {isLoading ? '...' : 'Send'}
-            </button>
+            {isLoading ? (
+              // While a response is streaming, the Send button transforms
+              // into Stop — the operator can interrupt an overlong generation
+              // without waiting for it to finish. Aborts the fetch via the
+              // AbortController; partial content already streamed stays in
+              // the message (per the catch-block handling).
+              <button
+                onClick={stopMessage}
+                title="Stop the brain mid-response"
+                style={{
+                  padding: '12px 20px',
+                  background: 'var(--surface)',
+                  color: '#ff6b6b',
+                  border: '1px solid #ff6b6b66',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  alignSelf: 'flex-end',
+                }}
+                onMouseOver={e => { e.currentTarget.style.background = '#1a0a0a' }}
+                onMouseOut={e => { e.currentTarget.style.background = 'var(--surface)' }}
+              >
+                ■ Stop
+              </button>
+            ) : (
+              <button
+                onClick={sendMessage}
+                disabled={!inputMessage.trim() || !selectedModel}
+                style={{
+                  padding: '12px 20px',
+                  background: (!inputMessage.trim() || !selectedModel) ? 'var(--surface)' : 'var(--accent)',
+                  color: (!inputMessage.trim() || !selectedModel) ? 'var(--muted)' : 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '10px',
+                  cursor: (!inputMessage.trim() || !selectedModel) ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  alignSelf: 'flex-end',
+                }}
+              >
+                Send
+              </button>
+            )}
           </div>
         </div>
 
