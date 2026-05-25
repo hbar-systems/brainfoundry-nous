@@ -98,30 +98,96 @@ PROVIDER_MODELS = {
 }
 
 
+# Per-provider live /models config. URL + auth-header pattern + name prefix.
+# Each provider exposes an OpenAI-compatible /models endpoint returning
+# {data: [{id, ...}, ...]} (Anthropic uses the same envelope). The `prefix`
+# is prepended to returned ids so they route correctly through _resolve()
+# below (groq/openrouter/together use prefix-stripped names internally).
+#
+# Live fetch lets BYOK pick up new releases (claude-opus-4-7, gpt-5, gemini
+# 2.5, etc.) without code changes. A 2026-05-03 hot-fix that hardcoded a
+# substring match in the UI dropdown rotted twice in three weeks; this
+# closes that pattern at the source.
+_PROVIDER_MODELS_ENDPOINTS = {
+    "anthropic":  ("https://api.anthropic.com/v1/models",                  "anthropic", "",            "ANTHROPIC_API_KEY"),
+    "openai":     ("https://api.openai.com/v1/models",                     "bearer",    "",            "OPENAI_API_KEY"),
+    "gemini":     ("https://generativelanguage.googleapis.com/v1beta/openai/models", "bearer", "",     "GOOGLE_API_KEY"),
+    "xai":        ("https://api.x.ai/v1/models",                           "bearer",    "",            "XAI_API_KEY"),
+    "groq":       ("https://api.groq.com/openai/v1/models",                "bearer",    "groq/",       "GROQ_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1/models",                  "bearer",    "openrouter/", "OPENROUTER_API_KEY"),
+    "together":   ("https://api.together.xyz/v1/models",                   "bearer",    "together/",   "TOGETHER_API_KEY"),
+    "mistral":    ("https://api.mistral.ai/v1/models",                     "bearer",    "",            "MISTRAL_API_KEY"),
+}
+
+# Per-provider live-list cache. Same TTL as Ollama's tag cache — model
+# lineups change on the order of days, a 60s cache is cheap insurance
+# against a chatty /models endpoint while still picking up new releases
+# quickly. Empty list means "fetched and the provider returned nothing";
+# absence means "not fetched yet, try again".
+_provider_models_cache: dict = {}  # provider → {"at": ts, "models": [name, ...]}
+_PROVIDER_MODELS_TTL = 60.0
+
+
+def _fetch_provider_models(provider: str) -> list:
+    """Return the live model-id list for a provider, prefixed for _resolve().
+    Cached for _PROVIDER_MODELS_TTL seconds. Fail-soft on any error: returns
+    [] so the caller can fall back to the static PROVIDER_MODELS list — a
+    network blip or revoked key never empties the dropdown."""
+    cfg = _PROVIDER_MODELS_ENDPOINTS.get(provider)
+    if not cfg:
+        return []
+    url, auth_kind, prefix, env_key = cfg
+    api_key = os.getenv(env_key)
+    if not api_key:
+        return []
+
+    now = time.time()
+    cached = _provider_models_cache.get(provider)
+    if cached and now - cached["at"] < _PROVIDER_MODELS_TTL:
+        return cached["models"]
+
+    if auth_kind == "anthropic":
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    else:
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        import requests as _req
+        r = _req.get(url, headers=headers, timeout=5)
+        if not r.ok:
+            return []
+        data = r.json().get("data") or []
+        names = [f"{prefix}{item['id']}" for item in data if isinstance(item, dict) and item.get("id")]
+        _provider_models_cache[provider] = {"at": now, "models": names}
+        return names
+    except Exception:
+        return []
+
+
 def get_available_models() -> list:
     """
     Return all models available given currently configured API keys + local Ollama.
-    Cloud providers only appear if their API key is set.
-    Ollama models are whatever is actually pulled on the node.
+    Cloud providers only appear if their API key is set. Each provider's list
+    is fetched live from its /models endpoint (cached 60s) — falls back to the
+    static PROVIDER_MODELS dict if the fetch fails (revoked key, network blip,
+    provider downtime). Ollama models are whatever is actually pulled on the node.
     """
     models = []
 
-    if os.getenv("ANTHROPIC_API_KEY") and _anthropic_async:
-        models += [{"name": m, "provider": "anthropic"} for m in PROVIDER_MODELS["anthropic"]]
-    if os.getenv("OPENAI_API_KEY") and _openai:
-        models += [{"name": m, "provider": "openai"} for m in PROVIDER_MODELS["openai"]]
-    if os.getenv("GOOGLE_API_KEY") and _gemini:
-        models += [{"name": m, "provider": "gemini"} for m in PROVIDER_MODELS["gemini"]]
-    if os.getenv("XAI_API_KEY") and _xai:
-        models += [{"name": m, "provider": "xai"} for m in PROVIDER_MODELS["xai"]]
-    if os.getenv("GROQ_API_KEY") and _groq:
-        models += [{"name": m, "provider": "groq"} for m in PROVIDER_MODELS["groq"]]
-    if os.getenv("OPENROUTER_API_KEY") and _openrouter:
-        models += [{"name": m, "provider": "openrouter"} for m in PROVIDER_MODELS["openrouter"]]
-    if os.getenv("TOGETHER_API_KEY") and _together:
-        models += [{"name": m, "provider": "together"} for m in PROVIDER_MODELS["together"]]
-    if os.getenv("MISTRAL_API_KEY") and _mistral:
-        models += [{"name": m, "provider": "mistral"} for m in PROVIDER_MODELS["mistral"]]
+    def _append_provider(provider: str, env_key: str, client) -> None:
+        if not os.getenv(env_key) or not client:
+            return
+        names = _fetch_provider_models(provider) or PROVIDER_MODELS.get(provider, [])
+        models.extend({"name": n, "provider": provider} for n in names)
+
+    _append_provider("anthropic",  "ANTHROPIC_API_KEY",  _anthropic_async)
+    _append_provider("openai",     "OPENAI_API_KEY",     _openai)
+    _append_provider("gemini",     "GOOGLE_API_KEY",     _gemini)
+    _append_provider("xai",        "XAI_API_KEY",        _xai)
+    _append_provider("groq",       "GROQ_API_KEY",       _groq)
+    _append_provider("openrouter", "OPENROUTER_API_KEY", _openrouter)
+    _append_provider("together",   "TOGETHER_API_KEY",   _together)
+    _append_provider("mistral",    "MISTRAL_API_KEY",    _mistral)
 
     try:
         import requests as _req
