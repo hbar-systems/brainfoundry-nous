@@ -344,6 +344,49 @@ export default function Chat() {
   // latest value without needing to be recreated on every session change.
   const currentSessionIdRef = useRef(null)
 
+  // "Store this" button state — Phase A of the memory capture flow.
+  // storedMessages: indices of messages already stored (renders as ✓ Stored).
+  // storingIndex: the message currently being POSTed (renders as ... saving).
+  // storeError: optional error text if a store request fails.
+  // Per-session reset would be cleaner but messages already remount on
+  // session switch, so a Set keyed by current message index is fine.
+  const [storedMessages, setStoredMessages] = useState(new Set())
+  const [storingIndex, setStoringIndex] = useState(null)
+  const [storeError, setStoreError] = useState(null)
+
+  const storeMessage = async (idx, msg) => {
+    if (storedMessages.has(idx) || storingIndex !== null) return
+    const content = typeof msg.content === 'string' ? msg.content.trim() : ''
+    if (!content) return
+    setStoringIndex(idx)
+    setStoreError(null)
+    try {
+      const r = await fetch('/api/bf/memory/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content,
+          mode: 'raw_inbox',
+          source: 'chat-store-button',
+          session_id: currentSessionIdRef.current,
+          message_role: msg.role,
+        }),
+      })
+      if (r.ok) {
+        setStoredMessages(prev => {
+          const next = new Set(prev); next.add(idx); return next
+        })
+      } else {
+        const body = await r.text().catch(() => '')
+        setStoreError(`Store failed: ${r.status} ${body.slice(0, 120)}`)
+      }
+    } catch (e) {
+      setStoreError(`Store failed: ${e.message}`)
+    } finally {
+      setStoringIndex(null)
+    }
+  }
+
   // Persona configuration state. /persona/status tells us whether the brain
   // is still the unedited template ([BRAIN_NAME]/[OWNER_NAME] unfilled). When
   // it is, the chat surfaces a "name your brain" onboarding flow — the
@@ -1166,6 +1209,54 @@ export default function Chat() {
                 {msg.role === 'assistant'
                   ? <MessageRenderer content={msg.content} />
                   : msg.content}
+
+                {/* Store-this footer — Phase A: one click → POST /memory/store.
+                    Writes to the brain's document_embeddings + emits a feedback
+                    signal that Phase 3 LoRA training will consume. The button is
+                    intentionally small and at the bottom of the bubble so it
+                    sits below the content and doesn't compete with the message
+                    itself. ✓ Stored is sticky for the session (re-storing the
+                    same message is gated against). */}
+                {typeof msg.content === 'string' && msg.content.trim() && (
+                  <div style={{
+                    marginTop: '8px',
+                    paddingTop: '8px',
+                    borderTop: '1px solid var(--border)',
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    fontSize: '11px',
+                    opacity: 0.5,
+                  }}>
+                    {storedMessages.has(i) ? (
+                      <span title="Saved to your brain's memory" style={{ color: 'var(--accent)' }}>
+                        ✓ Stored
+                      </span>
+                    ) : storingIndex === i ? (
+                      <span style={{ color: 'var(--muted)' }}>saving…</span>
+                    ) : (
+                      <button
+                        onClick={() => storeMessage(i, msg)}
+                        disabled={storingIndex !== null}
+                        title="Save this message into your brain's memory"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--muted)',
+                          cursor: storingIndex !== null ? 'wait' : 'pointer',
+                          padding: '0',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                          textTransform: 'lowercase',
+                          letterSpacing: '0.04em',
+                        }}
+                        onMouseOver={e => { if (storingIndex === null) e.currentTarget.style.color = 'var(--accent)' }}
+                        onMouseOut={e => { e.currentTarget.style.color = 'var(--muted)' }}
+                      >
+                        store ↗
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -1176,6 +1267,13 @@ export default function Chat() {
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px' }}>{selectedModel || 'Brain'}</div>
                 <span>thinking...</span>
               </div>
+            </div>
+          )}
+
+          {storeError && (
+            <div style={{ backgroundColor: '#1a0a0a', border: '1px solid #ff6b6b20', borderRadius: '10px', padding: '12px 16px', color: '#ff6b6b', fontSize: '13px' }}>
+              {storeError}
+              <button onClick={() => setStoreError(null)} style={{ float: 'right', background: 'transparent', border: 'none', color: '#ff6b6b', cursor: 'pointer' }}>×</button>
             </div>
           )}
 

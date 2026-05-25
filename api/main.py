@@ -4477,4 +4477,131 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
     }
 
 
+# --- /memory/store — "Store this" button capture flow ---
+#
+# Operator-driven in-the-moment capture from the chat UI. The chat surface
+# has a Store button on every message bubble: one click writes the selected
+# content into the brain's memory + logs the action as a feedback signal.
+#
+# Phase A (this commit): raw-inbox flow only. layer defaults to "episodic",
+# no classification proposal, no llm.complete call. The button is the
+# simplest possible "save this thought" affordance.
+#
+# Phase B (not yet built): classify-and-confirm flow. Brain proposes
+# {layer, path, tags, title, content, rationale} via llm.complete; operator
+# accepts / edits / overrides / rejects. Each decision becomes a labeled
+# training example for the Phase 3 LoRA fine-tuning that will let the brain
+# classify the way the operator actually classifies.
+#
+# Feedback signal logging is load-bearing from Phase A onward — the jsonl
+# file IS the training data. Without it, the button is just convenience;
+# with it, every click moves the brain toward an operator-trained classifier.
+
+class MemoryStoreRequest(BaseModel):
+    content: str
+    source: Optional[str] = "chat-store-button"
+    mode: str = "raw_inbox"  # "raw_inbox" | "classified" (Phase B)
+    session_id: Optional[str] = None
+    message_role: Optional[str] = None  # "user" | "assistant"
+    # Phase B fields — accepted but ignored in Phase A so client+server can
+    # evolve independently. When Phase B ships, these get honored.
+    proposed_layer: Optional[str] = None
+    proposed_path: Optional[str] = None
+    decision: Optional[str] = None  # "accept" | "edit" | "override" | "reject" | "raw_inbox"
+    final_layer: Optional[str] = None
+    final_path: Optional[str] = None
+
+
+@app.post("/memory/store")
+def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -> dict:
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail={"error": "empty_content"})
+
+    layer = req.final_layer or req.proposed_layer or "episodic"
+    if layer not in ("episodic", "semantic", "procedural"):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_layer", "allowed": ["episodic", "semantic", "procedural"]},
+        )
+
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    doc_name = f"store-{date_str}-{uuid.uuid4().hex[:8]}.md"
+
+    chunks = chunk_text(content)
+    if not chunks:
+        raise HTTPException(status_code=422, detail={"error": "chunking_produced_nothing"})
+    embeddings = generate_embeddings(chunks)
+
+    metadata_base = {
+        "layer": layer,
+        "source": req.source or "chat-store-button",
+        "stored_at": datetime.utcnow().isoformat(),
+        "store_mode": req.mode,
+        "session_id": req.session_id,
+        "message_role": req.message_role,
+    }
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    stored_ids: list = []
+    try:
+        for chunk, emb in zip(chunks, embeddings):
+            emb_str = "[" + ",".join(map(str, emb)) + "]"
+            cursor.execute(
+                """
+                INSERT INTO document_embeddings (document_name, content, embedding, metadata)
+                VALUES (%s, %s, %s::vector, %s)
+                RETURNING id
+                """,
+                (doc_name, chunk, emb_str, json.dumps(metadata_base)),
+            )
+            row = cursor.fetchone()
+            if row:
+                stored_ids.append(str(row[0]))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail={"error": "db_write_failed", "message": str(e)[:300]})
+    finally:
+        cursor.close()
+        conn.close()
+
+    # Feedback signal — Phase 3 LoRA training data starts accumulating here.
+    # Even raw_inbox decisions are labeled events: "operator chose to store
+    # this snippet without classification", which itself is signal about
+    # what's worth keeping. Phase B adds proposal + edit_diff fields.
+    try:
+        feedback_dir = Path("/app/runtime/feedback/store_button")
+        feedback_dir.mkdir(parents=True, exist_ok=True)
+        feedback_file = feedback_dir / f"{date_str}.jsonl"
+        event = {
+            "ts": datetime.utcnow().isoformat(),
+            "session_id": req.session_id,
+            "message_role": req.message_role,
+            "selection": content,
+            "decision": req.decision or req.mode,
+            "proposal": {
+                "layer": req.proposed_layer,
+                "path": req.proposed_path,
+            } if req.proposed_layer or req.proposed_path else None,
+            "final": {
+                "layer": layer,
+                "doc_name": doc_name,
+            },
+        }
+        with open(feedback_file, "a") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception as e:
+        print(f"[store] feedback log skipped: {e}", flush=True)
+
+    return {
+        "ok": True,
+        "doc_name": doc_name,
+        "chunk_ids": stored_ids,
+        "layer": layer,
+        "mode": req.mode,
+    }
+
+
 app.include_router(router)
