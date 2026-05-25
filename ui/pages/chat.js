@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import MessageRenderer from '../lib/MessageRenderer'
 import CustomSelect from '../lib/CustomSelect'
+import { loadModelsAndDefault, persistModelChoice } from '../lib/defaultModel'
 
 const THEME_OPTIONS = [
   { value: 'gold', label: 'gold', swatch: '#c9a96e' },
@@ -421,14 +422,8 @@ export default function Chat() {
   }
 
   useEffect(() => {
-    fetch('/api/bf/models')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (!d) return
-        const list = d.models || []
-        setModels(list)
-        setSelectedModel(list[0]?.name || '')
-      })
+    loadModelsAndDefault()
+      .then(({ models, default: def }) => { setModels(models); setSelectedModel(def) })
       .catch(e => setError(`Models: ${e.message}`))
 
     fetchSessions()
@@ -935,7 +930,7 @@ export default function Chat() {
 
           <CustomSelect
             value={selectedModel}
-            onChange={setSelectedModel}
+            onChange={(name) => { setSelectedModel(name); persistModelChoice(name) }}
             title="Model"
             minWidth={180}
             options={[

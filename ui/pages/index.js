@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { loadModelsAndDefault } from '../lib/defaultModel'
 
 // First-run checklist — the cold-start fix. A live 3-step card on the
 // dashboard: set persona → add knowledge → start a chat. Each step reflects
@@ -272,6 +273,7 @@ function MindArchitecture() {
 export default function Dashboard() {
   const [health, setHealth] = useState(null)
   const [models, setModels] = useState([])
+  const [defaultModelName, setDefaultModelName] = useState('')
   const [sessionCount, setSessionCount] = useState(null)
   const [error, setError] = useState(null)
 
@@ -281,9 +283,8 @@ export default function Dashboard() {
       .then(setHealth)
       .catch(e => setError(e.message))
 
-    fetch('/api/bf/models')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => d && setModels(d.models || []))
+    loadModelsAndDefault()
+      .then(({ models, default: def }) => { setModels(models); setDefaultModelName(def) })
       .catch(() => {})
 
     fetch('/api/bf/sessions')
@@ -293,7 +294,7 @@ export default function Dashboard() {
   }, [])
 
   const isOnline = health && health.status !== 'error'
-  const primaryModel = models.find(m => m.name && m.name.includes('claude')) || models[0]
+  const primaryModel = models.find(m => m.name === defaultModelName) || models[0]
 
   return (
     <div style={{ padding: '40px 32px', maxWidth: '920px', margin: '0 auto' }}>
