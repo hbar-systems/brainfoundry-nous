@@ -331,10 +331,18 @@ export default function Chat() {
     return () => mq.removeEventListener?.('change', update)
   }, [])
 
-  // Typewriter reveal: while streaming, deltas accumulate in revealRef.full
-  // and a rAF releases them into the visible message at the chosen cps.
-  const revealRef = useRef({ full: '', shown: 0, done: true, last: 0 })
+  // Typewriter reveal: per-session streaming buffer keyed by session id.
+  // Switching sessions mid-stream no longer paints incoming tokens into the
+  // wrong view (the 2026-05-18 hbar.health demo bug) — deltas always land in
+  // their originating session's entry, the rAF advances all entries each
+  // tick, and writeShown paints only into the view for currentSessionId.
+  // Concurrent sends across sessions don't merge into one buffer.
+  const revealRef = useRef(new Map()) // sessionId → { full, shown, done, last }
   const revealRafRef = useRef(null)
+
+  // Mirror currentSessionId in a ref so the rAF closure always reads the
+  // latest value without needing to be recreated on every session change.
+  const currentSessionIdRef = useRef(null)
 
   // Persona configuration state. /persona/status tells us whether the brain
   // is still the unedited template ([BRAIN_NAME]/[OWNER_NAME] unfilled). When
@@ -624,11 +632,20 @@ export default function Chat() {
 
         const paceObj = SCROLL_PACE_OPTIONS.find(p => p.value === scrollPace) || SCROLL_PACE_OPTIONS[2]
         const cps = paceObj.cps
-        revealRef.current = { full: '', shown: 0, done: false, last: 0 }
-        if (revealRafRef.current) cancelAnimationFrame(revealRafRef.current)
 
-        const writeShown = () => {
-          const st = revealRef.current
+        // Create a per-session buffer for this stream. Other in-flight streams
+        // (e.g. a concurrent send to another session) keep their own buffers.
+        revealRef.current.set(sessionId, { full: '', shown: 0, done: false, last: 0 })
+
+        // Paint into the message list only when the originating session is the
+        // one currently in view. In-flight tokens for a session the user has
+        // switched away from sit in their buffer; when the stream completes,
+        // the saved assistant message becomes visible the next time that
+        // session is opened (via its history fetch).
+        const writeShown = (sid) => {
+          if (sid !== currentSessionIdRef.current) return
+          const st = revealRef.current.get(sid)
+          if (!st) return
           const text = st.full.slice(0, Math.floor(st.shown))
           setMessages(prev => {
             const next = [...prev]
@@ -637,25 +654,40 @@ export default function Chat() {
           })
         }
 
+        // One rAF advances every active stream's buffer; only the visible
+        // session's content is painted into the DOM. Idle entries are
+        // garbage-collected once done && fully drained.
         const reveal = ts => {
-          const st = revealRef.current
-          if (cps === Infinity) {
-            st.shown = st.full.length
-          } else {
-            if (!st.last) st.last = ts
-            const dt = Math.min(0.25, (ts - st.last) / 1000) // clamp tab-away jumps
-            st.last = ts
-            const behind = st.full.length - st.shown
-            // Accelerate when far behind so a slow pace can't strand the
-            // reader minutes behind a long answer.
-            const rate = behind > 400 ? cps * (1 + behind / 400) : cps
-            st.shown = Math.min(st.full.length, st.shown + rate * dt)
+          let anyActive = false
+          for (const [sid, st] of revealRef.current.entries()) {
+            if (cps === Infinity) {
+              st.shown = st.full.length
+            } else {
+              if (!st.last) st.last = ts
+              const dt = Math.min(0.25, (ts - st.last) / 1000) // clamp tab-away jumps
+              st.last = ts
+              const behind = st.full.length - st.shown
+              // Accelerate when far behind so a slow pace can't strand the
+              // reader minutes behind a long answer.
+              const rate = behind > 400 ? cps * (1 + behind / 400) : cps
+              st.shown = Math.min(st.full.length, st.shown + rate * dt)
+            }
+            writeShown(sid)
+            if (st.done && st.shown >= st.full.length) {
+              revealRef.current.delete(sid)
+            } else {
+              anyActive = true
+            }
           }
-          writeShown()
-          if (st.done && st.shown >= st.full.length) { revealRafRef.current = null; return }
+          if (anyActive) {
+            revealRafRef.current = requestAnimationFrame(reveal)
+          } else {
+            revealRafRef.current = null
+          }
+        }
+        if (!revealRafRef.current) {
           revealRafRef.current = requestAnimationFrame(reveal)
         }
-        revealRafRef.current = requestAnimationFrame(reveal)
 
         const reader = r.body.getReader()
         const decoder = new TextDecoder()
@@ -676,7 +708,10 @@ export default function Chat() {
             try {
               const parsed = JSON.parse(data)
               const delta = parsed.choices?.[0]?.delta?.content
-              if (delta) revealRef.current.full += delta
+              if (delta) {
+                const st = revealRef.current.get(sessionId)
+                if (st) st.full += delta
+              }
               else if (parsed.error) setError(`Stream error: ${parsed.error}`)
             } catch {
               // Skip malformed frames silently.
@@ -684,7 +719,8 @@ export default function Chat() {
           }
         }
         // Stream finished — let the reveal loop drain the remaining buffer.
-        revealRef.current.done = true
+        const st = revealRef.current.get(sessionId)
+        if (st) st.done = true
         fetchSessions()
       }
     } catch (e) {
@@ -712,6 +748,10 @@ export default function Chat() {
   useEffect(() => () => {
     if (revealRafRef.current) cancelAnimationFrame(revealRafRef.current)
   }, [])
+
+  // Keep the rAF-readable mirror of currentSessionId fresh so streams paint
+  // into the right view as the user navigates between sessions.
+  useEffect(() => { currentSessionIdRef.current = currentSessionId }, [currentSessionId])
 
   const formatDate = dateString => {
     if (!dateString) return ''
