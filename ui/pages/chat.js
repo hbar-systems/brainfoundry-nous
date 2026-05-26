@@ -633,8 +633,15 @@ export default function Chat() {
     setError(null)
     const useStreaming = imagesForRequest.length === 0 // vision path is non-streaming in v0.7
 
+    // Create the AbortController BEFORE any await so there's no window where
+    // the Stop button is visible but the controller hasn't been initialized
+    // yet (which would make the click a no-op). Both the permit and chat/rag
+    // fetches share this controller — Stop aborts whichever is in flight.
+    abortControllerRef.current = new AbortController()
+    const abortSignal = abortControllerRef.current.signal
+
     try {
-      const permitRes = await fetch('/api/permit', { method: 'POST' })
+      const permitRes = await fetch('/api/permit', { method: 'POST', signal: abortSignal })
       const permitData = await permitRes.json()
       if (!permitData.permit_id || !permitData.permit_token) {
         setError(`Permit failed: ${permitData.detail || permitData.error || 'NodeOS did not issue permit'}`)
@@ -649,17 +656,10 @@ export default function Chat() {
         return rest
       })
 
-      // Fresh AbortController for this send. The Stop button reads
-      // abortControllerRef.current and calls .abort() to cancel the stream;
-      // the fetch promise rejects with AbortError, the catch below treats
-      // that as a normal stop (not an error), and the partial response is
-      // flushed via revealRef.done so the operator keeps what was already
-      // generated.
-      abortControllerRef.current = new AbortController()
       const r = await fetch('/api/bf/chat/rag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: abortControllerRef.current.signal,
+        signal: abortSignal,
         body: JSON.stringify({
           model: selectedModel,
           messages: messagesForBackend,
@@ -784,13 +784,16 @@ export default function Chat() {
         fetchSessions()
       }
     } catch (e) {
-      // Stop button abort: not an error — flush whatever streamed so far
-      // (mark the per-session reveal entry done so the typewriter drains
-      // the partial buffer into the visible message), refresh the session
-      // list, and exit quietly. Any other failure surfaces as before.
+      // Stop button abort: not an error — but the network-level abort alone
+      // isn't enough. New tokens stop arriving, but the typewriter keeps
+      // revealing whatever's already in the buffer at the configured cps,
+      // so the visible text keeps growing until the buffer drains. From
+      // the operator's perspective the Stop button "didn't stop" anything.
+      // Snap shown = full.length on abort so the message instantly settles
+      // at its current state and visible growth halts the moment Stop fires.
       if (e.name === 'AbortError') {
         const st = revealRef.current.get(sessionId)
-        if (st) st.done = true
+        if (st) { st.shown = st.full.length; st.done = true }
         fetchSessions()
       } else {
         setError(`Network error: ${e.message}`)
