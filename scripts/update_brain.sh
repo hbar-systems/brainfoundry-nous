@@ -79,17 +79,88 @@ if [ -f .env ]; then
     echo "✓ Backed up .env → .env.bak-$TS"
 fi
 
+# Preserve runtime state that was tracked on older provisions but is gitignored
+# at current HEAD. brain-apps/installed.json is the canonical example: provisions
+# before commit 21ff948 (2026-05-20) carry it as a tracked file that mutates
+# every time an app is installed/updated, so pull sees it as "local changes" and
+# aborts. Back it up explicitly; restore after pull.
+RUNTIME_BACKUPS=()
+if [ -f "$BRAIN_DIR/brain-apps/installed.json" ]; then
+    cp "$BRAIN_DIR/brain-apps/installed.json" "/tmp/installed.json.bak-$TS"
+    RUNTIME_BACKUPS+=("brain-apps/installed.json:/tmp/installed.json.bak-$TS")
+    echo "✓ Backed up brain-apps/installed.json (runtime state)"
+fi
+
+# Stash any local working-tree modifications + untracked files so the pull is
+# never blocked by a dirty tree. After pull we try to pop; on conflict we surface
+# the stash ref to the operator instead of aborting the whole update. Recurring
+# pattern for brains provisioned before the chown-fix bundle landed.
+STASH_REF=""
+if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    if git stash push --include-untracked --message "auto-stash-$TS" > /tmp/stash-out-$TS 2>&1; then
+        STASH_REF=$(git stash list --format='%gd' | head -1)
+        echo "✓ Local changes stashed as $STASH_REF (will try to re-apply after pull)"
+    else
+        echo "✗ git stash failed:"
+        cat /tmp/stash-out-$TS
+        echo "  Aborting before any state change. Your brain is unchanged."
+        exit 1
+    fi
+fi
+
 # Pull
 echo "==> Pulling..."
-if ! git pull --ff-only origin main 2>&1 || git pull --ff-only origin master 2>&1; then
-    echo "✗ Pull failed (likely local changes conflict). Aborting — your brain is unchanged."
-    exit 1
+if ! git pull --ff-only origin main 2>&1; then
+    if ! git pull --ff-only origin master 2>&1; then
+        echo "✗ Pull failed even after stash. Aborting — your brain is unchanged."
+        if [ -n "$STASH_REF" ]; then
+            echo "  Re-applying stashed changes from $STASH_REF..."
+            git stash pop "$STASH_REF" 2>&1 || echo "  Stash pop failed; manual recovery: git stash list / git stash pop"
+        fi
+        exit 1
+    fi
 fi
 
 # Restore .env (in case it was tracked for some reason — defensive)
 if [ ! -f .env ] && [ -f ".env.bak-$TS" ]; then
     cp ".env.bak-$TS" .env
     echo "✓ Restored .env from backup"
+fi
+
+# Restore runtime-state files that the new HEAD considers untracked. The pull
+# removed them from the working tree (because they're now gitignored), but the
+# brain still needs them — apps registry, etc.
+for entry in "${RUNTIME_BACKUPS[@]}"; do
+    target="${entry%%:*}"
+    source="${entry##*:}"
+    if [ ! -f "$BRAIN_DIR/$target" ] && [ -f "$source" ]; then
+        cp "$source" "$BRAIN_DIR/$target"
+        echo "✓ Restored $target from backup"
+    fi
+done
+
+# Try to re-apply local changes. Most of the time the stashed changes are
+# duplicates of what's now in HEAD (e.g. operator rsync-applied a fix before
+# the proper commit existed), so pop will conflict harmlessly and we discard.
+# Real local edits will conflict in a way the operator needs to resolve — we
+# surface the stash ref rather than abort.
+if [ -n "$STASH_REF" ]; then
+    if git stash pop "$STASH_REF" > /tmp/stash-pop-$TS 2>&1; then
+        echo "✓ Re-applied local changes from $STASH_REF cleanly"
+    else
+        if grep -q "CONFLICT" /tmp/stash-pop-$TS; then
+            echo "⚠ Stash pop produced conflicts — most likely your local changes"
+            echo "  were duplicates of what's now in HEAD. Inspect with:"
+            echo "    git status"
+            echo "    git stash show -p $STASH_REF"
+            echo "  Drop with: git stash drop $STASH_REF"
+            echo "  Update proceeds; brain is on the new version."
+        else
+            echo "⚠ Stash pop failed unexpectedly:"
+            cat /tmp/stash-pop-$TS
+            echo "  Stash preserved as $STASH_REF for manual recovery."
+        fi
+    fi
 fi
 
 # Record the pre-update commit as the rollback point. scripts/revert_brain.sh
