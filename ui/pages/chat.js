@@ -2011,13 +2011,33 @@ export default function Chat() {
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={e => {
+                // Pasted images (screenshots from Cmd+Shift+Ctrl+4, copied
+                // images from a browser, etc.) — extract any image/* items
+                // from the clipboard and route through the same ingest path
+                // as drag-drop and file-picker. Falls through normally for
+                // text pastes so typing UX is unchanged.
+                const items = e.clipboardData?.items
+                if (!items) return
+                const files = []
+                for (const it of items) {
+                  if (it.kind === 'file' && it.type.startsWith('image/')) {
+                    const f = it.getAsFile()
+                    if (f) files.push(f)
+                  }
+                }
+                if (files.length) {
+                  e.preventDefault()
+                  ingestImageFiles(files)
+                }
+              }}
               placeholder={
                 selectedModel
                   ? (attachedImages.length > 0
                       ? `Ask about the image${attachedImages.length > 1 ? 's' : ''}...`
                       : (typeof window !== 'undefined' && window.matchMedia('(max-width: 480px)').matches
                           ? 'Message...'
-                          : 'Message... (Enter to send, drop images here)'))
+                          : 'Message... (Enter to send, drop or paste images)'))
                   : 'Select a model first'
               }
               disabled={!selectedModel || isLoading}
