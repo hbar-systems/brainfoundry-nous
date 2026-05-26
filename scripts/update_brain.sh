@@ -53,6 +53,31 @@ echo "==> Current version:"
 git log --oneline -1
 echo ""
 
+# Pre-flight: self-heal brain-dir ownership.
+#
+# The api container runs as root and writes into the bind-mounted brain dir
+# (any container-side git op, .update-prev-commit, app installs, etc.).
+# Those writes leave files root-owned, blocking SSH-side operations with
+# `fatal: insufficient permission for adding an object to repository
+# database .git/objects` (git fetch) or `Permission denied` (any file
+# write). The recurring pattern in project_container_root_chown_pattern.
+# We self-heal by asking the api container (root + bind-mount) to chown
+# the whole brain dir back to the host operator's uid:gid before fetching.
+# Surfaced on hbar 2026-05-26 — same wall will hit every git-deployed brain.
+if [ -n "$(find "$BRAIN_DIR" -not -user "$(whoami)" -print -quit 2>/dev/null)" ]; then
+    echo "==> Detected non-operator-owned files in brain dir (container write residue) — healing..."
+    api_container="$(basename "$BRAIN_DIR")-api-1"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${api_container}\$"; then
+        if docker exec "$api_container" chown -R "$(id -u):$(id -g)" "$BRAIN_DIR" > /dev/null 2>&1; then
+            echo "✓ Ownership healed via $api_container"
+        else
+            echo "⚠ Container chown failed. Try manually: sudo chown -R $(whoami):$(whoami) $BRAIN_DIR"
+        fi
+    else
+        echo "⚠ $api_container not running. Operations may fail; manual fix: sudo chown -R $(whoami):$(whoami) $BRAIN_DIR"
+    fi
+fi
+
 echo "==> Fetching latest from $(git remote get-url origin)..."
 git fetch origin --quiet
 
