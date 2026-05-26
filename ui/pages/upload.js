@@ -760,8 +760,20 @@ export default function Upload() {
                   {expanded && (
                     <div style={{ borderTop: `1px solid ${BORDER}` }}>
                       {docs.map((d, i) => (
-                        <div key={`${d.name}-${i}`} style={{ padding: "8px 14px", borderBottom: i < docs.length - 1 ? `1px solid ${BORDER}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0 }}>{d.name}</span>
+                        <div key={`${d.name}-${i}`} style={{ padding: "8px 14px", borderBottom: i < docs.length - 1 ? `1px solid ${BORDER}` : "none", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ flex: "1 1 200px", minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                            <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</span>
+                            {/* Cheap synopsis — first ~150 chars of the first
+                                chunk. Makes the Browse list scannable without
+                                opening each doc. LLM-generated synopses are a
+                                future upgrade (one llm.complete per doc at
+                                ingest time, stored in metadata.synopsis). */}
+                            {d.synopsis && (
+                              <span style={{ color: MUTED, fontSize: 11, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                                {d.synopsis.replace(/\s+/g, ' ').slice(0, 200).trim()}{d.synopsis.length > 200 ? '…' : ''}
+                              </span>
+                            )}
+                          </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
                             {/* Show OTHER layers this doc is in (the current
                                 layer is implicit from the group header). Click

@@ -2731,7 +2731,11 @@ def list_documents(
                    ARRAY_AGG(DISTINCT metadata->>'layer')
                        FILTER (WHERE metadata->>'layer' IS NOT NULL
                                AND metadata->>'layer' <> '') AS layers,
-                   MAX(metadata->>'source') AS source
+                   MAX(metadata->>'source') AS source,
+                   -- First chunk's content, in ingest order, as the doc synopsis.
+                   -- Cheap, no LLM call. The UI truncates to ~150 chars; we
+                   -- return up to 400 so the client has room to play with.
+                   substring((array_agg(content ORDER BY id ASC))[1], 1, 400) AS synopsis
             FROM document_embeddings
             WHERE metadata->>'deleted_at' IS NULL
             GROUP BY document_name
@@ -2770,6 +2774,7 @@ def list_documents(
                     "last_updated": r[2].isoformat() if r[2] else None,
                     "layers": r[3] or [],
                     "source": r[4],
+                    "synopsis": r[5],
                 }
                 for r in rows
             ],
