@@ -1039,7 +1039,8 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
 
 def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None,
-                              architecture: Optional[str] = None) -> List[Dict[str, Any]]:
+                              architecture: Optional[str] = None,
+                              scope: Optional[str] = None) -> List[Dict[str, Any]]:
     """Search for similar documents.
 
     Retrieval modes (Track C3 — "Mind Architecture"):
@@ -1079,18 +1080,31 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         # ── Flat similarity path (C3) ────────────────────────────────
         # One similarity sweep across the entire corpus — no tiers, no layer
         # filter. The simplest retrieval architecture.
+        # Optional scope filter — independent of layers. Used by the public-
+        # chat surface to enforce metadata.scope = 'public' so org brains
+        # don't leak internal-scoped chunks through layer-only filtering
+        # (e.g., hbar.university's `vqa:_backlog` chunk has layer=semantic
+        # AND scope=internal — without this filter, layer=semantic would
+        # match it). Added 2026-05-26.
+        scope_sql = ""
+        scope_params: list = []
+        if scope:
+            scope_sql = " AND metadata->>'scope' = %s"
+            scope_params = [scope]
+
         if architecture == "flat":
             cursor.execute(
-                """
+                f"""
                 SELECT document_name, content, metadata,
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE embedding IS NOT NULL
                   AND (metadata->>'deleted_at' IS NULL)
+                  {scope_sql}
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
-                (embedding_str, embedding_str, limit),
+                (embedding_str, *scope_params, embedding_str, limit),
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -1108,16 +1122,17 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
             cursor.execute(
-                """
+                f"""
                 SELECT document_name, content, metadata,
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE metadata->>'layer' = ANY(%s)
                   AND (metadata->>'deleted_at' IS NULL)
+                  {scope_sql}
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
-                (embedding_str, list(layers), embedding_str, limit),
+                (embedding_str, list(layers), *scope_params, embedding_str, limit),
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -1964,15 +1979,26 @@ async def public_chat(request: dict, http_request: Request):
     Pre-stream gates (rate limit, input validation) still return JSON
     error responses with the appropriate status code.
     """
-    # ── Per-IP rate limit (Redis, fail-closed) ────────────────────────
+    # ── Per-IP + brain-wide-daily rate limit (Redis, fail-closed) ─────
     ip = _public_client_ip(http_request)
     rl = _public_rate_limiter.check(ip)
     if rl:
-        if rl.get("error") == "RATE_LIMITED":
+        err = rl.get("error")
+        if err == "RATE_LIMITED":
             return JSONResponse(
                 status_code=429,
                 content={
                     "error": "Rate limited. Please wait a minute and try again.",
+                    "retry_after": rl.get("retry_after"),
+                },
+            )
+        if err == "DAILY_BUDGET_EXCEEDED":
+            # 503 (not 429) because this is brain-wide, not per-client —
+            # the client did nothing wrong. retry_after counts to UTC midnight.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "This brain has reached today's chat quota. Try again after UTC midnight.",
                     "retry_after": rl.get("retry_after"),
                 },
             )
@@ -2011,20 +2037,26 @@ async def public_chat(request: dict, http_request: Request):
             break
         history.append({"role": role, "content": content})
 
-    # ── RAG retrieval — layers chosen by operator via env, never by client ─
-    # Default ["public"] preserves nous behavior. Org brains override per
-    # their corpus convention: hbar.university uses PUBLIC_CHAT_LAYERS=semantic
-    # because the curriculum ingest landed with metadata.layer="semantic"
-    # (per HUB-8 ingest spec). Comma-separated. Empty = no layer filter
-    # (search the entire corpus — only meaningful when scope is enforced
-    # some other way, e.g. by tagging the ingest with metadata.scope=public).
+    # ── RAG retrieval — layers + scope chosen by operator via env, never by client ─
+    # PUBLIC_CHAT_LAYERS (default ["public"]) preserves nous behavior. Org
+    # brains override per their corpus convention: hbar.university uses
+    # PUBLIC_CHAT_LAYERS=semantic because the curriculum ingest landed
+    # with metadata.layer="semantic" (HUB-8). Comma-separated.
+    #
+    # PUBLIC_CHAT_SCOPE (default unset, recommended "public" for any org
+    # brain) ANDs metadata.scope=X onto the query. Closes the leak where
+    # a layer-only filter pulls in chunks tagged scope=internal (e.g.,
+    # hbar.university's vqa:_backlog: layer=semantic + scope=internal).
+    # Added 2026-05-26 as defense-in-depth.
     _public_layers_env = os.getenv("PUBLIC_CHAT_LAYERS", "public").strip()
     _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
+    _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
     try:
         relevant_docs = search_similar_documents(
             message,
             limit=_PUBLIC_SEARCH_LIMIT,
             layers=_public_layers,
+            scope=_public_scope,
         )
     except Exception as e:
         # RAG failure is non-fatal — answer without context rather than 500.

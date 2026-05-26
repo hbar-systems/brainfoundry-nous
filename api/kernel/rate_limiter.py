@@ -47,17 +47,26 @@ class KernelRateLimiter:
 
 
 class PublicRateLimiter:
-    """Per-IP rate limiter for the public chat surface.
+    """Per-IP + brain-wide-daily rate limiter for the public chat surface.
 
-    Same Redis-backed, fail-closed shape as KernelRateLimiter, but reads
-    PUBLIC_RATE_LIMIT_MAX / PUBLIC_RATE_LIMIT_WINDOW and namespaces keys
-    under public_rl:ip:* so the two limiters cannot collide.
+    Two stacked checks, both Redis-backed and fail-closed:
+
+    1. **Per-IP / per-window** — PUBLIC_RATE_LIMIT_MAX (default 10) over
+       PUBLIC_RATE_LIMIT_WINDOW (default 60s). Catches a single abuser.
+
+    2. **Brain-wide daily cap** — PUBLIC_CHAT_DAILY_MAX (default 0 = unlimited).
+       Counts all /v1/public/chat calls regardless of IP, resets at UTC
+       midnight. Catches distributed-IP attacks that bypass per-IP rate-limit
+       (botnets, IP rotation). Returns 503 with retry-after = seconds-to-UTC-
+       midnight when exceeded. Default 0 preserves existing behavior; org
+       brains opt in by setting PUBLIC_CHAT_DAILY_MAX in their .env.
     """
 
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "")
         self.max_hits = int(os.getenv("PUBLIC_RATE_LIMIT_MAX", "10"))
         self.window = int(os.getenv("PUBLIC_RATE_LIMIT_WINDOW", "60"))
+        self.daily_max = int(os.getenv("PUBLIC_CHAT_DAILY_MAX", "0"))
         self._client: Optional[redis.Redis] = None
 
     def _get_client(self) -> Optional[redis.Redis]:
@@ -74,15 +83,32 @@ class PublicRateLimiter:
             if r is None:
                 return {"error": "FAILURE"}
 
+            # Per-IP check
             key = f"public_rl:ip:{ip}"
-
             count = r.incr(key)
             if count == 1:
                 r.expire(key, self.window)
-
             if count > self.max_hits:
                 ttl = r.ttl(key)
                 return {"error": "RATE_LIMITED", "retry_after": ttl}
+
+            # Brain-wide daily check (only if enabled). Key naturally bins by
+            # UTC date so rollover is automatic; TTL set to 25h so the key
+            # eventually evicts even if no traffic the next day.
+            if self.daily_max > 0:
+                from datetime import datetime, timezone
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                daily_key = f"public_rl:daily:{today}"
+                daily_count = r.incr(daily_key)
+                if daily_count == 1:
+                    r.expire(daily_key, 90000)  # 25h
+                if daily_count > self.daily_max:
+                    # Seconds until UTC midnight — gives operator-tunable
+                    # client backoff hint without leaking the exact cap.
+                    now = datetime.now(timezone.utc)
+                    midnight = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    retry = int((midnight - now).total_seconds())
+                    return {"error": "DAILY_BUDGET_EXCEEDED", "retry_after": retry}
 
             return None
 

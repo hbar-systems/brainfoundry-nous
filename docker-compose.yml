@@ -59,6 +59,15 @@ services:
       - PUBLIC_CHAT_LAYERS=${PUBLIC_CHAT_LAYERS:-public}
       - PUBLIC_CHAT_CITE_SOURCES=${PUBLIC_CHAT_CITE_SOURCES:-false}
       - PUBLIC_PERSONA_PATH=${PUBLIC_PERSONA_PATH:-/app/api/brain_persona_nous.md}
+      # PUBLIC_CHAT_SCOPE: AND metadata.scope=X onto the RAG retrieval so
+      # internal-tagged chunks never leak through a layer-only filter.
+      # Recommended "public" for any org brain. Empty = no scope filter.
+      - PUBLIC_CHAT_SCOPE=${PUBLIC_CHAT_SCOPE:-}
+      # PUBLIC_CHAT_DAILY_MAX: brain-wide daily cap on /v1/public/chat
+      # calls. Counts ALL IPs combined; bypasses-by-IP-rotation are
+      # caught here. Default 0 = unlimited (backward compat). Returns
+      # 503 with retry-to-UTC-midnight when exceeded.
+      - PUBLIC_CHAT_DAILY_MAX=${PUBLIC_CHAT_DAILY_MAX:-0}
       - CHUNK_SIZE=${CHUNK_SIZE:-750}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
       - TZ=${TZ:-UTC}
