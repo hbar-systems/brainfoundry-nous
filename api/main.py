@@ -1882,13 +1882,27 @@ def _public_client_ip(request: Request) -> str:
 def _build_public_prompt(user_message: str, history: list, relevant_docs: list) -> str:
     """Assemble the public-chat prompt: nous persona + RAG context + history + turn."""
     prompt = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a public demonstration brain."
-    prompt += "\n\nUse the provided documents to answer accurately. If the documents don't cover the question, answer from general knowledge but never invent personal facts about the operator or any private brain."
+    # Citation policy is brain-level: nous deliberately hides document names
+    # behind index-only labels (its corpus is a marketing/demo set); org brains
+    # like hbar.university want real source citation so users can navigate
+    # back to the lesson node. PUBLIC_CHAT_CITE_SOURCES=true flips the prompt.
+    cite_sources = os.getenv("PUBLIC_CHAT_CITE_SOURCES", "false").lower() in ("1", "true", "yes")
+    if cite_sources:
+        prompt += "\n\nUse the provided documents to answer accurately. **Cite each document you draw on by its name in square brackets** (e.g. [statistics:module6-bayesian-inference/node6-1-priors-and-posteriors]). If the documents don't cover the question, answer from general knowledge but say so explicitly and never invent personal facts about the operator or any private brain."
+    else:
+        prompt += "\n\nUse the provided documents to answer accurately. If the documents don't cover the question, answer from general knowledge but never invent personal facts about the operator or any private brain."
 
     if relevant_docs:
         prompt += "\n\nRelevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
-            # Use index-only labels — never leak document_name on the public surface.
-            prompt += f"\n[Document {i}]\n{doc.get('content', '')}\n"
+            if cite_sources:
+                # Org-brain mode: surface document_name so the model can cite
+                # it. Operator opted in via env; the docs are scope=public.
+                name = doc.get('document_name', f'Document {i}')
+                prompt += f"\n[{name}]\n{doc.get('content', '')}\n"
+            else:
+                # Default (nous): index-only labels, never leak document_name.
+                prompt += f"\n[Document {i}]\n{doc.get('content', '')}\n"
 
     # 1-shot anchor — small models (1b) need an in-context style example to
     # avoid drift into off-topic safety refusals or word-salad on plain
@@ -1992,12 +2006,20 @@ async def public_chat(request: dict, http_request: Request):
             break
         history.append({"role": role, "content": content})
 
-    # ── RAG retrieval — HARD-CODED layers=["public"], no client override ─
+    # ── RAG retrieval — layers chosen by operator via env, never by client ─
+    # Default ["public"] preserves nous behavior. Org brains override per
+    # their corpus convention: hbar.university uses PUBLIC_CHAT_LAYERS=semantic
+    # because the curriculum ingest landed with metadata.layer="semantic"
+    # (per HUB-8 ingest spec). Comma-separated. Empty = no layer filter
+    # (search the entire corpus — only meaningful when scope is enforced
+    # some other way, e.g. by tagging the ingest with metadata.scope=public).
+    _public_layers_env = os.getenv("PUBLIC_CHAT_LAYERS", "public").strip()
+    _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
     try:
         relevant_docs = search_similar_documents(
             message,
             limit=_PUBLIC_SEARCH_LIMIT,
-            layers=["public"],
+            layers=_public_layers,
         )
     except Exception as e:
         # RAG failure is non-fatal — answer without context rather than 500.
