@@ -122,6 +122,28 @@ export default function Chat() {
   // they want fuller answers; persisted server-side via /settings/max-tokens
   // so the choice survives reloads and is shared across browsers.
   const [maxTokens, setMaxTokens] = useState(2048)
+  // Brain greeting — operator-authored welcome shown as a faux assistant
+  // message in the chat empty state (no session selected). Org brains use
+  // this to introduce themselves before the visitor has typed anything;
+  // personal brains can leave it blank and fall through to the "is ready"
+  // placeholder. Editable inline from the empty state itself.
+  const [greeting, setGreeting] = useState('')
+  const [greetingEditing, setGreetingEditing] = useState(false)
+  const [greetingDraft, setGreetingDraft] = useState('')
+  const saveGreeting = async () => {
+    try {
+      const r = await fetch('/api/bf/settings/greeting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ greeting: greetingDraft }),
+      })
+      if (r.ok) {
+        const j = await r.json()
+        setGreeting(j.greeting || '')
+        setGreetingEditing(false)
+      }
+    } catch (e) { /* fail silent — UI stays in edit mode */ }
+  }
   const [messages, setMessages] = useState([])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -698,6 +720,11 @@ export default function Chat() {
     fetch('/api/bf/settings/max-tokens')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && typeof d.max_tokens === 'number') setMaxTokens(d.max_tokens) })
+      .catch(() => {})
+
+    fetch('/api/bf/settings/greeting')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && typeof d.greeting === 'string') setGreeting(d.greeting) })
       .catch(() => {})
 
     fetchSessions()
@@ -1508,6 +1535,74 @@ export default function Chat() {
           {messages.length === 0 && (
             personaUnconfigured ? (
               <IdentityOnboarding onStart={() => { setPersonaError(null); setShowPersonalize(true) }} />
+            ) : sessionLoading ? (
+              <div style={{ textAlign: 'center', marginTop: '100px' }}>
+                <div style={{ fontSize: '32px', marginBottom: '20px', color: 'var(--accent)', opacity: 0.25 }}>ℏ</div>
+                <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: '17px', color: 'var(--muted)', letterSpacing: '0.01em' }}>
+                  Loading session…
+                </div>
+              </div>
+            ) : (greeting || greetingEditing) && !currentSessionId ? (
+              /* Greeting block — faux assistant message that introduces the
+                 brain to a visitor before they type. Editable inline by the
+                 operator; renders nothing for a session that already has
+                 messages (real conversation takes over). */
+              <div style={{ maxWidth: '640px', margin: '60px auto 24px', padding: '0 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <div style={{
+                    maxWidth: '100%',
+                    padding: '16px 20px',
+                    borderRadius: '16px',
+                    background: 'var(--assistant-bg)',
+                    color: 'var(--assistant-text)',
+                    border: '1px solid var(--border)',
+                    fontSize: '14px',
+                    lineHeight: 1.6,
+                    width: '100%',
+                    boxSizing: 'border-box',
+                  }}>
+                    <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '8px', fontWeight: 500 }}>
+                      {process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'}
+                    </div>
+                    {greetingEditing ? (
+                      <>
+                        <textarea
+                          value={greetingDraft}
+                          onChange={e => setGreetingDraft(e.target.value)}
+                          rows={8}
+                          placeholder="Welcome to this brain. I cover …"
+                          style={{ width: '100%', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px', fontFamily: 'inherit', fontSize: '13px', lineHeight: 1.5, resize: 'vertical', boxSizing: 'border-box' }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
+                          <button
+                            onClick={() => { setGreetingEditing(false); setGreetingDraft(greeting) }}
+                            style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px' }}
+                          >Cancel</button>
+                          <button
+                            onClick={saveGreeting}
+                            style={{ background: 'var(--accent)', border: 'none', color: 'var(--bg)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                          >Save</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <MessageRenderer content={greeting} />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px', borderTop: '1px solid var(--border)', paddingTop: '8px' }}>
+                          <button
+                            onClick={() => { setGreetingDraft(greeting); setGreetingEditing(true) }}
+                            title="Edit greeting"
+                            style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '11px', opacity: 0.5, padding: 0, fontFamily: 'inherit' }}
+                            onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                            onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                          >
+                            edit greeting
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
             ) : (
               <div style={{ textAlign: 'center', marginTop: '100px' }}>
                 <div style={{ fontSize: '32px', marginBottom: '20px', color: 'var(--accent)', opacity: 0.25 }}>ℏ</div>
@@ -1518,12 +1613,25 @@ export default function Chat() {
                   color: 'var(--muted)',
                   letterSpacing: '0.01em',
                 }}>
-                  {sessionLoading
-                    ? 'Loading session…'
-                    : currentSessionId
-                      ? 'Session ready.'
-                      : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
+                  {currentSessionId
+                    ? 'Session ready.'
+                    : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
                 </div>
+                {!currentSessionId && !greeting && (
+                  /* Affordance to set a greeting when none exists. Operator
+                     clicks → empty-state flips into edit mode. Hidden once
+                     a greeting is set (then the edit-pencil takes over). */
+                  <div style={{ marginTop: '14px' }}>
+                    <button
+                      onClick={() => { setGreetingDraft(''); setGreetingEditing(true) }}
+                      style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: '8px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px' }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                      onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                    >
+                      + set a greeting
+                    </button>
+                  </div>
+                )}
               </div>
             )
           )}

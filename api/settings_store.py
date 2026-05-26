@@ -197,6 +197,31 @@ def set_layer_scope(layers: list) -> None:
         _save(data)
 
 
+# ── Greeting — the brain's auto-introduction shown when a chat opens ────────
+# Operator-authored welcome message that surfaces as a faux assistant
+# message[0] in the chat empty state (no session selected). Lets an org
+# brain — hbar.university, hbar.health, etc. — introduce itself and its
+# capabilities before the visitor has typed anything. Distinct from the
+# first-run onboarding checklist (which targets the operator/owner) and
+# from the persona system prompt (which is brain-internal context). The
+# greeting is PUBLIC-FACING — what a visitor sees when they land in chat.
+
+def get_greeting() -> str:
+    """Operator-authored chat greeting. Empty string if unset (chat empty
+    state then falls back to 'Your brain is ready')."""
+    v = _load().get("greeting")
+    return v if isinstance(v, str) else ""
+
+
+def set_greeting(text: str) -> None:
+    if not isinstance(text, str):
+        raise ValueError(f"greeting must be str, got {type(text).__name__}")
+    with _LOCK:
+        data = _load()
+        data["greeting"] = text.strip()
+        _save(data)
+
+
 MEMORY_LAYER_PRESETS = [
     {
         "name": "identity",

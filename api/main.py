@@ -651,6 +651,21 @@ class SetMaxTokensRequest(BaseModel):
     max_tokens: int
 
 
+class SetGreetingRequest(BaseModel):
+    greeting: str
+
+
+@app.get("/settings/greeting")
+def settings_get_greeting(api_key: str = Depends(get_api_key)):
+    return {"greeting": settings_store.get_greeting()}
+
+
+@app.post("/settings/greeting")
+def settings_set_greeting(req: SetGreetingRequest, api_key: str = Depends(get_api_key)):
+    settings_store.set_greeting(req.greeting)
+    return {"ok": True, "greeting": settings_store.get_greeting()}
+
+
 @app.get("/settings/max-tokens")
 def settings_get_max_tokens(api_key: str = Depends(get_api_key)):
     return {
