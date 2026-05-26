@@ -104,6 +104,40 @@ def set_active_model(model: str) -> None:
         _save(data)
 
 
+# ── max_tokens — operator-controlled response length cap ────────────────────
+# The default 2048 is fine for chat-message-length answers but truncates
+# longer outputs (multi-section explanations, code dumps, structured analyses)
+# mid-sentence. Operator picks a higher cap when they want fuller answers;
+# providers reject obviously-too-large values per their own quotas. We clamp
+# to a sane window here so a misconfigured client can't request 1M and
+# silently waste credits.
+MAX_TOKENS_DEFAULT = 2048
+MAX_TOKENS_MIN = 256
+MAX_TOKENS_MAX = 65536
+
+
+def get_max_tokens() -> int:
+    """Operator-set max output tokens for chat responses. Falls back to the
+    default when unset; clamps invalid stored values into the legal range."""
+    v = _load().get("max_tokens")
+    if not isinstance(v, int):
+        return MAX_TOKENS_DEFAULT
+    if v < MAX_TOKENS_MIN: return MAX_TOKENS_MIN
+    if v > MAX_TOKENS_MAX: return MAX_TOKENS_MAX
+    return v
+
+
+def set_max_tokens(n: int) -> None:
+    if not isinstance(n, int):
+        raise ValueError(f"max_tokens must be int, got {type(n).__name__}")
+    if n < MAX_TOKENS_MIN: n = MAX_TOKENS_MIN
+    if n > MAX_TOKENS_MAX: n = MAX_TOKENS_MAX
+    with _LOCK:
+        data = _load()
+        data["max_tokens"] = n
+        _save(data)
+
+
 def get_memory_layers() -> list:
     """Return user-defined memory layers. Empty list = blank slate."""
     data = _load()

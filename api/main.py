@@ -647,6 +647,26 @@ def settings_set_model(req: SetModelRequest, api_key: str = Depends(get_api_key)
     return {"ok": True, "active": req.model}
 
 
+class SetMaxTokensRequest(BaseModel):
+    max_tokens: int
+
+
+@app.get("/settings/max-tokens")
+def settings_get_max_tokens(api_key: str = Depends(get_api_key)):
+    return {
+        "max_tokens": settings_store.get_max_tokens(),
+        "default": settings_store.MAX_TOKENS_DEFAULT,
+        "min": settings_store.MAX_TOKENS_MIN,
+        "max": settings_store.MAX_TOKENS_MAX,
+    }
+
+
+@app.post("/settings/max-tokens")
+def settings_set_max_tokens(req: SetMaxTokensRequest, api_key: str = Depends(get_api_key)):
+    settings_store.set_max_tokens(req.max_tokens)
+    return {"ok": True, "max_tokens": settings_store.get_max_tokens()}
+
+
 @app.get("/settings/memory-layers")
 def settings_get_memory_layers(api_key: str = Depends(get_api_key)):
     return {
@@ -1278,7 +1298,7 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
 
         # non-streaming — route to correct provider via providers.py
         if not do_stream:
-            assistant_message = await _providers.complete(model, messages, max_tokens=request.get("max_tokens", 2048))
+            assistant_message = await _providers.complete(model, messages, max_tokens=request.get("max_tokens") or settings_store.get_max_tokens())
 
             # Save to database if session_id provided
             if session_id and messages:
@@ -1335,7 +1355,7 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
 
 
         # streaming path (SSE: "data: {...}\n\n" frames)
-        _stream_max_tokens = request.get("max_tokens", 2048)
+        _stream_max_tokens = request.get("max_tokens") or settings_store.get_max_tokens()
         async def event_stream():
             async for text in _providers.stream(model, messages, max_tokens=_stream_max_tokens):
                 chunk = {"id": f"chatcmpl-{uuid.uuid4()}", "object": "chat.completion.chunk", "model": model, "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}

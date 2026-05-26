@@ -117,6 +117,11 @@ function IdentityOnboarding({ onStart }) {
 export default function Chat() {
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
+  // max_tokens cap on the assistant's response. Default 2048 was causing
+  // long answers to truncate mid-sentence. Operator picks a higher cap when
+  // they want fuller answers; persisted server-side via /settings/max-tokens
+  // so the choice survives reloads and is shared across browsers.
+  const [maxTokens, setMaxTokens] = useState(2048)
   const [messages, setMessages] = useState([])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -528,6 +533,11 @@ export default function Chat() {
       .then(({ models, default: def }) => { setModels(models); setSelectedModel(def) })
       .catch(e => setError(`Models: ${e.message}`))
 
+    fetch('/api/bf/settings/max-tokens')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && typeof d.max_tokens === 'number') setMaxTokens(d.max_tokens) })
+      .catch(() => {})
+
     fetchSessions()
 
     // Is the brain still the unconfigured template? Drives the onboarding flow.
@@ -709,6 +719,7 @@ export default function Chat() {
           layers: ['identity', 'thinking', 'projects', 'writing', 'episodic'],
           search_limit: 5,
           stream: useStreaming,
+          max_tokens: maxTokens,
           ...(imagesForRequest.length > 0 ? {
             images: imagesForRequest.map(i => ({ base64: i.base64, media_type: i.mediaType })),
           } : {}),
@@ -1139,6 +1150,36 @@ export default function Chat() {
                 value: m.name,
                 label: m.name + (m.size ? ` (${(m.size / 1e9).toFixed(1)}GB)` : ''),
               })),
+            ]}
+          />
+
+          {/* Max-tokens cap on the assistant's response. Operator picks a
+              higher value when long answers were truncating; persisted
+              server-side via /settings/max-tokens so reloads + other browser
+              tabs honor the choice. */}
+          <CustomSelect
+            value={String(maxTokens)}
+            onChange={(v) => {
+              const n = parseInt(v, 10)
+              if (!isNaN(n)) {
+                setMaxTokens(n)
+                fetch('/api/bf/settings/max-tokens', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ max_tokens: n }),
+                }).catch(() => {})
+              }
+            }}
+            title="Max response length (tokens)"
+            minWidth={90}
+            options={[
+              { value: '1024',  label: '1k tokens' },
+              { value: '2048',  label: '2k tokens' },
+              { value: '4096',  label: '4k tokens' },
+              { value: '8192',  label: '8k tokens' },
+              { value: '16384', label: '16k tokens' },
+              { value: '32768', label: '32k tokens' },
+              { value: '65536', label: '64k tokens' },
             ]}
           />
 
