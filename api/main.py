@@ -4728,29 +4728,66 @@ Return ONLY a single JSON object with these keys (no prose before or after):
 
 JSON object only."""
 
+    # 4096 output tokens leaves comfortable headroom for the full JSON envelope
+    # even when the model is verbose; 1024 was too tight and Claude Opus 4.7
+    # truncated mid-`organizational_layer` value during real operator use 2026-05-26.
+    classify_max_tokens = 4096
     try:
-        raw = await _providers.complete(model, [{"role": "user", "content": classify_prompt}], max_tokens=1024)
+        raw = await _providers.complete(model, [{"role": "user", "content": classify_prompt}], max_tokens=classify_max_tokens)
     except Exception as e:
         raise HTTPException(status_code=502, detail={"error": "provider_failed", "message": str(e)[:300]})
 
-    # Parse — models occasionally wrap JSON in ```json fences or in prose.
-    # Strip code fences and locate the outermost {...} as a fallback.
-    text = raw.strip()
+    # Parse — models occasionally wrap JSON in ```json fences, lead with prose,
+    # or even truncate mid-JSON. Strip fences, then walk through brace-balancing
+    # to find the longest well-formed {...} block.
+    text = (raw or "").strip()
     if text.startswith("```"):
-        # Strip leading and trailing fences.
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```\s*$", "", text)
+
+    def _extract_json_object(s: str):
+        """Find the longest substring starting with '{' that parses as JSON.
+        Handles preamble prose and trailing junk. Returns the parsed object or
+        None if no valid JSON object is found."""
+        start_positions = [i for i, c in enumerate(s) if c == '{']
+        for start in start_positions:
+            depth = 0
+            in_str = False
+            esc = False
+            for i in range(start, len(s)):
+                ch = s[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                return json.loads(s[start:i+1])
+                            except json.JSONDecodeError:
+                                break
+        return None
+
+    proposal = None
     try:
         proposal = json.loads(text)
     except json.JSONDecodeError:
-        # Fallback: greedy match for the first {...} block.
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if not m:
-            raise HTTPException(status_code=502, detail={"error": "non_json_proposal", "raw": text[:500]})
-        try:
-            proposal = json.loads(m.group(0))
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=502, detail={"error": "malformed_proposal", "message": str(e), "raw": text[:500]})
+        proposal = _extract_json_object(text)
+
+    if proposal is None:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "non_json_proposal", "raw": text[:500], "max_tokens_used": classify_max_tokens},
+        )
 
     # Normalize + clamp. The model isn't fully trusted — we sanity-check
     # the storage layer and trim the slug+title so the operator's review
