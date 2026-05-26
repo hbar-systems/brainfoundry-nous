@@ -82,6 +82,12 @@ export default function Upload() {
     if (next.has(l)) next.delete(l); else next.add(l);
     return next;
   });
+
+  // Trash bin: soft-deleted documents. Forget now sets metadata.deleted_at
+  // rather than hard-deleting; the docs sit here until Restore (clears the
+  // flag) or Empty Trash (the only actually-destructive action).
+  const [trash, setTrash] = useState([]);
+  const [trashExpanded, setTrashExpanded] = useState(false);
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -201,6 +207,49 @@ export default function Upload() {
       .finally(() => setAllDocsLoading(false));
   };
 
+  // Trash loader. Reloaded after every soft-delete / restore / empty so the
+  // bin stays in sync with the working set above.
+  const loadTrash = () => {
+    fetch(`${API_BASE}/documents/trash`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setTrash(d?.documents || []))
+      .catch(() => {});
+  };
+
+  const restoreDoc = async (name) => {
+    try {
+      const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}/restore`, { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        pushLog(`RESTORED ${name}: ${j.chunks_restored ?? 0} chunk(s) back in working set`);
+        loadStats(); loadAllDocs(); loadTrash();
+      } else {
+        const body = await r.text();
+        pushLog(`FAIL restore ${name}: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL restore ${name}: ${err.message}`);
+    }
+  };
+
+  const emptyTrash = async () => {
+    if (!trash.length) return;
+    if (!confirm(`Permanently delete ${trash.length} document${trash.length === 1 ? '' : 's'} from the trash?\n\nThis removes every chunk for good. Cannot be undone.`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/documents/trash/empty`, { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        pushLog(`TRASH EMPTIED: ${j.chunks_deleted ?? 0} chunk(s) permanently removed`);
+        loadStats(); loadAllDocs(); loadTrash();
+      } else {
+        const body = await r.text();
+        pushLog(`FAIL empty trash: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL empty trash: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     fetch(`${API_BASE}/settings/memory-layers`)
       .then(r => r.ok ? r.json() : null)
@@ -208,6 +257,7 @@ export default function Upload() {
       .catch(() => {});
     loadStats();
     loadAllDocs();
+    loadTrash();
   }, []);
 
   const onSelect = (e) => setFiles(filterHidden(Array.from(e.target.files || [])));
@@ -364,20 +414,21 @@ export default function Upload() {
 
   const forgetDoc = async (name) => {
     if (!name) return;
-    if (!confirm(`Forget "${name}" from your brain's memory?\n\nThis removes every chunk of this document. Cannot be undone.`)) return;
+    if (!confirm(`Move "${name}" to trash?\n\nThe brain stops using it for retrieval. You can restore it from the Trash panel below — only Empty Trash actually removes it.`)) return;
     try {
       const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}`, { method: "DELETE" });
       const body = await r.text();
       if (r.ok) {
         const j = JSON.parse(body);
-        pushLog(`FORGOTTEN ${name}: ${j.chunks_deleted ?? 0} chunk(s) removed`);
+        pushLog(`TRASHED ${name}: ${j.chunks_trashed ?? 0} chunk(s) moved to trash`);
         loadStats();
         loadAllDocs();
+        loadTrash();
       } else {
-        pushLog(`FAIL forget ${name}: ${r.status} — ${body.slice(0, 200)}`);
+        pushLog(`FAIL trash ${name}: ${r.status} — ${body.slice(0, 200)}`);
       }
     } catch (err) {
-      pushLog(`FAIL forget ${name}: ${err.message}`);
+      pushLog(`FAIL trash ${name}: ${err.message}`);
     }
   };
 
@@ -737,6 +788,58 @@ export default function Upload() {
               );
             });
           })()}
+        </section>
+      )}
+
+      {/* Trash — soft-deleted documents.
+          The × buttons across the Knowledge tab no longer hard-delete; they
+          set metadata.deleted_at, the doc disappears from Browse / Search /
+          /chat/rag retrieval, and lands here. Restore puts it back. Empty
+          Trash is the only path to actually destroying rows — explicit,
+          confirmed, irreversible from there. */}
+      {trash.length > 0 && (
+        <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
+            <h2
+              onClick={() => setTrashExpanded(v => !v)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTrashExpanded(v => !v); } }}
+              style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT, cursor: "pointer", userSelect: "none" }}
+              title={trashExpanded ? "Collapse trash" : "Expand trash"}
+            >
+              {trashExpanded ? "▾" : "▸"} Trash &mdash; {trash.length} {trash.length === 1 ? "doc" : "docs"}
+            </h2>
+            <button
+              onClick={emptyTrash}
+              title="Permanently delete every trashed document"
+              style={{ background: "transparent", border: `1px solid ${REJECT}66`, color: REJECT, borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+              onMouseOver={e => e.currentTarget.style.background = "#1a0a0a"}
+              onMouseOut={e => e.currentTarget.style.background = "transparent"}
+            >
+              Empty Trash
+            </button>
+          </div>
+          {trashExpanded && trash.map((d, i) => (
+            <div key={`${d.name}-${i}`} style={{ padding: "8px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, background: BG, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: MUTED, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0, textDecoration: "line-through", textDecorationColor: BORDER }}>{d.name}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                {(d.layers || []).map(l => (
+                  <LayerBadge key={l} layer={l} />
+                ))}
+                <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks · trashed {d.trashed_at ? new Date(d.trashed_at).toLocaleString() : ""}</span>
+                <button
+                  onClick={() => restoreDoc(d.name)}
+                  title={`Restore "${d.name}"`}
+                  style={{ background: "transparent", border: `1px solid ${APPROVE}66`, color: APPROVE, borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+                  onMouseOver={e => e.currentTarget.style.background = "#0a1a0a"}
+                  onMouseOut={e => e.currentTarget.style.background = "transparent"}
+                >
+                  Restore
+                </button>
+              </div>
+            </div>
+          ))}
         </section>
       )}
 

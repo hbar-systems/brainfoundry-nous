@@ -1071,6 +1071,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE embedding IS NOT NULL
+                  AND (metadata->>'deleted_at' IS NULL)
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -1097,6 +1098,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE metadata->>'layer' = ANY(%s)
+                  AND (metadata->>'deleted_at' IS NULL)
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -1122,6 +1124,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE document_name LIKE %s
+                  AND (metadata->>'deleted_at' IS NULL)
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -1144,6 +1147,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
               AND document_name NOT LIKE %s
               AND document_name NOT LIKE %s
               AND document_name NOT LIKE %s
+              AND (metadata->>'deleted_at' IS NULL)
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
@@ -2504,10 +2508,59 @@ async def upload_document(
 
 @app.delete("/documents/{document_name:path}")
 def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_key)):
-    """Delete every chunk of a named document from long-term memory.
+    """Soft-delete every chunk of a named document.
 
-    Operator-gated (BRAIN_API_KEY). Full governance gate (propose→approve→
-    forget) is a v0.8.1 task; for now the api-key check is the boundary.
+    Sets metadata.deleted_at to the current ISO timestamp on every chunk
+    of the document. Read paths (/chat/rag retrieval, /documents,
+    /documents/search, /documents/stats, /documents/stats/by-layer) all
+    exclude deleted chunks, so the doc disappears from the operator's
+    view AND from the brain's reasoning context — but is fully restorable
+    via POST /documents/{name}/restore until Empty Trash actually removes
+    the rows. Replaces the previous hard DELETE.
+    """
+    if not document_name.strip():
+        raise HTTPException(status_code=400, detail="document_name is required")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        now_iso = datetime.utcnow().isoformat()
+        cursor.execute(
+            """
+            UPDATE document_embeddings
+            SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{deleted_at}', to_jsonb(%s::text))
+            WHERE document_name = %s
+              AND (metadata->>'deleted_at' IS NULL)
+            """,
+            (now_iso, document_name),
+        )
+        trashed = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if trashed == 0:
+            raise HTTPException(status_code=404, detail=f"No active chunks found for document: {document_name}")
+
+        return {
+            "document_name": document_name,
+            "chunks_trashed": trashed,
+            "deleted_at": now_iso,
+            "status": "trashed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Soft-delete failed: {str(e)}")
+
+
+@app.post("/documents/{document_name:path}/restore")
+def restore_document(document_name: str, api_key: str = Depends(get_api_key)):
+    """Remove the deleted_at flag from every chunk of a trashed document.
+
+    The document re-enters the brain's working set: visible in Browse,
+    searchable, available to /chat/rag retrieval. The reverse of the
+    soft-delete above. Once the operator calls Empty Trash the rows are
+    actually gone and Restore would return 404.
     """
     if not document_name.strip():
         raise HTTPException(status_code=400, detail="document_name is required")
@@ -2515,26 +2568,90 @@ def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_k
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "DELETE FROM document_embeddings WHERE document_name = %s",
+            """
+            UPDATE document_embeddings
+            SET metadata = metadata - 'deleted_at'
+            WHERE document_name = %s
+              AND (metadata->>'deleted_at' IS NOT NULL)
+            """,
             (document_name,),
         )
-        deleted = cursor.rowcount
+        restored = cursor.rowcount
         conn.commit()
         cursor.close()
         conn.close()
 
-        if deleted == 0:
-            raise HTTPException(status_code=404, detail=f"No chunks found for document: {document_name}")
+        if restored == 0:
+            raise HTTPException(status_code=404, detail=f"No trashed chunks found for document: {document_name}")
 
-        return {
-            "document_name": document_name,
-            "chunks_deleted": deleted,
-            "status": "forgotten",
-        }
+        return {"document_name": document_name, "chunks_restored": restored, "status": "restored"}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
+
+
+@app.get("/documents/trash")
+def list_trash(api_key: str = Depends(get_api_key)):
+    """List every soft-deleted document, grouped by document_name with the
+    same shape as GET /documents — name, chunks, last_updated, layers,
+    source — plus the trashed_at timestamp."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT document_name,
+                   COUNT(*) AS chunks,
+                   MAX(created_at) AS last_updated,
+                   MAX(metadata->>'deleted_at') AS trashed_at,
+                   ARRAY_AGG(DISTINCT metadata->>'layer')
+                       FILTER (WHERE metadata->>'layer' IS NOT NULL
+                               AND metadata->>'layer' <> '') AS layers,
+                   MAX(metadata->>'source') AS source
+            FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NOT NULL
+            GROUP BY document_name
+            ORDER BY MAX(metadata->>'deleted_at') DESC
+            """,
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {
+            "documents": [
+                {
+                    "name": r[0],
+                    "chunks": r[1],
+                    "last_updated": r[2].isoformat() if r[2] else None,
+                    "trashed_at": r[3],
+                    "layers": r[4] or [],
+                    "source": r[5],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Trash list failed: {str(e)}")
+
+
+@app.post("/documents/trash/empty")
+def empty_trash(api_key: str = Depends(get_api_key)):
+    """Permanently delete every chunk currently in the trash. This is the
+    only DELETE path now — the soft-delete UPDATE never destroys rows.
+    No undo from here."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM document_embeddings WHERE metadata->>'deleted_at' IS NOT NULL")
+        deleted = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"chunks_deleted": deleted, "status": "trash_emptied"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Empty trash failed: {str(e)}")
 
 @app.post("/documents/search")
 def search_documents(request: dict, api_key: str = Depends(get_api_key)):
@@ -2616,6 +2733,7 @@ def list_documents(
                                AND metadata->>'layer' <> '') AS layers,
                    MAX(metadata->>'source') AS source
             FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NULL
             GROUP BY document_name
             {layer_clause}
             ORDER BY MAX(created_at) DESC
@@ -2632,6 +2750,7 @@ def list_documents(
             SELECT COUNT(*) FROM (
                 SELECT document_name
                 FROM document_embeddings
+                WHERE metadata->>'deleted_at' IS NULL
                 GROUP BY document_name
                 {layer_clause}
             ) sub
@@ -2670,22 +2789,25 @@ def get_document_stats(api_key: str = Depends(get_api_key)):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get document statistics
+        # Get document statistics — excludes soft-deleted (trash) chunks.
         cursor.execute(
             """
-            SELECT 
+            SELECT
                 COUNT(*) as total_chunks,
                 COUNT(DISTINCT document_name) as unique_documents
             FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NULL
             """
         )
         stats = cursor.fetchone()
-        
+
         # Get recent documents — also surface every distinct layer present
         # in any chunk of each doc so the Knowledge UI can render layer
         # badges (and click-to-filter). A doc with chunks across multiple
         # layers comes back with every applicable layer; the UI shows them
         # all per Fix 1.5's multi-layer-fallback requirement.
+        # Excludes trashed docs (metadata.deleted_at) so the "recent" panel
+        # reflects the operator's live working set, not the bin.
         cursor.execute(
             """
             SELECT document_name,
@@ -2695,6 +2817,7 @@ def get_document_stats(api_key: str = Depends(get_api_key)):
                        FILTER (WHERE metadata->>'layer' IS NOT NULL
                                AND metadata->>'layer' <> '') as layers
             FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NULL
             GROUP BY document_name
             ORDER BY last_updated DESC
             LIMIT 10
@@ -2739,6 +2862,7 @@ def get_document_stats_by_layer(api_key: str = Depends(get_api_key)):
                    COUNT(*) AS chunk_count,
                    MAX(created_at) AS last_ingested
             FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NULL
             GROUP BY COALESCE(metadata->>'layer', '')
             """
         )
