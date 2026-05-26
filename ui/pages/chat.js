@@ -353,6 +353,48 @@ export default function Chat() {
     if (abortControllerRef.current) abortControllerRef.current.abort()
   }
 
+  // Per-message copy-to-clipboard state. copiedIndex is the message index
+  // that just had its content copied; it briefly flips to a ✓ label then
+  // reverts. One-shot UX, no library, no toast system.
+  const [copiedIndex, setCopiedIndex] = useState(null)
+  const copyMessage = async (idx, msg) => {
+    const content = typeof msg.content === 'string' ? msg.content : ''
+    if (!content) return
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopiedIndex(idx)
+      setTimeout(() => setCopiedIndex(prev => prev === idx ? null : prev), 1500)
+    } catch {
+      // Clipboard API can fail on insecure origins or if permissions denied;
+      // operator sees the button click do nothing — acceptable degradation.
+    }
+  }
+
+  // Hide chats — sidebar affordance to clear a session from the visible list
+  // without deleting it. Persisted client-side in localStorage so it survives
+  // reloads without a backend schema change. "Show hidden" toggle reveals
+  // them again. Hide is reversible; only the explicit × is destructive.
+  const HIDDEN_SESSIONS_KEY = 'brain_hidden_sessions'
+  const [hiddenSessions, setHiddenSessions] = useState(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.localStorage.getItem(HIDDEN_SESSIONS_KEY)
+      return raw ? new Set(JSON.parse(raw)) : new Set()
+    } catch { return new Set() }
+  })
+  const [showHidden, setShowHidden] = useState(false)
+  const persistHiddenSessions = (next) => {
+    try { window.localStorage.setItem(HIDDEN_SESSIONS_KEY, JSON.stringify(Array.from(next))) } catch {}
+  }
+  const toggleHideSession = (sid) => {
+    setHiddenSessions(prev => {
+      const next = new Set(prev)
+      if (next.has(sid)) next.delete(sid); else next.add(sid)
+      persistHiddenSessions(next)
+      return next
+    })
+  }
+
   // "Store this" button state — Phase A of the memory capture flow.
   // storedMessages: indices of messages already stored (renders as ✓ Stored).
   // storingIndex: the message currently being POSTed (renders as ... saving).
@@ -900,14 +942,48 @@ export default function Chat() {
           </button>
         </div>
 
+        {/* Show-hidden toggle. Only renders when there's at least one hidden
+            session, so the affordance is invisible until it has a purpose.
+            Click flips the filter; the count next to it makes the off-state
+            useful as a passive "how much have I tucked away" indicator. */}
+        {hiddenSessions.size > 0 && (
+          <div style={{ padding: '6px 12px', borderBottom: '1px solid var(--border)', fontSize: '11px' }}>
+            <button
+              onClick={() => setShowHidden(v => !v)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontSize: '11px', fontFamily: 'inherit' }}
+              onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+              onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+            >
+              {showHidden ? '▾' : '▸'} {showHidden ? 'hiding' : 'show'} hidden ({hiddenSessions.size})
+            </button>
+          </div>
+        )}
+
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-          {sessions.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px 16px' }}>
-              <div style={{ fontSize: '22px', marginBottom: '8px', color: 'var(--accent)', opacity: 0.4 }}>ℏ</div>
-              <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6 }}>No sessions yet.<br />Click + New to begin.</div>
-            </div>
-          ) : (
-            sessions.map(s => (
+          {(() => {
+            // Sessions list is filtered against the hidden Set unless the
+            // operator has clicked "show hidden" — same render path either
+            // way, so the per-row hide/show button only needs to flip the
+            // Set in localStorage.
+            const visibleSessions = showHidden
+              ? sessions
+              : sessions.filter(s => !hiddenSessions.has(s.session_id))
+            if (sessions.length === 0) {
+              return (
+                <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                  <div style={{ fontSize: '22px', marginBottom: '8px', color: 'var(--accent)', opacity: 0.4 }}>ℏ</div>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6 }}>No sessions yet.<br />Click + New to begin.</div>
+                </div>
+              )
+            }
+            if (visibleSessions.length === 0) {
+              return (
+                <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6 }}>All {sessions.length} sessions are hidden.<br />Click "show hidden" above to reveal.</div>
+                </div>
+              )
+            }
+            return visibleSessions.map(s => (
               <div
                 key={s.session_id}
                 onClick={() => loadSessionMessages(s.session_id)}
@@ -970,6 +1046,15 @@ export default function Chat() {
                         ✎
                       </button>
                       <button
+                        onClick={e => { e.stopPropagation(); toggleHideSession(s.session_id) }}
+                        title={hiddenSessions.has(s.session_id) ? 'Unhide' : 'Hide from sidebar'}
+                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '13px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                        onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                      >
+                        {hiddenSessions.has(s.session_id) ? '↻' : '⊘'}
+                      </button>
+                      <button
                         onClick={e => { e.stopPropagation(); deleteSession(s.session_id) }}
                         title="Delete"
                         style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
@@ -983,10 +1068,11 @@ export default function Chat() {
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
                   {s.message_count || 0} msgs &middot; {formatDate(s.created_at)}
+                  {hiddenSessions.has(s.session_id) && <span style={{ marginLeft: 8, opacity: 0.6 }}>· hidden</span>}
                 </div>
               </div>
             ))
-          )}
+          })()}
         </div>
 
         <div style={{
@@ -1237,17 +1323,17 @@ export default function Chat() {
                     ))}
                   </div>
                 )}
-                {msg.role === 'assistant'
-                  ? <MessageRenderer content={msg.content} />
-                  : msg.content}
+                {/* User messages now render through MessageRenderer too, so
+                    markdown the operator types (Cmd-B / Cmd-I shortcuts, the
+                    composer's B/I toolbar) actually renders as bold/italic in
+                    the sent bubble. Previously user content was raw pre-wrap
+                    text and markdown markers were visible verbatim. */}
+                <MessageRenderer content={msg.content} />
 
-                {/* Store-this footer — Phase A: one click → POST /memory/store.
-                    Writes to the brain's document_embeddings + emits a feedback
-                    signal that Phase 3 LoRA training will consume. The button is
-                    intentionally small and at the bottom of the bubble so it
-                    sits below the content and doesn't compete with the message
-                    itself. ✓ Stored is sticky for the session (re-storing the
-                    same message is gated against). */}
+                {/* Footer row: Store + Copy buttons. Both are small and sit
+                    below the content. Store writes to brain memory + the
+                    Phase-3 feedback log; Copy puts the content on the clipboard
+                    with a brief ✓ confirmation. */}
                 {typeof msg.content === 'string' && msg.content.trim() && (
                   <div style={{
                     marginTop: '8px',
@@ -1255,9 +1341,35 @@ export default function Chat() {
                     borderTop: '1px solid var(--border)',
                     display: 'flex',
                     justifyContent: 'flex-end',
+                    gap: '12px',
                     fontSize: '11px',
                     opacity: 0.5,
                   }}>
+                    {copiedIndex === i ? (
+                      <span title="Copied to clipboard" style={{ color: 'var(--accent)' }}>
+                        ✓ copied
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => copyMessage(i, msg)}
+                        title="Copy this message to clipboard"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--muted)',
+                          cursor: 'pointer',
+                          padding: '0',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                          textTransform: 'lowercase',
+                          letterSpacing: '0.04em',
+                        }}
+                        onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                        onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                      >
+                        copy
+                      </button>
+                    )}
                     {storedMessages.has(i) ? (
                       <span title="Saved to your brain's memory" style={{ color: 'var(--accent)' }}>
                         ✓ Stored
