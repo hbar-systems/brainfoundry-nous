@@ -174,12 +174,23 @@ if [ -n "$STASH_REF" ]; then
         echo "✓ Re-applied local changes from $STASH_REF cleanly"
     else
         if grep -q "CONFLICT" /tmp/stash-pop-$TS; then
-            echo "⚠ Stash pop produced conflicts — most likely your local changes"
-            echo "  were duplicates of what's now in HEAD. Inspect with:"
-            echo "    git status"
-            echo "    git stash show -p $STASH_REF"
-            echo "  Drop with: git stash drop $STASH_REF"
-            echo "  Update proceeds; brain is on the new version."
+            # Conflict resolution: per the no-rsync deploy rule (feedback memory
+            # 2026-05-26), legitimate code lives in commits — local working-tree
+            # mods on a brain are always duplicates of HEAD (rsync-applied
+            # fixes that landed as proper commits later). So we resolve by
+            # taking HEAD's view of every conflicted file and dropping the
+            # stash. Without this, conflict markers like `<<<<<<< Updated
+            # upstream` end up in files like api/main.py, Python refuses to
+            # import them, the api container crash-loops, and the brain is
+            # broken until manual recovery. Surfaced on nous/yury/hbar.uni
+            # 2026-05-26 during the first Update-tab rollout.
+            echo "⚠ Stash pop produced conflicts. Auto-resolving by taking HEAD"
+            echo "  (per the no-rsync rule — stashed content was duplicate of HEAD)..."
+            git checkout HEAD -- . 2>&1 | head -3
+            git stash drop "$STASH_REF" 2>&1 | head -1
+            echo "✓ Conflicts resolved, stash dropped. Working tree matches HEAD."
+            echo "  If you had genuine local edits you wanted preserved, they"
+            echo "  are GONE — commit your changes before running update_brain.sh."
         else
             echo "⚠ Stash pop failed unexpectedly:"
             cat /tmp/stash-pop-$TS
