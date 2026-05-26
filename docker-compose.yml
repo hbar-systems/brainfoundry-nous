@@ -48,6 +48,17 @@ services:
       - BRAIN_PUBLIC_KEY=${BRAIN_PUBLIC_KEY}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
+      # Org-brain public-chat tuning. PUBLIC_CHAT_LAYERS comma-separated
+      # metadata.layer values to retrieve from (default "public" for nous;
+      # org brains like hbar.university set this to "semantic" per their
+      # corpus convention). PUBLIC_CHAT_CITE_SOURCES=true makes the prompt
+      # surface document_name + ask the model to cite by name (default
+      # false = index-only [Document N] labels, nous behavior).
+      # PUBLIC_PERSONA_PATH points to the persona file the public-chat
+      # endpoint loads at startup (default = nous demo persona).
+      - PUBLIC_CHAT_LAYERS=${PUBLIC_CHAT_LAYERS:-public}
+      - PUBLIC_CHAT_CITE_SOURCES=${PUBLIC_CHAT_CITE_SOURCES:-false}
+      - PUBLIC_PERSONA_PATH=${PUBLIC_PERSONA_PATH:-/app/api/brain_persona_nous.md}
       - CHUNK_SIZE=${CHUNK_SIZE:-750}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
       - TZ=${TZ:-UTC}

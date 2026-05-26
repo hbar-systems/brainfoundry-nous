@@ -1770,7 +1770,12 @@ try:
 except ModuleNotFoundError:
     from kernel.rate_limiter import PublicRateLimiter
 
-_PUBLIC_PERSONA_PATH = APP_DIR / "brain_persona_nous.md"
+# Persona file the public-chat surface loads. Default = nous demo persona;
+# org brains override via PUBLIC_PERSONA_PATH env to point at their own
+# public-facing prose (e.g. hbar.university uses brain_persona.local.md
+# which has the teaching-brain content). Resolved at import time, so a
+# change requires an api container restart.
+_PUBLIC_PERSONA_PATH = Path(os.getenv("PUBLIC_PERSONA_PATH") or str(APP_DIR / "brain_persona_nous.md"))
 
 def _load_public_persona() -> str:
     try:
