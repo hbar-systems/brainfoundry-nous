@@ -1916,15 +1916,19 @@ export default function Chat() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: '10px', columnGap: '10px', alignItems: 'center', marginBottom: '14px' }}>
                   <label style={{ fontSize: '11px', color: 'var(--muted)' }}>layer</label>
-                  <select
-                    value={draft.layer}
-                    onChange={e => setDraft(d => ({ ...d, layer: e.target.value }))}
-                    style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '6px 8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
-                  >
-                    <option value="episodic">episodic</option>
-                    <option value="semantic">semantic</option>
-                    <option value="procedural">procedural</option>
-                  </select>
+                  <div>
+                    <CustomSelect
+                      value={draft.layer}
+                      onChange={(v) => setDraft(d => ({ ...d, layer: v }))}
+                      title="Storage layer"
+                      minWidth={180}
+                      options={[
+                        { value: 'episodic',   label: 'episodic' },
+                        { value: 'semantic',   label: 'semantic' },
+                        { value: 'procedural', label: 'procedural' },
+                      ]}
+                    />
+                  </div>
 
                   <label style={{ fontSize: '11px', color: 'var(--muted)' }}>path</label>
                   <input
