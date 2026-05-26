@@ -754,21 +754,46 @@ export default function Chat() {
       .catch(console.error)
   }
 
+  // Track which session the user most recently clicked. Lets a slow fetch be
+  // ignored when a newer click has already arrived — closes the stale-fetch
+  // race where two quick clicks (A then B) could finish out-of-order and
+  // leave the view on A while currentSessionId says B.
+  const sessionLoadTargetRef = useRef(null)
+  // Per-session loading flag so the UI can show "loading…" during the brief
+  // gap between click and message-fetch returning, instead of "Session ready."
+  // which is what created the "empty view, sidebar count says 2" report.
+  const [sessionLoading, setSessionLoading] = useState(false)
+
   const loadSessionMessages = sessionId => {
+    // Update currentSessionId IMMEDIATELY so the sidebar highlight + chat
+    // header reflect the click without waiting for the network round-trip.
+    // setMessages([]) is intentional — we'd rather show a loading state
+    // for ~150ms than briefly show the previous session's messages under
+    // the new session's id.
+    sessionLoadTargetRef.current = sessionId
+    setCurrentSessionId(sessionId)
+    setMessages([])
+    setSessionLoading(true)
+
     fetch(`/api/bf/sessions/${sessionId}/messages`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        if (!d) return
-        // Same defensive pattern as fetchSessions — don't wipe messages
-        // on malformed responses. Only update if messages is a real array.
-        if (Array.isArray(d.messages)) {
-          setMessages(d.messages)
-          setCurrentSessionId(sessionId)
-        } else {
-          console.warn('messages response missing messages array:', d)
+        // Stale-fetch guard: if the user clicked another session before this
+        // request returned, our result is for the wrong session. Drop it;
+        // the in-flight fetch for the new target will land.
+        if (sessionLoadTargetRef.current !== sessionId) return
+        if (!d || !Array.isArray(d.messages)) {
+          if (d) console.warn('messages response missing messages array:', d)
+          setSessionLoading(false)
+          return
         }
+        setMessages(d.messages)
+        setSessionLoading(false)
       })
-      .catch(console.error)
+      .catch(e => {
+        if (sessionLoadTargetRef.current === sessionId) setSessionLoading(false)
+        console.error(e)
+      })
   }
 
   const createNewSession = async (title = 'New Chat') => {
@@ -1493,7 +1518,11 @@ export default function Chat() {
                   color: 'var(--muted)',
                   letterSpacing: '0.01em',
                 }}>
-                  {currentSessionId ? 'Session ready.' : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
+                  {sessionLoading
+                    ? 'Loading session…'
+                    : currentSessionId
+                      ? 'Session ready.'
+                      : `${process.env.NEXT_PUBLIC_BRAIN_NAME || 'Your brain'} is ready.`}
                 </div>
               </div>
             )
