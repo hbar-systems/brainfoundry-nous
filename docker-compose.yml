@@ -26,7 +26,7 @@ services:
       - "127.0.0.1:8010:8000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-llm_db}
-      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       - SEMANTIC_DB_PATH=/app/extensions/brain/semantic.db
       - NODEOS_URL=http://nodeos:8001
