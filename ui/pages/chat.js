@@ -410,7 +410,20 @@ export default function Chat() {
   const [storingIndex, setStoringIndex] = useState(null)
   const [storeError, setStoreError] = useState(null)
 
-  const storeMessage = async (idx, msg) => {
+  // Phase B classify-and-propose modal state. When the operator clicks
+  // "store" (without shift), we open this modal, ask the brain to propose
+  // {layer, path, tags, title, content, rationale}, and let the operator
+  // accept / edit / reject. Shift-click stays on the raw_inbox path below
+  // for "drop this fast, don't bother classifying."
+  const [proposalOpen, setProposalOpen] = useState(false)
+  const [proposalIdx, setProposalIdx] = useState(null)
+  const [proposalLoading, setProposalLoading] = useState(false)
+  const [proposalError, setProposalError] = useState(null)
+  const [proposal, setProposal] = useState(null)  // original from server
+  const [draft, setDraft] = useState(null)        // operator-editable copy
+
+  // Raw-inbox path — Phase A behavior. Triggered by shift-click on store.
+  const storeRawInbox = async (idx, msg) => {
     if (storedMessages.has(idx) || storingIndex !== null) return
     const content = typeof msg.content === 'string' ? msg.content.trim() : ''
     if (!content) return
@@ -440,6 +453,155 @@ export default function Chat() {
       setStoreError(`Store failed: ${e.message}`)
     } finally {
       setStoringIndex(null)
+    }
+  }
+
+  // Phase B default: open modal + ask brain to classify.
+  const openProposalModal = async (idx, msg) => {
+    if (storedMessages.has(idx) || proposalOpen) return
+    const content = typeof msg.content === 'string' ? msg.content.trim() : ''
+    if (!content) return
+    setProposalIdx(idx)
+    setProposalOpen(true)
+    setProposalLoading(true)
+    setProposalError(null)
+    setProposal(null); setDraft(null)
+    // Build a small context window — last 4 messages excluding the one being
+    // stored — so the classifier has signal about what conversation this is in.
+    const ctxMsgs = messages.slice(Math.max(0, idx - 4), idx)
+      .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n')
+    try {
+      const r = await fetch('/api/bf/memory/store/propose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, context: ctxMsgs, model: selectedModel }),
+      })
+      if (r.ok) {
+        const j = await r.json()
+        setProposal(j)
+        setDraft({
+          layer: j.layer || 'episodic',
+          path: j.path || '',
+          tags: (j.tags || []).join(', '),
+          title: j.title || '',
+          content: j.content || content,
+          rationale: j.rationale || '',
+        })
+      } else {
+        const body = await r.text().catch(() => '')
+        setProposalError(`Classifier failed: ${r.status} ${body.slice(0, 200)}`)
+      }
+    } catch (e) {
+      setProposalError(`Classifier failed: ${e.message}`)
+    } finally {
+      setProposalLoading(false)
+    }
+  }
+
+  const closeProposalModal = () => {
+    setProposalOpen(false); setProposalIdx(null); setProposal(null); setDraft(null); setProposalError(null)
+  }
+
+  const commitProposal = async (decision) => {
+    if (!draft || proposalIdx === null) return
+    const msg = messages[proposalIdx]
+    if (!msg) return
+    const tagsArr = draft.tags ? draft.tags.split(',').map(s => s.trim()).filter(Boolean) : []
+    // Decision derivation: if any field differs from the original proposal,
+    // the operator edited it — log as "edit", otherwise as "accept". Reject
+    // is the explicit other path; reject_reason is captured separately.
+    let computedDecision = decision
+    if (decision === 'accept' && proposal) {
+      const changed =
+        draft.layer !== proposal.layer ||
+        draft.path !== (proposal.path || '') ||
+        draft.title !== (proposal.title || '') ||
+        draft.content !== (proposal.content || '') ||
+        JSON.stringify(tagsArr) !== JSON.stringify(proposal.tags || [])
+      if (changed) computedDecision = 'edit'
+    }
+    setProposalLoading(true)
+    setProposalError(null)
+    try {
+      const r = await fetch('/api/bf/memory/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: draft.content,
+          mode: 'classified',
+          source: 'chat-store-button',
+          session_id: currentSessionIdRef.current,
+          message_role: msg.role,
+          // proposal (what the brain said)
+          proposed_layer: proposal?.layer,
+          proposed_path: proposal?.path,
+          proposed_tags: proposal?.tags,
+          proposed_title: proposal?.title,
+          proposed_content: proposal?.content,
+          proposed_rationale: proposal?.rationale,
+          // final (what the operator committed to)
+          decision: computedDecision,
+          final_layer: draft.layer,
+          final_path: draft.path,
+        }),
+      })
+      if (r.ok) {
+        setStoredMessages(prev => {
+          const next = new Set(prev); next.add(proposalIdx); return next
+        })
+        closeProposalModal()
+      } else {
+        const body = await r.text().catch(() => '')
+        setProposalError(`Store failed: ${r.status} ${body.slice(0, 200)}`)
+      }
+    } catch (e) {
+      setProposalError(`Store failed: ${e.message}`)
+    } finally {
+      setProposalLoading(false)
+    }
+  }
+
+  const rejectProposal = async () => {
+    if (proposalIdx === null) return
+    const msg = messages[proposalIdx]
+    if (!msg) return
+    const content = typeof msg.content === 'string' ? msg.content.trim() : ''
+    setProposalLoading(true)
+    setProposalError(null)
+    try {
+      await fetch('/api/bf/memory/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content,
+          decision: 'reject',
+          mode: 'classified',
+          source: 'chat-store-button',
+          session_id: currentSessionIdRef.current,
+          message_role: msg.role,
+          proposed_layer: proposal?.layer,
+          proposed_path: proposal?.path,
+          proposed_tags: proposal?.tags,
+          proposed_title: proposal?.title,
+          proposed_rationale: proposal?.rationale,
+        }),
+      })
+      closeProposalModal()
+    } catch (e) {
+      setProposalError(`Reject failed: ${e.message}`)
+    } finally {
+      setProposalLoading(false)
+    }
+  }
+
+  // Dispatcher used by the per-message store button. Shift-click is the
+  // fast path (raw_inbox, Phase A); plain click is the classify path (Phase B).
+  const storeMessage = (idx, msg, ev) => {
+    if (storedMessages.has(idx) || storingIndex !== null) return
+    if (ev && (ev.shiftKey || ev.altKey)) {
+      storeRawInbox(idx, msg)
+    } else {
+      openProposalModal(idx, msg)
     }
   }
 
@@ -1173,6 +1335,8 @@ export default function Chat() {
             title="Max response length (tokens)"
             minWidth={90}
             options={[
+              { value: '256',   label: '256 (terse)' },
+              { value: '512',   label: '512 (brief)' },
               { value: '1024',  label: '1k tokens' },
               { value: '2048',  label: '2k tokens' },
               { value: '4096',  label: '4k tokens' },
@@ -1419,9 +1583,9 @@ export default function Chat() {
                       <span style={{ color: 'var(--muted)' }}>saving…</span>
                     ) : (
                       <button
-                        onClick={() => storeMessage(i, msg)}
-                        disabled={storingIndex !== null}
-                        title="Save this message into your brain's memory"
+                        onClick={(e) => storeMessage(i, msg, e)}
+                        disabled={storingIndex !== null || proposalOpen}
+                        title="Click: classify and store (Phase B). Shift+click: raw drop, skip the modal."
                         style={{
                           background: 'transparent',
                           border: 'none',
@@ -1698,6 +1862,134 @@ export default function Chat() {
         </PanelGroup>
       </Panel>
       </PanelGroup>
+
+      {/* Proposal modal — Phase B classify-and-propose flow. The brain
+          proposes how to store the operator's selected message; the
+          operator reviews / edits / accepts / rejects. Every decision
+          becomes a labeled feedback row that Phase 3 LoRA training will
+          consume. */}
+      {proposalOpen && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 200,
+          padding: '20px',
+        }}>
+          <div style={{
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: '14px',
+            padding: '24px',
+            width: 'min(640px, 100%)',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            color: 'var(--text)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '15px', fontFamily: 'Lora, Georgia, serif', margin: 0 }}>
+                Store to brain memory
+              </h2>
+              <button
+                onClick={closeProposalModal}
+                disabled={proposalLoading}
+                style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: proposalLoading ? 'wait' : 'pointer', fontSize: '18px', lineHeight: 1, padding: 0 }}
+                title="Cancel"
+              >
+                ×
+              </button>
+            </div>
+
+            {proposalLoading && !proposal ? (
+              <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '20px 0' }}>
+                Asking the brain to classify…
+              </div>
+            ) : proposalError ? (
+              <div style={{ backgroundColor: '#1a0a0a', border: '1px solid #ff6b6b30', borderRadius: '8px', padding: '12px', color: '#ff6b6b', fontSize: '12px', marginBottom: '12px' }}>
+                {proposalError}
+              </div>
+            ) : draft ? (
+              <>
+                <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '14px', fontStyle: 'italic' }}>
+                  {proposal?.rationale || 'Brain proposes:'}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: '10px', columnGap: '10px', alignItems: 'center', marginBottom: '14px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--muted)' }}>layer</label>
+                  <select
+                    value={draft.layer}
+                    onChange={e => setDraft(d => ({ ...d, layer: e.target.value }))}
+                    style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '6px 8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
+                  >
+                    <option value="episodic">episodic</option>
+                    <option value="semantic">semantic</option>
+                    <option value="procedural">procedural</option>
+                  </select>
+
+                  <label style={{ fontSize: '11px', color: 'var(--muted)' }}>path</label>
+                  <input
+                    value={draft.path}
+                    onChange={e => setDraft(d => ({ ...d, path: e.target.value }))}
+                    placeholder="YYYY-MM-DD_slug.md"
+                    style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '6px 8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
+                  />
+
+                  <label style={{ fontSize: '11px', color: 'var(--muted)' }}>title</label>
+                  <input
+                    value={draft.title}
+                    onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+                    style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '6px 8px', fontSize: '13px' }}
+                  />
+
+                  <label style={{ fontSize: '11px', color: 'var(--muted)' }}>tags</label>
+                  <input
+                    value={draft.tags}
+                    onChange={e => setDraft(d => ({ ...d, tags: e.target.value }))}
+                    placeholder="comma, separated"
+                    style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '6px 8px', fontFamily: 'DM Mono, monospace', fontSize: '12px' }}
+                  />
+                </div>
+
+                <label style={{ fontSize: '11px', color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>content</label>
+                <textarea
+                  value={draft.content}
+                  onChange={e => setDraft(d => ({ ...d, content: e.target.value }))}
+                  rows={8}
+                  style={{ width: '100%', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '8px', fontFamily: 'inherit', fontSize: '13px', lineHeight: 1.5, resize: 'vertical', boxSizing: 'border-box' }}
+                />
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '18px', gap: '10px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={rejectProposal}
+                    disabled={proposalLoading}
+                    title="Don't store. Still logs as negative training signal."
+                    style={{ background: 'transparent', border: '1px solid #ff6b6b66', color: '#ff6b6b', borderRadius: '8px', padding: '8px 14px', cursor: proposalLoading ? 'wait' : 'pointer', fontSize: '13px' }}
+                  >
+                    Reject
+                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={closeProposalModal}
+                      disabled={proposalLoading}
+                      style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: '8px', padding: '8px 14px', cursor: proposalLoading ? 'wait' : 'pointer', fontSize: '13px' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => commitProposal('accept')}
+                      disabled={proposalLoading}
+                      title="Save with the proposal as-is (or your edits)"
+                      style={{ background: 'var(--accent)', color: 'var(--bg)', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: proposalLoading ? 'wait' : 'pointer', fontSize: '13px', fontWeight: 600 }}
+                    >
+                      {proposalLoading ? '…' : 'Accept'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* New session modal */}
       {showNameModal && (

@@ -4652,13 +4652,123 @@ class MemoryStoreRequest(BaseModel):
     mode: str = "raw_inbox"  # "raw_inbox" | "classified" (Phase B)
     session_id: Optional[str] = None
     message_role: Optional[str] = None  # "user" | "assistant"
-    # Phase B fields — accepted but ignored in Phase A so client+server can
-    # evolve independently. When Phase B ships, these get honored.
+    # Phase B fields — proposal, decision, and diff so the feedback log
+    # captures every signal the Phase 3 LoRA training will need.
     proposed_layer: Optional[str] = None
     proposed_path: Optional[str] = None
+    proposed_tags: Optional[list] = None
+    proposed_title: Optional[str] = None
+    proposed_content: Optional[str] = None
+    proposed_rationale: Optional[str] = None
     decision: Optional[str] = None  # "accept" | "edit" | "override" | "reject" | "raw_inbox"
     final_layer: Optional[str] = None
     final_path: Optional[str] = None
+    reject_reason: Optional[str] = None
+
+
+class MemoryStoreProposeRequest(BaseModel):
+    content: str
+    context: Optional[str] = None  # surrounding conversation, for the LLM
+    model: Optional[str] = None    # which model to use; falls back to active
+
+
+@app.post("/memory/store/propose")
+async def memory_store_propose(req: MemoryStoreProposeRequest, api_key: str = Depends(get_api_key)) -> dict:
+    """Phase B classify-and-propose flow for the Store button.
+
+    Given the selected content (and optional surrounding conversation),
+    asks the brain's reasoner to propose how this should be stored:
+    layer, path, tags, title, content (verbatim or lightly cleaned),
+    plus a one-sentence rationale. The operator reviews, edits, accepts,
+    or rejects in the UI; every decision lands in the feedback log via
+    /memory/store with the full {proposal, decision, final} envelope.
+
+    Spec source: hbar.brain itself wrote the design — see
+    ops/proposals/2026-05-25_store-button-spec (transcribed via the
+    Phase A operator session).
+    """
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=422, detail={"error": "empty_content"})
+
+    model = req.model or settings_store.get_active_model() or os.getenv("DEFAULT_MODEL") or "llama3.2:3b"
+
+    # The prompt lists the canonical storage layers (E/S/P) plus the
+    # operator-facing organizational layer namespace; the model is told to
+    # pick from the storage tier AND emit an organizational layer hint so
+    # both ends of the memory model get fed by the same classification.
+    layer_names = settings_store.get_layer_names() or ["identity", "thinking", "projects", "writing", "episodic"]
+    layer_list = ", ".join(layer_names)
+
+    classify_prompt = f"""You are this brain's memory classifier. The operator has selected the following content to store. Propose how to store it.
+
+CONTENT TO STORE
+---
+{content}
+---
+"""
+    if req.context:
+        classify_prompt += f"""
+RECENT CONVERSATION CONTEXT (for grounding)
+---
+{req.context}
+---
+"""
+    classify_prompt += f"""
+AVAILABLE MEMORY LAYERS: {layer_list}
+
+Return ONLY a single JSON object with these keys (no prose before or after):
+- "layer": one of "episodic" | "semantic" | "procedural" — the storage tier
+- "organizational_layer": one of [{layer_list}] — the operator-facing layer; null if none fits
+- "path": a kebab-case filename slug ending in .md, prefixed with today's date (YYYY-MM-DD_<slug>.md)
+- "tags": array of 2-4 lowercase one-or-two-word tags
+- "title": a single-line summary, no more than 80 chars
+- "content": the content verbatim (or with minor cleanup if obvious typos), preserve structure
+- "rationale": one sentence explaining why this layer and not another
+
+JSON object only."""
+
+    try:
+        raw = await _providers.complete(model, [{"role": "user", "content": classify_prompt}], max_tokens=1024)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail={"error": "provider_failed", "message": str(e)[:300]})
+
+    # Parse — models occasionally wrap JSON in ```json fences or in prose.
+    # Strip code fences and locate the outermost {...} as a fallback.
+    text = raw.strip()
+    if text.startswith("```"):
+        # Strip leading and trailing fences.
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+    try:
+        proposal = json.loads(text)
+    except json.JSONDecodeError:
+        # Fallback: greedy match for the first {...} block.
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            raise HTTPException(status_code=502, detail={"error": "non_json_proposal", "raw": text[:500]})
+        try:
+            proposal = json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=502, detail={"error": "malformed_proposal", "message": str(e), "raw": text[:500]})
+
+    # Normalize + clamp. The model isn't fully trusted — we sanity-check
+    # the storage layer and trim the slug+title so the operator's review
+    # screen doesn't render something pathological.
+    layer = (proposal.get("layer") or "episodic").lower().strip()
+    if layer not in ("episodic", "semantic", "procedural"):
+        layer = "episodic"
+
+    return {
+        "layer": layer,
+        "organizational_layer": proposal.get("organizational_layer"),
+        "path": (proposal.get("path") or "").strip()[:120],
+        "tags": [t for t in (proposal.get("tags") or []) if isinstance(t, str)][:6],
+        "title": (proposal.get("title") or "").strip()[:120],
+        "content": proposal.get("content") or content,
+        "rationale": (proposal.get("rationale") or "").strip()[:300],
+        "model": model,
+    }
 
 
 @app.post("/memory/store")
@@ -4667,22 +4777,70 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
     if not content:
         raise HTTPException(status_code=422, detail={"error": "empty_content"})
 
-    layer = req.final_layer or req.proposed_layer or "episodic"
+    decision = (req.decision or req.mode or "raw_inbox").lower()
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+    def _write_feedback(envelope: dict) -> None:
+        try:
+            feedback_dir = Path("/app/runtime/feedback/store_button")
+            feedback_dir.mkdir(parents=True, exist_ok=True)
+            feedback_file = feedback_dir / f"{date_str}.jsonl"
+            with open(feedback_file, "a") as f:
+                f.write(json.dumps(envelope) + "\n")
+        except Exception as e:
+            print(f"[store] feedback log skipped: {e}", flush=True)
+
+    # Reject path: feedback signal only, no DB write. The operator considered
+    # this content but actively decided not to store it — that decision is
+    # itself training data for the Phase 3 classifier (negative example).
+    if decision == "reject":
+        _write_feedback({
+            "ts": datetime.utcnow().isoformat(),
+            "session_id": req.session_id,
+            "message_role": req.message_role,
+            "selection": content,
+            "decision": "reject",
+            "proposal": {
+                "layer": req.proposed_layer,
+                "path": req.proposed_path,
+                "tags": req.proposed_tags,
+                "title": req.proposed_title,
+                "rationale": req.proposed_rationale,
+            } if any([req.proposed_layer, req.proposed_path, req.proposed_tags, req.proposed_title]) else None,
+            "final": None,
+            "reject_reason": req.reject_reason,
+        })
+        return {"ok": True, "decision": "reject", "stored": False}
+
+    # Storage layer — operator's final choice wins, else the brain's proposal,
+    # else the safe "episodic" default. Sanity-clamped to E/S/P.
+    layer = (req.final_layer or req.proposed_layer or "episodic").lower()
     if layer not in ("episodic", "semantic", "procedural"):
         raise HTTPException(
             status_code=422,
             detail={"error": "invalid_layer", "allowed": ["episodic", "semantic", "procedural"]},
         )
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    doc_name = f"store-{date_str}-{uuid.uuid4().hex[:8]}.md"
+    # Doc-name preference: operator's final path > brain's proposed path >
+    # auto-generated. The auto path is the Phase A behavior; Phase B lets the
+    # operator inherit the brain's suggestion or override entirely.
+    chosen_path = (req.final_path or req.proposed_path or "").strip()
+    if chosen_path:
+        # Clean to a safe filename: keep alnum, dash, underscore, dot, slash.
+        # Strip leading slashes; ensure .md extension.
+        chosen_path = re.sub(r"[^a-zA-Z0-9._/-]+", "-", chosen_path).strip("/-")
+        if not chosen_path.endswith(".md"):
+            chosen_path += ".md"
+        doc_name = chosen_path[:200]
+    else:
+        doc_name = f"store-{date_str}-{uuid.uuid4().hex[:8]}.md"
 
     chunks = chunk_text(content)
     if not chunks:
         raise HTTPException(status_code=422, detail={"error": "chunking_produced_nothing"})
     embeddings = generate_embeddings(chunks)
 
-    metadata_base = {
+    metadata_base: dict = {
         "layer": layer,
         "source": req.source or "chat-store-button",
         "stored_at": datetime.utcnow().isoformat(),
@@ -4690,6 +4848,17 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         "session_id": req.session_id,
         "message_role": req.message_role,
     }
+    # Phase B metadata — tags + title persist alongside the chunk so the
+    # Browse view and any future search-by-tag can use them.
+    if req.proposed_tags or req.final_path:
+        # Use whichever set of tags the operator actually committed to. In
+        # the simple Phase B flow that's just the proposal's tags; the UI
+        # passes them along even on accept so we don't lose them.
+        tags = [t for t in (req.proposed_tags or []) if isinstance(t, str)]
+        if tags:
+            metadata_base["tags"] = tags[:6]
+    if req.proposed_title:
+        metadata_base["title"] = req.proposed_title[:200]
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -4716,39 +4885,37 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         cursor.close()
         conn.close()
 
-    # Feedback signal — Phase 3 LoRA training data starts accumulating here.
-    # Even raw_inbox decisions are labeled events: "operator chose to store
-    # this snippet without classification", which itself is signal about
-    # what's worth keeping. Phase B adds proposal + edit_diff fields.
-    try:
-        feedback_dir = Path("/app/runtime/feedback/store_button")
-        feedback_dir.mkdir(parents=True, exist_ok=True)
-        feedback_file = feedback_dir / f"{date_str}.jsonl"
-        event = {
-            "ts": datetime.utcnow().isoformat(),
-            "session_id": req.session_id,
-            "message_role": req.message_role,
-            "selection": content,
-            "decision": req.decision or req.mode,
-            "proposal": {
-                "layer": req.proposed_layer,
-                "path": req.proposed_path,
-            } if req.proposed_layer or req.proposed_path else None,
-            "final": {
-                "layer": layer,
-                "doc_name": doc_name,
-            },
-        }
-        with open(feedback_file, "a") as f:
-            f.write(json.dumps(event) + "\n")
-    except Exception as e:
-        print(f"[store] feedback log skipped: {e}", flush=True)
+    # Phase B feedback envelope: full proposal + final so the diff is
+    # implicit. Every store action becomes one labeled training example
+    # the Phase 3 LoRA will consume — accept / edit / override are all
+    # signal about what classifier the operator actually wants.
+    _write_feedback({
+        "ts": datetime.utcnow().isoformat(),
+        "session_id": req.session_id,
+        "message_role": req.message_role,
+        "selection": content,
+        "decision": decision,
+        "proposal": {
+            "layer": req.proposed_layer,
+            "path": req.proposed_path,
+            "tags": req.proposed_tags,
+            "title": req.proposed_title,
+            "content": req.proposed_content,
+            "rationale": req.proposed_rationale,
+        } if any([req.proposed_layer, req.proposed_path, req.proposed_tags, req.proposed_title]) else None,
+        "final": {
+            "layer": layer,
+            "path": req.final_path,
+            "doc_name": doc_name,
+        },
+    })
 
     return {
         "ok": True,
         "doc_name": doc_name,
         "chunk_ids": stored_ids,
         "layer": layer,
+        "decision": decision,
         "mode": req.mode,
     }
 
