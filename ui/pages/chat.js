@@ -130,6 +130,55 @@ export default function Chat() {
   const [greeting, setGreeting] = useState('')
   const [greetingEditing, setGreetingEditing] = useState(false)
   const [greetingDraft, setGreetingDraft] = useState('')
+  // Build a markdown rendering of the current chat. Same format used by
+  // both "copy all" and "download .md" so what lands on the clipboard
+  // matches what lands in the file. Includes session title + brain name
+  // + timestamp header, then role-titled sections per message.
+  const buildChatMarkdown = () => {
+    const brainName = process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'
+    const session = sessions.find(s => s.session_id === currentSessionId)
+    const title = session?.title || 'Chat'
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+    const header = `# ${title}\n\n> Exported from ${brainName} on ${now}\n\n---\n\n`
+    const body = messages.map(m => {
+      const role = m.role === 'user' ? 'You' : (selectedModel || 'Brain')
+      const content = typeof m.content === 'string' ? m.content : ''
+      return `## ${role}\n\n${content}\n`
+    }).join('\n')
+    return header + body
+  }
+
+  const [exportFlash, setExportFlash] = useState(null) // 'copied' | 'downloaded' | null
+
+  const copyAllMessages = async () => {
+    try {
+      await navigator.clipboard.writeText(buildChatMarkdown())
+      setExportFlash('copied')
+      setTimeout(() => setExportFlash(prev => prev === 'copied' ? null : prev), 1500)
+    } catch {
+      /* clipboard API can fail on insecure origins — fall through silently */
+    }
+  }
+
+  const downloadChatAsMd = () => {
+    const md = buildChatMarkdown()
+    const session = sessions.find(s => s.session_id === currentSessionId)
+    const slug = (session?.title || 'chat').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'chat'
+    const date = new Date().toISOString().slice(0, 10)
+    const filename = `${date}_${slug}.md`
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    setExportFlash('downloaded')
+    setTimeout(() => setExportFlash(prev => prev === 'downloaded' ? null : prev), 1500)
+  }
+
   const saveGreeting = async () => {
     try {
       const r = await fetch('/api/bf/settings/greeting', {
@@ -1423,8 +1472,57 @@ export default function Chat() {
             options={SCROLL_PACE_OPTIONS}
           />
 
-          {currentSessionId && messages.length >= 2 && (
+          {/* Export current chat — copy whole conversation to clipboard or
+              download as .md. Available with even one message; "Save to
+              memory" below has a stricter 2-msg minimum because consolidation
+              wants a real exchange to reason about. PDF is intentionally not
+              a button: Cmd+P / Ctrl+P → "Save as PDF" works directly on the
+              rendered chat with no extra dependency. */}
+          {currentSessionId && messages.length > 0 && (
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={copyAllMessages}
+                title="Copy the entire chat as markdown to the clipboard"
+                style={{
+                  padding: '6px 10px',
+                  background: 'transparent',
+                  color: exportFlash === 'copied' ? 'var(--accent)' : 'var(--muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.04em',
+                }}
+                onMouseOver={e => { if (exportFlash !== 'copied') e.currentTarget.style.color = 'var(--accent)' }}
+                onMouseOut={e => { if (exportFlash !== 'copied') e.currentTarget.style.color = 'var(--muted)' }}
+              >
+                {exportFlash === 'copied' ? '✓ copied' : 'copy all'}
+              </button>
+              <button
+                onClick={downloadChatAsMd}
+                title="Download the chat as a markdown file"
+                style={{
+                  padding: '6px 10px',
+                  background: 'transparent',
+                  color: exportFlash === 'downloaded' ? 'var(--accent)' : 'var(--muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.04em',
+                }}
+                onMouseOver={e => { if (exportFlash !== 'downloaded') e.currentTarget.style.color = 'var(--accent)' }}
+                onMouseOut={e => { if (exportFlash !== 'downloaded') e.currentTarget.style.color = 'var(--muted)' }}
+              >
+                {exportFlash === 'downloaded' ? '✓ saved' : 'download .md'}
+              </button>
+            </div>
+          )}
+
+          {currentSessionId && messages.length >= 2 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Memory layer this chat consolidates into — episodic / semantic
                   / procedural. The status line confirms where it landed. */}
               <CustomSelect
