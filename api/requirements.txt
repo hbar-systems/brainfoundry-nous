@@ -20,6 +20,7 @@ redis>=5.0.0
 
 # File handling / OCR
 pypdf>=4.0.0
+pymupdf>=1.24.0
 python-docx>=1.1.0
 pillow>=10.0.0
 pytesseract>=0.3.10

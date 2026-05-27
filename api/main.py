@@ -16,6 +16,7 @@ from typing import List, Optional, Annotated, Dict, Any, Union
 from datetime import datetime
 import uuid
 import pypdf
+import pymupdf  # tier-1 PDF extractor; pypdf kept as fallback for malformed PDFs
 import docx
 from PIL import Image
 import pytesseract
@@ -982,16 +983,60 @@ except Exception as e:
     print(f"[startup] brain_apps mount_installed_apps skipped: {e}", flush=True)
 
 def extract_text_from_pdf(file_content: bytes) -> str:
-    """Extract text from PDF file"""
+    """Extract text from a PDF.
+
+    Tier-1 path uses PyMuPDF (fitz), which handles layout-rich documents
+    (tables, multi-column, sidebars) better than pypdf. When a page has
+    no extractable text — meaning it's a scanned image disguised as a
+    PDF — we render the page to PNG at 200 dpi and run Tesseract OCR
+    on it. So a buyer dropping a scanned legal contract or a photographed
+    textbook page still gets useful text out.
+
+    pypdf is kept as a last-ditch fallback for the rare PDF that PyMuPDF
+    can't open at all (encrypted, corrupted headers, etc.).
+
+    Spec: ops/ideas.md line 158 — "hbar pdf2md — RAG-flavored PDF→MD
+    converter" tier-1 recommendation.
+    """
     try:
-        pdf_file = io.BytesIO(file_content)
-        pdf_reader = pypdf.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text.strip()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"PDF extraction failed: {str(e)}")
+        doc = pymupdf.open(stream=file_content, filetype="pdf")
+    except Exception:
+        # PyMuPDF couldn't even open the file. Fall back to pypdf —
+        # rare but the original behavior, preserved as defense in depth.
+        try:
+            pdf_reader = pypdf.PdfReader(io.BytesIO(file_content))
+            text = "\n".join((p.extract_text() or "") for p in pdf_reader.pages)
+            return text.strip()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"PDF extraction failed: {str(e)}")
+
+    pages_text: list = []
+    ocr_pages = 0
+    try:
+        for page in doc:
+            text = page.get_text() or ""
+            if not text.strip():
+                # Page has no extractable text — it's likely a scanned image.
+                # Render to PNG + OCR. 200 dpi is the sweet spot between OCR
+                # quality and processing time on CAX21 ARM64.
+                try:
+                    pix = page.get_pixmap(dpi=200)
+                    img = Image.open(io.BytesIO(pix.tobytes("png")))
+                    text = pytesseract.image_to_string(img) or ""
+                    ocr_pages += 1
+                except Exception as ocr_err:
+                    # OCR failed on this page — skip rather than fail the
+                    # whole document. The operator gets whatever other
+                    # pages extracted cleanly.
+                    print(f"[pdf] OCR failed on page {page.number}: {ocr_err}", flush=True)
+                    text = ""
+            pages_text.append(text)
+    finally:
+        doc.close()
+
+    if ocr_pages:
+        print(f"[pdf] extracted {len(pages_text)} pages ({ocr_pages} via OCR fallback)", flush=True)
+    return "\n\n".join(pages_text).strip()
 
 def extract_text_from_docx(file_content: bytes) -> str:
     """Extract text from Word document"""
