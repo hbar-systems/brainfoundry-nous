@@ -461,6 +461,15 @@ function MemoryPanel() {
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [err, setErr] = useState(null)
+  // "Brain proposes scheme" — modal state. proposal holds the LLM-derived
+  // taxonomy returned from POST /memory/layers/propose-scheme. Operator
+  // accepts (replaces or merges layers), rejects (closes), or edits in
+  // place (selective per-layer checkboxes).
+  const [proposeOpen, setProposeOpen] = useState(false)
+  const [proposeLoading, setProposeLoading] = useState(false)
+  const [proposeError, setProposeError] = useState(null)
+  const [proposal, setProposal] = useState(null)
+  const [proposalSelected, setProposalSelected] = useState({})
 
   const loadStats = () => api('/documents/stats/by-layer').then(d => {
     const map = {}
@@ -505,6 +514,51 @@ function MemoryPanel() {
     save([...layers, p])
   }
 
+  // Ask the brain to read the corpus and propose a taxonomy. POSTs to
+  // /memory/layers/propose-scheme which samples ~30 most-recent docs +
+  // calls the active model with a librarian prompt. Modal opens with the
+  // returned scheme; operator picks accept-all / accept-selected / reject.
+  const proposeScheme = async () => {
+    setProposeOpen(true)
+    setProposeLoading(true)
+    setProposeError(null)
+    setProposal(null); setProposalSelected({})
+    try {
+      const r = await api('/memory/layers/propose-scheme', { method: 'POST' })
+      setProposal(r)
+      // All proposed layers selected by default — operator can uncheck.
+      const sel = {}
+      for (const l of (r.layers || [])) sel[l.name] = true
+      setProposalSelected(sel)
+    } catch (e) {
+      setProposeError(e.message)
+    } finally {
+      setProposeLoading(false)
+    }
+  }
+
+  const closeProposal = () => {
+    setProposeOpen(false); setProposal(null); setProposalSelected({}); setProposeError(null)
+  }
+
+  // Apply: merge the checked proposed layers into the existing list.
+  // Skip duplicates (by name) so a previously-added layer keeps its
+  // current description.
+  const acceptProposal = async () => {
+    if (!proposal) return
+    const toAdd = (proposal.layers || []).filter(l => proposalSelected[l.name])
+    const merged = [...layers]
+    for (const l of toAdd) {
+      if (!merged.find(x => x.name === l.name)) {
+        merged.push({ name: l.name, description: l.description || '' })
+      }
+    }
+    try {
+      await save(merged)
+      closeProposal()
+    } catch (e) { setProposeError(e.message) }
+  }
+
   return (
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
@@ -517,6 +571,36 @@ function MemoryPanel() {
         Knowledge, and ask the brain scoped questions by passing
         <code> layers: ["thinking"] </code> in <code>/chat/rag</code>.
       </p>
+
+      {/* Differentiator surface: after the brain has read enough of your
+          corpus to form a model of you, ask IT to propose how the layers
+          should be organized. Most AI tools impose structure; we ask first. */}
+      <div style={{ marginBottom: 18, padding: '10px 14px', background: '#13110d', border: '1px solid #2a2420', borderRadius: 8 }}>
+        <div style={{ fontSize: 12, color: '#c9a96e', marginBottom: 4, fontFamily: 'DM Mono, monospace' }}>
+          Let the brain propose a scheme
+        </div>
+        <div style={{ fontSize: 12, color: '#6b5f52', lineHeight: 1.6, marginBottom: 8 }}>
+          Reads up to 30 of your most recently stored documents, then proposes a
+          set of themed-notebook layers that fit what you've actually written and
+          collected. You pick which to accept.
+        </div>
+        <button
+          onClick={proposeScheme}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(201, 169, 110, 0.38)',
+            color: '#c9a96e',
+            borderRadius: 8,
+            padding: '6px 14px',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontFamily: 'DM Mono, monospace',
+            letterSpacing: '0.04em',
+          }}
+        >
+          Suggest a scheme →
+        </button>
+      </div>
 
       {presets.length > 0 && (
         <div style={{ marginBottom: 18 }}>
@@ -571,6 +655,124 @@ function MemoryPanel() {
         <button onClick={add} style={BTN}>Add</button>
       </div>
       {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+
+      {/* Proposal modal — brain's suggested taxonomy. Operator picks which
+          to accept via checkboxes, then clicks "Accept selected" to merge
+          into existing layers. Rejecting just closes the modal; nothing
+          is applied. The "brain proposes, operator confirms" pattern
+          from hbar.brain's Store-this spec applies here too. */}
+      {proposeOpen && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.7)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 200, padding: 20,
+        }}>
+          <div style={{
+            background: '#161310', border: '1px solid #2a2420', borderRadius: 12,
+            padding: 24, width: 'min(640px, 100%)', maxHeight: '90vh', overflowY: 'auto',
+            color: '#e8e0d5',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h2 style={{ fontSize: 15, fontFamily: 'Lora, Georgia, serif', margin: 0 }}>
+                Brain's proposed memory-layer scheme
+              </h2>
+              <button onClick={closeProposal} style={{ background: 'none', border: 'none', color: '#6b5f52', cursor: 'pointer', fontSize: 18 }}>×</button>
+            </div>
+
+            {proposeLoading && !proposal && (
+              <div style={{ color: '#6b5f52', fontSize: 13, padding: '20px 0' }}>
+                Reading your corpus, drafting a scheme…
+              </div>
+            )}
+
+            {proposeError && (
+              <div style={{ background: '#1a0a0a', border: '1px solid #ff6b6b30', borderRadius: 8, padding: 12, color: '#ff6b6b', fontSize: 12, marginBottom: 12 }}>
+                {proposeError}
+              </div>
+            )}
+
+            {proposal && proposal.empty && (
+              <div style={{ color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+                {proposal.rationale}
+              </div>
+            )}
+
+            {proposal && !proposal.empty && (
+              <>
+                <div style={{ fontSize: 12, color: '#8b7d6e', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.5 }}>
+                  {proposal.rationale}
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  {(proposal.layers || []).map(l => (
+                    <label
+                      key={l.name}
+                      style={{
+                        display: 'flex', alignItems: 'flex-start', gap: 10,
+                        padding: '10px 12px',
+                        background: proposalSelected[l.name] ? '#1f1a14' : 'transparent',
+                        border: `1px solid ${proposalSelected[l.name] ? '#c9a96e66' : '#2a2420'}`,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!proposalSelected[l.name]}
+                        onChange={(e) => setProposalSelected(prev => ({ ...prev, [l.name]: e.target.checked }))}
+                        style={{ marginTop: 3, accentColor: '#c9a96e' }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: '#c9a96e', fontFamily: 'DM Mono, monospace', marginBottom: 4 }}>
+                          {l.name}
+                          {layers.find(x => x.name === l.name) && (
+                            <span style={{ marginLeft: 8, fontSize: 10, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1 }}>already added</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#8b7d6e', lineHeight: 1.5, marginBottom: 4 }}>{l.description}</div>
+                        {(l.example_docs || []).length > 0 && (
+                          <div style={{ fontSize: 11, color: '#6b5f52', fontFamily: 'DM Mono, monospace' }}>
+                            e.g. {l.example_docs.slice(0, 3).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: 11, color: '#6b5f52', marginBottom: 14, fontStyle: 'italic' }}>
+                  Sample size: {proposal.sample_size} most-recent docs · model: {proposal.model}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  <button
+                    onClick={closeProposal}
+                    style={{ background: 'transparent', border: '1px solid #2a2420', color: '#6b5f52', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    onClick={acceptProposal}
+                    disabled={!Object.values(proposalSelected).some(Boolean)}
+                    style={{
+                      background: Object.values(proposalSelected).some(Boolean) ? '#c9a96e' : '#2a2420',
+                      border: 'none',
+                      color: Object.values(proposalSelected).some(Boolean) ? '#0e0c0b' : '#6b5f52',
+                      borderRadius: 8, padding: '8px 14px',
+                      cursor: Object.values(proposalSelected).some(Boolean) ? 'pointer' : 'not-allowed',
+                      fontSize: 12, fontWeight: 600,
+                    }}
+                  >
+                    Accept selected
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

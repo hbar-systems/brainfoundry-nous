@@ -697,6 +697,148 @@ def settings_set_memory_layers(req: SetMemoryLayersRequest, api_key: str = Depen
     return {"ok": True, "layers": settings_store.get_memory_layers()}
 
 
+@app.post("/memory/layers/propose-scheme")
+async def propose_layer_scheme(api_key: str = Depends(get_api_key)) -> dict:
+    """Read enough of the brain's corpus to propose a memory-layer taxonomy.
+
+    This is the differentiator from the ops/ideas.md "Memory-layer select
+    structure" entry: after the brain has read enough to form a model of
+    the operator, it proposes an organization scheme. The operator picks
+    accept / alternative / no organization. Most AI tools impose structure;
+    brainfoundry asks first.
+
+    Samples up to 30 most-recently-updated documents (by document_name,
+    with the first chunk's content as a preview) and asks the active model
+    to propose 3-6 themed-notebook layers that fit what's actually there.
+    Returns the proposal as JSON; nothing is applied — the UI walks the
+    operator through accept / edit / reject.
+    """
+    # Sample the corpus — most-recent first, one row per document with
+    # a content snippet so the model has signal beyond filenames alone.
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT document_name,
+                   substring((array_agg(content ORDER BY id ASC))[1], 1, 300) AS preview,
+                   MAX(created_at) AS last_updated
+            FROM document_embeddings
+            WHERE metadata->>'deleted_at' IS NULL
+            GROUP BY document_name
+            ORDER BY MAX(created_at) DESC
+            LIMIT 30
+            """
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Corpus sample failed: {str(e)}")
+
+    if not rows:
+        return {
+            "layers": [],
+            "rationale": "Your brain has no ingested documents yet. Add a few via the Knowledge tab first, then come back and ask for a scheme.",
+            "sample_size": 0,
+            "empty": True,
+        }
+
+    doc_list = "\n".join(
+        f"- {r[0]}: {(r[1] or '').strip()[:200].replace(chr(10), ' ')}"
+        for r in rows
+    )
+
+    existing = settings_store.get_memory_layers() or []
+    existing_str = ", ".join(l.get("name") for l in existing if l.get("name")) or "(none)"
+
+    prompt = f"""You are this brain's librarian. The operator has stored {len(rows)} documents (most recent first). Propose a memory-layer taxonomy — 3-6 named "themed notebooks" that fit what's actually here.
+
+Constraints:
+- Names: short, lowercase, kebab-case, 1-2 words. Recognizable to the operator.
+- Descriptions: one sentence, what belongs in this notebook.
+- Every document should fit somewhere. The scheme is exhaustive.
+- Don't invent categories that don't fit the actual corpus.
+- If an existing layer ({existing_str}) is good, you can include it; if not, propose a replacement.
+
+DOCUMENTS (filename + first 200 chars of first chunk):
+{doc_list}
+
+Return ONLY a single JSON object — no prose before or after, no code fences:
+{{
+  "layers": [
+    {{"name": "...", "description": "...", "example_docs": ["doc_name", "doc_name"]}},
+    ...
+  ],
+  "rationale": "one sentence summarizing the overall scheme"
+}}"""
+
+    model = settings_store.get_active_model() or os.getenv("DEFAULT_MODEL") or "llama3.2:3b"
+    try:
+        raw = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=4096)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail={"error": "provider_failed", "message": str(e)[:300]})
+
+    # Robust JSON extraction — same brace-balancing walker as Store Phase B.
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+
+    def _extract(s: str):
+        in_str = False; esc = False; depth = 0; start = -1
+        for i, ch in enumerate(s):
+            if in_str:
+                if esc: esc = False
+                elif ch == '\\': esc = True
+                elif ch == '"': in_str = False
+                continue
+            if ch == '"': in_str = True; continue
+            if ch == '{':
+                if depth == 0: start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start != -1:
+                    try: return json.loads(s[start:i+1])
+                    except json.JSONDecodeError: start = -1
+        return None
+
+    proposal = None
+    try:
+        proposal = json.loads(text)
+    except json.JSONDecodeError:
+        proposal = _extract(text)
+
+    if not isinstance(proposal, dict) or not isinstance(proposal.get("layers"), list):
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "non_json_proposal", "raw": text[:500]},
+        )
+
+    # Normalize: trim names + descriptions, clamp size.
+    layers = []
+    for l in proposal["layers"][:8]:
+        if not isinstance(l, dict): continue
+        name = (l.get("name") or "").strip().lower()
+        if not name: continue
+        # Kebab-ish: alnum + dash + underscore. Strip everything else.
+        name = re.sub(r"[^a-z0-9_-]+", "-", name).strip("-")[:40]
+        if not name: continue
+        layers.append({
+            "name": name,
+            "description": (l.get("description") or "").strip()[:200],
+            "example_docs": [str(d)[:200] for d in (l.get("example_docs") or [])][:5],
+        })
+
+    return {
+        "layers": layers,
+        "rationale": (proposal.get("rationale") or "").strip()[:400],
+        "sample_size": len(rows),
+        "model": model,
+    }
+
+
 @app.get("/settings/retrieval-architecture")
 def settings_get_retrieval_architecture(api_key: str = Depends(get_api_key)):
     """The active "Mind Architecture" — which retrieval strategy /chat/rag uses.
