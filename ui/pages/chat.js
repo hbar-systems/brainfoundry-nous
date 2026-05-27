@@ -528,6 +528,47 @@ export default function Chat() {
     })
   }
 
+  // Focus mode — hbar.ink-inspired minimal surface. Hides the global
+  // nav (via [data-focus="true"] CSS in _app.js) and collapses the
+  // sessions sidebar. Composer + message stream get the full viewport.
+  // Persisted across reloads; ESC exits.
+  const [focusMode, setFocusMode] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = localStorage.getItem('bf-focus-mode') === '1'
+    setFocusMode(stored)
+    if (stored) document.documentElement.dataset.focus = 'true'
+  }, [])
+  const enterFocus = () => {
+    setFocusMode(true)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('bf-focus-mode', '1')
+      document.documentElement.dataset.focus = 'true'
+    }
+    sidebarPanelRef.current?.collapse()
+  }
+  const exitFocus = () => {
+    setFocusMode(false)
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('bf-focus-mode')
+      delete document.documentElement.dataset.focus
+    }
+  }
+  // ESC exits focus mode — only when in focus mode AND no modal is open.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !focusMode) return
+    const onKey = (e) => {
+      // Skip if a modal/textarea is the active target — let them handle ESC.
+      if (e.key !== 'Escape') return
+      const tag = (e.target && e.target.tagName) || ''
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return
+      exitFocus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMode])
+
   // RAG sources collapsible panel — per-message expand/collapse state.
   // Sources arrive in the first SSE frame's rag_metadata.sources and are
   // attached to msg.sources by the consumer; the panel renders only when
@@ -1487,6 +1528,26 @@ export default function Chat() {
             style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
           >
             {sidebarOpen ? '◀' : '▶'}
+          </button>
+
+          {/* Focus mode toggle — minimal hbar.ink-style surface. Hides
+              the nav + collapses the sidebar; ESC or this button exits.
+              Visible in both states so the operator can always escape. */}
+          <button
+            onClick={() => focusMode ? exitFocus() : enterFocus()}
+            title={focusMode ? 'Exit focus mode (ESC)' : 'Focus mode — hide chrome'}
+            style={{
+              background: focusMode ? 'var(--accent)' : 'none',
+              border: '1px solid var(--border)',
+              color: focusMode ? 'var(--bg)' : 'var(--muted)',
+              padding: '6px 10px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            {focusMode ? '⛶ exit' : '⛶'}
           </button>
 
           <CustomSelect

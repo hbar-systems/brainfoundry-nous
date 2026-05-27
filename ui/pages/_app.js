@@ -273,6 +273,15 @@ export default function App({ Component, pageProps }) {
           [data-nav-size="compact"]     { --nav-h: 40px; }
           [data-nav-size="comfortable"] { --nav-h: 64px; }
 
+          /* Focus mode — hbar.ink-inspired minimal surface. Hides the
+             global nav and zeroes the page padding-top so the chat
+             panel (or whatever route is active) takes the full viewport.
+             Chat-side also collapses the sessions sidebar via JS;
+             together these strip the chrome to just composer + stream.
+             Toggle is a small Exit pill rendered inside chat itself. */
+          [data-focus="true"] nav.bf-nav { display: none; }
+          [data-focus="true"] .bf-page-wrap { padding-top: 0 !important; }
+
           * { box-sizing: border-box; }
           html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); -webkit-text-size-adjust: 100%; }
           body { overflow-x: hidden; }
@@ -331,7 +340,7 @@ export default function App({ Component, pageProps }) {
         `}</style>
       </Head>
       <Nav />
-      <div style={{
+      <div className="bf-page-wrap" style={{
         // Match the nav's actual rendered height (--nav-h content + safe-
         // area padding-top) so page content starts below the fixed nav in
         // both browser mode and PWA standalone mode. --nav-h is set on
