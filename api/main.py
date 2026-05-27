@@ -1979,6 +1979,50 @@ async def public_chat(request: dict, http_request: Request):
     Pre-stream gates (rate limit, input validation) still return JSON
     error responses with the appropriate status code.
     """
+    # ── Cloudflare Turnstile gate (env-gated, optional) ───────────────
+    # When TURNSTILE_SECRET_KEY is set, the public-chat endpoint requires
+    # a valid Turnstile token in the request body and verifies it against
+    # Cloudflare's siteverify endpoint. Stops bot-loop abuse cold —
+    # Turnstile is invisible to humans, automatically challenges scrapers.
+    # Sits BEFORE rate-limit so a successful Turnstile costs the bot 0
+    # rate-limit budget; sits BEFORE the LLM call so a failed token never
+    # burns Anthropic spend.
+    _turnstile_secret = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+    if _turnstile_secret:
+        token = request.get("turnstile_token") if isinstance(request, dict) else None
+        if not isinstance(token, str) or not token:
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Turnstile verification required."},
+            )
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as _http:
+                _verify = await _http.post(
+                    "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                    data={
+                        "secret": _turnstile_secret,
+                        "response": token,
+                        "remoteip": _public_client_ip(http_request),
+                    },
+                )
+                _result = _verify.json()
+            if not _result.get("success"):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "Turnstile verification failed.",
+                        "details": _result.get("error-codes", []),
+                    },
+                )
+        except Exception as e:
+            # Fail closed on verification errors — never let a bypass
+            # through just because Cloudflare's endpoint blipped.
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Turnstile verification error", "detail": str(e)[:200]},
+            )
+
     # ── Per-IP + brain-wide-daily rate limit (Redis, fail-closed) ─────
     ip = _public_client_ip(http_request)
     rl = _public_rate_limiter.check(ip)

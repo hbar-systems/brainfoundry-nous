@@ -68,6 +68,10 @@ services:
       # caught here. Default 0 = unlimited (backward compat). Returns
       # 503 with retry-to-UTC-midnight when exceeded.
       - PUBLIC_CHAT_DAILY_MAX=${PUBLIC_CHAT_DAILY_MAX:-0}
+      # TURNSTILE_SECRET_KEY: when set, /v1/public/chat requires a
+      # Cloudflare Turnstile token verified against siteverify.
+      # Stops bot loops. Unset = no Turnstile gate (default, nous behavior).
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
       - CHUNK_SIZE=${CHUNK_SIZE:-750}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
       - TZ=${TZ:-UTC}
