@@ -27,23 +27,24 @@ const APPEARANCE_FONTS = [
 ]
 const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 
-const APPEARANCE_NAV_SIZES = [
-  { value: 'compact',     label: 'compact',     note: '40px' },
-  { value: 'normal',      label: 'normal',      note: '52px' },
-  { value: 'comfortable', label: 'comfortable', note: '64px' },
-]
+// Header height is a continuous pixel value; the drag handle on the nav
+// writes the same localStorage key. 36..88 bounds match Nav.js.
+const NAV_H_MIN = 36
+const NAV_H_MAX = 88
+const NAV_H_DEFAULT = 52
 
 function AppearancePanel() {
   const [theme, setTheme] = useState('gold')
   const [font, setFont] = useState('system')
-  const [navSize, setNavSize] = useState('normal')
+  const [navH, setNavH] = useState(NAV_H_DEFAULT)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     setTheme(localStorage.getItem('bf-theme') || 'gold')
     const storedFont = localStorage.getItem('bf-font') || 'system'
     setFont(FONT_MIGRATION[storedFont] || storedFont)
-    setNavSize(localStorage.getItem('bf-nav-size') || 'normal')
+    const stored = parseInt(localStorage.getItem('bf-nav-h') || '', 10)
+    setNavH(Number.isFinite(stored) ? stored : NAV_H_DEFAULT)
   }, [])
 
   const applyTheme = (val) => {
@@ -60,11 +61,19 @@ function AppearancePanel() {
     document.documentElement.dataset.font = val
   }
 
-  const applyNavSize = (val) => {
-    setNavSize(val)
+  const applyNavH = (val) => {
+    const n = Math.max(NAV_H_MIN, Math.min(NAV_H_MAX, parseInt(val, 10) || NAV_H_DEFAULT))
+    setNavH(n)
     if (typeof window === 'undefined') return
-    localStorage.setItem('bf-nav-size', val)
-    document.documentElement.dataset.navSize = val
+    localStorage.setItem('bf-nav-h', String(n))
+    document.documentElement.style.setProperty('--nav-h', `${n}px`)
+  }
+
+  const resetNavH = () => {
+    setNavH(NAV_H_DEFAULT)
+    if (typeof window === 'undefined') return
+    localStorage.removeItem('bf-nav-h')
+    document.documentElement.style.removeProperty('--nav-h')
   }
 
   return (
@@ -133,29 +142,32 @@ function AppearancePanel() {
       </div>
 
       <div>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-          Header size
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span>Header size</span>
+          <span style={{ fontFamily: 'DM Mono, monospace', textTransform: 'none', letterSpacing: 0, color: '#c9a96e', fontSize: 11 }}>{navH}px</span>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {APPEARANCE_NAV_SIZES.map(n => (
-            <button
-              key={n.value}
-              onClick={() => applyNavSize(n.value)}
-              style={{
-                padding: '6px 12px',
-                background: navSize === n.value ? '#1f1a14' : 'transparent',
-                color: navSize === n.value ? '#e8e0d5' : '#8b7d6e',
-                border: `1px solid ${navSize === n.value ? '#c9a96e66' : '#2a2420'}`,
-                borderRadius: 8,
-                cursor: 'pointer',
-                fontSize: 13,
-                display: 'flex', alignItems: 'baseline', gap: 6,
-              }}
-            >
-              <span>{n.label}</span>
-              <span style={{ fontSize: 11, color: '#6b5f52', fontFamily: 'DM Mono, monospace' }}>{n.note}</span>
-            </button>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 11, color: '#6b5f52' }}>{NAV_H_MIN}</span>
+          <input
+            type="range"
+            min={NAV_H_MIN}
+            max={NAV_H_MAX}
+            step={1}
+            value={navH}
+            onChange={(e) => applyNavH(e.target.value)}
+            style={{ flex: 1, accentColor: '#c9a96e' }}
+          />
+          <span style={{ fontSize: 11, color: '#6b5f52' }}>{NAV_H_MAX}</span>
+          <button
+            onClick={resetNavH}
+            title="Reset to default (52px)"
+            style={{ background: 'transparent', border: '1px solid #2a2420', color: '#8b7d6e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Mono, monospace' }}
+          >
+            reset
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#6b5f52', marginTop: 6, fontStyle: 'italic' }}>
+          Or drag the bottom edge of the header itself.
         </div>
       </div>
     </div>

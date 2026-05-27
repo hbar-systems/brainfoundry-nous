@@ -37,6 +37,13 @@ function isActive(router, tab) {
   return router.pathname === tab.href
 }
 
+// Bounds for the drag-resize handle on the nav's bottom edge. The
+// handle mirrors the sidebar/messages resize bars elsewhere in the UI.
+// Lower bound buys vertical real estate on small screens; upper bound
+// keeps the nav from eating the message column.
+const NAV_H_MIN = 36
+const NAV_H_MAX = 88
+
 export default function Nav() {
   const router = useRouter()
   const [tabs, setTabs] = useState(FALLBACK_NAV)
@@ -52,6 +59,44 @@ export default function Nav() {
       .catch(() => { /* keep FALLBACK_NAV on any error */ })
     return () => { cancelled = true }
   }, [])
+
+  // Drag-handle: mouse + touch. Both update --nav-h live during the
+  // drag so the user sees the layout respond instantly; on release we
+  // persist the final pixel value to localStorage. Document-level
+  // listeners (not handle-element) so a fast drag past the handle
+  // doesn't get lost.
+  const startDrag = (clientY, isTouch) => {
+    // safe-area-inset-top can be non-zero in PWA standalone mode;
+    // subtract it so the effective drag origin lines up with the
+    // visible nav baseline.
+    const cs = getComputedStyle(document.documentElement)
+    const safeTop = parseFloat(cs.getPropertyValue('--safe-area-top') || '0') || 0
+    const apply = (y) => {
+      const next = Math.max(NAV_H_MIN, Math.min(NAV_H_MAX, Math.round(y - safeTop)))
+      document.documentElement.style.setProperty('--nav-h', `${next}px`)
+    }
+    apply(clientY)
+    const moveEvt = isTouch ? 'touchmove' : 'mousemove'
+    const endEvt = isTouch ? 'touchend' : 'mouseup'
+    const onMove = (e) => {
+      const y = isTouch ? (e.touches[0] && e.touches[0].clientY) : e.clientY
+      if (y != null) apply(y)
+      e.preventDefault()
+    }
+    const onEnd = () => {
+      window.removeEventListener(moveEvt, onMove)
+      window.removeEventListener(endEvt, onEnd)
+      const cs2 = getComputedStyle(document.documentElement)
+      const finalH = parseInt(cs2.getPropertyValue('--nav-h') || '52', 10)
+      if (Number.isFinite(finalH)) {
+        localStorage.setItem('bf-nav-h', String(finalH))
+      }
+      document.body.style.userSelect = ''
+    }
+    document.body.style.userSelect = 'none'
+    window.addEventListener(moveEvt, onMove, { passive: false })
+    window.addEventListener(endEvt, onEnd)
+  }
 
   return (
     <nav className="bf-nav" style={{
@@ -106,6 +151,33 @@ export default function Nav() {
           )
         })}
       </div>
+
+      {/* Drag handle — sits on the nav's bottom edge, pulls up or down
+          to resize the nav height. Matches the sidebar/messages resize
+          bar styling (4px tall, brightens on hover via the same accent).
+          Double-click resets to the 52px default. */}
+      <div
+        onMouseDown={(e) => { e.preventDefault(); startDrag(e.clientY, false) }}
+        onTouchStart={(e) => { if (e.touches[0]) startDrag(e.touches[0].clientY, true) }}
+        onDoubleClick={() => {
+          document.documentElement.style.removeProperty('--nav-h')
+          localStorage.removeItem('bf-nav-h')
+        }}
+        title="Drag to resize header · double-click to reset"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: -2,
+          height: '4px',
+          cursor: 'ns-resize',
+          background: 'transparent',
+          transition: 'background 0.15s ease',
+          zIndex: 101,
+        }}
+        onMouseOver={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
+        onMouseOut={(e) => { e.currentTarget.style.background = 'transparent' }}
+      />
     </nav>
   )
 }

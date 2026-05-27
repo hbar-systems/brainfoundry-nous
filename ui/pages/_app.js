@@ -29,10 +29,25 @@ export default function App({ Component, pageProps }) {
     const stored = localStorage.getItem('bf-font') || 'system'
     const font = fontMigration[stored] || stored
     if (font !== stored) localStorage.setItem('bf-font', font)
-    const navSize = localStorage.getItem('bf-nav-size') || 'normal'
+    // Nav height: prefer the new continuous pixel value (bf-nav-h), fall
+    // back to the old three-step bucket (bf-nav-size), fall back to 52px
+    // default. Drag-handle on the nav writes bf-nav-h in pixels; Settings
+    // slider writes the same. The old discrete buckets migrate forward
+    // on first read so existing operators don't lose their preference.
+    const NAV_SIZE_MIGRATE = { compact: 40, normal: 52, comfortable: 64 }
+    let navH = parseInt(localStorage.getItem('bf-nav-h') || '', 10)
+    if (!Number.isFinite(navH)) {
+      const old = localStorage.getItem('bf-nav-size')
+      if (old && NAV_SIZE_MIGRATE[old] != null) {
+        navH = NAV_SIZE_MIGRATE[old]
+        localStorage.setItem('bf-nav-h', String(navH))
+      }
+    }
     document.documentElement.dataset.theme = theme
     document.documentElement.dataset.font = font
-    document.documentElement.dataset.navSize = navSize
+    if (Number.isFinite(navH) && navH >= 32 && navH <= 96) {
+      document.documentElement.style.setProperty('--nav-h', `${navH}px`)
+    }
   }, [])
 
   return (
