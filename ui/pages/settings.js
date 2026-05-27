@@ -27,15 +27,23 @@ const APPEARANCE_FONTS = [
 ]
 const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 
+const APPEARANCE_NAV_SIZES = [
+  { value: 'compact',     label: 'compact',     note: '40px' },
+  { value: 'normal',      label: 'normal',      note: '52px' },
+  { value: 'comfortable', label: 'comfortable', note: '64px' },
+]
+
 function AppearancePanel() {
   const [theme, setTheme] = useState('gold')
   const [font, setFont] = useState('system')
+  const [navSize, setNavSize] = useState('normal')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     setTheme(localStorage.getItem('bf-theme') || 'gold')
     const storedFont = localStorage.getItem('bf-font') || 'system'
     setFont(FONT_MIGRATION[storedFont] || storedFont)
+    setNavSize(localStorage.getItem('bf-nav-size') || 'normal')
   }, [])
 
   const applyTheme = (val) => {
@@ -50,6 +58,13 @@ function AppearancePanel() {
     if (typeof window === 'undefined') return
     localStorage.setItem('bf-font', val)
     document.documentElement.dataset.font = val
+  }
+
+  const applyNavSize = (val) => {
+    setNavSize(val)
+    if (typeof window === 'undefined') return
+    localStorage.setItem('bf-nav-size', val)
+    document.documentElement.dataset.navSize = val
   }
 
   return (
@@ -92,7 +107,7 @@ function AppearancePanel() {
         </div>
       </div>
 
-      <div>
+      <div style={{ marginBottom: 18 }}>
         <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
           Font
         </div>
@@ -112,6 +127,33 @@ function AppearancePanel() {
               }}
             >
               {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+          Header size
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {APPEARANCE_NAV_SIZES.map(n => (
+            <button
+              key={n.value}
+              onClick={() => applyNavSize(n.value)}
+              style={{
+                padding: '6px 12px',
+                background: navSize === n.value ? '#1f1a14' : 'transparent',
+                color: navSize === n.value ? '#e8e0d5' : '#8b7d6e',
+                border: `1px solid ${navSize === n.value ? '#c9a96e66' : '#2a2420'}`,
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontSize: 13,
+                display: 'flex', alignItems: 'baseline', gap: 6,
+              }}
+            >
+              <span>{n.label}</span>
+              <span style={{ fontSize: 11, color: '#6b5f52', fontFamily: 'DM Mono, monospace' }}>{n.note}</span>
             </button>
           ))}
         </div>

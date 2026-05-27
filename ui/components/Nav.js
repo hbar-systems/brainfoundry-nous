@@ -59,7 +59,7 @@ export default function Nav() {
       borderBottom: '1px solid var(--border)',
       display: 'flex',
       alignItems: 'center',
-      height: '52px',
+      height: 'var(--nav-h, 52px)',
       // PWA safe-area: in standalone mode the iOS status bar / dynamic
       // island sits at the top of the viewport. Pad the nav by the
       // OS-reported inset so the nav content drops below it. In browser

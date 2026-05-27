@@ -277,7 +277,7 @@ export default function AppHost() {
     <div
       style={{
         position: 'fixed',
-        top: 'calc(52px + env(safe-area-inset-top, 0px))',
+        top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px))',
         left: 0,
         right: 0,
         bottom: 0,

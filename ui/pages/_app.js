@@ -18,9 +18,10 @@ export default function App({ Component, pageProps }) {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   }, [])
 
-  // Theme + font init: read localStorage, apply to <html> dataset before paint.
-  // Switcher in chat header keeps these in sync on change. Old font tokens
-  // (ui/serif/mono) migrate to new names on read.
+  // Theme + font + nav-size init: read localStorage, apply to <html>
+  // dataset before paint. Switchers in chat header / settings page keep
+  // these in sync on change. Old font tokens (ui/serif/mono) migrate to
+  // new names on read.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const theme = localStorage.getItem('bf-theme') || 'gold'
@@ -28,8 +29,10 @@ export default function App({ Component, pageProps }) {
     const stored = localStorage.getItem('bf-font') || 'system'
     const font = fontMigration[stored] || stored
     if (font !== stored) localStorage.setItem('bf-font', font)
+    const navSize = localStorage.getItem('bf-nav-size') || 'normal'
     document.documentElement.dataset.theme = theme
     document.documentElement.dataset.font = font
+    document.documentElement.dataset.navSize = navSize
   }, [])
 
   return (
@@ -55,6 +58,13 @@ export default function App({ Component, pageProps }) {
              --code-bg/--code-fg fenced code. */
 
           :root {
+            /* Nav size — overridden by [data-nav-size] on <html>. Default
+               52px matches the historical fixed height; compact / comfortable
+               are operator-selectable from Settings → Appearance. Every
+               place that previously hardcoded "52px" (Nav, page padding-top,
+               chat panel height calc) now reads var(--nav-h). */
+            --nav-h: 52px;
+
             /* gold — warm academic, current default */
             --bg: #0e0c0b;
             --surface: #161310;
@@ -242,6 +252,12 @@ export default function App({ Component, pageProps }) {
             --font-display: "JetBrains Mono", ui-monospace, monospace;
           }
 
+          /* Nav size variants — override --nav-h. Compact buys more
+             vertical real estate on small screens; comfortable is friendlier
+             touch target on tablets. */
+          [data-nav-size="compact"]     { --nav-h: 40px; }
+          [data-nav-size="comfortable"] { --nav-h: 64px; }
+
           * { box-sizing: border-box; }
           html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); -webkit-text-size-adjust: 100%; }
           body { overflow-x: hidden; }
@@ -301,10 +317,12 @@ export default function App({ Component, pageProps }) {
       </Head>
       <Nav />
       <div style={{
-        // Match the nav's actual rendered height (52px content + safe-area
-        // padding-top) so page content starts below the fixed nav in both
-        // browser mode and PWA standalone mode.
-        paddingTop: 'calc(52px + env(safe-area-inset-top, 0px))',
+        // Match the nav's actual rendered height (--nav-h content + safe-
+        // area padding-top) so page content starts below the fixed nav in
+        // both browser mode and PWA standalone mode. --nav-h is set on
+        // <html> from localStorage by the hydration effect above; falls
+        // back to 52px by the :root default.
+        paddingTop: 'calc(var(--nav-h) + env(safe-area-inset-top, 0px))',
         minHeight: '100vh',
         backgroundColor: 'var(--bg)',
         color: 'var(--text)',

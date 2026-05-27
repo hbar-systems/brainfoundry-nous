@@ -1216,9 +1216,10 @@ export default function Chat() {
       direction="horizontal"
       autoSaveId="bf-chat-panels"
       style={{
-        // Subtract nav height (52px content + PWA safe-area-top) so the
-        // chat column fills exactly the viewport below the nav.
-        height: 'calc(100vh - 52px - env(safe-area-inset-top, 0px))',
+        // Subtract nav height (--nav-h content + PWA safe-area-top) so
+        // the chat column fills exactly the viewport below the nav.
+        // Operator-set via Settings → Appearance → Header size.
+        height: 'calc(100vh - var(--nav-h, 52px) - env(safe-area-inset-top, 0px))',
         backgroundColor: 'var(--bg)',
         color: 'var(--text)',
         fontFamily: 'var(--font-body)',
