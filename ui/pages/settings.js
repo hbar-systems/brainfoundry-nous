@@ -2,6 +2,124 @@ import { useEffect, useState } from 'react'
 
 const API = '/api/bf'
 
+// Theme + font lists kept in sync with chat.js (THEME_OPTIONS / FONT_OPTIONS).
+// Same localStorage keys + data-attribute approach so a theme set from
+// Settings persists to chat and vice versa.
+const APPEARANCE_THEMES = [
+  { value: 'gold',     label: 'gold',     swatch: '#c9a96e' },
+  { value: 'paper',    label: 'paper',    swatch: '#8a6e3c' },
+  { value: 'sapphire', label: 'sapphire', swatch: '#6b8cce' },
+  { value: 'forest',   label: 'forest',   swatch: '#88a868' },
+  { value: 'crimson',  label: 'crimson',  swatch: '#c87878' },
+  { value: 'mono',     label: 'mono',     swatch: '#b0b0b0' },
+  { value: 'fox',      label: 'fox',      swatch: '#d77a3a' },
+  { value: 'octopus',  label: 'octopus',  swatch: '#3a9ea0' },
+  { value: 'owl',      label: 'owl',      swatch: '#5b4d80' },
+]
+
+const APPEARANCE_FONTS = [
+  { value: 'system',    label: 'System sans' },
+  { value: 'inter',     label: 'Inter' },
+  { value: 'lora',      label: 'Lora' },
+  { value: 'crimson',   label: 'Crimson Pro' },
+  { value: 'dm-mono',   label: 'DM Mono' },
+  { value: 'jetbrains', label: 'JetBrains Mono' },
+]
+const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
+
+function AppearancePanel() {
+  const [theme, setTheme] = useState('gold')
+  const [font, setFont] = useState('system')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setTheme(localStorage.getItem('bf-theme') || 'gold')
+    const storedFont = localStorage.getItem('bf-font') || 'system'
+    setFont(FONT_MIGRATION[storedFont] || storedFont)
+  }, [])
+
+  const applyTheme = (val) => {
+    setTheme(val)
+    if (typeof window === 'undefined') return
+    localStorage.setItem('bf-theme', val)
+    document.documentElement.dataset.theme = val
+  }
+
+  const applyFont = (val) => {
+    setFont(val)
+    if (typeof window === 'undefined') return
+    localStorage.setItem('bf-font', val)
+    document.documentElement.dataset.font = val
+  }
+
+  return (
+    <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+      <p style={{ margin: '0 0 14px 0' }}>
+        Set the chat surface's palette and typography. Saved per-browser
+        (localStorage); chat picker stays in sync.
+      </p>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+          Theme
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {APPEARANCE_THEMES.map(t => (
+            <button
+              key={t.value}
+              onClick={() => applyTheme(t.value)}
+              title={t.label}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 12px 6px 8px',
+                background: theme === t.value ? '#1f1a14' : 'transparent',
+                color: theme === t.value ? '#e8e0d5' : '#8b7d6e',
+                border: `1px solid ${theme === t.value ? '#c9a96e66' : '#2a2420'}`,
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontFamily: 'DM Mono, monospace',
+              }}
+            >
+              <span style={{
+                width: 14, height: 14, borderRadius: '50%',
+                background: t.swatch, border: '1px solid rgba(0,0,0,0.3)',
+                display: 'inline-block',
+              }} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+          Font
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {APPEARANCE_FONTS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => applyFont(f.value)}
+              style={{
+                padding: '6px 12px',
+                background: font === f.value ? '#1f1a14' : 'transparent',
+                color: font === f.value ? '#e8e0d5' : '#8b7d6e',
+                border: `1px solid ${font === f.value ? '#c9a96e66' : '#2a2420'}`,
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const PROVIDER_LABELS = {
   anthropic: 'Anthropic (Claude)',
   openai: 'OpenAI (GPT, o-series)',
@@ -622,6 +740,10 @@ export default function Settings() {
             textDecoration: 'none', fontSize: 13, fontWeight: 600,
           }}>Open the persona editor</a>
         </div>
+      </Section>
+
+      <Section title="Appearance" subtitle="Palette and typography for the chat surface.">
+        <AppearancePanel />
       </Section>
 
       <Section title="Keys" subtitle="Bring your own — Anthropic, OpenAI, Gemini, and more.">

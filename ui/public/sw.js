@@ -1,7 +1,7 @@
 // Minimal service worker — static-asset cache + network-first navigation.
 // Bumps CACHE_NAME on each release to invalidate the previous cache.
 // Bump this string when shipping a new SW or asset set.
-const CACHE_NAME = 'bf-static-v1';
+const CACHE_NAME = 'bf-static-v2';
 
 const STATIC_ASSETS = [
   '/',

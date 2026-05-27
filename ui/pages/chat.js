@@ -393,6 +393,59 @@ export default function Chat() {
     setDragActive(false)
     if (e.dataTransfer?.files?.length) ingestImageFiles(e.dataTransfer.files)
   }
+
+  // Window-level drag handlers so images dropped ANYWHERE on the chat
+  // page get attached — not just on the narrow messages container. The
+  // per-element handlers above stay too (they keep the dashed accent
+  // outline on the messages area). Without these, a user who drops a
+  // file on the composer textarea triggers the BROWSER default (opens
+  // the image, navigates away from the chat), which reads as "drag-drop
+  // is broken". The dragover preventDefault is essential — without it
+  // the drop event never fires.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const isImageDrag = (e) => {
+      // dataTransfer.types is the only reliable read during dragover;
+      // .files is always empty until drop.
+      const types = e.dataTransfer?.types
+      if (!types) return false
+      // Browsers expose "Files" in the types array when files are being
+      // dragged from the OS. Accept anything with file payload — we
+      // filter to images inside ingestImageFiles already.
+      for (let i = 0; i < types.length; i++) {
+        if (types[i] === 'Files' || types[i] === 'application/x-moz-file') return true
+      }
+      return false
+    }
+    const onDragOver = (e) => {
+      if (!isImageDrag(e)) return
+      e.preventDefault()
+      if (!dragActive) setDragActive(true)
+    }
+    const onDragLeave = (e) => {
+      // Only clear if leaving the document body, not just crossing
+      // between child elements.
+      if (e.relatedTarget == null || e.relatedTarget === document.documentElement) {
+        setDragActive(false)
+      }
+    }
+    const onDrop = (e) => {
+      if (!isImageDrag(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      setDragActive(false)
+      if (e.dataTransfer?.files?.length) ingestImageFiles(e.dataTransfer.files)
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const messagesEndRef = useRef(null)
   const messagesContainerRef = useRef(null)
   const textareaRef = useRef(null)
