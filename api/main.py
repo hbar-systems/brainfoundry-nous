@@ -2517,6 +2517,56 @@ def list_memory_proposals(
         raise HTTPException(status_code=502, detail=f"NodeOS proposals query failed: {str(e)}")
 
 
+@app.post("/documents/extract")
+async def extract_document_text(
+    file: UploadFile = File(...),
+    api_key: str = Depends(get_api_key),
+):
+    """Extract text from an uploaded file WITHOUT storing it.
+
+    Used by the chat composer's drag-drop / paperclip flow when the
+    operator wants to drop a PDF / DOCX / image into a chat without
+    formally ingesting it into the brain's Knowledge tab. The extracted
+    text comes back to the client which inserts it into the composer
+    textarea so the operator can review, edit, and send as a normal
+    user message. No DB write, no chunking, no embedding.
+
+    Same content_type routing as /documents/upload:
+      application/pdf      → PyMuPDF + scanned-page OCR fallback
+      .docx                → python-docx
+      image/*              → Tesseract OCR
+      anything else        → UTF-8 decode attempt
+    """
+    content = await file.read()
+    content_type = file.content_type or ""
+    filename = file.filename or "unnamed"
+    try:
+        if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+            text = extract_text_from_pdf(content)
+        elif (
+            content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            or filename.lower().endswith(".docx")
+        ):
+            text = extract_text_from_docx(content)
+        elif content_type.startswith("image/"):
+            text = extract_text_from_image(content)
+        else:
+            try:
+                text = content.decode("utf-8")
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: {content_type or '(unknown)'}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Extraction failed: {str(e)[:300]}")
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "text": text,
+        "char_count": len(text),
+    }
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: Optional[UploadFile] = File(None),

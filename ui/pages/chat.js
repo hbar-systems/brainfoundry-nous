@@ -338,33 +338,74 @@ export default function Chat() {
     }
   }
 
+  // Routes incoming files: images attach to the vision-path images list;
+  // PDFs / DOCX / text files get extracted server-side via POST
+  // /documents/extract (no DB write) and the extracted text is APPENDED
+  // to the composer textarea so the operator can review/edit/send.
   const ingestImageFiles = (fileList) => {
     const incoming = Array.from(fileList || [])
-    const onlyImages = incoming.filter(f => f.type.startsWith('image/'))
-    if (incoming.length > onlyImages.length) {
-      setError(`Skipped ${incoming.length - onlyImages.length} non-image file(s)`)
-    }
-    setAttachedImages(prev => {
-      const room = MAX_IMAGES - prev.length
-      if (room <= 0) {
-        setError(`Already at max ${MAX_IMAGES} images — remove one to add more`)
-        return prev
-      }
-      const accepted = onlyImages.slice(0, room).filter(f => f.size <= 5 * 1024 * 1024)
-      const oversized = onlyImages.slice(0, room).length - accepted.length
-      if (oversized > 0) setError(`${oversized} image(s) over 5MB — skipped`)
-      if (onlyImages.length > room) setError(`Capped at ${MAX_IMAGES} images — extras ignored`)
-      accepted.forEach(file => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const dataUrl = reader.result
-          const base64 = String(dataUrl).split(',')[1]
-          setAttachedImages(curr => [...curr, { base64, mediaType: file.type, name: file.name, dataUrl }])
+    const images = incoming.filter(f => f.type.startsWith('image/'))
+    const docs = incoming.filter(f => !f.type.startsWith('image/'))
+
+    // ── Vision-path images (unchanged behavior) ──────────────────────
+    if (images.length > 0) {
+      setAttachedImages(prev => {
+        const room = MAX_IMAGES - prev.length
+        if (room <= 0) {
+          setError(`Already at max ${MAX_IMAGES} images — remove one to add more`)
+          return prev
         }
-        reader.onerror = () => setError(`Failed to read ${file.name}`)
-        reader.readAsDataURL(file)
+        const accepted = images.slice(0, room).filter(f => f.size <= 5 * 1024 * 1024)
+        const oversized = images.slice(0, room).length - accepted.length
+        if (oversized > 0) setError(`${oversized} image(s) over 5MB — skipped`)
+        if (images.length > room) setError(`Capped at ${MAX_IMAGES} images — extras ignored`)
+        accepted.forEach(file => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const dataUrl = reader.result
+            const base64 = String(dataUrl).split(',')[1]
+            setAttachedImages(curr => [...curr, { base64, mediaType: file.type, name: file.name, dataUrl }])
+          }
+          reader.onerror = () => setError(`Failed to read ${file.name}`)
+          reader.readAsDataURL(file)
+        })
+        return prev
       })
-      return prev
+    }
+
+    // ── Document path: extract text, append to composer ─────────────
+    // PDFs (incl. scanned via PyMuPDF + OCR fallback), DOCX, plain text.
+    // Server returns plain text; we append to inputMessage so the operator
+    // can edit + send as a normal user turn. Capped at 200KB extracted
+    // chars per file to keep the composer responsive — most PDFs fit;
+    // larger texts should go through the Knowledge tab for proper chunking
+    // and embedding.
+    docs.forEach(async (file) => {
+      if (file.size > 20 * 1024 * 1024) {
+        setError(`${file.name}: file >20MB — too large for inline extract; upload via Knowledge tab instead.`)
+        return
+      }
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        const r = await fetch('/api/bf/documents/extract', { method: 'POST', body: fd })
+        if (!r.ok) {
+          const body = await r.text().catch(() => '')
+          setError(`Extract ${file.name}: ${r.status} ${body.slice(0, 200)}`)
+          return
+        }
+        const data = await r.json()
+        const text = (data.text || '').slice(0, 200_000)
+        if (!text.trim()) {
+          setError(`${file.name}: no text extracted (might be an unreadable PDF).`)
+          return
+        }
+        // Append as a fenced block so multiple drops stack cleanly.
+        const block = `\n\n--- ${data.filename || file.name} ---\n${text}\n`
+        setInputMessage(prev => (prev ? prev + block : block.trimStart()))
+      } catch (e) {
+        setError(`Extract ${file.name}: ${e.message}`)
+      }
     })
   }
 
@@ -1550,6 +1591,35 @@ export default function Chat() {
             {focusMode ? '⛶ exit' : '⛶'}
           </button>
 
+          {/* Floating exit affordance — always visible in focus mode so the
+              operator doesn't lose the way out when the chat header scrolls
+              or feels swallowed. Fixed-position, top-right, escapes the
+              normal layout flow. Also surfaces the ESC shortcut. */}
+          {focusMode && (
+            <button
+              onClick={exitFocus}
+              title="Exit focus mode"
+              style={{
+                position: 'fixed',
+                top: '12px',
+                right: '12px',
+                zIndex: 999,
+                background: 'var(--surface)',
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
+                padding: '6px 14px',
+                borderRadius: '999px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                letterSpacing: '0.04em',
+              }}
+            >
+              ⛶ Exit focus · ESC
+            </button>
+          )}
+
           <CustomSelect
             value={selectedModel}
             onChange={(name) => { setSelectedModel(name); persistModelChoice(name) }}
@@ -2166,7 +2236,7 @@ export default function Chat() {
           <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>
             <label
               htmlFor="image-upload-input"
-              title="Attach image (uses vision-capable model — Claude / GPT-4o)"
+              title="Attach image (vision model needed) or document (PDF / DOCX / TXT — extracted text fills the composer)"
               style={{
                 padding: '12px 14px',
                 backgroundColor: 'var(--surface)',
@@ -2184,7 +2254,7 @@ export default function Chat() {
             <input
               id="image-upload-input"
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf,.docx,.txt,.md"
               multiple
               onChange={handleImageSelect}
               disabled={isLoading}
@@ -2197,15 +2267,15 @@ export default function Chat() {
               onKeyDown={handleKeyDown}
               onPaste={e => {
                 // Pasted images (screenshots from Cmd+Shift+Ctrl+4, copied
-                // images from a browser, etc.) — extract any image/* items
-                // from the clipboard and route through the same ingest path
-                // as drag-drop and file-picker. Falls through normally for
-                // text pastes so typing UX is unchanged.
+                // images from a browser) + pasted documents (PDFs, etc.) —
+                // route through the same ingest path as drag-drop and the
+                // paperclip picker. Falls through normally for text pastes
+                // so typing UX is unchanged.
                 const items = e.clipboardData?.items
                 if (!items) return
                 const files = []
                 for (const it of items) {
-                  if (it.kind === 'file' && it.type.startsWith('image/')) {
+                  if (it.kind === 'file') {
                     const f = it.getAsFile()
                     if (f) files.push(f)
                   }
@@ -2221,7 +2291,7 @@ export default function Chat() {
                       ? `Ask about the image${attachedImages.length > 1 ? 's' : ''}...`
                       : (typeof window !== 'undefined' && window.matchMedia('(max-width: 480px)').matches
                           ? 'Message...'
-                          : 'Message... (Enter to send, drop or paste images)'))
+                          : 'Message... (Enter to send, drop images or PDFs)'))
                   : 'Select a model first'
               }
               disabled={!selectedModel || isLoading}
