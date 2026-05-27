@@ -528,6 +528,17 @@ export default function Chat() {
     })
   }
 
+  // RAG sources collapsible panel — per-message expand/collapse state.
+  // Sources arrive in the first SSE frame's rag_metadata.sources and are
+  // attached to msg.sources by the consumer; the panel renders only when
+  // sources.length > 0. Collapsed by default; "N sources ▾" toggles.
+  const [expandedSources, setExpandedSources] = useState(new Set())
+  const toggleSources = (idx) => setExpandedSources(prev => {
+    const next = new Set(prev)
+    if (next.has(idx)) next.delete(idx); else next.add(idx)
+    return next
+  })
+
   // "Store this" button state — Phase A of the memory capture flow.
   // storedMessages: indices of messages already stored (renders as ✓ Stored).
   // storingIndex: the message currently being POSTed (renders as ... saving).
@@ -1054,7 +1065,8 @@ export default function Chat() {
       } else if (!useStreaming) {
         // Vision path returns JSON
         const data = await r.json()
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content }])
+        const sources = Array.isArray(data?.rag_metadata?.sources) ? data.rag_metadata.sources : []
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
@@ -1082,7 +1094,10 @@ export default function Chat() {
           const text = st.full.slice(0, Math.floor(st.shown))
           setMessages(prev => {
             const next = [...prev]
-            next[next.length - 1] = { role: 'assistant', content: text }
+            // Preserve any non-content fields (e.g., sources from the
+            // first SSE frame's rag_metadata) — only the content stream
+            // is delta-updated per rAF tick.
+            next[next.length - 1] = { ...next[next.length - 1], role: 'assistant', content: text }
             return next
           })
         }
@@ -1140,6 +1155,20 @@ export default function Chat() {
             if (data === '[DONE]') continue
             try {
               const parsed = JSON.parse(data)
+              // First SSE frame announces RAG metadata (object:
+              // "chat.completion.rag_meta"). Attach the sources array to
+              // the in-flight assistant message so the collapsible panel
+              // can render once the stream completes.
+              if (parsed.rag_metadata && Array.isArray(parsed.rag_metadata.sources)) {
+                const sources = parsed.rag_metadata.sources
+                setMessages(prev => {
+                  if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
+                  const next = [...prev]
+                  next[next.length - 1] = { ...next[next.length - 1], sources }
+                  return next
+                })
+                continue
+              }
               const delta = parsed.choices?.[0]?.delta?.content
               if (delta) {
                 const st = revealRef.current.get(sessionId)
@@ -1827,6 +1856,42 @@ export default function Chat() {
                     the sent bubble. Previously user content was raw pre-wrap
                     text and markdown markers were visible verbatim. */}
                 <MessageRenderer content={msg.content} />
+
+                {/* RAG sources panel — collapsed by default. Backed by the
+                    rag_metadata.sources attached during the SSE first frame.
+                    Renders only for assistant messages with sources; click
+                    toggles expand. Listing the document_names by which the
+                    brain grounded its answer closes the "show your work" gap. */}
+                {msg.role === 'assistant' && Array.isArray(msg.sources) && msg.sources.length > 0 && (
+                  <div style={{ marginTop: '10px', fontSize: '11px' }}>
+                    <button
+                      onClick={() => toggleSources(i)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--muted)',
+                        cursor: 'pointer',
+                        padding: 0,
+                        fontFamily: 'inherit',
+                        fontSize: '11px',
+                        opacity: 0.7,
+                      }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                      onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                    >
+                      {expandedSources.has(i) ? '▾' : '▸'} {msg.sources.length} source{msg.sources.length > 1 ? 's' : ''}
+                    </button>
+                    {expandedSources.has(i) && (
+                      <ul style={{ margin: '6px 0 0 0', padding: '0 0 0 18px', color: 'var(--muted)', listStyle: 'none' }}>
+                        {msg.sources.map((src, si) => (
+                          <li key={si} style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', lineHeight: 1.6, opacity: 0.75 }}>
+                            <span style={{ marginRight: 6, opacity: 0.5 }}>{si + 1}.</span>{src}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 {/* Footer row: Store + Copy buttons. Both are small and sit
                     below the content. Store writes to brain memory + the
