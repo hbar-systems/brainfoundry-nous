@@ -156,6 +156,57 @@ export default function App({ Component, pageProps }) {
             --code-fg: #c0c0c0;
           }
 
+          /* fox — burnt copper, autumnal warmth */
+          [data-theme="fox"] {
+            --bg: #1a0d08;
+            --surface: #221308;
+            --surface2: #2a1810;
+            --text: #f0d8c0;
+            --muted: #7a5a40;
+            --accent: #d77a3a;
+            --border: #3a2218;
+            --user-bg: #f0c896;
+            --user-text: #1a0d08;
+            --assistant-bg: #221308;
+            --assistant-text: #d8c0a8;
+            --code-bg: #1a0d08;
+            --code-fg: #d8c0a8;
+          }
+
+          /* octopus — deep teal abyss, cool but distinct from sapphire */
+          [data-theme="octopus"] {
+            --bg: #051818;
+            --surface: #0c2424;
+            --surface2: #143030;
+            --text: #c8e0e0;
+            --muted: #4a7070;
+            --accent: #3a9ea0;
+            --border: #1f3838;
+            --user-bg: #a8d8d8;
+            --user-text: #051818;
+            --assistant-bg: #0c2424;
+            --assistant-text: #b0c8c8;
+            --code-bg: #051818;
+            --code-fg: #b0c8c8;
+          }
+
+          /* owl — moonlit pale on slate, the second light theme alongside paper */
+          [data-theme="owl"] {
+            --bg: #f0eef5;
+            --surface: #e6e3ee;
+            --surface2: #d8d4e2;
+            --text: #1a1825;
+            --muted: #6a6478;
+            --accent: #5b4d80;
+            --border: #b8b0c8;
+            --user-bg: #2a2438;
+            --user-text: #f0eef5;
+            --assistant-bg: #e6e3ee;
+            --assistant-text: #1a1825;
+            --code-bg: #2a2438;
+            --code-fg: #d8d4e2;
+          }
+
           /* Six font sets — three sans/serif body fonts, one each from
              two mono families. --font-display follows body for serif/mono
              so headings feel cohesive; for sans body it stays Lora so

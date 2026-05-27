@@ -11,6 +11,10 @@ const THEME_OPTIONS = [
   { value: 'forest', label: 'forest', swatch: '#88a868' },
   { value: 'crimson', label: 'crimson', swatch: '#c87878' },
   { value: 'mono', label: 'mono', swatch: '#b0b0b0' },
+  // Animal-themed palettes — added 2026-05-27
+  { value: 'fox', label: 'fox', swatch: '#d77a3a' },
+  { value: 'octopus', label: 'octopus', swatch: '#3a9ea0' },
+  { value: 'owl', label: 'owl', swatch: '#5b4d80' },
 ]
 
 // Each option's optionStyle previews the font in the dropdown row itself,
