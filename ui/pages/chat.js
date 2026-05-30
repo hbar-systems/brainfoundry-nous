@@ -2054,7 +2054,13 @@ export default function Chat() {
                     the open web for this turn (untrusted external sources).
                     Numbered to match the inline [1]/[2] citations. Renders only
                     when a search actually ran and returned results. */}
-                {msg.role === 'assistant' && msg.webSearch?.used && Array.isArray(msg.webSearch.results) && msg.webSearch.results.length > 0 && (
+                {msg.role === 'assistant' && msg.webSearch?.used && Array.isArray(msg.webSearch.results) && msg.webSearch.results.length > 0 && (() => {
+                  const corro = msg.webSearch.corroboration
+                  // Corroboration is a MEASUREMENT of source agreement, not a
+                  // truth verdict. Colour by band: high green, mid amber, low red.
+                  const band = corro ? (corro.score >= 70 ? '#5fae6b' : corro.score >= 45 ? '#c9a96e' : '#d97777') : null
+                  const dissents = new Set(corro?.dissenters || [])
+                  return (
                   <div style={{ marginTop: '8px', fontSize: '11px' }}>
                     <button
                       onClick={() => toggleWeb(i)}
@@ -2064,21 +2070,40 @@ export default function Chat() {
                     >
                       {expandedWeb.has(i) ? '▾' : '▸'} 🌐 {msg.webSearch.results.length} web source{msg.webSearch.results.length > 1 ? 's' : ''} (untrusted)
                     </button>
+                    {corro && (
+                      <span title="Corroboration: measured agreement across independent, trusted sources — NOT a truth verdict."
+                            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 5, border: `1px solid ${band}55`, color: band, fontFamily: 'DM Mono, monospace', fontSize: '10px' }}>
+                        corroboration {corro.score}%
+                      </span>
+                    )}
                     {expandedWeb.has(i) && (
-                      <ol style={{ margin: '6px 0 0 0', padding: '0 0 0 22px', color: 'var(--muted)' }}>
-                        {msg.webSearch.results.map((r, si) => (
-                          <li key={si} style={{ fontSize: '11px', lineHeight: 1.7 }}>
-                            <a href={r.url} target="_blank" rel="noreferrer noopener"
-                               style={{ color: 'var(--accent)', opacity: 0.85, textDecoration: 'none', wordBreak: 'break-word' }}
-                               onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'}
-                               onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}
-                            >{r.title || r.url}</a>
-                          </li>
-                        ))}
-                      </ol>
+                      <>
+                        {corro && (
+                          <div style={{ margin: '6px 0 2px 22px', color: 'var(--muted)', opacity: 0.7, fontFamily: 'DM Mono, monospace', fontSize: '10px', lineHeight: 1.6 }}>
+                            {corro.n_domains} independent domain{corro.n_domains > 1 ? 's' : ''}
+                            {corro.agreement != null && ` · agreement ${corro.agreement}`}
+                            {` · trust ${corro.trust}`}
+                            {corro.dissenters.length > 0 && ` · ${corro.dissenters.length} dissenting`}
+                            <span style={{ opacity: 0.6 }}> — a measurement, not a verdict</span>
+                          </div>
+                        )}
+                        <ol style={{ margin: '4px 0 0 0', padding: '0 0 0 22px', color: 'var(--muted)' }}>
+                          {msg.webSearch.results.map((r, si) => (
+                            <li key={si} style={{ fontSize: '11px', lineHeight: 1.7 }}>
+                              <a href={r.url} target="_blank" rel="noreferrer noopener"
+                                 style={{ color: 'var(--accent)', opacity: 0.85, textDecoration: 'none', wordBreak: 'break-word' }}
+                                 onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'}
+                                 onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}
+                              >{r.title || r.url}</a>
+                              {dissents.has(r.url) && <span title="Disagrees with the other sources" style={{ marginLeft: 6, color: '#d97777', opacity: 0.8 }}>⚠ dissents</span>}
+                            </li>
+                          ))}
+                        </ol>
+                      </>
                     )}
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* Web search was requested but failed (e.g. bad key, rate
                     limit) — surface a quiet note so a silent miss isn't read

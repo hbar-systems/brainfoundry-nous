@@ -711,6 +711,19 @@ def tools_audit_endpoint(limit: int = 50, api_key: str = Depends(get_api_key)):
     return {"entries": _tool_audit.tail(max(1, min(int(limit), 500)))}
 
 
+class FactCheckRequest(BaseModel):
+    sources: List[Dict[str, Any]]  # [{title, url, snippet}]
+
+
+@app.post("/factcheck/score")
+def factcheck_score(req: FactCheckRequest, api_key: str = Depends(get_api_key)):
+    """Corroboration score for a set of sources — a measurement of independent,
+    mutually-agreeing, trusted sourcing, NOT a truth verdict. Returns null when
+    there are fewer than 2 sourced results to corroborate."""
+    from api import factcheck
+    return {"corroboration": factcheck.score_corroboration(req.sources)}
+
+
 class SetMaxTokensRequest(BaseModel):
     max_tokens: int
 
@@ -1993,6 +2006,16 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                         {"title": p.get("title"), "url": p.get("url")}
                         for p in tr.provenance
                     ]
+                    # Corroboration score over the retrieved sources — a
+                    # measured trust signal (independence·agreement·trust),
+                    # not a truth verdict. Guarded so a scoring hiccup never
+                    # breaks the answer.
+                    try:
+                        from api import factcheck
+                        web_meta["corroboration"] = factcheck.score_corroboration(
+                            tr.meta.get("results", []))
+                    except Exception as _fc_err:
+                        web_meta["corroboration"] = None
                 else:
                     web_meta["error"] = tr.error
             else:

@@ -6,6 +6,21 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- tools: **corroboration score (FactChecker v0).** Every web-search answer now
+  carries a measured trust signal — `corroboration N%` shown next to the web
+  sources — computed in `api/factcheck.py` as
+  `100·(0.35·independence + 0.35·agreement + 0.30·trust)`: **independence** =
+  count of distinct registrable domains (five copies of one wire story ≠
+  corroboration), **agreement** = mean pairwise cosine of the source snippets
+  via the brain's bge-large embeddings (do the sources actually say the same
+  thing?), **trust** = mean per-domain prior from a small operator-extensible
+  seed list (gov/edu/wire weigh more). Sources that disagree with the rest are
+  flagged as ⚠ dissenters rather than averaged away. Presented honestly as a
+  MEASUREMENT of source agreement, not a truth verdict; degrades gracefully
+  (drops the agreement term) when embeddings are unavailable, and returns null
+  for <2 sources. New `POST /factcheck/score` endpoint for reuse. The same
+  scorer will later cover RAG-doc and cross-brain claims once they carry
+  provenance.
 - ui: **web-search result citations + dollar-amount rendering fix.** (1) The
   URLs the brain pulls from the web now render as a collapsible "🌐 N web
   sources (untrusted)" panel under the message (numbered to match the inline

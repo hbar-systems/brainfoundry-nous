@@ -87,7 +87,10 @@ async def run(query: str, count: int = _DEFAULT_COUNT) -> ToolResult:
         ok=True,
         content=content,
         provenance=provenance,
-        meta={"query": query, "count": len(blocks)},
+        # `results` carries the raw blocks (incl. snippets) so downstream
+        # analysis — e.g. the corroboration scorer — can read them without
+        # re-parsing the safety-wrapped content.
+        meta={"query": query, "count": len(blocks), "results": blocks},
     )
 
 
