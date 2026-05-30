@@ -1123,6 +1123,16 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] harmonics init skipped: {e}", flush=True)
 
+    # Boot-time migration: re-own .git to the host user. The api container runs
+    # git as root (version-info fetch, update pull), which root-clobbers
+    # .git/FETCH_HEAD etc. and breaks `git pull` from the host shell. Every
+    # update ends in a container restart, so this runs after each update too.
+    try:
+        from api.git_ownership import chown_git_to_host_owner
+        chown_git_to_host_owner()
+    except Exception as e:
+        print(f"[startup] git ownership migration skipped: {e}", flush=True)
+
 
 @app.on_event("startup")
 async def _prewarm_ollama() -> None:
@@ -4839,6 +4849,15 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
                     cwd=BRAIN_HOST_DIR, timeout=10, check=False,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
+            except Exception:
+                pass
+            # This fetch runs as root and root-owns .git/FETCH_HEAD — which is
+            # what breaks `git pull` from the host shell. Re-own immediately so
+            # the host user keeps a working git CLI (and the Update tab path
+            # stays clean instead of degrading to rsync).
+            try:
+                from api.git_ownership import chown_git_to_host_owner
+                chown_git_to_host_owner()
             except Exception:
                 pass
             r = subprocess.run(

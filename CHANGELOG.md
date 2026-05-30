@@ -6,6 +6,18 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- fix: **root-owned `.git` — the Update tab / `git pull` permission bug.** The
+  api container runs git as root against the bind-mounted repo (`/admin/version-
+  info` fetches origin on every console load; `/admin/update` pulls), which
+  root-clobbered `.git/FETCH_HEAD` etc. so the host SSH user got
+  `cannot open '.git/FETCH_HEAD': Permission denied` and deploys degraded to
+  rsync (which then diverges the checkout — the mess that bit hbar 2026-05-30).
+  New `api/git_ownership.py` re-owns `.git` to the host user after the root
+  fetch, plus a boot-time migration (runs on every container restart, so it also
+  covers post-update) that repairs brains already in the broken state. Mirrors
+  the brain-apps container-root-chown pattern; best-effort, never blocks a
+  request or startup. Makes "deploy via the Update tab, never rsync" actually
+  hold on every brain + future provision.
 - ui: **"How it works" explainer** in Settings → Web search — a collapsed,
   sentence-per-line teaching block covering what web search is, how it stays
   safe (untrusted results, cites URLs, never obeys hidden instructions), what
