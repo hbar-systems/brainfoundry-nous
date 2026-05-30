@@ -6,6 +6,19 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- security: **prompt-injection defenses on ingest** (cognitive-OS gap #3). A
+  poisoned PDF / scraped page / forwarded email can carry text aimed at the
+  MODEL ("ignore your instructions", "reveal your system prompt", a forged
+  `System:` turn, invisible zero-width instructions) that, once embedded, can be
+  retrieved into a later answer and treated as a command. Two layers: (1)
+  `api/injection_scan.py` scans extracted text at propose time for injection
+  patterns + invisible-character payloads and returns a risk band — surfaced to
+  the operator in the Knowledge-tab approval card (⚠ banner + flagged passages)
+  so a poisoned doc is visible BEFORE it lands in memory; it informs, never
+  auto-blocks (respects propose→approve governance). (2) Structural backstop in
+  the RAG prompt: retrieved documents are now explicitly framed as reference to
+  draw facts from, and the model is told not to obey instructions embedded in
+  them. 11 tests.
 - fix: **root-owned `.git` — the Update tab / `git pull` permission bug.** The
   api container runs git as root against the bind-mounted repo (`/admin/version-
   info` fetches origin on every console load; `/admin/update` pulls), which

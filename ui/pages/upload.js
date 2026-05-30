@@ -299,8 +299,12 @@ export default function Upload() {
           const body = await r.text();
           if (r.status === 202) {
             const j = JSON.parse(body);
-            newPending.push({ proposal_id: j.proposal_id, file, layer, filename: file.name });
+            newPending.push({ proposal_id: j.proposal_id, file, layer, filename: file.name, injectionScan: j.injection_scan || null });
             pushLog(`PROPOSED ${file.name} → awaiting your approval below`);
+            const sc = j.injection_scan;
+            if (sc && (sc.risk === "high" || sc.risk === "medium")) {
+              pushLog(`⚠ ${file.name}: ${sc.risk.toUpperCase()} injection risk — ${sc.summary}`);
+            }
           } else if (r.ok) {
             pushLog(`OK ${file.name} (already approved)`);
           } else {
@@ -626,6 +630,22 @@ export default function Upload() {
                   </button>
                 </div>
               </div>
+              {p.injectionScan && (p.injectionScan.risk === "high" || p.injectionScan.risk === "medium") && (
+                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, border: `1px solid ${p.injectionScan.risk === "high" ? "#d9777755" : "#c9a96e55"}`, background: p.injectionScan.risk === "high" ? "#1a0e0e" : "#15120c" }}>
+                  <div style={{ color: p.injectionScan.risk === "high" ? "#d97777" : "#c9a96e", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    ⚠ Possible prompt injection ({p.injectionScan.risk} risk)
+                  </div>
+                  <div style={{ color: MUTED, fontSize: 11.5, lineHeight: 1.6, marginBottom: (p.injectionScan.signals || []).length ? 8 : 0 }}>
+                    This document contains text that looks like instructions aimed at the AI, not at you.
+                    Review the flagged passages before approving — approving ingests it into your brain's memory.
+                  </div>
+                  {(p.injectionScan.signals || []).slice(0, 4).map((s, si) => (
+                    <div key={si} style={{ color: MUTED, fontSize: 11, fontFamily: "DM Mono, monospace", opacity: 0.8, lineHeight: 1.6, marginTop: 3 }}>
+                      <span style={{ color: "#d97777", opacity: 0.8 }}>[{s.severity}]</span> {s.excerpt}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </section>
