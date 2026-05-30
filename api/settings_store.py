@@ -29,6 +29,13 @@ PROVIDER_ENV = {
     "mistral": "MISTRAL_API_KEY",
 }
 
+# Map from tool-provider slug → env var name. Tools (web search, etc.) hold
+# their keys separately from LLM provider keys so the two surfaces stay
+# independent in the UI and in policy.
+TOOL_ENV = {
+    "brave": "BRAVE_SEARCH_API_KEY",
+}
+
 
 def _load() -> Dict[str, Any]:
     if not SETTINGS_PATH.exists():
@@ -58,6 +65,11 @@ def hydrate_env() -> None:
         active_model = data.get("active_model")
         if active_model and not os.environ.get("OLLAMA_MODEL"):
             os.environ["OLLAMA_MODEL"] = active_model
+        # Tool keys (Brave, etc.) — same env-override pattern as provider keys.
+        for provider, env_name in TOOL_ENV.items():
+            value = data.get("tool_keys", {}).get(provider)
+            if value and not os.environ.get(env_name):
+                os.environ[env_name] = value
 
 
 def get_keys_masked() -> Dict[str, Optional[str]]:
@@ -219,6 +231,80 @@ def set_greeting(text: str) -> None:
     with _LOCK:
         data = _load()
         data["greeting"] = text.strip()
+        _save(data)
+
+
+# ── Tools: web search (YELLOW tier) ─────────────────────────────────────────
+# Web search is the brain's first external-capability tool. It is OFF by
+# default. The operator turns it on (standing authorization for the YELLOW
+# tier) and supplies a Brave Search API key under their own billing. Per
+# message, the chat client still passes a `web_search` flag, so the operator
+# also controls *when* the brain reaches the open web — enabling here only
+# grants the capability, it does not make every message search.
+WEB_SEARCH_BUDGET_DEFAULT = 1000
+WEB_SEARCH_BUDGET_MIN = 0
+WEB_SEARCH_BUDGET_MAX = 100000
+
+
+def get_web_search_enabled() -> bool:
+    return bool(_load().get("web_search_enabled", False))
+
+
+def set_web_search_enabled(enabled: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["web_search_enabled"] = bool(enabled)
+        _save(data)
+
+
+def get_web_search_budget() -> int:
+    """Operator-set monthly cap on web_search calls."""
+    v = _load().get("web_search_budget")
+    if not isinstance(v, int):
+        return WEB_SEARCH_BUDGET_DEFAULT
+    if v < WEB_SEARCH_BUDGET_MIN: return WEB_SEARCH_BUDGET_MIN
+    if v > WEB_SEARCH_BUDGET_MAX: return WEB_SEARCH_BUDGET_MAX
+    return v
+
+
+def set_web_search_budget(n: int) -> None:
+    if not isinstance(n, int):
+        raise ValueError(f"web_search_budget must be int, got {type(n).__name__}")
+    if n < WEB_SEARCH_BUDGET_MIN: n = WEB_SEARCH_BUDGET_MIN
+    if n > WEB_SEARCH_BUDGET_MAX: n = WEB_SEARCH_BUDGET_MAX
+    with _LOCK:
+        data = _load()
+        data["web_search_budget"] = n
+        _save(data)
+
+
+def get_tool_keys_masked() -> Dict[str, Optional[str]]:
+    """Return {tool_provider: masked_tail_or_null} for UI display."""
+    out: Dict[str, Optional[str]] = {}
+    for provider, env_name in TOOL_ENV.items():
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            out[provider] = None
+        else:
+            tail = raw[-4:] if len(raw) > 8 else "****"
+            out[provider] = f"…{tail}"
+    return out
+
+
+def set_tool_key(provider: str, key: str) -> None:
+    """Set or clear a tool API key (e.g. 'brave'). Empty string clears."""
+    if provider not in TOOL_ENV:
+        raise ValueError(f"Unknown tool provider: {provider}")
+    env_name = TOOL_ENV[provider]
+    with _LOCK:
+        data = _load()
+        keys = data.setdefault("tool_keys", {})
+        if key:
+            keys[provider] = key
+            os.environ[env_name] = key
+        else:
+            keys.pop(provider, None)
+            os.environ.pop(env_name, None)
         _save(data)
 
 

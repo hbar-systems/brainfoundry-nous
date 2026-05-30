@@ -6,6 +6,23 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- tools: the brain gets its first real external capability — **web search**
+  (Brave Search API). New `api/tools/` package: a permission-tiered registry +
+  dispatcher (`green`/`yellow`/`red`) that every future tool (fetch, calendar,
+  mail, `brain_call`) slots into. Web search is `yellow` (external API read):
+  off by default, enabled by the operator in Settings → Web search with a Brave
+  key under their own billing. Every dispatch is audited (`/app/runtime/
+  tool_audit.jsonl`, surfaced read-only at `GET /tools/audit`) and counted
+  against an operator-set monthly cap. Results enter chat as clearly-delimited
+  **untrusted** reference data (`api/tools/safety.py`) with provenance (URL +
+  retrieval time) — never as instructions the model can follow, and the
+  delimiter tokens are neutralized so a crafted snippet can't break out. v0
+  wiring is deterministic and operator-driven: a per-message `🌐 web` toggle in
+  the chat composer sets `web_search: true` on `/chat/rag`; `red`-tier tools and
+  native model-driven tool-calling are intentionally deferred to land with the
+  permission-tier enforcement they depend on. Endpoints: `GET/POST
+  /settings/web-search`, `POST /settings/web-search/key`, `GET /tools`,
+  `GET /tools/audit`. Closes the first box of ROADMAP §v1.1+ "tool registry".
 - brain-apps: install no longer leaves root-owned dirs on the host. The api
   container clones as root, so `brain-apps/<id>/` used to land root-owned on
   the bind-mounted host filesystem — the operator could not `rm` a stale dir

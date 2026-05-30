@@ -453,6 +453,109 @@ function ModelsPanel() {
   )
 }
 
+// ---------- Web search (tools) ----------
+function WebSearchPanel() {
+  const [state, setState] = useState({ enabled: false, key_set: false, key_masked: null, budget: 1000, usage_this_month: 0 })
+  const [draftKey, setDraftKey] = useState('')
+  const [draftBudget, setDraftBudget] = useState('')
+  const [busy, setBusy] = useState(null)
+  const [err, setErr] = useState(null)
+
+  const load = () => api('/settings/web-search').then(s => { setState(s); setDraftBudget(String(s.budget)) }).catch(e => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  const toggle = async () => {
+    setBusy('toggle'); setErr(null)
+    try {
+      await api('/settings/web-search', { method: 'POST', body: JSON.stringify({ enabled: !state.enabled }) })
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(null)
+  }
+
+  const saveKey = async () => {
+    setBusy('key'); setErr(null)
+    try {
+      await api('/settings/web-search/key', { method: 'POST', body: JSON.stringify({ provider: 'brave', key: draftKey }) })
+      setDraftKey('')
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(null)
+  }
+
+  const clearKey = async () => {
+    setBusy('key'); setErr(null)
+    try {
+      await api('/settings/web-search/key', { method: 'POST', body: JSON.stringify({ provider: 'brave', key: '' }) })
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(null)
+  }
+
+  const saveBudget = async () => {
+    setBusy('budget'); setErr(null)
+    try {
+      await api('/settings/web-search', { method: 'POST', body: JSON.stringify({ budget: parseInt(draftBudget, 10) || 0 }) })
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(null)
+  }
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+        Let your brain read the open web (Brave Search). A yellow-tier tool: external,
+        read-only, off by default. Results enter chat as <em>untrusted</em> reference data —
+        cited by URL, never followed as instructions. Get a key at{' '}
+        <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>brave.com/search/api</a>;
+        it stays on your brain under your own billing.
+      </p>
+
+      {/* Enable toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #1c1814' }}>
+        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+          Web search
+          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>
+            {state.enabled ? 'Enabled — the 🌐 toggle is live in chat.' : 'Disabled.'}
+            {state.enabled && !state.key_set && <span style={{ color: '#d9a777' }}> Add a key below to use it.</span>}
+          </div>
+        </div>
+        <button style={state.enabled ? BTN : BTN_GHOST} disabled={busy === 'toggle'} onClick={toggle}>
+          {busy === 'toggle' ? '…' : (state.enabled ? 'On' : 'Off')}
+        </button>
+      </div>
+
+      {/* Brave key */}
+      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 90px 90px', gap: 10, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid #1c1814' }}>
+        <div style={{ fontSize: 13, color: '#e8e0d5' }}>Brave API key</div>
+        <div>
+          {state.key_set ? (
+            <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: '#c9a96e' }}>{state.key_masked}</span>
+          ) : (
+            <input type="password" value={draftKey} onChange={e => setDraftKey(e.target.value)} placeholder="paste Brave key…" style={{ ...INPUT, width: '100%' }} />
+          )}
+        </div>
+        {!state.key_set
+          ? <button style={BTN} disabled={busy === 'key' || !draftKey} onClick={saveKey}>{busy === 'key' ? '…' : 'Save'}</button>
+          : <span />}
+        {state.key_set && <button style={BTN_GHOST} disabled={busy === 'key'} onClick={clearKey}>Clear</button>}
+      </div>
+
+      {/* Monthly budget */}
+      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 90px', gap: 10, alignItems: 'center', padding: '12px 0' }}>
+        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+          Monthly cap
+          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>{state.usage_this_month} used this month</div>
+        </div>
+        <input type="number" min={0} value={draftBudget} onChange={e => setDraftBudget(e.target.value)} style={{ ...INPUT, width: 120 }} />
+        <button style={BTN} disabled={busy === 'budget'} onClick={saveBudget}>{busy === 'budget' ? '…' : 'Save'}</button>
+      </div>
+
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
 // ---------- Memory layers ----------
 function MemoryPanel() {
   const [layers, setLayers] = useState([])
@@ -1008,6 +1111,10 @@ export default function Settings() {
 
       <Section title="Models" subtitle="Local Ollama is free. Cloud providers unlock when keyed.">
         <ModelsPanel />
+      </Section>
+
+      <Section title="Web search" subtitle="Give your brain eyes on the open web — read-only, untrusted, off by default.">
+        <WebSearchPanel />
       </Section>
 
       <Section title="Memory layers" subtitle="Your themed notebooks — the shape of what your brain knows.">

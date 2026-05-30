@@ -123,7 +123,7 @@ The brain currently has no formal way to call out to the world. Tools are the su
 - [ ] **Tool registry primitive** — `tools/local.toml` schema (name, endpoint, permit-class: read/write/network, budget, provenance-tag format) + `POST /v1/tools/:name/invoke` contract. One registry pattern, every tool slots in.
 - [ ] **Permit classes** — read-only tools (web search, fetch, calendar read) auto-permit with audit log. Write tools (mail send, blog post, federation call) gated by PROPOSE/CONFIRM. Hard monthly budget cap per tool.
 - [ ] **Provenance tagging** — every tool result entering memory tagged with source, tool name, timestamp, session id. Required for commercial use — must be able to answer "where did this claim come from."
-- [ ] **First reference tool: web search** — Brave Search API (commercial-clean, soloist-friendly: paid tier ~$3/1k queries, no contract). Auto-permitted, audit-logged, budget-capped.
+- [x] **First reference tool: web search** — Brave Search API (commercial-clean, soloist-friendly: paid tier ~$3/1k queries, no contract). Shipped 2026-05-30 as `api/tools/` (registry + tiered dispatcher), `web_search` tool, audit log, monthly budget cap, untrusted-result safety wrapping, Settings UI + chat composer toggle. v0 is operator-driven (deterministic toggle); native model-driven invocation lands with permission-tier enforcement.
 - [ ] **Tool tier rollout** (sequence, not all at once):
   - Tier 1 (hands): web search + fetch, file read/write in `.hbar/`, sandboxed shell, git read
   - Tier 2 (senses): calendar read, mail read, RSS, screenshot+OCR, audio in

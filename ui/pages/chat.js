@@ -126,6 +126,13 @@ export default function Chat() {
   // they want fuller answers; persisted server-side via /settings/max-tokens
   // so the choice survives reloads and is shared across browsers.
   const [maxTokens, setMaxTokens] = useState(2048)
+  // Web search (YELLOW-tier tool). `webSearchAvailable` reflects the
+  // brain-wide Settings toggle (the operator's standing authorization);
+  // `webSearchOn` is the per-message switch in the composer. The brain only
+  // reaches the open web when BOTH are true — capability is granted in
+  // Settings, used per-message here.
+  const [webSearchAvailable, setWebSearchAvailable] = useState(false)
+  const [webSearchOn, setWebSearchOn] = useState(false)
   // Brain greeting — operator-authored welcome shown as a faux assistant
   // message in the chat empty state (no session selected). Org brains use
   // this to introduce themselves before the visitor has typed anything;
@@ -926,6 +933,13 @@ export default function Chat() {
       .then(d => { if (d && typeof d.greeting === 'string') setGreeting(d.greeting) })
       .catch(() => {})
 
+    // Is web search enabled brain-wide? Drives whether the composer's web
+    // toggle is live or points the operator to Settings.
+    fetch('/api/bf/settings/web-search')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setWebSearchAvailable(!!d.enabled && !!d.key_set) })
+      .catch(() => {})
+
     fetchSessions()
 
     // Is the brain still the unconfigured template? Drives the onboarding flow.
@@ -1133,6 +1147,7 @@ export default function Chat() {
           search_limit: 5,
           stream: useStreaming,
           max_tokens: maxTokens,
+          web_search: webSearchAvailable && webSearchOn,
           ...(imagesForRequest.length > 0 ? {
             images: imagesForRequest.map(i => ({ base64: i.base64, media_type: i.mediaType })),
           } : {}),
@@ -2221,6 +2236,32 @@ export default function Chat() {
             <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
               markdown
             </span>
+            {/* Web-search toggle — only live when the operator has enabled web
+                search brain-wide in Settings. When on, this message reaches the
+                open web (Brave), results injected as untrusted reference data. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!webSearchAvailable) { window.location.href = '/settings'; return }
+                setWebSearchOn(v => !v)
+              }}
+              title={webSearchAvailable
+                ? (webSearchOn
+                    ? 'Web search ON for this message — results are untrusted, cited by URL. Click to turn off.'
+                    : 'Search the web (Brave) for this message')
+                : 'Enable web search in Settings first'}
+              style={{
+                marginLeft: '8px', height: '26px', padding: '0 9px',
+                background: (webSearchAvailable && webSearchOn) ? 'var(--accent)' : 'var(--surface2)',
+                border: '1px solid var(--border)', borderRadius: '6px',
+                color: (webSearchAvailable && webSearchOn) ? 'var(--bg)' : 'var(--muted)',
+                cursor: 'pointer', fontSize: '11px', lineHeight: 1,
+                fontFamily: 'var(--font-mono)', letterSpacing: '0.04em',
+                opacity: webSearchAvailable ? 1 : 0.55, whiteSpace: 'nowrap',
+              }}
+            >
+              {webSearchAvailable && webSearchOn ? '🌐 web · on' : '🌐 web'}
+            </button>
             {/* How to make a newline is invisible without a hint. It also
                 differs by device: desktop has Shift+Enter, touch has no
                 Shift so plain Enter is the newline and Send is the sender. */}
