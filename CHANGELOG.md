@@ -6,6 +6,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui: **web-search result citations + dollar-amount rendering fix.** (1) The
+  URLs the brain pulls from the web now render as a collapsible "🌐 N web
+  sources (untrusted)" panel under the message (numbered to match the inline
+  [1]/[2] citations), so those references resolve instead of dangling; a failed
+  search shows a quiet note rather than silently looking like "chose not to
+  search". (2) `singleDollarTextMath: false` in MessageRenderer — prose dollar
+  amounts ("$50 billion … $225 billion", common in web/news/finance results)
+  were being parsed as inline LaTeX and rendered as a vertical stack of
+  characters; lone `$` is now plain text, `$$…$$` display math still works.
 - build: **CPU-only torch + `.dockerignore`** — fixes recurring "no space left
   on device" failures during `docker compose up -d --build` on brain boxes. The
   fleet has no GPU (Hetzner CAX ARM, CPU embeddings + CPU Ollama), but the

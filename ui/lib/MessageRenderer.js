@@ -132,7 +132,11 @@ export default function MessageRenderer({ content }) {
   return (
     <div className="bf-md">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        // singleDollarTextMath: false — a lone `$` is NOT math. Without this,
+        // prose dollar amounts ("$50 billion … $225 billion", common in web
+        // results, pricing, finance) get parsed as inline LaTeX and rendered
+        // as a stack of single characters. Display math `$$…$$` still works.
+        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
         rehypePlugins={[rehypeKatex, rehypeHighlight]}
         components={components}
       >

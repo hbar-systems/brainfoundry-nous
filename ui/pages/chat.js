@@ -627,6 +627,15 @@ export default function Chat() {
     if (next.has(idx)) next.delete(idx); else next.add(idx)
     return next
   })
+  // Web-search results panel — separate from the RAG sources panel. Backed by
+  // rag_metadata.web_search.results (the URLs the brain pulled from the open
+  // web for that turn). Lets the inline [1]/[2] citations resolve to real URLs.
+  const [expandedWeb, setExpandedWeb] = useState(new Set())
+  const toggleWeb = (idx) => setExpandedWeb(prev => {
+    const next = new Set(prev)
+    if (next.has(idx)) next.delete(idx); else next.add(idx)
+    return next
+  })
 
   // "Store this" button state — Phase A of the memory capture flow.
   // storedMessages: indices of messages already stored (renders as ✓ Stored).
@@ -1163,7 +1172,8 @@ export default function Chat() {
         // Vision path returns JSON
         const data = await r.json()
         const sources = Array.isArray(data?.rag_metadata?.sources) ? data.rag_metadata.sources : []
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources }])
+        const webSearch = data?.rag_metadata?.web_search || null
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
@@ -1258,10 +1268,11 @@ export default function Chat() {
               // can render once the stream completes.
               if (parsed.rag_metadata && Array.isArray(parsed.rag_metadata.sources)) {
                 const sources = parsed.rag_metadata.sources
+                const webSearch = parsed.rag_metadata.web_search || null
                 setMessages(prev => {
                   if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
                   const next = [...prev]
-                  next[next.length - 1] = { ...next[next.length - 1], sources }
+                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch }
                   return next
                 })
                 continue
@@ -2036,6 +2047,45 @@ export default function Chat() {
                         ))}
                       </ul>
                     )}
+                  </div>
+                )}
+
+                {/* Web-search results panel — the URLs the brain pulled from
+                    the open web for this turn (untrusted external sources).
+                    Numbered to match the inline [1]/[2] citations. Renders only
+                    when a search actually ran and returned results. */}
+                {msg.role === 'assistant' && msg.webSearch?.used && Array.isArray(msg.webSearch.results) && msg.webSearch.results.length > 0 && (
+                  <div style={{ marginTop: '8px', fontSize: '11px' }}>
+                    <button
+                      onClick={() => toggleWeb(i)}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0, fontFamily: 'inherit', fontSize: '11px', opacity: 0.7 }}
+                      onMouseOver={e => e.currentTarget.style.color = 'var(--accent)'}
+                      onMouseOut={e => e.currentTarget.style.color = 'var(--muted)'}
+                    >
+                      {expandedWeb.has(i) ? '▾' : '▸'} 🌐 {msg.webSearch.results.length} web source{msg.webSearch.results.length > 1 ? 's' : ''} (untrusted)
+                    </button>
+                    {expandedWeb.has(i) && (
+                      <ol style={{ margin: '6px 0 0 0', padding: '0 0 0 22px', color: 'var(--muted)' }}>
+                        {msg.webSearch.results.map((r, si) => (
+                          <li key={si} style={{ fontSize: '11px', lineHeight: 1.7 }}>
+                            <a href={r.url} target="_blank" rel="noreferrer noopener"
+                               style={{ color: 'var(--accent)', opacity: 0.85, textDecoration: 'none', wordBreak: 'break-word' }}
+                               onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'}
+                               onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}
+                            >{r.title || r.url}</a>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                )}
+
+                {/* Web search was requested but failed (e.g. bad key, rate
+                    limit) — surface a quiet note so a silent miss isn't read
+                    as "the brain chose not to search". */}
+                {msg.role === 'assistant' && msg.webSearch?.requested && !msg.webSearch?.used && msg.webSearch?.error && (
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--muted)', opacity: 0.6 }}>
+                    🌐 web search did not run: {msg.webSearch.error}
                   </div>
                 )}
 
