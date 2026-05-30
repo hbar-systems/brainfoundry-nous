@@ -460,6 +460,7 @@ function WebSearchPanel() {
   const [draftBudget, setDraftBudget] = useState('')
   const [busy, setBusy] = useState(null)
   const [err, setErr] = useState(null)
+  const [showHow, setShowHow] = useState(false)
 
   const load = () => api('/settings/web-search').then(s => { setState(s); setDraftBudget(String(s.budget)) }).catch(e => setErr(e.message))
   useEffect(() => { load() }, [])
@@ -510,6 +511,62 @@ function WebSearchPanel() {
         <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>brave.com/search/api</a>;
         it stays on your brain under your own billing.
       </p>
+
+      {/* How it works — collapsed teaching block. Sentence-per-line so each
+          idea lands on its own; covers what / safety / corroboration / cost. */}
+      <div style={{ marginBottom: 18 }}>
+        <button
+          onClick={() => setShowHow(v => !v)}
+          style={{ background: 'transparent', border: 'none', color: '#c9a96e', cursor: 'pointer', padding: 0, fontSize: 12, fontFamily: 'inherit' }}
+        >
+          {showHow ? '▾' : '▸'} How it works
+        </button>
+        {showHow && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {[
+              {
+                h: 'What it is',
+                lines: [
+                  'Your brain can read the live web through Brave Search.',
+                  'It stays off until you enable it here.',
+                  'It only searches a message when you flip the 🌐 toggle in the chat composer.',
+                ],
+              },
+              {
+                h: 'How it stays safe',
+                lines: [
+                  'Web results enter the conversation as untrusted reference data.',
+                  'Your brain reasons over them and cites the source URLs.',
+                  'It never follows instructions hidden inside a page.',
+                ],
+              },
+              {
+                h: 'Corroboration score',
+                lines: [
+                  'Each web answer shows a measured corroboration percentage.',
+                  'It counts how many independent, trusted sources actually agree.',
+                  'It is a measurement of agreement, not a verdict on what is true.',
+                ],
+              },
+              {
+                h: 'Cost and control',
+                lines: [
+                  'Each search is one Brave request; the free tier covers about 1,000 a month.',
+                  'The monthly cap below bounds what your brain can spend.',
+                  'Every search is recorded in the tool audit trail.',
+                ],
+              },
+            ].map((sec) => (
+              <div key={sec.h}>
+                <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>{sec.h}</div>
+                {sec.lines.map((ln, li) => (
+                  <div key={li} style={{ color: '#9a8c7a', fontSize: 12.5, lineHeight: 1.7 }}>{ln}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Enable toggle */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #1c1814' }}>

@@ -6,6 +6,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui: **"How it works" explainer** in Settings → Web search — a collapsed,
+  sentence-per-line teaching block covering what web search is, how it stays
+  safe (untrusted results, cites URLs, never obeys hidden instructions), what
+  the corroboration score means (a measurement of agreement, not a verdict),
+  and cost/control. Closes the "is there a place where this is clear to users"
+  gap; the per-tool "How it works" block is the pattern for future tools.
 - tools: **corroboration score (FactChecker v0).** Every web-search answer now
   carries a measured trust signal — `corroboration N%` shown next to the web
   sources — computed in `api/factcheck.py` as
