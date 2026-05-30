@@ -1,0 +1,12 @@
+# Build context for the `ui` service is ./ui (see docker-compose.yml). The
+# Dockerfile runs `npm ci` + `npm run build`, which regenerate node_modules and
+# .next inside the image — so shipping the host copies into the build context
+# is pure waste (and they're large). Keep them out.
+node_modules
+.next
+.git
+npm-debug.log*
+yarn-error.log*
+*.local
+.env
+.env.*

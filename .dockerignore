@@ -1,0 +1,39 @@
+# Build context for the `api` service is the repo root (see docker-compose.yml:
+# api → context: .). The api Dockerfile only needs `api/` + `VERSION`, so keep
+# everything else out of the context that gets shipped to the builder. This
+# shrinks the build, speeds it up, and avoids needless disk churn on small
+# brain boxes. Other services build from their own sub-contexts (ui → ./ui,
+# nodeos → ./nodeos, public-chat → ./apps/public-chat) and are unaffected.
+
+# VCS + editor
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+**/*.pyc
+*.swp
+
+# Other service trees (their own build contexts — not needed by the api image)
+ui
+nodeos
+apps
+vector-db
+
+# Repo content not needed at runtime in the api image
+scripts
+tests
+notes
+docs
+export
+input_samples
+brain-apps
+ops
+# NOTE: deliberately NOT excluding "*.md" — the api image needs
+# api/brain_persona.template.md + api/brain_persona_nous.md (COPY api /app/api).
+# Root-level .md files are KB-sized; not worth risking the persona files.
+
+# Secrets + local/runtime artifacts (defense in depth — never in an image)
+.env
+.env.*
+docker-compose.override.yml
+api/brain_persona.local.md

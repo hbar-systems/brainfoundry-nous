@@ -28,6 +28,17 @@ WORKDIR /app
 # requirements live under api/ when build context is repo root
 COPY api/requirements.txt /app/requirements.txt
 
+# CPU-only torch FIRST. The fleet boxes have no GPU (Hetzner CAX ARM, CPU
+# embeddings + CPU Ollama), but the default `torch` wheel pulled by
+# sentence-transformers drags in multi-GB nvidia/cudnn CUDA libraries that are
+# pure dead weight here — and they filled brain disks during `--build` rebuilds
+# ("no space left on device" writing libcudnn_*.so). Installing CPU-only torch
+# from PyTorch's cpu index up front means sentence-transformers sees torch
+# already satisfied and never installs the CUDA build. Arch-agnostic: the cpu
+# index serves both x86_64 and aarch64 CPU wheels.
+RUN pip install --no-cache-dir torch \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy ONLY the api package from repo root into /app/api
