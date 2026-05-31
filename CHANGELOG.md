@@ -6,6 +6,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui: **Tool activity on the Trace page** — the `/tools/audit` trail now has a
+  surface. A "Tool activity" section on `/trace` lists every external tool call
+  the brain made (web search, future tools) newest-first: success/fail dot, tool
+  name, tier, result/reason summary, relative time. Closes the "what did my
+  brain reach out and do" loop; the audit log was endpoint-only before.
 - security: **prompt-injection defenses on ingest** (cognitive-OS gap #3). A
   poisoned PDF / scraped page / forwarded email can carry text aimed at the
   MODEL ("ignore your instructions", "reveal your system prompt", a forged

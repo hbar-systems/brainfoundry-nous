@@ -116,6 +116,9 @@ export default function Trace() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // Tool activity — the brain's external-tool audit trail (web search, etc.).
+  // Loaded independently of admin/trace so it shows even if that fails.
+  const [toolAudit, setToolAudit] = useState(null)
 
   useEffect(() => {
     fetch('/api/bf/admin/trace')
@@ -128,7 +131,14 @@ export default function Trace() {
       })
       .then(d => { setData(d); setLoading(false) })
       .catch(e => { setError(e.message); setLoading(false) })
+
+    fetch('/api/bf/tools/audit?limit=50')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && Array.isArray(d.entries)) setToolAudit(d.entries) })
+      .catch(() => {})
   }, [])
+
+  const TIER_COLOR = { green: '#5fae6b', yellow: '#c9a96e', red: '#d97777' }
 
   const layerMaxChunks = data?.documents?.by_layer?.length
     ? Math.max(...data.documents.by_layer.map(l => l.chunk_count || 0))
@@ -423,6 +433,45 @@ export default function Trace() {
             </div>
 
           </>
+        )}
+
+        {/* Tool activity — every external tool call the brain made, logged.
+            "What did my brain reach out and do." Read-only audit surface. */}
+        {toolAudit !== null && (
+          <div style={{ marginTop: '8px' }}>
+            <h2 style={{ fontSize: '13px', color: COLORS.muted, letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 4px 0' }}>
+              Tool activity
+            </h2>
+            <p style={{ color: COLORS.dim, fontSize: '12px', margin: '0 0 14px 0', fontFamily: 'Lora, ui-serif, serif' }}>
+              What your brain reached out and did — every external tool call, logged.
+            </p>
+            {toolAudit.length === 0 ? (
+              <p style={{ color: COLORS.dim, fontSize: '12px', fontStyle: 'italic' }}>
+                No tool activity yet. Enable web search in Settings to give your brain reach.
+              </p>
+            ) : (
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: '10px', overflow: 'hidden' }}>
+                {[...toolAudit].reverse().map((e, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    padding: '9px 14px', fontFamily: 'DM Mono, monospace', fontSize: '11px',
+                    background: i % 2 ? COLORS.surface : COLORS.surface2,
+                    borderTop: i ? `1px solid ${COLORS.border}` : 'none',
+                  }}>
+                    <span title={e.ok ? 'succeeded' : 'failed/refused'} style={{ color: e.ok ? '#5fae6b' : '#d97777', flexShrink: 0 }}>
+                      {e.ok ? '●' : '○'}
+                    </span>
+                    <span style={{ color: COLORS.text, minWidth: '90px', flexShrink: 0 }}>{e.tool}</span>
+                    <span style={{ color: TIER_COLOR[e.tier] || COLORS.muted, minWidth: '52px', flexShrink: 0, opacity: 0.85 }}>{e.tier}</span>
+                    <span style={{ color: COLORS.muted, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>
+                      {typeof e.result === 'string' ? e.result : (e.reason || '')}
+                    </span>
+                    <span style={{ color: COLORS.dim, flexShrink: 0, minWidth: '70px', textAlign: 'right' }}>{fmtRelative(e.ts)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </>
