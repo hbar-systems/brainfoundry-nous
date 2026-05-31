@@ -6,6 +6,34 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- memory: **memory-type separation + provenance (cognitive-OS gap #2, phase
+  1+2).** Every retrievable chunk now carries a **memory type** and
+  **provenance**, and retrieval weights by it. New `api/memory_type.py` defines
+  the trust taxonomy — `semantic` (operator-curated upload), `reflective`
+  (derived/inferred summary, e.g. chat consolidation), `untrusted` (an upload
+  the injection scan flagged medium/high), `ephemeral` (session scratch, never
+  persisted) — a **different axis** from the user-named `layer` (they use
+  distinct metadata keys and never collide). At ingest, each chunk is stamped
+  structurally by its path: uploads → `semantic` (or `untrusted` if the
+  persisted injection-scan band is medium/high — which makes the gap-#3 defense
+  *structural*, not just a one-time warning), consolidation summaries →
+  `reflective`; provenance records `source`, `derivation` (observed/inferred),
+  `ingested_at`, `ingested_by`, `source_trust`, and `content_hash` (the join key
+  back to the signed `artifact_attestations` ledger that was missing before). At
+  retrieval, the flat and layer-scoped paths overscan then rerank by
+  `similarity × trust_prior` so `untrusted` chunks are demoted (not erased — the
+  roadmap wants conflicting evidence surfaced) and `ephemeral` dropped; a
+  poisoned chunk can no longer dominate retrieval on raw similarity alone (gap
+  #5). The RAG prompt now labels each document with its type/derivation
+  (`[Document N — semantic, observed]`) so the model — and the operator reading
+  a trace — can tell a curated fact from an inferred summary from an untrusted
+  scrape (gap #4). Schema: two partial indexes (`mem_type`, `content_hash`) in
+  `vector-db/init.sql` + boot-time ensure; backward-compatible — an untagged
+  legacy chunk is treated as `semantic` at read, so no migration is *required*.
+  Optional backfill `scripts/backfill_memory_type.py` (idempotent, SSH-into-
+  container like `reembed_null_embeddings.py`) makes existing tags explicit.
+  13 tests. Deferred to a follow-up: FactChecker generalization over RAG/cross-
+  brain claims (phase 3) and the UI type chips (phase 4).
 - tools: **Tool activity shows the query + clickable sources.** The dispatch
   audit record now keeps each call's sources (title + url, capped at 10), and
   the `/trace` Tool activity rows show the search query (`"…"`) and expand to a

@@ -23,6 +23,20 @@ CREATE INDEX IF NOT EXISTS document_embeddings_layer_idx
 ON document_embeddings ((metadata->>'layer'))
 WHERE metadata->>'layer' IS NOT NULL;
 
+-- v0.8.x: cognitive-OS gap #2 — memory-type taxonomy + provenance. `mem_type`
+-- (semantic/reflective/untrusted/ephemeral) is the trust axis, orthogonal to the
+-- user-named `layer`. `content_hash` is the join key from a chunk back to the
+-- signed artifact_attestations ledger. Partial indexes stay small — only tagged
+-- chunks are indexed; legacy/untagged chunks are treated as semantic at read.
+-- See api/memory_type.py. Migration backfill: scripts/backfill_memory_type.py.
+CREATE INDEX IF NOT EXISTS document_embeddings_memtype_idx
+ON document_embeddings ((metadata->>'mem_type'))
+WHERE metadata->>'mem_type' IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS document_embeddings_content_hash_idx
+ON document_embeddings ((metadata->>'content_hash'))
+WHERE metadata->>'content_hash' IS NOT NULL;
+
 -- Create a table for chat sessions
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,

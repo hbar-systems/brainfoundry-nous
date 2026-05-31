@@ -1098,6 +1098,17 @@ def _ensure_runtime_indexes() -> None:
                 "ON document_embeddings ((metadata->>'layer')) "
                 "WHERE metadata->>'layer' IS NOT NULL"
             )
+            # v0.8.x: memory-type + provenance indexes (cognitive-OS gap #2).
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_embeddings_memtype_idx "
+                "ON document_embeddings ((metadata->>'mem_type')) "
+                "WHERE metadata->>'mem_type' IS NOT NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_embeddings_content_hash_idx "
+                "ON document_embeddings ((metadata->>'content_hash')) "
+                "WHERE metadata->>'content_hash' IS NOT NULL"
+            )
         conn.close()
     except Exception as e:
         print(f"[startup] layer index ensure skipped: {e}", flush=True)
@@ -1348,6 +1359,14 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         query_embedding = generate_embeddings([query])[0]
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        # Memory-type aware retrieval (cognitive-OS gap #2/#5). The flat and
+        # layer-scoped paths overscan, then rerank by similarity × trust prior so
+        # `untrusted` chunks are demoted (not erased) and `ephemeral` dropped —
+        # a poisoned chunk can't dominate retrieval by raw similarity alone. The
+        # tiered path keeps its fixed folder composition unchanged.
+        from api import memory_type as _memtype
+        fetch_limit = max(limit * 3, limit + 10)
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
         # ── Flat similarity path (C3) ────────────────────────────────
@@ -1377,12 +1396,12 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
-                (embedding_str, *scope_params, embedding_str, limit),
+                (embedding_str, *scope_params, embedding_str, fetch_limit),
             )
             rows = cursor.fetchall()
             cursor.close()
             conn.close()
-            return [
+            results = [
                 {
                     "document_name": r[0],
                     "content": r[1],
@@ -1391,6 +1410,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
+            return _memtype.rerank(results, limit)
 
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
@@ -1405,12 +1425,12 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
-                (embedding_str, list(layers), *scope_params, embedding_str, limit),
+                (embedding_str, list(layers), *scope_params, embedding_str, fetch_limit),
             )
             rows = cursor.fetchall()
             cursor.close()
             conn.close()
-            return [
+            results = [
                 {
                     "document_name": r[0],
                     "content": r[1],
@@ -1419,6 +1439,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
+            return _memtype.rerank(results, limit)
 
         def fetch_tier(pattern, n):
             cursor.execute(
@@ -1454,22 +1475,29 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (embedding_str, f'{_t1}/%', f'{_t2a}/%', f'{_t2b}/%', f'{_t2c}/%', embedding_str, limit)
+            (embedding_str, f'{_t1}/%', f'{_t2a}/%', f'{_t2b}/%', f'{_t2c}/%', embedding_str, fetch_limit)
         )
         tier3 = cursor.fetchall()
         cursor.close()
         conn.close()
 
-        all_results = tier1 + tier2a + tier2b + tier2c + tier3
-        return [
-            {
-                "document_name": r[0],
-                "content": r[1],
-                "metadata": r[2] or {},
-                "similarity_score": float(1 - r[3])
-            }
-            for r in all_results
-        ]
+        def _to_dicts(rows):
+            return [
+                {
+                    "document_name": r[0],
+                    "content": r[1],
+                    "metadata": r[2] or {},
+                    "similarity_score": float(1 - r[3]),
+                }
+                for r in rows
+            ]
+
+        # Tiers 1–2 are curated identity/thinking folders — keep their fixed
+        # composition. Tier 3 is a pure similarity sweep (like the flat path), so
+        # it gets the same memory-type rerank: untrusted demoted, ephemeral
+        # dropped, then truncated back to `limit`.
+        tier3_ranked = _memtype.rerank(_to_dicts(tier3), limit)
+        return _to_dicts(tier1 + tier2a + tier2b + tier2c) + tier3_ranked
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
@@ -1756,6 +1784,20 @@ Summary:"""
         chunks = chunk_text(summary)
         embeddings = generate_embeddings(chunks)
 
+        # Memory-type + provenance (cognitive-OS gap #2). A consolidated summary
+        # is a derived/inferred belief, not a directly-observed artifact -> it is
+        # `reflective` (demoted slightly below `semantic` at retrieval). The
+        # content_hash joins to the artifact_attestations row recorded below.
+        from api import memory_type as _memtype
+        from api import substrate as _substrate
+        _summary_hash = _substrate.content_hash_of(summary)
+        _provenance = _memtype.provenance(
+            mem_type=_memtype.REFLECTIVE,
+            source="consolidation_v0.5",
+            derivation=_memtype.INFERRED,
+            content_hash=_summary_hash,
+        )
+
         conn = get_db_connection()
         cursor = conn.cursor()
         stored = 0
@@ -1769,9 +1811,10 @@ Summary:"""
                 (doc_name, chunk, emb_str, json.dumps({
                     "session_id": session_id,
                     "consolidated_at": datetime.utcnow().isoformat(),
+                    "ingested_at": datetime.utcnow().isoformat(),
                     "chunk_index": stored,
                     "layer": layer,
-                    "source": "consolidation_v0.5",
+                    **_provenance,
                 }))
             )
             stored += 1
@@ -1856,9 +1899,16 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
         relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered")
     context = ""
     if relevant_docs:
+        from api import memory_type as _memtype
         context = "\n\nRelevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
-            context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
+            # Provenance label (cognitive-OS gap #2/#4) so the model can weight a
+            # curated fact above an inferred summary or an untrusted scrape, and
+            # a hallucination is distinguishable from a memory.
+            prov = _memtype.label(doc.get("metadata"))
+            head = f"[Document {i}: {doc['document_name']}"
+            head += f" — {prov}]" if prov else "]"
+            context += f"\n{head}\n{doc['content']}\n"
     # Persona: only use it as the system prompt once it is actually
     # configured. An unconfigured brain still loads the blank
     # brain_persona.template.md — feeding that "# TEMPLATE — edit this file
@@ -2247,16 +2297,21 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
         prompt += "\n\nUse the provided documents to answer accurately. If the documents don't cover the question, answer from general knowledge but never invent personal facts about the operator or any private brain."
 
     if relevant_docs:
+        from api import memory_type as _memtype
         prompt += "\n\nRelevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
+            # Provenance label (cognitive-OS gap #2/#4) — surfaces the trust type
+            # without leaking document_name, so it is safe in both modes.
+            prov = _memtype.label(doc.get("metadata"))
+            suffix = f" — {prov}" if prov else ""
             if cite_sources:
                 # Org-brain mode: surface document_name so the model can cite
                 # it. Operator opted in via env; the docs are scope=public.
                 name = doc.get('document_name', f'Document {i}')
-                prompt += f"\n[{name}]\n{doc.get('content', '')}\n"
+                prompt += f"\n[{name}{suffix}]\n{doc.get('content', '')}\n"
             else:
                 # Default (nous): index-only labels, never leak document_name.
-                prompt += f"\n[Document {i}]\n{doc.get('content', '')}\n"
+                prompt += f"\n[Document {i}{suffix}]\n{doc.get('content', '')}\n"
 
     # 1-shot anchor — small models (1b) need an in-context style example to
     # avoid drift into off-topic safety refusals or word-salad on plain
@@ -2688,11 +2743,28 @@ def _stream_ingest_path_b(
     size: int,
     proposal_id: str,
     layer: Optional[str],
+    injection_risk: Optional[str] = None,
 ):
     def sse(event: str, payload: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
     yield sse("started", {"proposal_id": proposal_id, "filename": filename, "text_length": len(text)})
+
+    # Memory-type + provenance (cognitive-OS gap #2). An operator-approved upload
+    # is `semantic` (curated by the act of approval) UNLESS the injection scan
+    # flagged it medium/high — then it lands `untrusted` and is demoted at
+    # retrieval, making the gap-#3 defense structural. The content_hash is the
+    # join key to the signed artifact_attestations ledger written below.
+    from api import memory_type as _memtype
+    from api import substrate as _substrate
+    content_hash = _substrate.content_hash_of(text)
+    mem_type = _memtype.classify_upload(injection_risk)
+    provenance = _memtype.provenance(
+        mem_type=mem_type,
+        source="upload",
+        derivation=_memtype.OBSERVED,
+        content_hash=content_hash,
+    )
 
     t_chunk = time.time()
     chunks = chunk_text(text)
@@ -2729,9 +2801,11 @@ def _stream_ingest_path_b(
                             "file_size": size,
                             "content_type": content_type,
                             "upload_timestamp": datetime.utcnow().isoformat(),
+                            "ingested_at": datetime.utcnow().isoformat(),
                             "chunk_index": stored_chunks,
                             "proposal_id": proposal_id,
                             "layer": layer,
+                            **provenance,
                         }),
                     ),
                 )
@@ -2897,6 +2971,7 @@ async def upload_document(
         filename = ""
         content_type = ""
         size = 0
+        injection_risk: Optional[str] = None  # persisted scan band -> mem_type
 
         if proposal_id is None:
             if file is None:
@@ -2926,7 +3001,8 @@ async def upload_document(
                 filename = saved["filename"]
                 content_type = saved["content_type"]
                 size = saved["size"]
-                print(f"[upload] approve path: loaded persisted text for proposal={proposal_id} filename={filename} text_len={len(text)}", flush=True)
+                injection_risk = (saved.get("injection_scan") or {}).get("risk")
+                print(f"[upload] approve path: loaded persisted text for proposal={proposal_id} filename={filename} text_len={len(text)} injection_risk={injection_risk or 'n/a'}", flush=True)
             elif file is not None:
                 content = await file.read()
                 size = len(content)
@@ -3010,6 +3086,7 @@ async def upload_document(
                 size=size,
                 proposal_id=proposal_id,
                 layer=layer,
+                injection_risk=injection_risk,
             ),
             media_type="text/event-stream",
             headers={"x-accel-buffering": "no", "cache-control": "no-cache, no-transform"},
