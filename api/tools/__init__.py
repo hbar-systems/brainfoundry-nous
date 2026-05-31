@@ -155,12 +155,21 @@ async def dispatch(
     # A call that reached the provider counts against budget even if it
     # returned zero results — the quota was spent.
     budget.record(name)
-    audit.log({
+    entry = {
         "tool": name, "tier": tool.tier, "ok": result.ok,
         "args": _summarize(args),
         "result": (result.error if not result.ok
                    else f"{len(result.provenance)} source(s)"),
-    })
+    }
+    # Keep the actual sources (title + url) on the record so the audit surface
+    # can let the operator click through to what the brain actually read — not
+    # just a count. Capped so the log line stays small.
+    if result.ok and result.provenance:
+        entry["sources"] = [
+            {"title": p.get("title"), "url": p.get("url")}
+            for p in result.provenance if p.get("url")
+        ][:10]
+    audit.log(entry)
     return result
 
 

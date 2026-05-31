@@ -6,6 +6,13 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- tools: **Tool activity shows the query + clickable sources.** The dispatch
+  audit record now keeps each call's sources (title + url, capped at 10), and
+  the `/trace` Tool activity rows show the search query (`"…"`) and expand to a
+  numbered list of clickable source links — so the operator can check *what the
+  brain actually read*, not just a "5 sources" count. (Sources were already
+  clickable in the chat answer's web panel; this brings the historical audit
+  view to parity.)
 - ui: **fix "deployed but the UI looks the same."** Two changes so a new build
   is always visible: (1) the service worker now fetches page navigations with
   `cache:'no-store'` (was network-first but the browser HTTP cache could still

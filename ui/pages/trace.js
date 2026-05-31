@@ -119,6 +119,12 @@ export default function Trace() {
   // Tool activity — the brain's external-tool audit trail (web search, etc.).
   // Loaded independently of admin/trace so it shows even if that fails.
   const [toolAudit, setToolAudit] = useState(null)
+  const [expandedAudit, setExpandedAudit] = useState(() => new Set())
+  const toggleAudit = (i) => setExpandedAudit(prev => {
+    const next = new Set(prev)
+    if (next.has(i)) next.delete(i); else next.add(i)
+    return next
+  })
 
   useEffect(() => {
     fetch('/api/bf/admin/trace')
@@ -451,24 +457,53 @@ export default function Trace() {
               </p>
             ) : (
               <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: '10px', overflow: 'hidden' }}>
-                {[...toolAudit].reverse().map((e, i) => (
+                {[...toolAudit].reverse().map((e, i) => {
+                  const sources = Array.isArray(e.sources) ? e.sources : []
+                  const query = e.args && e.args.query
+                  const canExpand = sources.length > 0
+                  const open = expandedAudit.has(i)
+                  return (
                   <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: '12px',
-                    padding: '9px 14px', fontFamily: 'DM Mono, monospace', fontSize: '11px',
                     background: i % 2 ? COLORS.surface : COLORS.surface2,
                     borderTop: i ? `1px solid ${COLORS.border}` : 'none',
                   }}>
-                    <span title={e.ok ? 'succeeded' : 'failed/refused'} style={{ color: e.ok ? '#5fae6b' : '#d97777', flexShrink: 0 }}>
-                      {e.ok ? '●' : '○'}
-                    </span>
-                    <span style={{ color: COLORS.text, minWidth: '90px', flexShrink: 0 }}>{e.tool}</span>
-                    <span style={{ color: TIER_COLOR[e.tier] || COLORS.muted, minWidth: '52px', flexShrink: 0, opacity: 0.85 }}>{e.tier}</span>
-                    <span style={{ color: COLORS.muted, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>
-                      {typeof e.result === 'string' ? e.result : (e.reason || '')}
-                    </span>
-                    <span style={{ color: COLORS.dim, flexShrink: 0, minWidth: '70px', textAlign: 'right' }}>{fmtRelative(e.ts)}</span>
+                    <div
+                      onClick={() => canExpand && toggleAudit(i)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '12px',
+                        padding: '9px 14px', fontFamily: 'DM Mono, monospace', fontSize: '11px',
+                        cursor: canExpand ? 'pointer' : 'default',
+                      }}
+                    >
+                      <span title={e.ok ? 'succeeded' : 'failed/refused'} style={{ color: e.ok ? '#5fae6b' : '#d97777', flexShrink: 0 }}>
+                        {e.ok ? '●' : '○'}
+                      </span>
+                      <span style={{ color: COLORS.text, minWidth: '90px', flexShrink: 0 }}>{e.tool}</span>
+                      <span title="permission tier — yellow = external read" style={{ color: TIER_COLOR[e.tier] || COLORS.muted, minWidth: '52px', flexShrink: 0, opacity: 0.85 }}>{e.tier}</span>
+                      <span style={{ color: COLORS.muted, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.85 }}>
+                        {query ? `“${query}”` : (typeof e.result === 'string' ? e.result : (e.reason || ''))}
+                      </span>
+                      {canExpand && (
+                        <span style={{ color: COLORS.dim, flexShrink: 0 }}>{open ? '▾' : '▸'} {sources.length}</span>
+                      )}
+                      <span style={{ color: COLORS.dim, flexShrink: 0, minWidth: '70px', textAlign: 'right' }}>{fmtRelative(e.ts)}</span>
+                    </div>
+                    {open && canExpand && (
+                      <ol style={{ margin: 0, padding: '2px 14px 10px 40px', listStyle: 'decimal' }}>
+                        {sources.map((s, si) => (
+                          <li key={si} style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', lineHeight: 1.7 }}>
+                            <a href={s.url} target="_blank" rel="noreferrer noopener"
+                               style={{ color: COLORS.accent, textDecoration: 'none', wordBreak: 'break-word' }}
+                               onMouseOver={ev => ev.currentTarget.style.textDecoration = 'underline'}
+                               onMouseOut={ev => ev.currentTarget.style.textDecoration = 'none'}
+                            >{s.title || s.url}</a>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
