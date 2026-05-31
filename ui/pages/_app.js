@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
@@ -17,6 +17,34 @@ export default function App({ Component, pageProps }) {
     if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') return
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   }, [])
+
+  // New-version detection. Each Next build gets a unique buildId; once a tab is
+  // open, clicking nav links does client-side routing with the ALREADY-LOADED
+  // bundle, so a deploy is invisible until a full reload. This polls the live
+  // page's buildId (on mount, on focus, every 2 min) and, when it differs from
+  // the one this tab loaded, surfaces a one-click reload — so "I deployed but
+  // the UI looks the same" stops happening.
+  const [updateReady, setUpdateReady] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const myBuild = window.__NEXT_DATA__ && window.__NEXT_DATA__.buildId
+    if (!myBuild) return
+    let stopped = false
+    const check = async () => {
+      try {
+        const r = await fetch('/?_v=' + Date.now(), { cache: 'no-store' })
+        if (!r.ok) return
+        const html = await r.text()
+        const m = html.match(/"buildId":"([^"]+)"/)
+        if (m && m[1] && m[1] !== myBuild && !stopped) setUpdateReady(true)
+      } catch {}
+    }
+    const onFocus = () => { if (!updateReady) check() }
+    window.addEventListener('focus', onFocus)
+    const iv = setInterval(() => { if (!updateReady) check() }, 120000)
+    check()
+    return () => { stopped = true; window.removeEventListener('focus', onFocus); clearInterval(iv) }
+  }, [updateReady])
 
   // Theme + font + nav-size init: read localStorage, apply to <html>
   // dataset before paint. Switchers in chat header / settings page keep
@@ -340,6 +368,22 @@ export default function App({ Component, pageProps }) {
         `}</style>
       </Head>
       <Nav />
+      {updateReady && (
+        <div role="status" style={{
+          position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
+          left: '50%', transform: 'translateX(-50%)', zIndex: 99999,
+          background: 'var(--accent)', color: 'var(--bg)', padding: '10px 14px',
+          borderRadius: 10, display: 'flex', gap: 12, alignItems: 'center',
+          fontSize: 13, fontFamily: 'var(--font-body)',
+          boxShadow: '0 6px 24px rgba(0,0,0,0.45)', maxWidth: '92vw',
+        }}>
+          <span>A new version of your brain is ready.</span>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ background: 'var(--bg)', color: 'var(--text)', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit', fontSize: 13 }}
+          >Reload</button>
+        </div>
+      )}
       <div className="bf-page-wrap" style={{
         // Match the nav's actual rendered height (--nav-h content + safe-
         // area padding-top) so page content starts below the fixed nav in

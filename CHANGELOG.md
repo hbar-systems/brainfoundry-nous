@@ -6,6 +6,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui: **fix "deployed but the UI looks the same."** Two changes so a new build
+  is always visible: (1) the service worker now fetches page navigations with
+  `cache:'no-store'` (was network-first but the browser HTTP cache could still
+  hand it a stale page → stale chunk references); a normal refresh after a
+  deploy now always loads the fresh page. CACHE_NAME bumped to v3. (2) A
+  new-version banner in `_app.js` — once a tab is open, clicking nav links does
+  client-side routing with the already-loaded bundle, so a deploy is invisible
+  until a full reload; the app now polls the live page's Next buildId (on mount,
+  on focus, every 2 min) and, when it differs from the loaded one, shows a
+  one-click "A new version of your brain is ready · Reload".
 - ui: **Tool activity on the Trace page** — the `/tools/audit` trail now has a
   surface. A "Tool activity" section on `/trace` lists every external tool call
   the brain made (web search, future tools) newest-first: success/fail dot, tool
