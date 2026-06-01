@@ -3298,7 +3298,7 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
 @app.get("/documents")
 def list_documents(
     layer: Optional[str] = None,
-    limit: int = 500,
+    limit: int = 10000,
     offset: int = 0,
     api_key: str = Depends(get_api_key),
 ):
@@ -3315,9 +3315,12 @@ def list_documents(
       ?layer=__unlayered__   show docs whose chunks have no layer tag (or empty string)
 
     Pagination: ?limit + ?offset over the document_name set, ordered by
-    last_updated DESC. Default limit 500 — a single brain seldom holds more
-    than a few hundred documents and the UI groups by layer so longer lists
-    stay scannable.
+    last_updated DESC. Default limit 10000 — the Knowledge browse view derives
+    its per-layer counts from this list client-side, so the default must cover a
+    full corpus (the prior default of 500 silently undercounted every layer on
+    brains past ~500 docs). The response always returns the true `total` (a
+    separate COUNT) so an overflow past the limit is visible, not silent. Use
+    ?offset for real paging if a brain ever exceeds 10000 documents.
     """
     try:
         conn = get_db_connection()

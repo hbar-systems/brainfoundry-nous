@@ -6,6 +6,18 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- fix: **Knowledge "Browse — by memory layer" capped at 500 docs.** On a brain
+  past ~500 documents the browse panel listed only the 500 most-recent docs AND
+  undercounted every layer (the per-layer counts are derived client-side from
+  that capped list, so the cap propagated into the counts) — e.g. hbar's 647
+  docs showed as "500 total" with identity 14 vs 23, episodic 291 vs 365. The
+  brain itself was fine; retrieval/chat/search always used the full corpus, only
+  this manual listing was capped. `ui/pages/upload.js` now requests `?limit=
+  10000` (a soft ceiling, not an assumption) and shows "showing N of TOTAL" if a
+  brain ever exceeds it (the response already returns the true `total`). Backend
+  `list_documents` default bumped 500 → 10000 as defense; `?offset` paging is
+  already wired for any brain that eventually exceeds 10000. Template bug — every
+  brain past 500 docs benefits.
 - tools: **FactChecker generalized to the brain's own documents (cognitive-OS
   gap #2 phase 3 — the payoff).** The corroboration score that web search got
   now also runs over RAG answers, using the per-chunk provenance phase 1+2 added.

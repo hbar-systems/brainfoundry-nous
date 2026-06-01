@@ -70,9 +70,13 @@ export default function Upload() {
   const [pasteText, setPasteText] = useState("");   // paste-text path — alternative to file upload
   const [pasteTitle, setPasteTitle] = useState("");
   // Browse view: full doc list grouped by memory layer + "unlayered" bucket.
-  // GET /documents returns up to LIMIT 500 — large enough that no realistic
-  // single-brain operator hits the cap. Reloaded after every ingest/forget.
+  // GET /documents?limit=N is a soft ceiling, NOT an assumption — past ~500 docs
+  // the layer counts here are derived from this list, so an undersized limit
+  // silently undercounts every layer. We request a high ceiling and surface
+  // "showing N of TOTAL" if a brain ever exceeds it. Reloaded after every
+  // ingest/forget.
   const [allDocs, setAllDocs] = useState(null); // null = not loaded yet, [] = empty
+  const [allDocsTotal, setAllDocsTotal] = useState(0); // backend's full COUNT (may exceed the fetched page)
   const [allDocsLoading, setAllDocsLoading] = useState(false);
   // Per-layer expand/collapse state. Default: collapsed; "(unlayered)" opens
   // automatically because it's the operator's "needs organizing" queue.
@@ -200,10 +204,13 @@ export default function Upload() {
   // re-fetching — backend stays simple, UI handles presentation.
   const loadAllDocs = () => {
     setAllDocsLoading(true);
-    fetch(`${API_BASE}/documents?limit=500`)
+    fetch(`${API_BASE}/documents?limit=10000`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => setAllDocs(d?.documents || []))
-      .catch(() => setAllDocs([]))
+      .then(d => {
+        setAllDocs(d?.documents || []);
+        setAllDocsTotal(typeof d?.total === "number" ? d.total : (d?.documents || []).length);
+      })
+      .catch(() => { setAllDocs([]); setAllDocsTotal(0); })
       .finally(() => setAllDocsLoading(false));
   };
 
@@ -719,7 +726,9 @@ export default function Upload() {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
             <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>Browse — by memory layer</h2>
             <div style={{ fontSize: 12, color: MUTED, fontFamily: "DM Mono, monospace" }}>
-              {allDocs.length} {allDocs.length === 1 ? "doc" : "docs"} total
+              {allDocsTotal > allDocs.length
+                ? `showing ${allDocs.length} of ${allDocsTotal} docs`
+                : `${allDocs.length} ${allDocs.length === 1 ? "doc" : "docs"} total`}
             </div>
           </div>
 
