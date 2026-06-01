@@ -188,3 +188,4 @@ def _summarize(args: Dict[str, Any]) -> Dict[str, Any]:
 # bottom so the names above (Tool, register, tiers) already exist.
 from api.tools import web_search      # noqa: E402,F401  (yellow)
 from api.tools import memory_search   # noqa: E402,F401  (green)
+from api.tools import brain_call      # noqa: E402,F401  (yellow — federation)

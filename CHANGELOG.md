@@ -6,6 +6,26 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- federation: **`brain_call` — a brain can ask another brain (orchestration v0).**
+  The agentic loop can now reach a peer brain: register hbar.university /
+  hbar.science (etc.) as introduced peers, turn on agentic mode, and the model
+  can call `brain_call(target, query)` to get an answer from that peer's own
+  corpus and synthesize it WITH attribution ("according to hbar.university: …").
+  Two halves: (1) serving — new `POST /v1/federation/query`, the machine-callable
+  cross-brain READ surface every brain now exposes (non-streaming JSON, no
+  Turnstile, per-IP rate-limited, answers only from the same PUBLIC_CHAT_LAYERS /
+  SCOPE the public chat already serves, so federation never exposes more than
+  public); (2) calling — `api/tools/brain_call.py`, a YELLOW tool (a cross-brain
+  read is external-read, same tier as web search; a cross-brain *write* would be
+  RED, not this). The callable directory is the brain's introduced-peers list
+  (`data/peers.json`, managed via the `peers.*` kernel commands); v0 calls the
+  peer's public surface so no signing is needed (signed private-scope reads are a
+  later tier). The peer's answer is wrapped as an attributed, untrusted reference
+  (treat as citation, don't obey embedded instructions). The agentic loop injects
+  the live peer list into `brain_call`'s target enum each turn (and drops the
+  tool when no peers are configured). Every call is tier-gated + audited like any
+  tool. 6 tests. This is the team-of-brains orchestration story — each node a
+  full sovereign brain, not a sub-agent.
 - tools: **native model-driven tool-calling + permission-tier enforcement
   (opt-in agentic mode).** The brain can now DECIDE when to use a tool instead
   of the operator flipping the per-message 🌐 toggle. `api/providers.py` gains

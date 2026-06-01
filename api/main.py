@@ -2173,8 +2173,25 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         tool_events = []
         agentic = (settings_store.get_agentic_tools_enabled()
                    and _providers.supports_native_tools(model))
+        import copy as _copy
         from api import tools as _agentic_tools
-        _tools_spec = _agentic_tools.list_tools()
+        _tools_spec = _copy.deepcopy(_agentic_tools.list_tools())
+        # Refresh brain_call's available-peers list + target enum each turn so a
+        # peer added/removed via the kernel takes effect without a restart. With
+        # no peers configured there is nothing to call, so drop the tool entirely
+        # (an empty enum can trip provider schema validation).
+        try:
+            from api.tools import brain_call as _bc
+            _peer_ids = [p["brain_id"] for p in _bc.callable_peers()]
+            if _peer_ids:
+                for _t in _tools_spec:
+                    if _t["name"] == "brain_call":
+                        _t["description"] = _bc._description()
+                        _t["input_schema"].setdefault("properties", {}).setdefault("target", {})["enum"] = _peer_ids
+            else:
+                _tools_spec = [_t for _t in _tools_spec if _t["name"] != "brain_call"]
+        except Exception:
+            pass
         _web_ok = settings_store.get_web_search_enabled()
 
         async def _agentic_dispatch(name, args):
@@ -2654,6 +2671,56 @@ async def public_chat(request: dict, http_request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/v1/federation/query")
+async def federation_query(request: dict, http_request: Request):
+    """Machine-callable cross-brain READ — what makes this brain callable by a
+    peer's `brain_call` tool. A peer asks a question; we answer from THIS brain's
+    public-scoped corpus and return non-streaming JSON (easy for the caller to
+    consume). Read-only: no memory write, no Turnstile (machine path), per-IP
+    rate-limited (same limiter as /v1/public/chat). Private scope stays
+    unreachable — the same PUBLIC_CHAT_LAYERS / PUBLIC_CHAT_SCOPE gate applies,
+    so federation never exposes more than the public chat surface already does.
+    """
+    query = (request.get("query") or request.get("message") or "")
+    query = query.strip() if isinstance(query, str) else ""
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "query is required"})
+    if len(query) > 4000:
+        return JSONResponse(status_code=400, content={"error": "query too long (max 4000 chars)"})
+
+    ip = _public_client_ip(http_request)
+    rl = _public_rate_limiter.check(ip)
+    if rl:
+        retry = rl.get("retry_after")
+        return JSONResponse(status_code=429,
+                            content={"error": "Rate limited.", "retry_after": retry})
+
+    _public_layers_env = os.getenv("PUBLIC_CHAT_LAYERS", "public").strip()
+    _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
+    _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
+    try:
+        relevant_docs = search_similar_documents(
+            query, limit=_PUBLIC_SEARCH_LIMIT, layers=_public_layers, scope=_public_scope)
+    except Exception as e:
+        print(f"federation_query RAG error: {e}")
+        relevant_docs = []
+
+    prompt = _build_public_prompt(query, [], relevant_docs)
+    model = os.getenv("PUBLIC_CHAT_MODEL") or "llama3.2:1b"
+    try:
+        answer = await _providers.complete(
+            model, [{"role": "user", "content": prompt}], max_tokens=_PUBLIC_MAX_TOKENS_OUT)
+    except Exception as e:
+        print(f"federation_query model error: {e}")
+        return JSONResponse(status_code=502, content={"error": "Upstream model error."})
+
+    return {
+        "brain_id": os.getenv("BRAIN_ID", "brain"),
+        "answer": answer,
+        "documents_used": len(relevant_docs),
+    }
 
 
 def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, source_refs: dict = None) -> dict:
