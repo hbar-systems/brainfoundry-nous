@@ -186,4 +186,5 @@ def _summarize(args: Dict[str, Any]) -> Dict[str, Any]:
 
 # Registering a tool is a side effect of importing its module. Keep this at the
 # bottom so the names above (Tool, register, tiers) already exist.
-from api.tools import web_search  # noqa: E402,F401
+from api.tools import web_search      # noqa: E402,F401  (yellow)
+from api.tools import memory_search   # noqa: E402,F401  (green)

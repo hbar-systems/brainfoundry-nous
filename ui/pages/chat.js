@@ -1174,7 +1174,8 @@ export default function Chat() {
         const sources = Array.isArray(data?.rag_metadata?.sources) ? data.rag_metadata.sources : []
         const webSearch = data?.rag_metadata?.web_search || null
         const corroboration = data?.rag_metadata?.corroboration || null
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration }])
+        const toolEvents = Array.isArray(data?.rag_metadata?.tool_events) ? data.rag_metadata.tool_events : []
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
@@ -1271,10 +1272,11 @@ export default function Chat() {
                 const sources = parsed.rag_metadata.sources
                 const webSearch = parsed.rag_metadata.web_search || null
                 const corroboration = parsed.rag_metadata.corroboration || null
+                const toolEvents = Array.isArray(parsed.rag_metadata.tool_events) ? parsed.rag_metadata.tool_events : []
                 setMessages(prev => {
                   if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
                   const next = [...prev]
-                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration }
+                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration, toolEvents }
                   return next
                 })
                 continue
@@ -2021,6 +2023,18 @@ export default function Chat() {
                     Renders only for assistant messages with sources; click
                     toggles expand. Listing the document_names by which the
                     brain grounded its answer closes the "show your work" gap. */}
+                {/* Agentic tool trail — what the brain decided to call this
+                    turn (green=ok, red=failed/blocked). Full detail on /trace. */}
+                {msg.role === 'assistant' && Array.isArray(msg.toolEvents) && msg.toolEvents.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', fontFamily: 'DM Mono, monospace', opacity: 0.85 }}>
+                    {msg.toolEvents.map((ev, ei) => (
+                      <span key={ei} title={ev.summary || ''} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
+                        <span style={{ color: ev.ok ? '#5fae6b' : '#d97777' }}>{ev.ok ? '🔧' : '⚠'}</span> {ev.tool}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 {msg.role === 'assistant' && Array.isArray(msg.sources) && msg.sources.length > 0 && (() => {
                   // Corroboration over the brain's OWN documents — measured
                   // support (independence × agreement × trust from per-chunk

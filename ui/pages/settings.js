@@ -453,6 +453,91 @@ function ModelsPanel() {
   )
 }
 
+// ---------- Agentic tools + permission tiers ----------
+const TIER_COLOR = { green: '#5fae6b', yellow: '#c9a96e', red: '#d97777' }
+
+function AgenticToolsPanel() {
+  const [enabled, setEnabled] = useState(false)
+  const [tiers, setTiers] = useState([])
+  const [tools, setTools] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  const load = () => {
+    api('/settings/agentic-tools').then(s => setEnabled(!!s.enabled)).catch(e => setErr(e.message))
+    api('/tools/tiers').then(d => setTiers(d.tiers || [])).catch(() => {})
+    api('/tools').then(d => setTools(d.tools || [])).catch(() => {})
+  }
+  useEffect(() => { load() }, [])
+
+  const toggle = async () => {
+    setBusy(true); setErr(null)
+    try {
+      await api('/settings/agentic-tools', { method: 'POST', body: JSON.stringify({ enabled: !enabled }) })
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+        Let your brain decide for itself when to reach for a tool — search its own memory, or
+        the open web — instead of you flipping a switch each message. Off by default. Works only on
+        a cloud model that supports tool-calling (Claude, GPT, …); a local Ollama model keeps the
+        manual 🌐 toggle. Every tool call is gated by its permission tier and recorded on the Trace page.
+      </p>
+
+      {/* Permission tiers — what green / yellow / red mean (from /tools/tiers). */}
+      <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 13 }}>
+        <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+          What green · yellow · red mean
+        </div>
+        {tiers.map(t => (
+          <div key={t.tier} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ width: 9, height: 9, borderRadius: '50%', background: TIER_COLOR[t.tier] || '#888', marginTop: 5, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 12.5, color: '#e8e0d5' }}>
+                {t.label} — <span style={{ color: TIER_COLOR[t.tier] }}>{t.rule}</span>
+              </div>
+              <div style={{ fontSize: 12, color: '#9a8c7a', lineHeight: 1.65, marginTop: 2 }}>{t.detail}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Enable toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #1c1814' }}>
+        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+          Agentic mode
+          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>
+            {enabled ? 'On — your brain calls tools on its own judgment.' : 'Off — tools run only when you ask (manual 🌐 toggle).'}
+          </div>
+        </div>
+        <button style={enabled ? BTN : BTN_GHOST} disabled={busy} onClick={toggle}>
+          {busy ? '…' : (enabled ? 'On' : 'Off')}
+        </button>
+      </div>
+
+      {/* Registered tools, dotted by tier */}
+      {tools.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ color: '#6b5f52', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tools your brain can call</div>
+          {tools.map(t => (
+            <div key={t.name} style={{ display: 'flex', gap: 9, alignItems: 'baseline', padding: '5px 0' }}>
+              <span title={t.tier} style={{ width: 8, height: 8, borderRadius: '50%', background: TIER_COLOR[t.tier] || '#888', flexShrink: 0, alignSelf: 'center' }} />
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: '#e8e0d5' }}>{t.name}</span>
+              <span style={{ fontSize: 12, color: '#9a8c7a', lineHeight: 1.5 }}>{t.description}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
 // ---------- Web search (tools) ----------
 function WebSearchPanel() {
   const [state, setState] = useState({ enabled: false, key_set: false, key_masked: null, budget: 1000, usage_this_month: 0 })
@@ -1172,6 +1257,10 @@ export default function Settings() {
 
       <Section title="Web search" subtitle="Give your brain eyes on the open web — read-only, untrusted, off by default.">
         <WebSearchPanel />
+      </Section>
+
+      <Section title="Agentic tools" subtitle="Let your brain decide when to use tools — and what green / yellow / red permission tiers mean.">
+        <AgenticToolsPanel />
       </Section>
 
       <Section title="Memory layers" subtitle="Your themed notebooks — the shape of what your brain knows.">

@@ -696,6 +696,54 @@ def settings_set_web_search_key(req: SetToolKeyRequest, api_key: str = Depends(g
     return {"ok": True, **_web_search_status()}
 
 
+class SetAgenticToolsRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/settings/agentic-tools")
+def settings_get_agentic_tools(api_key: str = Depends(get_api_key)):
+    """Agentic mode status — whether the model decides when to call tools."""
+    return {"enabled": settings_store.get_agentic_tools_enabled()}
+
+
+@app.post("/settings/agentic-tools")
+def settings_set_agentic_tools(req: SetAgenticToolsRequest, api_key: str = Depends(get_api_key)):
+    settings_store.set_agentic_tools_enabled(req.enabled)
+    return {"ok": True, "enabled": settings_store.get_agentic_tools_enabled()}
+
+
+# Plain-language definitions of the permission tiers — the single source of
+# truth the UI explainer reads so "what does green/yellow/red mean" is never
+# hardcoded in two places.
+_TIER_DEFINITIONS = [
+    {"tier": "green", "label": "Green — reads your own memory",
+     "rule": "Always allowed.",
+     "detail": "Searches and summarizes documents already in your brain. No "
+               "external network, no approval, no budget — it only ever reads "
+               "what you put there."},
+    {"tier": "yellow", "label": "Yellow — reaches outside",
+     "rule": "You enable it; then audited + budget-capped.",
+     "detail": "Reads from the open web or an external API (e.g. web search). "
+               "Off until you turn it on in Settings (standing authorization). "
+               "Every call is logged to the Trace page and counts against a "
+               "monthly cap so a runaway loop can't drain a quota. Results are "
+               "treated as untrusted reference, never as commands."},
+    {"tier": "red", "label": "Red — writes, sends, or executes",
+     "rule": "Per-call approval. Not enabled yet.",
+     "detail": "Anything that changes the world outside the brain — sending a "
+               "message, writing a file, running a command, a cross-brain write. "
+               "These require you to approve each call. The approval flow is not "
+               "built yet, so red tools are blocked by default (read-only "
+               "first, write second)."},
+]
+
+
+@app.get("/tools/tiers")
+def tool_tiers_endpoint(api_key: str = Depends(get_api_key)):
+    """The green/yellow/red permission-tier definitions (for the UI explainer)."""
+    return {"tiers": _TIER_DEFINITIONS}
+
+
 @app.get("/tools")
 def list_tools_endpoint(api_key: str = Depends(get_api_key)):
     """Inventory of registered tools (name, description, tier, schema)."""
@@ -2116,34 +2164,74 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         except Exception:
             rag_corroboration = None
 
+        # ── Agentic tool use (opt-in) ─────────────────────────────────
+        # When the operator has enabled agentic mode AND the model supports
+        # native tool-calling, the model DECIDES when to search memory (green)
+        # or the web (yellow). The dispatcher enforces tiers — web stays gated
+        # by the web-search toggle, RED stays blocked. Local Ollama models never
+        # qualify (unreliable tool-calling); they keep the deterministic path.
+        tool_events = []
+        agentic = (settings_store.get_agentic_tools_enabled()
+                   and _providers.supports_native_tools(model))
+        from api import tools as _agentic_tools
+        _tools_spec = _agentic_tools.list_tools()
+        _web_ok = settings_store.get_web_search_enabled()
+
+        async def _agentic_dispatch(name, args):
+            return await _agentic_tools.dispatch(name, args, operator_authorized=_web_ok)
+
         # ── Streaming path (SSE) ──────────────────────────────────────
         if do_stream:
             async def event_stream():
-                # First frame announces RAG metadata so the UI can render sources immediately.
-                meta = {
-                    "object": "chat.completion.rag_meta",
-                    "rag_metadata": {
-                        "documents_used": len(relevant_docs),
-                        "search_query": user_query,
-                        "sources": sources,
-                        "architecture": settings_store.get_retrieval_architecture(),
-                        "web_search": web_meta,
-                        "corroboration": rag_corroboration,
-                    },
-                }
-                yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+                def _meta_frame(events):
+                    return {
+                        "object": "chat.completion.rag_meta",
+                        "rag_metadata": {
+                            "documents_used": len(relevant_docs),
+                            "search_query": user_query,
+                            "sources": sources,
+                            "architecture": settings_store.get_retrieval_architecture(),
+                            "web_search": web_meta,
+                            "corroboration": rag_corroboration,
+                            "tool_events": events,
+                        },
+                    }
 
+                def _chunk(text):
+                    return {
+                        "id": f"chatcmpl-rag-{uuid.uuid4()}",
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                    }
+
+                # Agentic turn runs to completion (tools may fire mid-reasoning),
+                # then we emit the meta (with the tool trail) + the full answer.
+                if agentic:
+                    try:
+                        res = await _providers.complete_with_tools(
+                            model, [{"role": "user", "content": prompt}],
+                            _tools_spec, _agentic_dispatch, max_tokens=2048)
+                        reply_text, ev = res["text"], res["tool_events"]
+                    except Exception as agentic_err:
+                        # Fall back to a plain (non-tool) completion so a tool
+                        # path failure never costs the operator their answer.
+                        reply_text = await _providers.complete(
+                            model, [{"role": "user", "content": prompt}], max_tokens=2048)
+                        ev = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
+                    yield f"data: {json.dumps(_meta_frame(ev), ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(_chunk(reply_text), ensure_ascii=False)}\n\n"
+                    _persist_chat_turn(session_id, messages, reply_text)
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Deterministic (non-agentic) path — token streaming as before.
+                yield f"data: {json.dumps(_meta_frame([]), ensure_ascii=False)}\n\n"
                 accumulated = []
                 try:
                     async for text in _providers.stream(model, [{"role": "user", "content": prompt}], max_tokens=2048):
                         accumulated.append(text)
-                        chunk = {
-                            "id": f"chatcmpl-rag-{uuid.uuid4()}",
-                            "object": "chat.completion.chunk",
-                            "model": model,
-                            "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
-                        }
-                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps(_chunk(text), ensure_ascii=False)}\n\n"
                 except Exception as stream_err:
                     err_chunk = {"object": "chat.completion.error", "error": str(stream_err)}
                     yield f"data: {json.dumps(err_chunk, ensure_ascii=False)}\n\n"
@@ -2156,7 +2244,17 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         # ── Non-streaming path (JSON) ─────────────────────────────────
-        reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+        if agentic:
+            try:
+                res = await _providers.complete_with_tools(
+                    model, [{"role": "user", "content": prompt}],
+                    _tools_spec, _agentic_dispatch, max_tokens=2048)
+                reply, tool_events = res["text"], res["tool_events"]
+            except Exception as agentic_err:
+                reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+                tool_events = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
+        else:
+            reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
         _persist_chat_turn(session_id, messages, reply)
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
@@ -2164,7 +2262,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 

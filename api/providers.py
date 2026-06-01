@@ -307,6 +307,143 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
             return resp.json()["message"]["content"]
 
 
+# ── Native model-driven tool use (agentic loop) ─────────────────────────────
+# The model decides when to call a registered tool; each call runs through
+# api.tools.dispatch (the tier gate — GREEN auto, YELLOW standing-auth, RED
+# blocked) and the result is fed back so the model can continue. Only Anthropic
+# and OpenAI-compatible providers support native tool-calling here; the local
+# Ollama path is intentionally excluded (small local models tool-call
+# unreliably) — the caller keeps the deterministic manual path for those.
+
+_MAX_TOOL_ROUNDS = 4  # hard ceiling on tool round-trips per turn (loop guard)
+
+
+def _anthropic_tool_specs(tools_spec: list) -> list:
+    """Registry inventory -> Anthropic `tools` format."""
+    return [
+        {"name": t["name"], "description": t["description"],
+         "input_schema": t["input_schema"]}
+        for t in tools_spec
+    ]
+
+
+def _openai_tool_specs(tools_spec: list) -> list:
+    """Registry inventory -> OpenAI function-calling `tools` format."""
+    return [
+        {"type": "function", "function": {
+            "name": t["name"], "description": t["description"],
+            "parameters": t["input_schema"]}}
+        for t in tools_spec
+    ]
+
+
+def supports_native_tools(model: str) -> bool:
+    """True when `model` routes to a provider that supports native tool-calling
+    (Anthropic or OpenAI-compatible). Local Ollama models return False."""
+    client_type, client, _ = _resolve(model)
+    return client_type in ("anthropic", "openai_compat") and client is not None
+
+
+def _event(result) -> dict:
+    """Compact, UI/audit-facing record of one tool call from its ToolResult."""
+    sources = [{"title": p.get("title"), "url": p.get("url")}
+               for p in (getattr(result, "provenance", None) or []) if p.get("title") or p.get("url")][:10]
+    return {
+        "ok": bool(getattr(result, "ok", False)),
+        "summary": (getattr(result, "error", None) if not getattr(result, "ok", False)
+                    else f"{len(getattr(result, 'provenance', []) or [])} source(s)"),
+        "sources": sources,
+    }
+
+
+async def _run_anthropic_tools(client, model, system, conv, tools, dispatch_fn,
+                               max_tokens, max_rounds):
+    """Anthropic tool-use loop. `conv` is the running message list (no system).
+    `dispatch_fn(name, args) -> ToolResult`. Returns (text, events)."""
+    events: list = []
+    kwargs = {"system": system} if system else {}
+    text_out = ""
+    for _ in range(max_rounds):
+        r = await client.messages.create(
+            model=model, max_tokens=max_tokens, messages=conv, tools=tools, **kwargs)
+        text_parts = [b.text for b in r.content if getattr(b, "type", None) == "text"]
+        text_out = "".join(text_parts).strip()
+        tool_uses = [b for b in r.content if getattr(b, "type", None) == "tool_use"]
+        if not tool_uses:
+            return text_out, events
+        # Echo the assistant turn (all blocks) then answer each tool_use.
+        conv.append({"role": "assistant", "content": r.content})
+        results_blocks = []
+        for tu in tool_uses:
+            result = await dispatch_fn(tu.name, dict(tu.input or {}))
+            ev = _event(result); ev["tool"] = tu.name; events.append(ev)
+            payload = result.content if getattr(result, "ok", False) else f"ERROR: {result.error}"
+            results_blocks.append({"type": "tool_result", "tool_use_id": tu.id,
+                                   "content": payload})
+        conv.append({"role": "user", "content": results_blocks})
+    # Ran out of rounds — return whatever text we have (loop guard tripped).
+    return text_out, events
+
+
+async def _run_openai_tools(client, model, conv, tools, dispatch_fn,
+                            max_tokens, max_rounds):
+    """OpenAI-compatible function-calling loop. `conv` includes the system
+    message. Returns (text, events)."""
+    import json as _json
+    events: list = []
+    text_out = ""
+    for _ in range(max_rounds):
+        r = await client.chat.completions.create(
+            model=model, max_tokens=max_tokens, messages=conv, tools=tools)
+        msg = r.choices[0].message
+        text_out = (msg.content or "").strip()
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            return text_out, events
+        conv.append({"role": "assistant", "content": msg.content or "",
+                     "tool_calls": [tc.model_dump() if hasattr(tc, "model_dump") else tc
+                                    for tc in tool_calls]})
+        for tc in tool_calls:
+            try:
+                args = _json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            result = await dispatch_fn(tc.function.name, args)
+            ev = _event(result); ev["tool"] = tc.function.name; events.append(ev)
+            payload = result.content if getattr(result, "ok", False) else f"ERROR: {result.error}"
+            conv.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
+    return text_out, events
+
+
+async def complete_with_tools(model: str, messages: list, tools_spec: list,
+                              dispatch_fn, max_tokens: int = 2048,
+                              max_rounds: int = _MAX_TOOL_ROUNDS) -> dict:
+    """Agentic completion: let `model` call the tools in `tools_spec`, running
+    each through `dispatch_fn` (the tier-gated dispatcher). Returns
+    {"text", "tool_events"}. Raises ValueError if the model can't do native
+    tools (caller should fall back to plain complete())."""
+    client_type, client, actual_model = _resolve(model)
+    if client_type == "anthropic":
+        if not client:
+            raise ValueError("ANTHROPIC_API_KEY is not set")
+        system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
+        conv = [m for m in messages if m.get("role") != "system"]
+        text, events = await _run_anthropic_tools(
+            client, actual_model, system_msg, conv, _anthropic_tool_specs(tools_spec),
+            dispatch_fn, max_tokens, max_rounds)
+        return {"text": text, "tool_events": events}
+    elif client_type == "openai_compat":
+        if not client:
+            raise ValueError(f"API key not configured for model: {model}")
+        conv = list(messages)
+        text, events = await _run_openai_tools(
+            client, actual_model, conv, _openai_tool_specs(tools_spec),
+            dispatch_fn, max_tokens, max_rounds)
+        return {"text": text, "tool_events": events}
+    else:
+        raise ValueError(f"model {model} does not support native tool-calling")
+
+
 async def stream(model: str, messages: list, max_tokens: int = 2048):
     """
     Async generator that yields text chunks from the model.

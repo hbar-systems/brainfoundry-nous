@@ -257,6 +257,22 @@ def set_web_search_enabled(enabled: bool) -> None:
         _save(data)
 
 
+def get_agentic_tools_enabled() -> bool:
+    """Agentic mode: let the model DECIDE when to call tools (native tool-use),
+    instead of the deterministic per-message web toggle. Off by default — opt-in
+    per brain so the safe deterministic path never regresses. Only takes effect
+    on a model that supports native tool-calling (Anthropic / OpenAI-compatible);
+    local Ollama models keep the manual path regardless."""
+    return bool(_load().get("agentic_tools_enabled", False))
+
+
+def set_agentic_tools_enabled(enabled: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["agentic_tools_enabled"] = bool(enabled)
+        _save(data)
+
+
 def get_web_search_budget() -> int:
     """Operator-set monthly cap on web_search calls."""
     v = _load().get("web_search_budget")
