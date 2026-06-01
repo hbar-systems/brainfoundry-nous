@@ -310,10 +310,11 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
 # ── Native model-driven tool use (agentic loop) ─────────────────────────────
 # The model decides when to call a registered tool; each call runs through
 # api.tools.dispatch (the tier gate — GREEN auto, YELLOW standing-auth, RED
-# blocked) and the result is fed back so the model can continue. Only Anthropic
-# and OpenAI-compatible providers support native tool-calling here; the local
-# Ollama path is intentionally excluded (small local models tool-call
-# unreliably) — the caller keeps the deterministic manual path for those.
+# blocked) and the result is fed back so the model can continue. Supported on
+# Anthropic, OpenAI-compatible, AND local Ollama models — federation must not
+# require a cloud model (sovereignty). Capable local models (llama3.3:70b,
+# qwen2.5:72b, mistral-nemo, …) tool-call well; a model that can't simply
+# answers without emitting tool_calls, never an error.
 
 _MAX_TOOL_ROUNDS = 4  # hard ceiling on tool round-trips per turn (loop guard)
 
@@ -338,9 +339,15 @@ def _openai_tool_specs(tools_spec: list) -> list:
 
 
 def supports_native_tools(model: str) -> bool:
-    """True when `model` routes to a provider that supports native tool-calling
-    (Anthropic or OpenAI-compatible). Local Ollama models return False."""
+    """True when `model` can attempt native tool-calling. Anthropic + OpenAI-
+    compatible need their client configured; **local Ollama models are allowed**
+    — capable ones (llama3.3:70b, qwen2.5:72b, mistral-nemo, …) tool-call well,
+    and a model that can't simply answers without emitting tool_calls (never an
+    error). Federation must not require a cloud model — that would break the
+    sovereignty thesis."""
     client_type, client, _ = _resolve(model)
+    if client_type == "ollama":
+        return True
     return client_type in ("anthropic", "openai_compat") and client is not None
 
 
@@ -415,6 +422,47 @@ async def _run_openai_tools(client, model, conv, tools, dispatch_fn,
     return text_out, events
 
 
+async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rounds):
+    """Local-model (Ollama) tool-calling loop. Ollama's /api/chat speaks the
+    OpenAI tool shape — `tools` in, `message.tool_calls` out (arguments arrive
+    as an object, occasionally a JSON string; no call id). Capable local models
+    (llama3.3:70b, qwen2.5:72b, mistral-nemo, …) drive this well; a tiny 3b will
+    just rarely emit tool_calls and answer directly — never an error. This is
+    the sovereign path: federation with no cloud dependency."""
+    import json as _json
+    events: list = []
+    text_out = ""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15, read=300)) as http:
+        for _ in range(max_rounds):
+            payload = {"model": model, "messages": conv, "tools": tools,
+                       "stream": False, "options": {"num_predict": max_tokens}}
+            resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            resp.raise_for_status()
+            msg = (resp.json() or {}).get("message", {}) or {}
+            text_out = (msg.get("content") or "").strip()
+            tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                return text_out, events
+            conv.append({"role": "assistant", "content": msg.get("content") or "",
+                         "tool_calls": tool_calls})
+            for tc in tool_calls:
+                fn = tc.get("function", {}) or {}
+                name = fn.get("name")
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = _json.loads(args or "{}")
+                    except Exception:
+                        args = {}
+                elif not isinstance(args, dict):
+                    args = {}
+                result = await dispatch_fn(name, args)
+                ev = _event(result); ev["tool"] = name; events.append(ev)
+                content = result.content if getattr(result, "ok", False) else f"ERROR: {result.error}"
+                conv.append({"role": "tool", "content": content})
+    return text_out, events
+
+
 async def complete_with_tools(model: str, messages: list, tools_spec: list,
                               dispatch_fn, max_tokens: int = 2048,
                               max_rounds: int = _MAX_TOOL_ROUNDS) -> dict:
@@ -440,8 +488,12 @@ async def complete_with_tools(model: str, messages: list, tools_spec: list,
             client, actual_model, conv, _openai_tool_specs(tools_spec),
             dispatch_fn, max_tokens, max_rounds)
         return {"text": text, "tool_events": events}
-    else:
-        raise ValueError(f"model {model} does not support native tool-calling")
+    else:  # ollama (local) — sovereign tool-calling, no cloud dependency
+        conv = list(messages)
+        text, events = await _run_ollama_tools(
+            actual_model, conv, _openai_tool_specs(tools_spec),
+            dispatch_fn, max_tokens, max_rounds)
+        return {"text": text, "tool_events": events}
 
 
 async def stream(model: str, messages: list, max_tokens: int = 2048):

@@ -168,5 +168,63 @@ def test_openai_loop_dispatches_then_answers():
     assert conv[-1]["role"] == "tool" and conv[-1]["content"] == "MEM"
 
 
-def test_supports_native_tools_false_for_ollama():
-    assert providers.supports_native_tools("llama3.2:3b") is False
+def test_supports_native_tools_allows_local_models():
+    # Sovereignty: a local model must be allowed to attempt tool-calling.
+    assert providers.supports_native_tools("llama3.3:70b") is True
+    assert providers.supports_native_tools("llama3.2:3b") is True
+
+
+# ── fake Ollama HTTP client ──────────────────────────────────────────────────
+
+class _FakeResp:
+    def __init__(self, data): self._data = data
+    def raise_for_status(self): pass
+    def json(self): return self._data
+
+
+class _FakeOllamaHTTP:
+    def __init__(self, responses): self._it = iter(responses)
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def post(self, url, json=None): return _FakeResp(next(self._it))
+
+
+def test_ollama_loop_dispatches_then_answers(monkeypatch):
+    responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "search_memory", "arguments": {"query": "y"}}}]}},
+        {"message": {"content": "local answer"}},
+    ]
+    monkeypatch.setattr(providers.httpx, "AsyncClient",
+                        lambda *a, **k: _FakeOllamaHTTP(responses))
+    seen = {}
+
+    async def disp(name, args):
+        seen["name"] = name; seen["args"] = args
+        return ToolResult(ok=True, content="MEM", provenance=[{"title": "d.md"}])
+
+    conv = [{"role": "user", "content": "hi"}]
+    text, events = _run(providers._run_ollama_tools("llama3.3:70b", conv, [], disp, 100, 4))
+    assert text == "local answer"
+    assert seen == {"name": "search_memory", "args": {"query": "y"}}
+    assert events[0]["tool"] == "search_memory" and events[0]["ok"] is True
+    assert conv[-1]["role"] == "tool" and conv[-1]["content"] == "MEM"
+
+
+def test_ollama_loop_handles_json_string_args(monkeypatch):
+    # Some local models emit arguments as a JSON string rather than an object.
+    responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "web_search", "arguments": '{"query": "z"}'}}]}},
+        {"message": {"content": "done"}},
+    ]
+    monkeypatch.setattr(providers.httpx, "AsyncClient",
+                        lambda *a, **k: _FakeOllamaHTTP(responses))
+    seen = {}
+
+    async def disp(name, args):
+        seen.update(args)
+        return ToolResult(ok=True, content="r", provenance=[])
+
+    text, events = _run(providers._run_ollama_tools("qwen2.5:72b", [{"role": "user", "content": "hi"}], [], disp, 100, 4))
+    assert text == "done" and seen == {"query": "z"}

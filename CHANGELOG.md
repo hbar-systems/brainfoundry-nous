@@ -32,8 +32,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   `complete_with_tools()` — an agentic loop for Anthropic + OpenAI-compatible
   models: the model emits a tool call, it runs through the existing tier-gated
   `tools.dispatch()` (GREEN auto, YELLOW standing-auth, RED still fail-closed),
-  the result is fed back, repeat (capped at 4 rounds as a loop guard). Local
-  Ollama models are excluded (unreliable tool-calling) and keep the manual path.
+  the result is fed back, repeat (capped at 4 rounds as a loop guard). Works on
+  Anthropic, OpenAI-compatible, AND local Ollama models — federation never
+  requires a cloud model (sovereignty). Capable local models (llama3.3:70b,
+  qwen2.5:72b, mistral-nemo, …) tool-call well; a model that can't simply
+  answers without tool calls, never an error.
   New GREEN tool `search_memory` (the model reads its own corpus on demand,
   carrying memory-type provenance) — the green-tier counterpart to yellow
   `web_search`. Agentic mode is **off by default**, opt-in per brain via

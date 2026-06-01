@@ -2168,8 +2168,9 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         # When the operator has enabled agentic mode AND the model supports
         # native tool-calling, the model DECIDES when to search memory (green)
         # or the web (yellow). The dispatcher enforces tiers — web stays gated
-        # by the web-search toggle, RED stays blocked. Local Ollama models never
-        # qualify (unreliable tool-calling); they keep the deterministic path.
+        # by the web-search toggle, RED stays blocked. Works on local models too
+        # (capable ones tool-call; tiny ones just answer) — federation never
+        # requires a cloud model.
         tool_events = []
         agentic = (settings_store.get_agentic_tools_enabled()
                    and _providers.supports_native_tools(model))

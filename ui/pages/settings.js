@@ -483,9 +483,10 @@ function AgenticToolsPanel() {
     <div style={{ paddingTop: 16 }}>
       <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
         Let your brain decide for itself when to reach for a tool — search its own memory, or
-        the open web — instead of you flipping a switch each message. Off by default. Works only on
-        a cloud model that supports tool-calling (Claude, GPT, …); a local Ollama model keeps the
-        manual 🌐 toggle. Every tool call is gated by its permission tier and recorded on the Trace page.
+        the open web — instead of you flipping a switch each message. Off by default. Works on
+        cloud models (Claude, GPT, …) AND capable local models (llama3.3:70b, qwen2.5:72b, …) —
+        federation never requires a cloud model. A very small local model may just answer without
+        calling tools. Every tool call is gated by its permission tier and recorded on the Trace page.
       </p>
 
       {/* Permission tiers — what green / yellow / red mean (from /tools/tiers). */}
