@@ -6,6 +6,25 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- tools: **FactChecker generalized to the brain's own documents (cognitive-OS
+  gap #2 phase 3 — the payoff).** The corroboration score that web search got
+  now also runs over RAG answers, using the per-chunk provenance phase 1+2 added.
+  `api/factcheck.py` refactored to a shared `_corroboration_core` (the
+  independence·agreement·trust math was already source-agnostic); new
+  `score_rag_corroboration(docs)` maps RAG provenance onto the three factors —
+  **independence** = distinct source documents (by `content_hash`, else
+  `document_name`, so five chunks of one doc don't self-corroborate),
+  **trust** = mean per-chunk `source_trust` (an answer grounded only in
+  `untrusted` chunks scores low — the gap-#5 signal made visible),
+  **agreement** = mean pairwise cosine of the chunk contents. Every RAG answer
+  now carries `rag_metadata.corroboration` (both streaming + non-streaming),
+  surfaced in the chat UI as a colour-banded `corroboration N%` badge on the
+  sources panel with an expandable breakdown (independent documents / agreement
+  / trust / dissenting docs) — mirroring the web badge. New `POST
+  /factcheck/score-rag` endpoint. The web score's output shape is unchanged
+  (`n_domains` preserved for the existing UI). Presented, like the web score, as
+  a MEASUREMENT of support, not a truth verdict; returns null for <2 chunks and
+  degrades to independence+trust when embeddings are unavailable. 10 tests.
 - memory: **memory-type separation + provenance (cognitive-OS gap #2, phase
   1+2).** Every retrievable chunk now carries a **memory type** and
   **provenance**, and retrieval weights by it. New `api/memory_type.py` defines

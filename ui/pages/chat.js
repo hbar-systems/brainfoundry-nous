@@ -1173,7 +1173,8 @@ export default function Chat() {
         const data = await r.json()
         const sources = Array.isArray(data?.rag_metadata?.sources) ? data.rag_metadata.sources : []
         const webSearch = data?.rag_metadata?.web_search || null
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch }])
+        const corroboration = data?.rag_metadata?.corroboration || null
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
@@ -1269,10 +1270,11 @@ export default function Chat() {
               if (parsed.rag_metadata && Array.isArray(parsed.rag_metadata.sources)) {
                 const sources = parsed.rag_metadata.sources
                 const webSearch = parsed.rag_metadata.web_search || null
+                const corroboration = parsed.rag_metadata.corroboration || null
                 setMessages(prev => {
                   if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
                   const next = [...prev]
-                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch }
+                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration }
                   return next
                 })
                 continue
@@ -2019,7 +2021,15 @@ export default function Chat() {
                     Renders only for assistant messages with sources; click
                     toggles expand. Listing the document_names by which the
                     brain grounded its answer closes the "show your work" gap. */}
-                {msg.role === 'assistant' && Array.isArray(msg.sources) && msg.sources.length > 0 && (
+                {msg.role === 'assistant' && Array.isArray(msg.sources) && msg.sources.length > 0 && (() => {
+                  // Corroboration over the brain's OWN documents — measured
+                  // support (independence × agreement × trust from per-chunk
+                  // provenance), NOT a truth verdict. Same banding as the web
+                  // badge; renders only when 2+ docs produced a score.
+                  const corroR = msg.corroboration
+                  const bandR = corroR ? (corroR.score >= 70 ? '#5fae6b' : corroR.score >= 45 ? '#c9a96e' : '#d97777') : null
+                  const dissentsR = new Set(corroR?.dissenters || [])
+                  return (
                   <div style={{ marginTop: '10px', fontSize: '11px' }}>
                     <button
                       onClick={() => toggleSources(i)}
@@ -2038,17 +2048,36 @@ export default function Chat() {
                     >
                       {expandedSources.has(i) ? '▾' : '▸'} {msg.sources.length} source{msg.sources.length > 1 ? 's' : ''}
                     </button>
+                    {corroR && (
+                      <span title="Corroboration: measured support across your independent, trusted memories — NOT a truth verdict."
+                            style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 5, border: `1px solid ${bandR}55`, color: bandR, fontFamily: 'DM Mono, monospace', fontSize: '10px' }}>
+                        corroboration {corroR.score}%
+                      </span>
+                    )}
                     {expandedSources.has(i) && (
-                      <ul style={{ margin: '6px 0 0 0', padding: '0 0 0 18px', color: 'var(--muted)', listStyle: 'none' }}>
-                        {msg.sources.map((src, si) => (
-                          <li key={si} style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', lineHeight: 1.6, opacity: 0.75 }}>
-                            <span style={{ marginRight: 6, opacity: 0.5 }}>{si + 1}.</span>{src}
-                          </li>
-                        ))}
-                      </ul>
+                      <>
+                        {corroR && (
+                          <div style={{ margin: '6px 0 2px 18px', color: 'var(--muted)', opacity: 0.7, fontFamily: 'DM Mono, monospace', fontSize: '10px', lineHeight: 1.6 }}>
+                            {corroR.n_documents} independent document{corroR.n_documents > 1 ? 's' : ''}
+                            {corroR.agreement != null && ` · agreement ${corroR.agreement}`}
+                            {` · trust ${corroR.trust}`}
+                            {corroR.dissenters.length > 0 && ` · ${corroR.dissenters.length} dissenting`}
+                            <span style={{ opacity: 0.6 }}> — a measurement, not a verdict</span>
+                          </div>
+                        )}
+                        <ul style={{ margin: '6px 0 0 0', padding: '0 0 0 18px', color: 'var(--muted)', listStyle: 'none' }}>
+                          {msg.sources.map((src, si) => (
+                            <li key={si} style={{ fontFamily: 'DM Mono, monospace', fontSize: '11px', lineHeight: 1.6, opacity: 0.75 }}>
+                              <span style={{ marginRight: 6, opacity: 0.5 }}>{si + 1}.</span>{src}
+                              {dissentsR.has(src) && <span title="Disagrees with the other documents" style={{ marginLeft: 6, color: '#d97777', opacity: 0.8 }}>⚠ dissents</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
                     )}
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* Web-search results panel — the URLs the brain pulled from
                     the open web for this turn (untrusted external sources).

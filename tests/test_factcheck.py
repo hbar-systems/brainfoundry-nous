@@ -134,3 +134,96 @@ def test_trusted_diverse_agreeing_beats_echo_chamber():
     rg = factcheck.score_corroboration(good, embed_fn=_identical)
     re = factcheck.score_corroboration(echo, embed_fn=_identical)
     assert rg["score"] > re["score"]
+
+
+# ── RAG corroboration (cognitive-OS gap #2/#4/#5 payoff) ──────────────────────
+
+def _doc(name, content="text", trust=None, chash=None, mem_type=None):
+    md = {}
+    if trust is not None:
+        md["source_trust"] = trust
+    if chash is not None:
+        md["content_hash"] = chash
+    if mem_type is not None:
+        md["mem_type"] = mem_type
+    return {"document_name": name, "content": content, "metadata": md}
+
+
+def test_rag_single_doc_returns_none():
+    assert factcheck.score_rag_corroboration([_doc("a.md", trust=1.0)]) is None
+
+
+def test_rag_empty_returns_none():
+    assert factcheck.score_rag_corroboration([]) is None
+
+
+def test_rag_blank_content_filtered_out():
+    # Only one doc has real content -> nothing to corroborate.
+    docs = [_doc("a.md", content="real", trust=1.0), _doc("b.md", content="   ", trust=1.0)]
+    assert factcheck.score_rag_corroboration(docs) is None
+
+
+def test_rag_distinct_documents_corroborate():
+    docs = [_doc("a.md", trust=1.0, chash="sha256:a"),
+            _doc("b.md", trust=1.0, chash="sha256:b"),
+            _doc("c.md", trust=1.0, chash="sha256:c")]
+    r = factcheck.score_rag_corroboration(docs, embed_fn=_identical)
+    assert r["n_documents"] == 3
+    assert r["n_sources"] == 3
+    assert r["independence"] == 1.0          # 3 distinct docs hits the target
+    assert r["trust"] == 1.0
+    assert r["score"] > 90
+
+
+def test_rag_same_document_chunks_are_not_independent():
+    # Three chunks of ONE document (shared content_hash) -> independence is low.
+    docs = [_doc("a.md", content=f"chunk{i}", trust=1.0, chash="sha256:same") for i in range(3)]
+    r = factcheck.score_rag_corroboration(docs, embed_fn=_identical)
+    assert r["n_documents"] == 1
+    assert r["independence"] < 0.5
+
+
+def test_rag_untrusted_scores_below_semantic():
+    semantic = [_doc("a.md", trust=1.0, chash="sha256:a"), _doc("b.md", trust=1.0, chash="sha256:b")]
+    untrusted = [_doc("c.md", trust=0.4, chash="sha256:c"), _doc("d.md", trust=0.4, chash="sha256:d")]
+    rs = factcheck.score_rag_corroboration(semantic, embed_fn=_identical)
+    ru = factcheck.score_rag_corroboration(untrusted, embed_fn=_identical)
+    assert ru["trust"] < rs["trust"]
+    assert ru["score"] < rs["score"]
+
+
+def test_rag_trust_falls_back_to_mem_type_prior():
+    # No explicit source_trust -> uses memory_type.trust_prior(mem_type).
+    docs = [_doc("a.md", chash="sha256:a", mem_type="untrusted"),
+            _doc("b.md", chash="sha256:b", mem_type="untrusted")]
+    r = factcheck.score_rag_corroboration(docs, embed_fn=_identical)
+    assert abs(r["trust"] - 0.4) < 1e-9
+
+
+def test_rag_dissenter_uses_document_name():
+    # Two agree, one points elsewhere -> the outlier is named by document_name.
+    docs = [_doc("a.md", trust=1.0, chash="sha256:a"),
+            _doc("b.md", trust=1.0, chash="sha256:b"),
+            _doc("outlier.md", trust=1.0, chash="sha256:c")]
+    def embed(texts):
+        # a,b identical; outlier orthogonal
+        return [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    r = factcheck.score_rag_corroboration(docs, embed_fn=embed)
+    assert "outlier.md" in r["dissenters"]
+
+
+def test_rag_degrades_without_embeddings():
+    docs = [_doc("a.md", trust=1.0, chash="sha256:a"), _doc("b.md", trust=1.0, chash="sha256:b")]
+    r = factcheck.score_rag_corroboration(docs, embed_fn=_no_embed)
+    assert r["agreement"] is None
+    assert r["score"] > 0                    # independence + trust still compute
+
+
+# ── web shape regression (must stay byte-compatible for the existing UI) ──────
+
+def test_web_shape_unchanged_after_refactor():
+    good = [_src("https://reuters.com/a"), _src("https://apnews.com/b")]
+    r = factcheck.score_corroboration(good, embed_fn=_identical)
+    assert "n_domains" in r                   # UI reads corro.n_domains
+    assert r["n_domains"] == 2
+    assert set(["score", "dissenters", "n_sources", "independence", "agreement", "trust", "method"]).issubset(r)

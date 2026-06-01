@@ -724,6 +724,19 @@ def factcheck_score(req: FactCheckRequest, api_key: str = Depends(get_api_key)):
     return {"corroboration": factcheck.score_corroboration(req.sources)}
 
 
+class FactCheckRagRequest(BaseModel):
+    docs: List[Dict[str, Any]]  # retrieval results [{document_name, content, metadata}]
+
+
+@app.post("/factcheck/score-rag")
+def factcheck_score_rag(req: FactCheckRagRequest, api_key: str = Depends(get_api_key)):
+    """Corroboration score over the brain's OWN retrieved documents (uses the
+    per-chunk provenance trust). Same measurement as /factcheck/score but for RAG
+    chunks instead of web results. Returns null for fewer than 2 chunks."""
+    from api import factcheck
+    return {"corroboration": factcheck.score_rag_corroboration(req.docs)}
+
+
 class SetMaxTokensRequest(BaseModel):
     max_tokens: int
 
@@ -2091,6 +2104,18 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             messages, user_query, layers, search_limit, web_context=web_context)
         sources = [d["document_name"] for d in relevant_docs]
 
+        # Corroboration over the brain's OWN documents (cognitive-OS gap #2/#4/#5
+        # payoff). Measures how independent / mutually-agreeing / trusted the
+        # retrieved chunks are — an answer grounded only in untrusted chunks
+        # scores low. A measurement, not a verdict. Degrades to None gracefully.
+        rag_corroboration = None
+        try:
+            if len(relevant_docs) >= 2:
+                from api import factcheck
+                rag_corroboration = factcheck.score_rag_corroboration(relevant_docs)
+        except Exception:
+            rag_corroboration = None
+
         # ── Streaming path (SSE) ──────────────────────────────────────
         if do_stream:
             async def event_stream():
@@ -2103,6 +2128,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                         "sources": sources,
                         "architecture": settings_store.get_retrieval_architecture(),
                         "web_search": web_meta,
+                        "corroboration": rag_corroboration,
                     },
                 }
                 yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
@@ -2138,7 +2164,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 

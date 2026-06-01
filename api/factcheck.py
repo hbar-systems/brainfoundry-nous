@@ -123,29 +123,35 @@ def _mean_pairwise_and_dissenters(vectors: List[Sequence[float]]):
     return mean_pairwise, per_source
 
 
-def score_corroboration(
-    sources: List[Dict],
+def _corroboration_core(
+    *,
+    identities: List[str],
+    trusts: List[float],
+    texts: List[str],
+    labels: List[str],
+    method: str,
     embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
 ) -> Optional[Dict]:
-    """Score how well a set of sources corroborate each other.
+    """The shared three-factor corroboration math, source-agnostic.
 
-    sources: [{title, url, snippet}]. embed_fn(texts)->vectors; when None, the
-    brain's bge-large model is used, and if that is unavailable the agreement
-    term is dropped (weight redistributed). Returns None when there is nothing
-    meaningful to score (fewer than 2 sourced results), so callers can treat
-    "no score" as "not enough to corroborate".
+    - independence — distinct count of `identities` (registrable domains for web,
+      document content_hash/name for RAG) over the target.
+    - agreement    — mean pairwise cosine of the embedded `texts`.
+    - trust        — mean of `trusts` (domain prior for web, per-chunk
+      `source_trust` for RAG).
+    `labels` are what gets reported in `dissenters`. Returns None when there are
+    fewer than 2 items to compare. Returns a `n_distinct`; callers alias it to
+    their domain-specific name (`n_domains` / `n_documents`) for back-compat.
     """
-    items = [s for s in (sources or []) if s.get("url")]
-    if len(items) < 2:
+    n = len(identities)
+    if n < 2:
         return None
 
-    domains = [_registrable_domain(s["url"]) for s in items]
-    distinct = sorted({d for d in domains if d})
-    n_domains = len(distinct)
-    independence = min(n_domains / _INDEPENDENCE_TARGET, 1.0)
+    distinct = sorted({d for d in identities if d})
+    n_distinct = len(distinct)
+    independence = min(n_distinct / _INDEPENDENCE_TARGET, 1.0)
 
-    trusts = [_trust_for(d) for d in domains]
-    mean_trust = sum(trusts) / len(trusts)
+    mean_trust = (sum(trusts) / len(trusts)) if trusts else _DEFAULT_TRUST
 
     # ── Semantic agreement (optional) ────────────────────────────────────
     agreement: Optional[float] = None
@@ -153,16 +159,15 @@ def score_corroboration(
     if embed_fn is None:
         embed_fn = _default_embed
     try:
-        texts = [f"{s.get('title', '')}. {s.get('snippet', '')}".strip() for s in items]
         vectors = embed_fn(texts)
-        if vectors is not None and len(vectors) == len(items):
+        if vectors is not None and len(vectors) == n:
             mean_pairwise, per_source = _mean_pairwise_and_dissenters(list(vectors))
             if mean_pairwise is not None:
                 # cosine is in [-1,1]; clamp to [0,1] for a score factor.
                 agreement = max(0.0, min(1.0, mean_pairwise))
-                for s, m in zip(items, per_source):
+                for lbl, m in zip(labels, per_source):
                     if m < _DISSENT_THRESHOLD:
-                        dissenters.append(s["url"])
+                        dissenters.append(lbl)
     except Exception:
         agreement = None  # degrade gracefully — never break the answer
 
@@ -180,14 +185,96 @@ def score_corroboration(
     score = int(round(100 * max(0.0, min(1.0, raw))))
     return {
         "score": score,
-        "n_sources": len(items),
-        "n_domains": n_domains,
+        "n_sources": n,
+        "n_distinct": n_distinct,
         "independence": round(independence, 3),
         "agreement": round(agreement, 3) if agreement is not None else None,
         "trust": round(mean_trust, 3),
         "dissenters": dissenters,
-        "method": "corroboration v0 (independence·agreement·trust)",
+        "method": method,
     }
+
+
+def score_corroboration(
+    sources: List[Dict],
+    embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
+) -> Optional[Dict]:
+    """Score how well a set of WEB sources corroborate each other.
+
+    sources: [{title, url, snippet}]. embed_fn(texts)->vectors; when None, the
+    brain's bge-large model is used, and if that is unavailable the agreement
+    term is dropped (weight redistributed). Returns None when there is nothing
+    meaningful to score (fewer than 2 sourced results), so callers can treat
+    "no score" as "not enough to corroborate".
+    """
+    items = [s for s in (sources or []) if s.get("url")]
+    if len(items) < 2:
+        return None
+
+    domains = [_registrable_domain(s["url"]) for s in items]
+    result = _corroboration_core(
+        identities=domains,
+        trusts=[_trust_for(d) for d in domains],
+        texts=[f"{s.get('title', '')}. {s.get('snippet', '')}".strip() for s in items],
+        labels=[s["url"] for s in items],
+        method="corroboration v0 (independence·agreement·trust)",
+        embed_fn=embed_fn,
+    )
+    if result is not None:
+        result["n_domains"] = result["n_distinct"]  # back-compat: web UI reads this
+    return result
+
+
+def score_rag_corroboration(
+    docs: List[Dict],
+    embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
+) -> Optional[Dict]:
+    """Score how well a set of RAG chunks corroborate the answer they grounded.
+
+    The generalization the memory-type/provenance work unblocked: the same
+    corroboration measurement, now over the brain's OWN documents instead of web
+    results. Maps RAG provenance onto the three factors:
+
+    - independence — distinct source DOCUMENTS (by `content_hash`, else
+      `document_name`). Five chunks of one document are NOT five corroborating
+      sources; five documents are.
+    - trust        — per-chunk `source_trust` from provenance (semantic 1.0,
+      reflective 0.9, untrusted 0.4). An answer grounded only in `untrusted`
+      chunks scores low even if the chunks agree — the gap-#5 poisoning signal.
+    - agreement    — mean pairwise cosine of the chunk contents.
+
+    docs: the retrieval results [{document_name, content, metadata{...}}]. Returns
+    None for fewer than 2 chunks. Presented, like the web score, as a MEASUREMENT
+    of support — not a verdict on truth.
+    """
+    items = [d for d in (docs or []) if (d.get("content") or "").strip()]
+    if len(items) < 2:
+        return None
+
+    def _identity(d: Dict) -> str:
+        md = d.get("metadata") or {}
+        return md.get("content_hash") or d.get("document_name") or ""
+
+    def _trust(d: Dict) -> float:
+        md = d.get("metadata") or {}
+        t = md.get("source_trust")
+        if isinstance(t, (int, float)):
+            return float(t)
+        # No explicit prior (legacy/untagged chunk) — fall back to the type prior.
+        from api import memory_type
+        return memory_type.trust_prior(md.get("mem_type"))
+
+    result = _corroboration_core(
+        identities=[_identity(d) for d in items],
+        trusts=[_trust(d) for d in items],
+        texts=[(d.get("content") or "")[:600] for d in items],
+        labels=[d.get("document_name") or "" for d in items],
+        method="corroboration v0 (rag: independence·agreement·trust)",
+        embed_fn=embed_fn,
+    )
+    if result is not None:
+        result["n_documents"] = result["n_distinct"]
+    return result
 
 
 def _default_embed(texts: List[str]) -> Optional[List[Sequence[float]]]:
