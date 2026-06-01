@@ -128,19 +128,26 @@ const components = {
   },
 }
 
+// Escape currency-looking dollar signs so they don't get parsed as inline math
+// once singleDollarTextMath is ON. A `$` immediately before a digit (with an
+// optional space) is treated as currency — "$50 billion", "$225" — and escaped
+// to a literal. Real inline math (`$\hat{A}^\dagger$`, `$P(H|D)$`) starts with a
+// backslash/letter/paren, so it is untouched and renders. The lookbehind skips
+// the second `$` of a `$$…$$` display block, so display math is never broken.
+// This replaces the old singleDollarTextMath:false, which fixed currency by
+// killing ALL inline math — wrong for an educational brain full of notation.
+const escapeCurrencyDollars = (s) =>
+  (typeof s === 'string' ? s : '').replace(/(?<!\$)\$(?=\s?\d)/g, () => '\\$')
+
 export default function MessageRenderer({ content }) {
   return (
     <div className="bf-md">
       <ReactMarkdown
-        // singleDollarTextMath: false — a lone `$` is NOT math. Without this,
-        // prose dollar amounts ("$50 billion … $225 billion", common in web
-        // results, pricing, finance) get parsed as inline LaTeX and rendered
-        // as a stack of single characters. Display math `$$…$$` still works.
-        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
+        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
         rehypePlugins={[rehypeKatex, rehypeHighlight]}
         components={components}
       >
-        {content || ''}
+        {escapeCurrencyDollars(content)}
       </ReactMarkdown>
     </div>
   )

@@ -6,6 +6,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ui: **math renders again, and the tool trail names the peer.** (1) Inline
+  LaTeX (`$\hat{A}^\dagger = \hat{A}$`, `$P(H|D)$`) was showing as raw source
+  because `singleDollarTextMath` was turned OFF to stop prose dollar amounts
+  ("$50 billion") rendering as math — wrong trade-off for an educational brain.
+  Now single-dollar math is ON and currency `$`-before-a-digit is escaped to a
+  literal instead, so both render correctly (display `$$…$$` untouched). (2) The
+  agentic tool trail now shows the target — `🔧 brain_call → hbar-university`,
+  `🔧 web_search → <query>` — instead of a bare tool name; the per-call `detail`
+  rides in the tool event.
 - federation: **`brain_call` — a brain can ask another brain (orchestration v0).**
   The agentic loop can now reach a peer brain: register hbar.university /
   hbar.science (etc.) as introduced peers, turn on agentic mode, and the model

@@ -355,10 +355,14 @@ def _event(result) -> dict:
     """Compact, UI/audit-facing record of one tool call from its ToolResult."""
     sources = [{"title": p.get("title"), "url": p.get("url")}
                for p in (getattr(result, "provenance", None) or []) if p.get("title") or p.get("url")][:10]
+    # A short "what" for the UI trail: the peer for brain_call, else the query.
+    meta = getattr(result, "meta", None) or {}
+    detail = meta.get("target") or meta.get("query")
     return {
         "ok": bool(getattr(result, "ok", False)),
         "summary": (getattr(result, "error", None) if not getattr(result, "ok", False)
                     else f"{len(getattr(result, 'provenance', []) or [])} source(s)"),
+        "detail": (str(detail)[:80] if detail else None),
         "sources": sources,
     }
 

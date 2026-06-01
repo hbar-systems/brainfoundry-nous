@@ -2030,6 +2030,7 @@ export default function Chat() {
                     {msg.toolEvents.map((ev, ei) => (
                       <span key={ei} title={ev.summary || ''} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
                         <span style={{ color: ev.ok ? '#5fae6b' : '#d97777' }}>{ev.ok ? '🔧' : '⚠'}</span> {ev.tool}
+                        {ev.detail ? <span style={{ opacity: 0.7 }}> → {ev.detail}</span> : null}
                       </span>
                     ))}
                   </div>
