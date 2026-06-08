@@ -1930,8 +1930,75 @@ def _persist_chat_turn(session_id: str, messages: list, reply: str):
         print(f"Database save error (rag): {db_error}")
 
 
+# ── RAG context budget (added 2026-06-08) ───────────────────────────────────
+# Bound how much retrieved text enters the prompt — but ONLY as much as the
+# target model actually requires. The two tiers are deliberately different:
+#
+#   • Cloud / BYOK frontier model (large context): NEVER truncate document
+#     bodies — a serious model must not be dumbed down to accommodate a tiny
+#     one. The only change is a generous count cap so a noisy tiered retrieval
+#     stops citing ~10 low-relevance padding docs. Full text is preserved.
+#
+#   • Local Ollama tiny model (fixed ~num_ctx window): apply the hard fit-budget
+#     (count + per-doc truncation + total chars). Without it the ~10k-token
+#     prompt overflowed the 4096 window and starved generation (empty output on
+#     1b) or timed out the slower 3b (502). The local model is a degraded
+#     offline fallback; this keeps it alive, it does not try to make it good.
+#
+# A similarity floor (off by default) applies to both, to drop weak matches.
+# All values env-overridable. See the 2026-06-08 incident root-cause.
+_RAG_MAX_DOCS_CLOUD = int(os.getenv("RAG_MAX_DOCS_CLOUD", "6"))   # count cap only; full text
+_RAG_MAX_DOCS_LOCAL = int(os.getenv("RAG_MAX_DOCS_LOCAL", "5"))
+_RAG_PER_DOC_CHARS = int(os.getenv("RAG_PER_DOC_CHARS", "1500"))  # local only
+_RAG_CONTEXT_CHAR_BUDGET = int(os.getenv("RAG_CONTEXT_CHAR_BUDGET", "7000"))  # local only
+_RAG_MIN_SIMILARITY = float(os.getenv("RAG_MIN_SIMILARITY", "0.0"))
+
+
+def _apply_rag_budget(docs: List[Dict[str, Any]], model: str):
+    """Bound the retrieved set for `model`. Returns (kept_docs, dropped_count).
+
+    Cloud/BYOK: count cap only, document bodies kept whole. Local Ollama: hard
+    fit-budget (count + per-doc truncation + total chars) so the prompt fits a
+    small context window. The similarity floor (if > 0) drops weak matches for
+    both; it only affects docs that carry a `similarity_score`.
+    """
+    if not docs:
+        return [], 0
+    from api import providers as _prov
+
+    if _RAG_MIN_SIMILARITY > 0:
+        filtered = [d for d in docs
+                    if d.get("similarity_score") is None
+                    or d.get("similarity_score", 0) >= _RAG_MIN_SIMILARITY]
+    else:
+        filtered = list(docs)
+
+    if not _prov.routes_to_ollama(model):
+        # Frontier / BYOK — large context. Keep full document bodies; only trim
+        # the count so retrieval stops padding to ~10 noisy sources.
+        kept = filtered[:_RAG_MAX_DOCS_CLOUD]
+        return kept, len(docs) - len(kept)
+
+    # Local tiny model — hard fit-budget.
+    capped = filtered[:_RAG_MAX_DOCS_LOCAL]
+    kept: List[Dict[str, Any]] = []
+    used = 0
+    for d in capped:
+        if used >= _RAG_CONTEXT_CHAR_BUDGET:
+            break
+        content = d.get("content") or ""
+        room = min(_RAG_PER_DOC_CHARS, _RAG_CONTEXT_CHAR_BUDGET - used)
+        if len(content) > room:
+            content = content[:room].rstrip() + "\n…[document truncated to fit local model context]"
+        nd = dict(d)
+        nd["content"] = content
+        kept.append(nd)
+        used += len(content)
+    return kept, len(docs) - len(kept)
+
+
 def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int,
-                      web_context: str = ""):
+                      web_context: str = "", model: str = ""):
     """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs).
 
     Track C3: the retrieval architecture is a persisted brain setting (the
@@ -1942,6 +2009,9 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     search results (see api/tools/safety.py). It is injected as clearly-marked
     UNTRUSTED reference material, distinct from the brain's own trusted
     documents, so a poisoned snippet cannot pose as a trusted memory.
+
+    Retrieved docs pass through `_apply_rag_budget` before assembly so the
+    prompt cannot overflow a small local model's context window.
     """
     arch = settings_store.get_retrieval_architecture()
     if arch == "flat":
@@ -1958,6 +2028,14 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
             relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
     else:  # 'tiered' — the default folder-weighted retrieval
         relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered")
+    # Bound the retrieved set before it enters the prompt (model-aware context
+    # budget). Cloud/BYOK keeps full document bodies (count cap only); the local
+    # tiny model gets the hard fit-budget. This also caps the citation/source
+    # count surfaced to the UI.
+    relevant_docs, _rag_dropped = _apply_rag_budget(relevant_docs, model)
+    if _rag_dropped:
+        print(f"[rag] context budget dropped/truncated {_rag_dropped} doc(s) "
+              f"for model={model or '(default)'}", flush=True)
     context = ""
     if relevant_docs:
         from api import memory_type as _memtype
@@ -2163,7 +2241,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                 web_meta["error"] = "web search is not enabled in Settings"
 
         prompt, relevant_docs = _build_rag_prompt(
-            messages, user_query, layers, search_limit, web_context=web_context)
+            messages, user_query, layers, search_limit, web_context=web_context, model=model)
         sources = [d["document_name"] for d in relevant_docs]
 
         # Corroboration over the brain's OWN documents (cognitive-OS gap #2/#4/#5

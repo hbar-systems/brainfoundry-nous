@@ -24,6 +24,26 @@ settings_store.hydrate_env()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 
+# ── Ollama generation budget (added 2026-06-08) ─────────────────────────────
+# Ollama defaults num_ctx to 4096 and reserves nothing for output. With RAG, the
+# prompt filled the whole window and generation was starved (empty output) or
+# the slower 3b timed out (502). We set both explicitly: a larger context window
+# AND a reserved generation budget (num_predict), so the answer always has room.
+# num_ctx trades memory/CPU (KV cache grows with context) — 8192 is a safe
+# middle on the CAX11; pair with the RAG context caps in main.py, don't rely on
+# it alone. Env-overridable per deployment.
+_OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+_OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
+
+
+def _ollama_options(**overrides):
+    """Shared ollama `options` — explicit context window + reserved generation
+    budget. Overrides win (e.g. the tool loop passes its own num_predict)."""
+    opts = {"num_ctx": _OLLAMA_NUM_CTX, "num_predict": _OLLAMA_NUM_PREDICT}
+    opts.update({k: v for k, v in overrides.items() if v is not None})
+    return opts
+
+
 _anthropic_async = None
 _openai = _groq = _xai = _openrouter = _gemini = _together = _mistral = None
 
@@ -268,6 +288,17 @@ def _resolve(model: str):
         return ("ollama", None, model)
 
 
+def routes_to_ollama(model: str) -> bool:
+    """True if `model` is served by the local Ollama (small fixed context window),
+    False for cloud/BYOK frontier models (large context). Used by the RAG context
+    budget so the tight, content-truncating cap is applied ONLY to the local
+    model — a serious BYOK model is never dumbed down to fit a tiny one."""
+    try:
+        return _resolve(model)[0] == "ollama"
+    except Exception:
+        return False  # unknown -> treat as cloud (don't over-constrain)
+
+
 async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
     """
     Route a chat completion to the correct provider.
@@ -299,7 +330,8 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=180)) as http:
             system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
             user_msgs = [m for m in messages if m.get("role") != "system"]
-            payload = {"model": actual_model, "messages": user_msgs, "stream": False}
+            payload = {"model": actual_model, "messages": user_msgs,
+                       "stream": False, "options": _ollama_options()}
             if system_msg:
                 payload["system"] = system_msg
             resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
@@ -439,7 +471,7 @@ async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rou
     async with httpx.AsyncClient(timeout=httpx.Timeout(15, read=300)) as http:
         for _ in range(max_rounds):
             payload = {"model": model, "messages": conv, "tools": tools,
-                       "stream": False, "options": {"num_predict": max_tokens}}
+                       "stream": False, "options": _ollama_options(num_predict=max_tokens)}
             resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
             resp.raise_for_status()
             msg = (resp.json() or {}).get("message", {}) or {}
@@ -537,7 +569,8 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
         async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=300)) as http:
             system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
             user_msgs = [m for m in messages if m.get("role") != "system"]
-            payload = {"model": actual_model, "messages": user_msgs, "stream": True}
+            payload = {"model": actual_model, "messages": user_msgs,
+                       "stream": True, "options": _ollama_options()}
             if system_msg:
                 payload["system"] = system_msg
             async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
