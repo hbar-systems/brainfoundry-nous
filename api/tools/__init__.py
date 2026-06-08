@@ -76,6 +76,58 @@ class Tool:
 REGISTRY: Dict[str, Tool] = {}
 
 
+# ── Fail-closed dangerous-tool gate ─────────────────────────────────────────
+# Modeled on Odysseus's `src/tool_security.py:is_public_blocked_tool` (PewDiePie,
+# MIT — see NOTICE). The governing principle: a security gate must treat "I can't
+# evaluate this" as DENY, not allow. This runs BEFORE the registry lookup and the
+# tier gate, so it is the outermost wall: even a tool that is not registered, or a
+# tool_use whose `name` arrives malformed from a model turn, is stopped here.
+#
+#   - non-string / empty name      -> blocked (cannot be evaluated -> fail closed)
+#   - mcp__*                        -> admin-only (any MCP tool is privileged)
+#   - shell / file / mail / settings / memory-write families -> default-deny,
+#       allowed only for an explicit admin caller.
+#
+# Names are matched on token boundaries (exact, or `<prefix>_…`) so legitimate
+# read tools — web_search, search_memory, memory_search, brain_call — are never
+# caught by a substring collision.
+_DANGEROUS_PREFIXES = (
+    "shell", "bash", "sh", "exec", "subprocess", "run", "cmd",          # shell/exec
+    "file", "fs", "read_file", "write", "delete", "remove", "rm",        # filesystem
+    "edit", "move", "rename", "chmod", "mkdir",
+    "email", "mail", "smtp", "send", "reply", "forward",                 # messaging
+    "settings", "setting", "config", "configure", "admin", "sudo",       # config/admin
+    "memory_write", "delete_memory", "update_memory", "forget",          # memory mutation
+    "set_persona", "install", "uninstall", "deploy",                     # brain mutation
+)
+_DANGEROUS_EXACT = {
+    "delete_memory", "forget", "wipe", "reset", "drop", "purge",
+}
+
+
+def is_blocked_tool(name: Any, *, admin: bool = False) -> bool:
+    """Fail-closed verdict on whether a tool may run. See the block comment.
+
+    `admin=True` is the operator's explicit assertion of an admin caller; it
+    lifts the MCP and dangerous-family bans (but never the malformed-name ban).
+    Default is `admin=False` — the safe posture for the autonomous agentic loop,
+    where the model, not a human, chose the tool name.
+    """
+    if not isinstance(name, str) or name.strip() == "":
+        return True                       # cannot evaluate -> deny
+    low = name.strip().lower()
+    if low.startswith("mcp__"):
+        return not admin                  # MCP namespace is admin-only
+    if admin:
+        return False                      # admin may use the dangerous families
+    if low in _DANGEROUS_EXACT:
+        return True
+    for p in _DANGEROUS_PREFIXES:
+        if low == p or low.startswith(p + "_"):
+            return True
+    return False
+
+
 def register(tool: Tool) -> None:
     if tool.tier not in _TIER_ORDER:
         raise ValueError(f"tool {tool.name!r}: unknown tier {tool.tier!r}")
@@ -101,6 +153,7 @@ async def dispatch(
     *,
     operator_authorized: bool = False,
     approval_token: Optional[str] = None,
+    admin: bool = False,
 ) -> ToolResult:
     """Run a registered tool through the governance gate.
 
@@ -110,8 +163,27 @@ async def dispatch(
     per-call `approval_token`, which is not yet issued anywhere — so RED is
     refused until that flow exists. Failures are returned as `ok=False`
     ToolResults, never raised, so a tool call can never crash the chat turn.
+
+    `admin` defaults to False — the safe posture for the autonomous agentic loop,
+    where the model (not a human) chose the tool name. It only relaxes the
+    fail-closed dangerous-tool gate below.
     """
     from api.tools import audit, budget
+
+    # ── Fail-closed dangerous-tool gate (outermost wall) ─────────────────
+    # Runs first: a malformed (non-string) `name` would otherwise raise on the
+    # dict lookup, and a blocked family must never reach tier/budget logic. This
+    # is the structural backstop behind the prompt-layer untrusted wrapper — a
+    # poisoned document that smuggles "call delete_memory" past the model still
+    # dies here.
+    if is_blocked_tool(name, admin=admin):
+        audit.log({"tool": name if isinstance(name, str) else repr(name),
+                   "ok": False, "reason": "blocked_tool_gate", "admin": admin})
+        shown = name if isinstance(name, str) else type(name).__name__
+        return ToolResult(ok=False, error=f"{shown} is blocked by the security "
+                          "gate (malformed name, MCP namespace, or a "
+                          "shell/file/email/settings/memory-write tool that "
+                          "requires admin authorization).")
 
     tool = REGISTRY.get(name)
     if tool is None:
@@ -186,6 +258,17 @@ def _summarize(args: Dict[str, Any]) -> Dict[str, Any]:
 
 # Registering a tool is a side effect of importing its module. Keep this at the
 # bottom so the names above (Tool, register, tiers) already exist.
-from api.tools import web_search      # noqa: E402,F401  (yellow)
-from api.tools import memory_search   # noqa: E402,F401  (green)
-from api.tools import brain_call      # noqa: E402,F401  (yellow — federation)
+#
+# On a plain first import the submodules run normally and call register(). On
+# importlib.reload(api.tools) — REGISTRY is rebuilt empty above, but a cached
+# submodule would NOT re-execute, leaving the registry empty. Reload cached
+# submodules explicitly so a reload fully rebuilds the registry (the tests rely
+# on this for clean per-case isolation).
+import importlib as _importlib  # noqa: E402
+import sys as _sys             # noqa: E402
+
+for _mod in ("api.tools.web_search", "api.tools.memory_search", "api.tools.brain_call"):
+    if _mod in _sys.modules:
+        _importlib.reload(_sys.modules[_mod])
+    else:
+        _importlib.import_module(_mod)

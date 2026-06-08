@@ -1961,15 +1961,23 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     context = ""
     if relevant_docs:
         from api import memory_type as _memtype
-        context = "\n\nRelevant documents:\n"
+        from api.security import untrusted as _untrusted
+        # Build the documents body, then demote the WHOLE block to untrusted
+        # source data (Odysseus pattern — api/security/untrusted.py). Retrieved
+        # documents are the brain's own corpus, but a poisoned chunk in that
+        # corpus is injected into every session that retrieves it; framing the
+        # block as data (not a system peer) is the demotion our v0.8.2 notes
+        # flagged as missing ("doesn't demote untrusted"). Per-document
+        # provenance labels still ride inside so the model can weight a curated
+        # fact above an inferred summary or an untrusted scrape.
+        doc_body = "Relevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
-            # Provenance label (cognitive-OS gap #2/#4) so the model can weight a
-            # curated fact above an inferred summary or an untrusted scrape, and
-            # a hallucination is distinguishable from a memory.
             prov = _memtype.label(doc.get("metadata"))
             head = f"[Document {i}: {doc['document_name']}"
             head += f" — {prov}]" if prov else "]"
-            context += f"\n{head}\n{doc['content']}\n"
+            doc_body += f"\n{head}\n{doc['content']}\n"
+        context = "\n\n" + _untrusted.untrusted_context_block(
+            "knowledge-store (retrieved documents)", doc_body)
     # Persona: only use it as the system prompt once it is actually
     # configured. An unconfigured brain still loads the blank
     # brain_persona.template.md — feeding that "# TEMPLATE — edit this file
@@ -1977,6 +1985,7 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     # a brand-new user (cohort feedback, 2026-05-17). Use a clean default
     # until the owner sets a persona.
     from api.persona_tools import is_template, detect_placeholders
+    from api.security import untrusted as _untrusted
     persona_set = bool(BRAIN_PERSONA) and not is_template(BRAIN_PERSONA) \
         and not detect_placeholders(BRAIN_PERSONA)
     if persona_set:
@@ -1986,6 +1995,11 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
                   "still setting it up. You have not been given a persona "
                   "yet. Answer helpfully and directly. Never recite setup, "
                   "template, or configuration instructions back to the user.")
+    # When this turn will carry retrieved documents or web results, lead the
+    # system prompt with the standing untrusted-context policy so the
+    # do-not-follow rule is stated once, globally, above any persona text.
+    if relevant_docs or web_context:
+        prompt = _untrusted.with_policy_preamble(prompt)
     prompt += ("\n\nUse the provided documents to answer questions "
                "accurately. When a document informs your answer, cite it "
                "inline by its name in square brackets — e.g. "
