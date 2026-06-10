@@ -115,6 +115,21 @@ def clear_email_account() -> None:
         _save(data)
 
 
+def get_calendar_ics() -> str:
+    with _LOCK:
+        return _load().get("calendar_ics_url", "")
+
+
+def set_calendar_ics(url: str) -> None:
+    with _LOCK:
+        data = _load()
+        if url:
+            data["calendar_ics_url"] = url
+        else:
+            data.pop("calendar_ics_url", None)
+        _save(data)
+
+
 def set_google_client(client_id: Optional[str], client_secret: Optional[str]) -> None:
     """Persist the Google OAuth client id/secret in the sidecar and apply to the
     running process. Empty client_id clears both. The secret is never returned by
@@ -278,7 +293,12 @@ def get_layer_names() -> list:
 # (/app/runtime is volume-mounted). 'hybrid_routed' is described in the UI but
 # not yet selectable — it needs a query router and is intentionally deferred.
 RETRIEVAL_ARCHITECTURES = ("tiered", "flat", "layer_scoped")
-DEFAULT_RETRIEVAL_ARCHITECTURE = "tiered"
+# Flat (similarity-only) is the default: it retrieves documents that actually
+# match the question. The older "tiered" default force-injected the same
+# identity/context docs on every answer regardless of relevance — which made
+# unrelated questions (e.g. "summarize my email") cite the same identity files
+# every time. Operators can still choose tiered/layer_scoped in Settings.
+DEFAULT_RETRIEVAL_ARCHITECTURE = "flat"
 
 
 def get_retrieval_architecture() -> str:

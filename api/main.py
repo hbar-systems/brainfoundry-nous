@@ -753,6 +753,31 @@ def google_status(api_key: str = Depends(get_api_key)):
     return google.status()
 
 
+class SetCalendarIcsRequest(BaseModel):
+    url: str = ""
+
+
+@app.get("/integrations/calendar/status")
+def calendar_status(api_key: str = Depends(get_api_key)):
+    from api.integrations import calendar_ics
+    return calendar_ics.status()
+
+
+@app.post("/integrations/calendar/ics")
+async def calendar_set_ics(req: SetCalendarIcsRequest, api_key: str = Depends(get_api_key)):
+    """Save a calendar ICS feed URL and verify it parses. No OAuth."""
+    from api.integrations import calendar_ics
+    url = (req.url or "").strip()
+    settings_store.set_calendar_ics(url)
+    if not url:
+        return {"ok": True, "configured": False}
+    try:
+        events = await calendar_ics.list_events(max_results=1)
+        return {"ok": True, **calendar_ics.status(), "sample_count": len(events)}
+    except Exception as e:
+        return {"ok": False, "error": str(e), **calendar_ics.status()}
+
+
 class SetEmailAccountRequest(BaseModel):
     host: str = ""
     port: int = 993

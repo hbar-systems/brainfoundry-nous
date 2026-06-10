@@ -14,15 +14,20 @@ from api.security import untrusted as _untrusted
 
 
 async def run(max_results: int = 10) -> ToolResult:
-    from api.integrations import google
-    if not google.is_configured():
-        return ToolResult(ok=False, error="Google Calendar is not set up on this brain "
-                          "(no OAuth client configured).")
-    if not google.is_connected():
-        return ToolResult(ok=False, error="Google Calendar is not connected. Connect it "
-                          "in Settings → Integrations first.")
+    # Prefer the simple ICS calendar (no OAuth); fall back to Google OAuth.
+    from api.integrations import calendar_ics, google
+    source = None
+    if calendar_ics.is_configured():
+        source = "ics (" + (calendar_ics.status().get("host") or "") + ")"
+        getter = calendar_ics.list_events
+    elif google.is_configured() and google.is_connected():
+        source = "google-calendar (primary)"
+        getter = google.list_events
+    else:
+        return ToolResult(ok=False, error="No calendar is connected. Add a calendar ICS "
+                          "link (or connect Google) in Integrations first.")
     try:
-        events = await google.list_events(max_results=max_results)
+        events = await getter(max_results=max_results)
     except Exception as e:
         return ToolResult(ok=False, error=f"calendar_read failed: {e}")
 
@@ -36,7 +41,7 @@ async def run(max_results: int = 10) -> ToolResult:
         where = f" @ {ev['location']}" if ev.get("location") else ""
         lines.append(f"{i}. {ev['start']} — {ev['summary']}{where}{who}")
     body = "Upcoming calendar events:\n" + "\n".join(lines)
-    content = _untrusted.untrusted_context_block("google-calendar (primary)", body)
+    content = _untrusted.untrusted_context_block(source, body)
     return ToolResult(ok=True, content=content,
                       provenance=[{"source": "calendar_read", "tool": "calendar_read",
                                    "trust": "untrusted"}],
