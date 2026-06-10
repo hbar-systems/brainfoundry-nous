@@ -299,6 +299,46 @@ def routes_to_ollama(model: str) -> bool:
         return False  # unknown -> treat as cloud (don't over-constrain)
 
 
+# ── Default-model resolution (added 2026-06-08) ─────────────────────────────
+# A local 1b/3b model is a degraded offline fallback, not a serious reasoner.
+# When a brain has a BYOK cloud key configured, a fresh chat should default to a
+# frontier reasoner — memory + RAG stay sovereign on the brain, only the
+# reasoner is remote. This keeps the sovereignty story intact (the brain owns the
+# corpus and retrieval) while giving real answer quality by default.
+BYOK_DEFAULT_MODEL = os.getenv("BYOK_DEFAULT_MODEL", "claude-opus-4-8")
+LOCAL_FALLBACK_MODEL = os.getenv("LOCAL_FALLBACK_MODEL", "llama3.2:3b")
+
+
+def has_cloud_key() -> bool:
+    """True if any cloud/BYOK provider client is configured (a key is present)."""
+    return any(c is not None for c in (
+        _anthropic_async, _openai, _gemini, _xai, _groq, _openrouter, _together, _mistral))
+
+
+def default_model() -> str:
+    """The model an operator chat turn uses when the request names none.
+
+    Order:
+      1. the operator's explicit active-model choice (settings / OLLAMA_MODEL),
+      2. an env-pinned DEFAULT_MODEL,
+      3. a BYOK frontier reasoner IF any cloud key is configured (sovereign
+         memory/RAG, remote reasoner),
+      4. the local sovereign fallback.
+
+    So a fresh brain with a key defaults to a serious model instead of the tiny
+    local one; a brain with no key still works fully offline on the local model.
+    Does NOT affect the public/unauth chat surface (that stays local by design —
+    anonymous visitors must not spend the operator's BYOK key).
+    """
+    from api import settings_store
+    chosen = settings_store.get_active_model() or os.getenv("DEFAULT_MODEL")
+    if chosen:
+        return chosen
+    if has_cloud_key():
+        return BYOK_DEFAULT_MODEL
+    return LOCAL_FALLBACK_MODEL
+
+
 async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
     """
     Route a chat completion to the correct provider.

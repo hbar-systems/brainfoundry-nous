@@ -1678,7 +1678,7 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """Chat completion endpoint compatible with OpenAI format - supports streaming"""
     try:
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
-        model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+        model = request.get("model") or _providers.default_model()
         messages = request.get("messages", [])
 
         # Inject brain persona as system message (if caller didn't provide one)
@@ -1779,7 +1779,10 @@ async def consolidate_session(session_id: str, request: dict, api_key: str = Dep
     """
     try:
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
-        model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+        # Consolidation is a background, auto-fired task — keep it on the local
+        # model by default so it never silently escalates to a paid reasoner.
+        # Callers can still pass an explicit `model` to use a frontier one.
+        model = request.get("model") or _providers.LOCAL_FALLBACK_MODEL
 
         # Memory layer the consolidated chat lands in (the episodic / semantic /
         # procedural model). The console "Save to memory" control lets the
@@ -2142,7 +2145,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             _verify_loop_permit(permit_id, permit_token)
         # else: X-API-Key auth (validated by Depends(get_api_key)) is enough
         # for this read-only operation.
-        model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
+        model = request.get("model") or _providers.default_model()
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
