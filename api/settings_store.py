@@ -79,6 +79,42 @@ def hydrate_env() -> None:
             os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = gc["client_secret"]
 
 
+def get_email_account() -> Dict[str, Any]:
+    """The configured IMAP email account (host/port/user/password). The password
+    is returned here for the connector's use; never expose it via an API."""
+    with _LOCK:
+        return dict(_load().get("email_account", {}))
+
+
+def set_email_account(host: str, port: int, user: str, password: Optional[str],
+                      ssl: bool = True) -> None:
+    """Store the IMAP email account. An empty host clears it. If password is
+    None/empty an existing stored password is kept (so the operator can edit the
+    host/user without re-typing the secret)."""
+    with _LOCK:
+        data = _load()
+        if not host:
+            data.pop("email_account", None)
+            _save(data)
+            return
+        acct = data.get("email_account", {})
+        acct["imap_host"] = host
+        acct["imap_port"] = int(port or 993)
+        acct["imap_user"] = user
+        acct["imap_ssl"] = bool(ssl)
+        if password:
+            acct["imap_password"] = password
+        data["email_account"] = acct
+        _save(data)
+
+
+def clear_email_account() -> None:
+    with _LOCK:
+        data = _load()
+        data.pop("email_account", None)
+        _save(data)
+
+
 def set_google_client(client_id: Optional[str], client_secret: Optional[str]) -> None:
     """Persist the Google OAuth client id/secret in the sidecar and apply to the
     running process. Empty client_id clears both. The secret is never returned by

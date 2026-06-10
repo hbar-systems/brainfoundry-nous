@@ -269,7 +269,7 @@ import sys as _sys             # noqa: E402
 
 for _mod in ("api.tools.web_search", "api.tools.fetch_url", "api.tools.memory_search",
              "api.tools.brain_call", "api.tools.calendar_read", "api.tools.gmail_read",
-             "api.tools.drive_search"):
+             "api.tools.drive_search", "api.tools.inbox_read"):
     if _mod in _sys.modules:
         _importlib.reload(_sys.modules[_mod])
     else:

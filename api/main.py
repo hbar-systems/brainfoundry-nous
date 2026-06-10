@@ -753,6 +753,44 @@ def google_status(api_key: str = Depends(get_api_key)):
     return google.status()
 
 
+class SetEmailAccountRequest(BaseModel):
+    host: str = ""
+    port: int = 993
+    user: str = ""
+    password: str = ""
+    ssl: bool = True
+
+
+@app.get("/integrations/email/status")
+def email_status(api_key: str = Depends(get_api_key)):
+    from api.integrations import email_imap
+    return email_imap.status()
+
+
+@app.post("/integrations/email/account")
+async def email_set_account(req: SetEmailAccountRequest, api_key: str = Depends(get_api_key)):
+    """Save an IMAP email account (host + email + app password), then verify it
+    by logging in. No OAuth — the simple, provider-agnostic path."""
+    from api.integrations import email_imap
+    host = (req.host or "").strip() or email_imap.guess_host((req.user or "").strip())
+    if not host:
+        raise HTTPException(400, "Could not determine the IMAP host — enter it manually "
+                            "(e.g. imap.gmail.com).")
+    settings_store.set_email_account(host, req.port, (req.user or "").strip(),
+                                     (req.password or "").strip(), req.ssl)
+    result = await email_imap.verify()
+    if not result.get("ok"):
+        # Keep the saved account so the operator can fix the password, but report.
+        return {"ok": False, "error": result.get("error"), **email_imap.status()}
+    return {"ok": True, **email_imap.status()}
+
+
+@app.post("/integrations/email/disconnect")
+def email_disconnect(api_key: str = Depends(get_api_key)):
+    settings_store.clear_email_account()
+    return {"ok": True, "configured": False}
+
+
 class SetGoogleClientRequest(BaseModel):
     client_id: str = ""
     client_secret: str = ""

@@ -32,6 +32,88 @@ function Cap({ label, desc, tool, active }) {
   )
 }
 
+function EmailCard() {
+  const [status, setStatus] = useState(null)
+  const [user, setUser] = useState('')
+  const [pass, setPass] = useState('')
+  const [host, setHost] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  const load = () => api('/integrations/email/status').then(setStatus).catch(e => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  const save = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await api('/integrations/email/account', {
+        method: 'POST',
+        body: JSON.stringify({ user: user.trim(), password: pass.trim(), host: host.trim() }),
+      })
+      if (r.ok) { setStatus(r); setPass('') }
+      else { setErr(r.error || 'Could not connect'); setStatus(r) }
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  const disconnect = async () => {
+    setBusy(true); setErr(null)
+    try { await api('/integrations/email/disconnect', { method: 'POST' }); await load() }
+    catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  const connected = status?.configured
+  const inp = { background: '#0e0c0a', border: '1px solid #2a2420', borderRadius: 7, color: '#e8e0d5', padding: '8px 10px', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }
+  const btnGhost = { background: 'transparent', color: '#c9a96e', border: '1px solid #3a3128', padding: '9px 18px', borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }
+
+  return (
+    <div style={{ border: '1px solid #1c1814', borderRadius: 12, background: '#120f0c', padding: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+          <span style={{ fontSize: 26 }} aria-hidden>✉️</span>
+          <div>
+            <div style={{ fontSize: 15, color: '#f0e8da', fontWeight: 600 }}>Email <span style={{ fontSize: 11, color: '#6b5f52', fontWeight: 400 }}>· IMAP, any provider</span></div>
+            <div style={{ fontSize: 12.5, color: connected ? '#1f9d55' : '#9a8c7a', marginTop: 2 }}>
+              {connected ? `Connected · ${status.user} (${status.host})` : 'Not connected'}
+            </div>
+          </div>
+        </div>
+        {connected && <button onClick={disconnect} disabled={busy} style={btnGhost}>Disconnect</button>}
+      </div>
+
+      {connected && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
+          <Cap label="Inbox" desc="read recent / unread mail, search" tool="inbox_read" active />
+        </div>
+      )}
+
+      {!connected && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
+          <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+            Connect with an app password — no OAuth
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
+            <input value={user} onChange={e => setUser(e.target.value)} placeholder="you@gmail.com" style={inp} />
+            <input value={pass} onChange={e => setPass(e.target.value)} placeholder="app password (16 chars for Gmail)" type="password" style={inp} />
+            <input value={host} onChange={e => setHost(e.target.value)} placeholder="IMAP host (auto-detected for Gmail/Outlook/iCloud…)" style={inp} />
+            <div>
+              <button onClick={save} disabled={busy || !user.trim() || !pass.trim()}
+                style={{ background: (user.trim() && pass.trim()) ? '#c9a96e' : '#221c16', color: (user.trim() && pass.trim()) ? '#1a1510' : '#6b5f52', border: 'none', padding: '8px 16px', borderRadius: 8, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {busy ? 'Connecting…' : 'Connect email'}
+              </button>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, color: '#6b5f52', fontSize: 12, lineHeight: 1.6 }}>
+            Gmail: turn on 2-step verification → <b>App passwords</b> → generate one → paste it above
+            (not your normal password). Read-only; your brain treats every email as untrusted data.
+          </div>
+        </div>
+      )}
+      {err && <div style={{ marginTop: 12, color: '#c0392b', fontSize: 12 }}>{err}</div>}
+    </div>
+  )
+}
+
 function GoogleCard() {
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -178,6 +260,7 @@ export default function Integrations() {
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <EmailCard />
           <GoogleCard />
           <ComingSoon icon="📅" name="Microsoft" detail="Outlook mail + calendar — a separate connection." />
         </div>
