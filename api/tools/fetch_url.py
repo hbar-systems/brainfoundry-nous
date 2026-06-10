@@ -182,7 +182,7 @@ async def run(url: str) -> ToolResult:
         content=content,
         provenance=[{"source": "fetch_url", "tool": "fetch_url", "trust": "untrusted",
                      "title": title or current, "url": current}],
-        meta={"url": current, "title": title, "chars": len(text)},
+        meta={"url": current, "title": title, "chars": len(text), "text": text},
     )
 
 

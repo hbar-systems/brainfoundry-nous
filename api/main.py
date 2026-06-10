@@ -809,6 +809,27 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
+@app.post("/research")
+async def research_endpoint(request: dict, api_key: str = Depends(get_api_key)):
+    """Deep Research — plan → search → read → cited synthesis, streamed as SSE so
+    the UI can show the work live."""
+    from api import research as _research
+    question = (request.get("question") or "").strip()
+    if not question:
+        raise HTTPException(400, "question required")
+    model = request.get("model") or ""
+
+    async def gen():
+        try:
+            async for ev in _research.run_research(question, model=model):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'phase': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 class SetCalendarIcsRequest(BaseModel):
     url: str = ""
 
