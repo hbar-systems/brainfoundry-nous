@@ -1,7 +1,7 @@
-// Minimal service worker — static-asset cache + network-first navigation.
+// Minimal service worker — static-asset cache only.
 // Bumps CACHE_NAME on each release to invalidate the previous cache.
 // Bump this string when shipping a new SW or asset set.
-const CACHE_NAME = 'bf-static-v3';
+const CACHE_NAME = 'bf-static-v4';
 
 const STATIC_ASSETS = [
   '/',
@@ -40,26 +40,18 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.startsWith('/_next/data/')) return;
 
-  // Page navigations (HTML): go to network with cache:'no-store' so a refresh
-  // after a deploy ALWAYS gets the fresh page — and therefore the fresh,
-  // content-hashed JS chunk references. This is the fix for "I updated but the
-  // UI looks the same": stale HTML would point at old chunks. Cache only as an
-  // offline fallback. (Without no-store the browser HTTP cache could hand the
-  // SW a stale page even though it's "network-first".)
-  if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req, { cache: 'no-store' })
-        .then((resp) => {
-          if (resp && resp.ok && resp.type === 'basic') {
-            const copy = resp.clone();
-            caches.open(CACHE_NAME).then((c) => c.put('/', copy)).catch(() => {});
-          }
-          return resp;
-        })
-        .catch(() => caches.match(req).then((m) => m || caches.match('/')))
-    );
-    return;
-  }
+  // Page navigations (HTML): DO NOT intercept. On an origin behind HTTP Basic
+  // Auth, a service-worker-driven fetch cannot resolve the 401 auth challenge in
+  // Firefox — it fails with "ServiceWorker intercepted the request and
+  // encountered an unexpected error" and the page never loads (the login dialog
+  // never appears). Letting navigations go straight to the browser lets it
+  // handle both the HTML and the Basic-Auth dialog natively, in every browser.
+  //
+  // The previous network-first interception existed to avoid stale HTML after a
+  // deploy (stale HTML → stale content-hashed chunk refs). That is now the job
+  // of Cache-Control on HTML responses, not the SW — never of an SW that breaks
+  // auth-gated hosts. So: bypass navigations entirely.
+  if (req.mode === 'navigate') return;
 
   // Other GETs — content-hashed static assets, safe to cache. Network-first
   // with cached fallback offline.
