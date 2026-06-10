@@ -249,11 +249,11 @@ function GoogleCard() {
     <div style={{ border: '1px solid #1c1814', borderRadius: 12, background: '#120f0c', padding: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ fontSize: 26 }} aria-hidden>📬</span>
+          <span style={{ fontSize: 26 }} aria-hidden>🗂️</span>
           <div>
-            <div style={{ fontSize: 15, color: '#f0e8da', fontWeight: 600 }}>Google</div>
+            <div style={{ fontSize: 15, color: '#f0e8da', fontWeight: 600 }}>Google Drive <span style={{ fontSize: 11, color: '#6b5f52', fontWeight: 400 }}>· optional</span></div>
             <div style={{ fontSize: 12.5, color: connected ? '#1f9d55' : '#9a8c7a', marginTop: 2 }}>
-              {!configured ? 'Not set up — operator must configure the OAuth client'
+              {!configured ? 'Only needed for Drive file search — email & calendar are already set up above without OAuth'
                 : connected ? `Connected${status.email ? ' · ' + status.email : ''}`
                   : 'Configured — not connected yet'}
             </div>

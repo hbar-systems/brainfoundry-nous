@@ -332,6 +332,12 @@ def default_model() -> str:
     """
     from api import settings_store
     chosen = settings_store.get_active_model() or os.getenv("DEFAULT_MODEL")
+    # Guard against a stale/bogus ollama pin (e.g. OLLAMA_MODEL=oss-brain) that
+    # names a local model which isn't actually installed — that would 404 at
+    # serve time. If the pinned ollama model isn't present, ignore it and fall
+    # through to the BYOK/local resolution below.
+    if chosen and _resolve(chosen)[0] == "ollama" and chosen not in _local_ollama_models():
+        chosen = None
     if chosen:
         return chosen
     if has_cloud_key():
