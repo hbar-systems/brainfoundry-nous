@@ -124,8 +124,20 @@ APP_DIR = Path(__file__).resolve().parent
 # Track J1 — the persona is split into a tracked blank template and a
 # gitignored personalized copy, so a `git pull` (Track J) can never overwrite
 # a brain's identity. The runtime loads .local.md if present, else .template.md.
+#
+# 2026-06-10 fix: the personalized .local.md now lives in the PERSISTENT runtime
+# volume (/app/runtime — the api_runtime named volume, same place settings.json
+# survives), NOT in /app/api. The api/ dir is baked into the image and excluded
+# by .dockerignore, so a copy there was wiped on every `docker compose up
+# --build` — the "brain forgot its name after every deploy" bug. The runtime
+# volume survives rebuilds.
+RUNTIME_DIR = Path(os.getenv("BRAIN_RUNTIME_DIR") or "/app/runtime")
 PERSONA_TEMPLATE_PATH = APP_DIR / "brain_persona.template.md"
-PERSONA_LOCAL_PATH = APP_DIR / "brain_persona.local.md"
+PERSONA_LOCAL_PATH = RUNTIME_DIR / "brain_persona.local.md"
+# Legacy locations a personalized persona may still live in (pre-runtime-volume):
+# the image-baked api/ dir, and the host brain repo. Migrated into the runtime
+# volume on startup so an upgrading brain keeps its identity.
+_LEGACY_LOCAL_IN_APP = APP_DIR / "brain_persona.local.md"
 # Pre-J1 single-file path. Migrated into .local.md on startup, then removed.
 PERSONA_LEGACY_PATH = APP_DIR / "brain_persona.md"
 
@@ -172,6 +184,34 @@ def _run_persona_migration() -> None:
 
 
 _run_persona_migration()
+
+
+def _migrate_persona_to_runtime() -> None:
+    """If the persona isn't in the persistent runtime volume yet but exists in a
+    legacy location (the image-baked api/ dir, or the host brain repo), copy it
+    in — so a brain that was personalized before this change keeps its identity
+    after upgrading, instead of reverting to the template. Idempotent."""
+    try:
+        if PERSONA_LOCAL_PATH.exists():
+            return
+        candidates = [_LEGACY_LOCAL_IN_APP]
+        host_api = _host_api_dir()
+        if host_api:
+            candidates.append(host_api / "brain_persona.local.md")
+        for c in candidates:
+            try:
+                if c.exists() and c.resolve() != PERSONA_LOCAL_PATH.resolve():
+                    PERSONA_LOCAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    PERSONA_LOCAL_PATH.write_text(c.read_text(encoding="utf-8"), encoding="utf-8")
+                    print(f"persona migrated to runtime volume from {c}", flush=True)
+                    return
+            except Exception as e:
+                print(f"WARNING: persona runtime migration from {c} failed: {e}", flush=True)
+    except Exception as e:
+        print(f"WARNING: persona runtime migration error: {e}", flush=True)
+
+
+_migrate_persona_to_runtime()
 
 
 def active_persona_path() -> Path:
