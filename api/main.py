@@ -753,6 +753,62 @@ def google_status(api_key: str = Depends(get_api_key)):
     return google.status()
 
 
+class ConnectTelegramRequest(BaseModel):
+    token: str = ""
+
+
+@app.get("/integrations/telegram/status")
+def telegram_status(api_key: str = Depends(get_api_key)):
+    from api.integrations import telegram
+    return telegram.status()
+
+
+@app.post("/integrations/telegram/connect")
+async def telegram_connect(req: ConnectTelegramRequest, api_key: str = Depends(get_api_key)):
+    from api.integrations import telegram
+    if not (req.token or "").strip():
+        raise HTTPException(400, "Bot token required (get one from @BotFather).")
+    return await telegram.connect(req.token.strip())
+
+
+@app.post("/integrations/telegram/disconnect")
+async def telegram_disconnect(api_key: str = Depends(get_api_key)):
+    from api.integrations import telegram
+    await telegram.disconnect()
+    return {"ok": True, "configured": False}
+
+
+@app.post("/integrations/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Public — Telegram POSTs updates here. Authenticated by the per-bot secret
+    token header (set when we registered the webhook), and answers only the
+    pinned owner chat."""
+    from api.integrations import telegram
+    secret = request.headers.get("x-telegram-bot-api-secret-token")
+    if not telegram.verify_secret(secret):
+        raise HTTPException(403, "bad webhook secret")
+    try:
+        update = await request.json()
+    except Exception:
+        return {"ok": True}
+    msg = (update or {}).get("message") or {}
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    text = (msg.get("text") or "").strip()
+    if not chat_id or not text:
+        return {"ok": True}
+    owner = telegram.owner_chat_id()
+    if owner is None:
+        telegram.pin_owner(chat_id)            # first chat to message becomes the owner
+        owner = chat_id
+    if chat_id != owner:
+        await telegram.send_message(chat_id, "This brain is private.")
+        return {"ok": True}
+    answer = await telegram.answer(text)
+    await telegram.send_message(chat_id, answer)
+    return {"ok": True}
+
+
 class SetCalendarIcsRequest(BaseModel):
     url: str = ""
 

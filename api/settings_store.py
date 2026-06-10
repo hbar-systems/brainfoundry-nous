@@ -115,6 +115,25 @@ def clear_email_account() -> None:
         _save(data)
 
 
+def get_telegram() -> Dict[str, Any]:
+    with _LOCK:
+        return dict(_load().get("telegram", {}))
+
+
+def set_telegram(info: Dict[str, Any]) -> None:
+    with _LOCK:
+        data = _load()
+        data["telegram"] = {**data.get("telegram", {}), **info}
+        _save(data)
+
+
+def clear_telegram() -> None:
+    with _LOCK:
+        data = _load()
+        data.pop("telegram", None)
+        _save(data)
+
+
 def get_calendar_ics() -> str:
     with _LOCK:
         return _load().get("calendar_ics_url", "")
