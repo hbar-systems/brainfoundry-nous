@@ -1202,95 +1202,6 @@ function AdvancedPanel() {
 }
 
 // ---------- Page ----------
-function IntegrationsPanel() {
-  const [status, setStatus] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(null)
-
-  const load = () => api('/integrations/google/status').then(setStatus).catch(e => setErr(e.message))
-  useEffect(() => { load() }, [])
-
-  const connect = async () => {
-    setBusy(true); setErr(null)
-    try {
-      const { auth_url } = await api('/integrations/google/auth-url', { method: 'POST' })
-      window.open(auth_url, '_blank', 'noopener')
-      // Poll for the connection to complete in the other tab (~90s).
-      let tries = 0
-      const iv = setInterval(async () => {
-        tries++
-        try {
-          const s = await api('/integrations/google/status')
-          if (s.connected) { setStatus(s); clearInterval(iv); setBusy(false) }
-        } catch {}
-        if (tries > 45) { clearInterval(iv); setBusy(false); load() }
-      }, 2000)
-    } catch (e) { setErr(e.message); setBusy(false) }
-  }
-
-  const disconnect = async () => {
-    setBusy(true); setErr(null)
-    try { await api('/integrations/google/disconnect', { method: 'POST' }); await load() }
-    catch (e) { setErr(e.message) }
-    setBusy(false)
-  }
-
-  const connected = status?.connected
-  const configured = status?.configured
-  const btnPrimary = { background: '#c9a96e', color: '#1a1510', border: 'none', padding: '8px 16px', borderRadius: 8, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
-  const btnGhost = { background: 'transparent', color: '#c9a96e', border: '1px solid #3a3128', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
-  const btnDisabled = { ...btnPrimary, background: '#221c16', color: '#6b5f52', cursor: 'default' }
-
-  return (
-    <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
-        Connect Google so your brain can read your Gmail and Calendar — read-only. Ask it
-        "what's on my schedule today?" or "summarize my unread email" and it answers from your
-        real inbox and calendar. Email and invites enter as untrusted data: your brain reasons
-        over them but never obeys instructions hidden inside them.
-      </p>
-
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 10, border: '1px solid #1c1814', background: '#120f0c' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 20 }} aria-hidden>📬</span>
-          <div>
-            <div style={{ fontSize: 13.5, color: '#e8e0d5' }}>Google — Gmail + Calendar</div>
-            <div style={{ fontSize: 12, color: connected ? '#1f9d55' : '#9a8c7a', marginTop: 2 }}>
-              {!configured ? 'Not set up — operator must set the OAuth client.'
-                : connected ? `Connected${status.email ? ' · ' + status.email : ''}`
-                  : 'Configured — not connected yet.'}
-            </div>
-          </div>
-        </div>
-        <div>
-          {connected
-            ? <button onClick={disconnect} disabled={busy} style={btnGhost}>Disconnect</button>
-            : <button onClick={connect} disabled={busy || !configured} style={configured ? btnPrimary : btnDisabled}>{busy ? 'Connecting…' : 'Connect Google'}</button>}
-        </div>
-      </div>
-
-      {connected && (
-        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1 }}>Now available to your brain</div>
-          <div style={{ color: '#9a8c7a', fontSize: 12.5 }}>calendar_read — upcoming events</div>
-          <div style={{ color: '#9a8c7a', fontSize: 12.5 }}>gmail_read — recent mail (supports Gmail search)</div>
-        </div>
-      )}
-
-      {!configured && (
-        <div style={{ marginTop: 14, color: '#6b5f52', fontSize: 12, lineHeight: 1.6 }}>
-          Operator setup: enable Gmail + Calendar APIs in Google Cloud, add yourself as an OAuth
-          test user, and set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET. Redirect URI:
-          <code style={{ color: '#9a8c7a' }}> {status?.redirect_uri || '<api>/integrations/google/callback'}</code>
-        </div>
-      )}
-
-      {err && <div style={{ marginTop: 12, color: '#c0392b', fontSize: 12 }}>{err}</div>}
-    </div>
-  )
-}
-
-
 export default function Settings() {
   return (
     <div style={{ padding: '40px 32px', maxWidth: 860, margin: '0 auto' }}>
@@ -1351,10 +1262,6 @@ export default function Settings() {
 
       <Section title="Agentic tools" subtitle="Let your brain decide when to use tools — and what green / yellow / red permission tiers mean.">
         <AgenticToolsPanel />
-      </Section>
-
-      <Section title="Integrations" subtitle="Connect Gmail + Calendar (read-only) so your brain can see your real schedule and inbox.">
-        <IntegrationsPanel />
       </Section>
 
       <Section title="Memory layers" subtitle="Your themed notebooks — the shape of what your brain knows.">

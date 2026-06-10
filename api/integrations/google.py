@@ -34,12 +34,22 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 CALENDAR_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_MESSAGES = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+DRIVE_FILES = "https://www.googleapis.com/drive/v3/files"
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
     "openid",
     "email",
+]
+
+# The capabilities this one Google connection grants — surfaced in the UI so it
+# reads as distinct features, not one opaque "Google" blob.
+CAPABILITIES = [
+    {"key": "calendar", "label": "Calendar", "tool": "calendar_read", "desc": "upcoming events"},
+    {"key": "gmail", "label": "Gmail", "tool": "gmail_read", "desc": "recent mail (with search)"},
+    {"key": "drive", "label": "Drive", "tool": "drive_search", "desc": "find files by name or content"},
 ]
 
 
@@ -70,6 +80,7 @@ def status() -> Dict[str, Any]:
         "email": info.get("email"),
         "connected_at": info.get("connected_at"),
         "redirect_uri": redirect_uri(),
+        "capabilities": CAPABILITIES,
     }
 
 
@@ -202,3 +213,36 @@ async def list_messages(query: str = "", max_results: int = 10) -> List[Dict[str
                 "unread": "UNREAD" in (j.get("labelIds") or []),
             })
     return msgs
+
+
+async def list_files(query: str = "", max_results: int = 10) -> List[Dict[str, Any]]:
+    """Search the operator's Google Drive by name/content (most-recent first)."""
+    at = await _access_token()
+    n = max(1, min(int(max_results), 25))
+    params: Dict[str, Any] = {
+        "pageSize": n,
+        "orderBy": "modifiedTime desc",
+        "fields": "files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName))",
+        "spaces": "drive",
+    }
+    q = (query or "").strip().replace("\\", "\\\\").replace("'", "\\'")
+    if q:
+        params["q"] = f"(name contains '{q}' or fullText contains '{q}') and trashed = false"
+    else:
+        params["q"] = "trashed = false"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=20)) as http:
+        r = await http.get(DRIVE_FILES, headers={"Authorization": f"Bearer {at}"}, params=params)
+        r.raise_for_status()
+        files = r.json().get("files", [])
+    out = []
+    for f in files:
+        mime = f.get("mimeType", "")
+        kind = mime.split(".")[-1] if mime.startswith("application/vnd.google-apps") else mime
+        out.append({
+            "name": f.get("name", "(unnamed)"),
+            "kind": kind,
+            "modified": f.get("modifiedTime", ""),
+            "link": f.get("webViewLink", ""),
+            "owner": (f.get("owners") or [{}])[0].get("displayName", ""),
+        })
+    return out
