@@ -36,9 +36,23 @@ function GoogleCard() {
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const [cid, setCid] = useState('')
+  const [csecret, setCsecret] = useState('')
 
   const load = () => api('/integrations/google/status').then(setStatus).catch(e => setErr(e.message))
   useEffect(() => { load() }, [])
+
+  const saveClient = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const s = await api('/integrations/google/client', {
+        method: 'POST',
+        body: JSON.stringify({ client_id: cid.trim(), client_secret: csecret.trim() }),
+      })
+      setStatus(s); setCsecret('')
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
 
   const connect = async () => {
     setBusy(true); setErr(null)
@@ -107,10 +121,27 @@ function GoogleCard() {
       </div>
 
       {!configured && (
-        <div style={{ marginTop: 12, color: '#6b5f52', fontSize: 12, lineHeight: 1.6 }}>
-          Operator setup: enable Gmail + Calendar + Drive APIs in Google Cloud, add yourself as an OAuth
-          test user, and set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET. Redirect URI:
-          <code style={{ color: '#9a8c7a' }}> {status?.redirect_uri || '<api>/integrations/google/callback'}</code>
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
+          <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+            Operator setup — paste your Google OAuth client
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
+            <input value={cid} onChange={e => setCid(e.target.value)} placeholder="Client ID (…apps.googleusercontent.com)"
+              style={{ background: '#0e0c0a', border: '1px solid #2a2420', borderRadius: 7, color: '#e8e0d5', padding: '8px 10px', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }} />
+            <input value={csecret} onChange={e => setCsecret(e.target.value)} placeholder="Client Secret" type="password"
+              style={{ background: '#0e0c0a', border: '1px solid #2a2420', borderRadius: 7, color: '#e8e0d5', padding: '8px 10px', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }} />
+            <div>
+              <button onClick={saveClient} disabled={busy || !cid.trim() || !csecret.trim()}
+                style={{ background: (cid.trim() && csecret.trim()) ? '#c9a96e' : '#221c16', color: (cid.trim() && csecret.trim()) ? '#1a1510' : '#6b5f52', border: 'none', padding: '8px 16px', borderRadius: 8, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {busy ? 'Saving…' : 'Save client'}
+              </button>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, color: '#6b5f52', fontSize: 12, lineHeight: 1.6 }}>
+            In Google Cloud: enable Gmail + Calendar + Drive APIs, add yourself as an OAuth test user,
+            and create an OAuth <b>Web</b> client with this exact redirect URI:
+            <br /><code style={{ color: '#9a8c7a' }}>{status?.redirect_uri || '<api>/integrations/google/callback'}</code>
+          </div>
         </div>
       )}
       {err && <div style={{ marginTop: 12, color: '#c0392b', fontSize: 12 }}>{err}</div>}

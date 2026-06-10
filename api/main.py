@@ -753,6 +753,22 @@ def google_status(api_key: str = Depends(get_api_key)):
     return google.status()
 
 
+class SetGoogleClientRequest(BaseModel):
+    client_id: str = ""
+    client_secret: str = ""
+
+
+@app.post("/integrations/google/client")
+def google_set_client(req: SetGoogleClientRequest, api_key: str = Depends(get_api_key)):
+    """Set (or clear) the Google OAuth client id/secret from the UI — stored in
+    the settings sidecar so the operator doesn't have to edit .env. Empty
+    client_id clears it."""
+    settings_store.set_google_client((req.client_id or "").strip(),
+                                     (req.client_secret or "").strip())
+    from api.integrations import google
+    return {"ok": True, **google.status()}
+
+
 @app.post("/integrations/google/auth-url")
 def google_auth_url(api_key: str = Depends(get_api_key)):
     """Return the Google consent URL to open. Stores a one-shot CSRF state."""

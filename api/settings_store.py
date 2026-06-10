@@ -70,6 +70,34 @@ def hydrate_env() -> None:
             value = data.get("tool_keys", {}).get(provider)
             if value and not os.environ.get(env_name):
                 os.environ[env_name] = value
+        # Google OAuth client (Gmail/Calendar/Drive) — sidecar-stored so the
+        # operator can paste it in the UI instead of editing .env.
+        gc = data.get("google_oauth_client", {})
+        if gc.get("client_id") and not os.environ.get("GOOGLE_OAUTH_CLIENT_ID"):
+            os.environ["GOOGLE_OAUTH_CLIENT_ID"] = gc["client_id"]
+        if gc.get("client_secret") and not os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"):
+            os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = gc["client_secret"]
+
+
+def set_google_client(client_id: Optional[str], client_secret: Optional[str]) -> None:
+    """Persist the Google OAuth client id/secret in the sidecar and apply to the
+    running process. Empty client_id clears both. The secret is never returned by
+    any getter (see get_google_client_status)."""
+    with _LOCK:
+        data = _load()
+        if not client_id:
+            data.pop("google_oauth_client", None)
+            os.environ.pop("GOOGLE_OAUTH_CLIENT_ID", None)
+            os.environ.pop("GOOGLE_OAUTH_CLIENT_SECRET", None)
+            _save(data)
+            return
+        gc = data.setdefault("google_oauth_client", {})
+        gc["client_id"] = client_id
+        os.environ["GOOGLE_OAUTH_CLIENT_ID"] = client_id
+        if client_secret:
+            gc["client_secret"] = client_secret
+            os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = client_secret
+        _save(data)
 
 
 def get_keys_masked() -> Dict[str, Optional[str]]:
