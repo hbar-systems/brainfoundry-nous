@@ -116,6 +116,45 @@ def set_active_model(model: str) -> None:
         _save(data)
 
 
+# ── Google OAuth tokens (Gmail + Calendar read-only) ────────────────────────
+# The refresh token is a secret — stored in the sidecar like provider keys,
+# never returned to any client. Only status (connected? which email?) is exposed.
+def get_google_oauth() -> Dict[str, Any]:
+    with _LOCK:
+        return dict(_load().get("google_oauth", {}))
+
+
+def set_google_oauth(info: Dict[str, Any]) -> None:
+    with _LOCK:
+        data = _load()
+        data["google_oauth"] = info
+        _save(data)
+
+
+def clear_google_oauth() -> None:
+    with _LOCK:
+        data = _load()
+        data.pop("google_oauth", None)
+        _save(data)
+
+
+def set_oauth_state(state: str) -> None:
+    """One-shot CSRF state for the Google OAuth round-trip."""
+    with _LOCK:
+        data = _load()
+        data["google_oauth_state"] = state
+        _save(data)
+
+
+def take_oauth_state() -> Optional[str]:
+    """Read-and-clear the stored OAuth state (single use)."""
+    with _LOCK:
+        data = _load()
+        state = data.pop("google_oauth_state", None)
+        _save(data)
+        return state
+
+
 # ── max_tokens — operator-controlled response length cap ────────────────────
 # The default 2048 is fine for chat-message-length answers but truncates
 # longer outputs (multi-section explanations, code dumps, structured analyses)

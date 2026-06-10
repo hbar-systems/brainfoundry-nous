@@ -1,7 +1,7 @@
 from api import providers as _providers
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 import sqlite3
 from fastapi import APIRouter
 from fastapi.security import APIKeyHeader
@@ -704,6 +704,67 @@ class SetAgenticToolsRequest(BaseModel):
 def settings_get_agentic_tools(api_key: str = Depends(get_api_key)):
     """Agentic mode status — whether the model decides when to call tools."""
     return {"enabled": settings_store.get_agentic_tools_enabled()}
+
+
+# ── Google integration (Gmail + Calendar, read-only) ────────────────────────
+@app.get("/integrations/google/status")
+def google_status(api_key: str = Depends(get_api_key)):
+    from api.integrations import google
+    return google.status()
+
+
+@app.post("/integrations/google/auth-url")
+def google_auth_url(api_key: str = Depends(get_api_key)):
+    """Return the Google consent URL to open. Stores a one-shot CSRF state."""
+    from api.integrations import google
+    import secrets as _secrets
+    if not google.is_configured():
+        raise HTTPException(400, "Google OAuth client is not configured "
+                            "(set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET).")
+    state = _secrets.token_urlsafe(24)
+    settings_store.set_oauth_state(state)
+    return {"auth_url": google.auth_url(state)}
+
+
+@app.get("/integrations/google/callback")
+async def google_callback(code: str = "", state: str = "", error: str = ""):
+    """Public OAuth redirect target — Google sends the browser here. Verifies the
+    one-shot state, exchanges the code, stores the refresh token."""
+    from api.integrations import google
+
+    def _page(title: str, body: str, ok: bool) -> HTMLResponse:
+        color = "#1f9d55" if ok else "#c0392b"
+        return HTMLResponse(
+            f"<!doctype html><meta charset=utf-8><title>{title}</title>"
+            f"<body style='font-family:system-ui;max-width:34rem;margin:4rem auto;"
+            f"padding:0 1rem;color:#222'><h2 style='color:{color}'>{title}</h2>"
+            f"<p>{body}</p><p style='color:#888'>You can close this tab and return "
+            f"to your brain.</p></body>")
+
+    if error:
+        return _page("Google connection failed", f"Google returned: {error}", False)
+    expected = settings_store.take_oauth_state()
+    if not state or not expected or state != expected:
+        return _page("Google connection failed",
+                     "Security check failed (state mismatch). Please start the "
+                     "connection again from Settings.", False)
+    if not code:
+        return _page("Google connection failed", "No authorization code returned.", False)
+    try:
+        result = await google.exchange_code(code)
+    except Exception as e:
+        return _page("Google connection failed", f"Token exchange error: {e}", False)
+    who = result.get("email") or "your account"
+    return _page("Google connected",
+                 f"Gmail + Calendar (read-only) are now connected for "
+                 f"<b>{who}</b>. Ask your brain about your schedule or recent email.", True)
+
+
+@app.post("/integrations/google/disconnect")
+def google_disconnect(api_key: str = Depends(get_api_key)):
+    from api.integrations import google  # noqa: F401
+    settings_store.clear_google_oauth()
+    return {"ok": True, "connected": False}
 
 
 @app.post("/settings/agentic-tools")
