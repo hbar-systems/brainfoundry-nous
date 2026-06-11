@@ -373,6 +373,85 @@ function TelegramCard() {
   )
 }
 
+function McpCard() {
+  const [status, setStatus] = useState(null)
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
+  const [auth, setAuth] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  const load = () => api('/integrations/mcp/status').then(setStatus).catch(e => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  const connect = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await api('/integrations/mcp/connect', { method: 'POST', body: JSON.stringify({ name: name.trim(), url: url.trim(), auth: auth.trim() }) })
+      if (r.ok) { setName(''); setUrl(''); setAuth(''); await load() } else { setErr(r.error || 'Could not connect') }
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  const disconnect = async (srv) => {
+    setBusy(true); setErr(null)
+    try { await api('/integrations/mcp/disconnect', { method: 'POST', body: JSON.stringify({ name: srv }) }); await load() }
+    catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  const servers = status?.servers || []
+  const inp = { background: '#0e0c0a', border: '1px solid #2a2420', borderRadius: 7, color: '#e8e0d5', padding: '8px 10px', fontSize: 12.5, fontFamily: 'var(--font-mono, monospace)' }
+  const btnGhost = { background: 'transparent', color: '#c9a96e', border: '1px solid #3a3128', padding: '6px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }
+
+  return (
+    <div style={{ border: '1px solid #1c1814', borderRadius: 12, background: '#120f0c', padding: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+        <span style={{ fontSize: 26 }} aria-hidden>🔌</span>
+        <div>
+          <div style={{ fontSize: 15, color: '#f0e8da', fontWeight: 600 }}>MCP servers <span style={{ fontSize: 11, color: '#6b5f52', fontWeight: 400 }}>· connect any tool</span></div>
+          <div style={{ fontSize: 12.5, color: servers.length ? '#1f9d55' : '#9a8c7a', marginTop: 2 }}>
+            {servers.length ? `${servers.length} connected` : 'None connected'}
+          </div>
+        </div>
+      </div>
+
+      {servers.length > 0 && (
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1c1814', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {servers.map(s => (
+            <div key={s.name} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, color: '#e8e0d5' }}>{s.name} <span style={{ color: '#6b5f52', fontSize: 11 }}>{s.tools.length} tool{s.tools.length === 1 ? '' : 's'}</span></div>
+                <div style={{ fontSize: 11.5, color: '#9a8c7a', marginTop: 2, fontFamily: 'var(--font-mono, monospace)' }}>{s.tools.slice(0, 8).join(', ')}</div>
+              </div>
+              <button onClick={() => disconnect(s.name)} disabled={busy} style={btnGhost}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1c1814' }}>
+        <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Add a server (HTTP)</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 520 }}>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="name (e.g. github)" style={inp} />
+          <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…/mcp  (server endpoint URL)" style={inp} />
+          <input value={auth} onChange={e => setAuth(e.target.value)} placeholder="Authorization header (optional, e.g. Bearer …)" type="password" style={inp} />
+          <div>
+            <button onClick={connect} disabled={busy || !url.trim()}
+              style={{ background: url.trim() ? '#c9a96e' : '#221c16', color: url.trim() ? '#1a1510' : '#6b5f52', border: 'none', padding: '8px 16px', borderRadius: 8, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {busy ? 'Connecting…' : 'Connect server'}
+            </button>
+          </div>
+        </div>
+        <div style={{ marginTop: 12, color: '#6b5f52', fontSize: 12, lineHeight: 1.6 }}>
+          The server's tools become available to your brain in agentic mode. Tool output is treated as
+          untrusted. You connect servers — the model can't add them.
+        </div>
+      </div>
+      {err && <div style={{ marginTop: 12, color: '#c0392b', fontSize: 12 }}>{err}</div>}
+    </div>
+  )
+}
+
 function ComingSoon({ icon, name, detail }) {
   return (
     <div style={{ border: '1px dashed #221c16', borderRadius: 12, background: '#0e0c0a', padding: 20, opacity: 0.7 }}>
@@ -405,6 +484,7 @@ export default function Integrations() {
           <EmailCard />
           <CalendarCard />
           <TelegramCard />
+          <McpCard />
           <GoogleCard />
           <ComingSoon icon="📅" name="Microsoft" detail="Outlook mail + calendar — a separate connection." />
         </div>

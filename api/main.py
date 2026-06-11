@@ -831,6 +831,36 @@ async def research_endpoint(request: dict, api_key: str = Depends(get_api_key)):
 
 
 # ── Tasks / reminders ───────────────────────────────────────────────────────
+class ConnectMcpRequest(BaseModel):
+    name: str = ""
+    url: str = ""
+    auth: str = ""
+
+
+@app.get("/integrations/mcp/status")
+def mcp_status(api_key: str = Depends(get_api_key)):
+    from api.integrations import mcp_client
+    return mcp_client.status()
+
+
+@app.post("/integrations/mcp/connect")
+async def mcp_connect(req: ConnectMcpRequest, api_key: str = Depends(get_api_key)):
+    from api.integrations import mcp_client
+    if not (req.url or "").strip():
+        raise HTTPException(400, "MCP server URL required.")
+    try:
+        return await mcp_client.connect(req.name, req.url, req.auth)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/integrations/mcp/disconnect")
+def mcp_disconnect(req: ConnectMcpRequest, api_key: str = Depends(get_api_key)):
+    from api.integrations import mcp_client
+    mcp_client.disconnect((req.name or "").strip())
+    return {"ok": True}
+
+
 class CreateTaskRequest(BaseModel):
     text: str
     due: Optional[str] = None
@@ -2610,7 +2640,19 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             pass
         _web_ok = settings_store.get_web_search_enabled()
 
+        # Surface operator-connected MCP server tools (named mcp__<server>__<tool>).
+        try:
+            from api.integrations import mcp_client as _mcp
+            _tools_spec += _mcp.agentic_tool_specs()
+        except Exception:
+            pass
+
         async def _agentic_dispatch(name, args):
+            # MCP tools route to the connected server (operator granted them by
+            # connecting it); everything else goes through the tier-gated dispatch.
+            if isinstance(name, str) and name.startswith("mcp__"):
+                from api.integrations import mcp_client as _mcp
+                return await _mcp.call(name, args)
             return await _agentic_tools.dispatch(name, args, operator_authorized=_web_ok)
 
         # ── Streaming path (SSE) ──────────────────────────────────────

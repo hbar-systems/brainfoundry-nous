@@ -115,6 +115,28 @@ def clear_email_account() -> None:
         _save(data)
 
 
+def get_mcp_servers() -> list:
+    with _LOCK:
+        return list(_load().get("mcp_servers", []))
+
+
+def upsert_mcp_server(server: Dict[str, Any]) -> None:
+    """Add or replace an MCP server entry (keyed by name)."""
+    with _LOCK:
+        data = _load()
+        servers = [s for s in data.get("mcp_servers", []) if s.get("name") != server.get("name")]
+        servers.append(server)
+        data["mcp_servers"] = servers
+        _save(data)
+
+
+def remove_mcp_server(name: str) -> None:
+    with _LOCK:
+        data = _load()
+        data["mcp_servers"] = [s for s in data.get("mcp_servers", []) if s.get("name") != name]
+        _save(data)
+
+
 def get_telegram() -> Dict[str, Any]:
     with _LOCK:
         return dict(_load().get("telegram", {}))
