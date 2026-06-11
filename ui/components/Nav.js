@@ -11,6 +11,7 @@ const FALLBACK_NAV = [
   { id: '_persona',    href: '/persona',    label: 'Persona'    },
   { id: '_knowledge',  href: '/upload',     label: 'Knowledge'  },
   { id: '_apps',       href: '/apps',       label: 'Apps'       },
+  { id: '_tasks',      href: '/tasks',      label: 'Tasks'      },
   { id: '_federation', href: '/federation', label: 'Federation' },
   { id: '_research',   href: '/research',   label: 'Research'    },
   { id: '_integrations', href: '/integrations', label: 'Integrations' },

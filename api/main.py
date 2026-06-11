@@ -830,6 +830,39 @@ async def research_endpoint(request: dict, api_key: str = Depends(get_api_key)):
         "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+# ── Tasks / reminders ───────────────────────────────────────────────────────
+class CreateTaskRequest(BaseModel):
+    text: str
+    due: Optional[str] = None
+
+
+@app.get("/tasks")
+def tasks_list(include_done: bool = False, api_key: str = Depends(get_api_key)):
+    from api import tasks_store
+    return {"tasks": tasks_store.list_tasks(include_done=include_done)}
+
+
+@app.post("/tasks")
+def tasks_create(req: CreateTaskRequest, api_key: str = Depends(get_api_key)):
+    from api import tasks_store
+    try:
+        return {"ok": True, "task": tasks_store.add(req.text, due=req.due)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/tasks/{task_id}/complete")
+def tasks_complete(task_id: str, done: bool = True, api_key: str = Depends(get_api_key)):
+    from api import tasks_store
+    return {"ok": tasks_store.complete(task_id, done)}
+
+
+@app.delete("/tasks/{task_id}")
+def tasks_delete(task_id: str, api_key: str = Depends(get_api_key)):
+    from api import tasks_store
+    return {"ok": tasks_store.delete(task_id)}
+
+
 class SetCalendarIcsRequest(BaseModel):
     url: str = ""
 
@@ -1461,6 +1494,36 @@ def _ensure_runtime_indexes() -> None:
         chown_git_to_host_owner()
     except Exception as e:
         print(f"[startup] git ownership migration skipped: {e}", flush=True)
+
+
+@app.on_event("startup")
+async def _start_reminder_loop() -> None:
+    """Background loop: when a task's due time passes, ping Telegram once.
+    Fail-soft — any error is logged and the loop continues."""
+    import asyncio
+
+    async def _loop():
+        from datetime import timezone
+        from api import tasks_store
+        from api.integrations import telegram
+        while True:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                due = tasks_store.due_unreminded(now)
+                if due and telegram.is_configured() and telegram.owner_chat_id() is not None:
+                    for t in due:
+                        await telegram.send_message(
+                            telegram.owner_chat_id(), f"⏰ Reminder: {t['text']}")
+                        tasks_store.mark_reminded(t["id"])
+                elif due:
+                    # No Telegram connected — just mark so we don't re-scan forever.
+                    for t in due:
+                        tasks_store.mark_reminded(t["id"])
+            except Exception as e:
+                print(f"[reminders] loop error: {e}", flush=True)
+            await asyncio.sleep(60)
+
+    asyncio.create_task(_loop())
 
 
 @app.on_event("startup")
