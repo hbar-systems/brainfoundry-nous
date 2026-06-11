@@ -108,6 +108,11 @@ def _sync_list(url: str, max_results: int) -> List[Dict[str, Any]]:
         r = http.get(url, headers={"User-Agent": "brainfoundry-calendar/1.0"})
         r.raise_for_status()
         ics = r.content[:_MAX_BYTES].decode("utf-8", "replace")
+    if "BEGIN:VCALENDAR" not in ics:
+        raise RuntimeError(
+            "that URL isn't an iCal feed (it returned a web page, not calendar data). "
+            "In Google Calendar use Settings → your calendar → 'Secret address in "
+            "iCal format' — the link that ends in .ics.")
     now = datetime.datetime.now(datetime.timezone.utc)
     upcoming = []
     for ev in _parse_events(ics):
