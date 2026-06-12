@@ -268,7 +268,7 @@ import importlib as _importlib  # noqa: E402
 import sys as _sys             # noqa: E402
 
 for _mod in ("api.tools.web_search", "api.tools.fetch_url", "api.tools.memory_search",
-             "api.tools.brain_call", "api.tools.calendar_read", "api.tools.gmail_read",
+             "api.tools.brain_call", "api.tools.calendar_read",
              "api.tools.drive_search", "api.tools.inbox_read",
              "api.tools.task_add", "api.tools.task_list"):
     if _mod in _sys.modules:

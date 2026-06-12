@@ -44,11 +44,9 @@ SCOPES = [
     "email",
 ]
 
-# The capabilities this one Google connection grants — surfaced in the UI so it
-# reads as distinct features, not one opaque "Google" blob.
+# Google OAuth now backs only Drive — email is handled by the IMAP connector and
+# calendar by the iCal-link connector (both no-OAuth). So this card is Drive-only.
 CAPABILITIES = [
-    {"key": "calendar", "label": "Calendar", "tool": "calendar_read", "desc": "upcoming events"},
-    {"key": "gmail", "label": "Gmail", "tool": "gmail_read", "desc": "recent mail (with search)"},
     {"key": "drive", "label": "Drive", "tool": "drive_search", "desc": "find files by name or content"},
 ]
 
