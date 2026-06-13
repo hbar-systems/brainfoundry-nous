@@ -1520,8 +1520,8 @@ def _ensure_runtime_indexes() -> None:
     # .git/FETCH_HEAD etc. and breaks `git pull` from the host shell. Every
     # update ends in a container restart, so this runs after each update too.
     try:
-        from api.git_ownership import chown_git_to_host_owner
-        chown_git_to_host_owner()
+        from api.git_ownership import repair_repo_ownership
+        repair_repo_ownership()
     except Exception as e:
         print(f"[startup] git ownership migration skipped: {e}", flush=True)
 
