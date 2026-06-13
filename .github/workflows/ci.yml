@@ -51,6 +51,14 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     needs: lint
+    # api/main.py refuses to import unless a brain identity is configured
+    # (the same startup guard that protects a real deployment). test_vendor_disavowal
+    # imports it, so give the suite the dev profile: BRAIN_ENV=dev relaxes the
+    # production-only checks, and a throwaway identity secret satisfies the guard.
+    # These are CI test values, never real secrets.
+    env:
+      BRAIN_ENV: dev
+      BRAIN_IDENTITY_SECRET: ci-test-identity-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
