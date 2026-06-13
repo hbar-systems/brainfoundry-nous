@@ -1068,6 +1068,157 @@ function SecurityPanel() {
       <Field label="Public key (ED25519, base64url)" value={state.public_key} copyable />
       <Field label="Console API key configured" value={state.api_key_configured ? 'yes' : 'no'} mono={false} />
       <Field label="Federation HTTP route" value={state.federation_route} />
+
+      <PeersPanel />
+      <FederationLogPanel />
+    </div>
+  )
+}
+
+// ---------- Peers (introduce / ping / remove) ----------
+function PeersPanel() {
+  const [peers, setPeers] = useState([])
+  const [endpoint, setEndpoint] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null) // {ok, text}
+  const [pingState, setPingState] = useState({}) // brain_id -> 'ok'|'fail'|'...'
+
+  const load = () => api('/v1/federation/peers').then(d => setPeers(d.peers || [])).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  const flash = (ok, text) => { setMsg({ ok, text }); setTimeout(() => setMsg(null), 6000) }
+
+  const introduce = async () => {
+    const ep = endpoint.trim()
+    if (!ep || busy) return
+    setBusy(true); setMsg(null)
+    try {
+      const d = await api('/v1/federation/peers/introduce', {
+        method: 'POST', body: JSON.stringify({ endpoint: ep }),
+      })
+      flash(true, `Introduced ${d.peer}`)
+      setEndpoint('')
+      load()
+    } catch (e) {
+      flash(false, e.message)
+    } finally { setBusy(false) }
+  }
+
+  const ping = async (p) => {
+    setPingState(s => ({ ...s, [p.brain_id]: '…' }))
+    try {
+      const d = await api('/v1/federation/peers/ping', {
+        method: 'POST', body: JSON.stringify({ id: p.brain_id }),
+      })
+      setPingState(s => ({ ...s, [p.brain_id]: d.ok ? 'ok' : 'fail' }))
+    } catch {
+      setPingState(s => ({ ...s, [p.brain_id]: 'fail' }))
+    }
+    setTimeout(() => setPingState(s => ({ ...s, [p.brain_id]: undefined })), 5000)
+  }
+
+  const remove = async (p) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await api(`/v1/federation/peers/${encodeURIComponent(p.brain_id)}`, { method: 'DELETE' })
+      load()
+    } catch (e) { flash(false, e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #2a2420' }}>
+      <div style={{ fontSize: 13, color: '#c9a96e', marginBottom: 4, fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>INTRODUCED PEERS</div>
+      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0' }}>
+        Brains your brain can call (<code>brain_call</code>). Introducing fetches the peer&rsquo;s
+        <code> /identity</code> and pins its public key. Calls reach the peer&rsquo;s public-scoped corpus only.
+      </p>
+
+      {msg && (
+        <div style={{ padding: '8px 12px', marginBottom: 12, borderRadius: 6, fontSize: 12, fontFamily: 'DM Mono, monospace',
+          background: msg.ok ? '#1e3a26' : '#3a1e1e', color: msg.ok ? '#7fc99c' : '#c98080' }}>{msg.text}</div>
+      )}
+
+      {peers.length === 0 && (
+        <p style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic', marginBottom: 12 }}>No peers introduced yet.</p>
+      )}
+      {peers.map(p => (
+        <div key={p.brain_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', marginBottom: 6,
+          background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 13, color: '#e8e0d5' }}>
+              {p.brain_id} {p.pinned ? <span style={{ color: '#7fc99c', fontSize: 10 }}>· pinned</span> : <span style={{ color: '#c9a060', fontSize: 10 }}>· no key</span>}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b5f52', wordBreak: 'break-all' }}>{p.endpoint}</div>
+          </div>
+          <button onClick={() => ping(p)} style={BTN_GHOST}>
+            {pingState[p.brain_id] === 'ok' ? 'online' : pingState[p.brain_id] === 'fail' ? 'offline' : pingState[p.brain_id] === '…' ? '…' : 'ping'}
+          </button>
+          <button onClick={() => remove(p)} style={{ ...BTN_GHOST, color: '#c98080' }}>remove</button>
+        </div>
+      ))}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <input
+          type="text"
+          value={endpoint}
+          onChange={e => setEndpoint(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') introduce() }}
+          placeholder="https://peer.brainfoundry.ai"
+          disabled={busy}
+          style={{ flex: 1, padding: '8px 12px', background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6,
+            color: '#e8e0d5', fontSize: 13, fontFamily: 'DM Mono, monospace', outline: 'none' }}
+        />
+        <button onClick={introduce} disabled={!endpoint.trim() || busy}
+          style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #2a2420', cursor: (endpoint.trim() && !busy) ? 'pointer' : 'not-allowed',
+            background: (endpoint.trim() && !busy) ? '#c9a96e' : '#161310', color: (endpoint.trim() && !busy) ? '#0e0c0b' : '#3a2e26', fontSize: 13, fontWeight: 600 }}>
+          {busy ? '…' : 'Introduce'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------- Federation activity log ----------
+function FederationLogPanel() {
+  const [entries, setEntries] = useState([])
+  const [open, setOpen] = useState(false)
+
+  const load = () => api('/v1/federation/log?limit=100').then(d => setEntries(d.entries || [])).catch(() => {})
+  useEffect(() => { if (open) load() }, [open])
+
+  const fmt = (iso) => { try { return new Date(iso).toLocaleString() } catch { return iso } }
+
+  return (
+    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #2a2420' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 13, color: '#c9a96e', fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>FEDERATION ACTIVITY LOG</div>
+        <button style={BTN_GHOST} onClick={() => setOpen(o => !o)}>{open ? 'hide' : 'show'}</button>
+      </div>
+      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '6px 0 12px 0' }}>
+        Every cross-brain call, both directions — who called this brain and who it called.
+      </p>
+      {open && (
+        <>
+          <button style={{ ...BTN_GHOST, marginBottom: 10 }} onClick={load}>refresh</button>
+          {entries.length === 0 && <p style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic' }}>No federation activity recorded yet.</p>}
+          {[...entries].reverse().map((e, i) => (
+            <div key={i} style={{ padding: '8px 12px', marginBottom: 5, background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6, fontSize: 11, fontFamily: 'DM Mono, monospace' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ color: e.direction === 'in' ? '#6b8cce' : '#88a868' }}>
+                  {e.direction === 'in' ? '← in' : '→ out'} · {e.peer_brain_id}
+                  {e.verified ? <span style={{ color: '#7fc99c' }}> ✓</span> : <span style={{ color: '#6b5f52' }}> (anon)</span>}
+                </span>
+                <span style={{ color: e.outcome === 'ok' ? '#7fc99c' : '#c98080' }}>{e.outcome}</span>
+              </div>
+              {e.query_summary && <div style={{ color: '#8b7d6e', marginTop: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.query_summary}</div>}
+              <div style={{ color: '#4a3f36', marginTop: 3 }}>
+                {fmt(e.ts)}{e.documents_used != null ? ` · ${e.documents_used} docs` : ''}{e.answer_len != null ? ` · ${e.answer_len} chars` : ''}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   )
 }

@@ -2764,9 +2764,9 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
 # ============================================================================
 
 try:
-    from api.kernel.rate_limiter import PublicRateLimiter
+    from api.kernel.rate_limiter import PublicRateLimiter, FederationRateLimiter
 except ModuleNotFoundError:
-    from kernel.rate_limiter import PublicRateLimiter
+    from kernel.rate_limiter import PublicRateLimiter, FederationRateLimiter
 
 # Persona file the public-chat surface loads. Default = nous demo persona;
 # org brains override via PUBLIC_PERSONA_PATH env to point at their own
@@ -2851,6 +2851,44 @@ def _vendor_disavowal_instruction(vendors: list[str]) -> str:
     )
 
 _public_rate_limiter = PublicRateLimiter()
+_federation_rate_limiter = FederationRateLimiter()
+
+
+def _identify_federation_caller(http_request: Request) -> tuple[Optional[str], bool]:
+    """Identify the caller of an inbound federation request.
+
+    If an X-Brain-Assertion header is present and verifies against the pinned
+    public key of an introduced peer (matched by the token's `iss` claim), the
+    caller is that peer (verified). Anything else — no header, unknown issuer,
+    bad signature, expired — is treated as anonymous. Best-effort and never
+    raises: the federation read surface stays open to anonymous public callers
+    (the per-IP floor still applies), this only *upgrades* an identified peer so
+    the per-peer cap and the audit log can name it.
+    """
+    token = http_request.headers.get("X-Brain-Assertion")
+    if not token:
+        return None, False
+    try:
+        import base64 as _b64
+        from api.hbar_commands import find_peer_by_brain_id
+        from api.identity.core import verify_federation_assertion
+        # Peek the unverified issuer to find which pinned key to verify against.
+        claims_b64 = token.split(".")[1]
+        claims_b64 += "=" * (-len(claims_b64) % 4)
+        iss = json.loads(_b64.urlsafe_b64decode(claims_b64).decode()).get("iss")
+        peer = find_peer_by_brain_id(iss)
+        if not peer:
+            return None, False
+        verify_federation_assertion(
+            public_key_b64=peer["public_key"],
+            token=token,
+            expected_audience=os.getenv("BRAIN_ID", ""),
+            expected_issuer=iss,
+        )
+        return iss, True
+    except Exception:
+        return None, False
+
 
 # Defense-in-depth caps — also enforced by the relay, but the brain endpoint
 # is publicly reachable on api.nous.brainfoundry.ai and must defend itself.
@@ -3141,6 +3179,8 @@ async def federation_query(request: dict, http_request: Request):
     unreachable — the same PUBLIC_CHAT_LAYERS / PUBLIC_CHAT_SCOPE gate applies,
     so federation never exposes more than the public chat surface already does.
     """
+    from api.tools import federation_audit
+
     query = (request.get("query") or request.get("message") or "")
     query = query.strip() if isinstance(query, str) else ""
     if not query:
@@ -3148,10 +3188,17 @@ async def federation_query(request: dict, http_request: Request):
     if len(query) > 4000:
         return JSONResponse(status_code=400, content={"error": "query too long (max 4000 chars)"})
 
+    # Identify the caller: a verified peer (signed assertion) is rate-limited and
+    # audited by brain_id; an anonymous public caller falls back to its IP.
+    peer_id, verified = _identify_federation_caller(http_request)
     ip = _public_client_ip(http_request)
-    rl = _public_rate_limiter.check(ip)
+    rl_key = f"peer:{peer_id}" if verified else f"ip:{ip}"
+    rl = _federation_rate_limiter.check(rl_key)
     if rl:
         retry = rl.get("retry_after")
+        federation_audit.record_event(
+            direction="in", peer_brain_id=(peer_id or "anonymous"), query=query,
+            verified=verified, outcome="rate_limited")
         return JSONResponse(status_code=429,
                             content={"error": "Rate limited.", "retry_after": retry})
 
@@ -3172,13 +3219,108 @@ async def federation_query(request: dict, http_request: Request):
             model, [{"role": "user", "content": prompt}], max_tokens=_PUBLIC_MAX_TOKENS_OUT)
     except Exception as e:
         print(f"federation_query model error: {e}")
+        federation_audit.record_event(
+            direction="in", peer_brain_id=(peer_id or "anonymous"), query=query,
+            documents_used=len(relevant_docs), verified=verified, outcome="error:model")
         return JSONResponse(status_code=502, content={"error": "Upstream model error."})
+
+    federation_audit.record_event(
+        direction="in", peer_brain_id=(peer_id or "anonymous"), query=query,
+        documents_used=len(relevant_docs), answer_len=len(answer or ""),
+        verified=verified, outcome="ok")
 
     return {
         "brain_id": os.getenv("BRAIN_ID", "brain"),
         "answer": answer,
         "documents_used": len(relevant_docs),
     }
+
+
+@app.get("/v1/federation/log")
+def federation_log_endpoint(limit: int = 100, api_key: str = Depends(get_api_key)):
+    """Recent cross-brain federation events, both directions (newest last).
+    Operator-authed read surface for 'who called my brain, and who did mine
+    call'. Backs the Settings → Security & Federation activity log."""
+    from api.tools import federation_audit
+    return {"entries": federation_audit.tail(max(1, min(int(limit), 500)))}
+
+
+# ── Sanctioned introduce path ────────────────────────────────────────────────
+# peers.introduce is a kernel STATE_MUTATION (403 in this build) and requires a
+# signed assertion raw curl can't produce — so the only way to add a peer used
+# to be hand-editing data/peers.json inside the container. These operator-authed
+# REST endpoints close that gap: the console (basic-auth + BFF api-key) is the
+# sanctioned operator surface, so an api-key call IS the operator's authority —
+# the brain introduces the peer server-side, pinning its /identity public key.
+
+class IntroducePeerRequest(BaseModel):
+    endpoint: str
+
+
+@app.get("/v1/federation/peers")
+def federation_list_peers(api_key: str = Depends(get_api_key)):
+    """The introduced-peers directory (data/peers.json). `pinned` flags whether
+    a federation public key was captured so inbound assertions can be verified."""
+    from api.hbar_commands import _load_peers
+    peers = []
+    for p in _load_peers():
+        peers.append({
+            "brain_id": p.get("brain_id"),
+            "endpoint": p.get("endpoint"),
+            "introduced_at": p.get("introduced_at"),
+            "pinned": bool(p.get("public_key")),
+        })
+    return {"peers": peers}
+
+
+@app.post("/v1/federation/peers/introduce")
+async def federation_introduce_peer(req: IntroducePeerRequest, api_key: str = Depends(get_api_key)):
+    """Introduce a peer by endpoint: validate the URL (SSRF-guarded), fetch the
+    peer's /identity, and persist {brain_id, endpoint, public_key} to the
+    introduced-peers directory. Idempotent on brain_id."""
+    from api.hbar_commands import handle_hbar_command
+    try:
+        result = await handle_hbar_command(
+            command="peers.introduce",
+            payload={"endpoint": req.endpoint},
+            client_id="console",
+        )
+        return {"ok": True, **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"peer /identity returned HTTP {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"introduce failed: {e}")
+
+
+@app.post("/v1/federation/peers/ping")
+async def federation_ping_peer(req: dict, api_key: str = Depends(get_api_key)):
+    """Health-check a peer by id (looked up in the directory) or raw endpoint —
+    the 'Test federation' action next to each peer in the UI."""
+    from api.hbar_commands import handle_hbar_command
+    try:
+        return await handle_hbar_command(
+            command="peers.ping",
+            payload={"id": (req.get("id") or "").strip(), "endpoint": (req.get("endpoint") or "").strip()},
+            client_id="console",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/v1/federation/peers/{brain_id}")
+async def federation_remove_peer(brain_id: str, api_key: str = Depends(get_api_key)):
+    """Remove a peer from the introduced-peers directory."""
+    from api.hbar_commands import handle_hbar_command
+    try:
+        return await handle_hbar_command(
+            command="peers.remove",
+            payload={"id": brain_id},
+            client_id="console",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _nodeos_propose_memory(memory_type: str, content: str, permit_id: str, source_refs: dict = None) -> dict:

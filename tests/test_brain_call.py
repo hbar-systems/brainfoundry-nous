@@ -44,7 +44,7 @@ def test_unknown_peer_lists_known(monkeypatch):
 def test_successful_call_attributes_and_wraps(monkeypatch):
     _fake_peers(monkeypatch, [{"brain_id": "hbar-university", "endpoint": "https://u"}])
 
-    async def fake_query(endpoint, query):
+    async def fake_query(endpoint, query, assertion=None):
         assert endpoint == "https://u" and query == "what is bayes"
         return {"brain_id": "hbar-university", "answer": "Bayes' theorem relates...", "documents_used": 3}
 
@@ -64,7 +64,7 @@ def test_successful_call_attributes_and_wraps(monkeypatch):
 def test_empty_answer_is_error(monkeypatch):
     _fake_peers(monkeypatch, [{"brain_id": "p", "endpoint": "https://p"}])
 
-    async def fake_query(endpoint, query):
+    async def fake_query(endpoint, query, assertion=None):
         return {"brain_id": "p", "answer": "   "}
 
     monkeypatch.setattr(brain_call, "_query_peer", fake_query)
@@ -75,9 +75,47 @@ def test_empty_answer_is_error(monkeypatch):
 def test_transport_failure_is_clean_error(monkeypatch):
     _fake_peers(monkeypatch, [{"brain_id": "p", "endpoint": "https://p"}])
 
-    async def boom(endpoint, query):
+    async def boom(endpoint, query, assertion=None):
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr(brain_call, "_query_peer", boom)
     r = _run(brain_call.run("p", "q"))
     assert r.ok is False and "failed" in r.error and "connection refused" in r.error
+
+
+def test_per_peer_budget_refusal(monkeypatch):
+    """A peer over its monthly budget is refused before any network call, with a
+    clear message — and the network is never touched."""
+    from api.tools import budget
+    _fake_peers(monkeypatch, [{"brain_id": "p", "endpoint": "https://p"}])
+    monkeypatch.setattr(budget, "under_cap", lambda key: False)
+    monkeypatch.setattr(budget, "cap", lambda key: 500)
+
+    called = {"hit": False}
+    async def fake_query(endpoint, query, assertion=None):
+        called["hit"] = True
+        return {"brain_id": "p", "answer": "should not run"}
+
+    monkeypatch.setattr(brain_call, "_query_peer", fake_query)
+    r = _run(brain_call.run("p", "q"))
+    assert r.ok is False
+    assert "budget" in r.error and "500" in r.error
+    assert called["hit"] is False  # refused before the round-trip
+
+
+def test_per_peer_budget_keyed_by_target(monkeypatch):
+    """The budget is checked/recorded per peer (brain_call:<id>), not globally."""
+    from api.tools import budget
+    _fake_peers(monkeypatch, [{"brain_id": "u", "endpoint": "https://u"}])
+    seen = {}
+    monkeypatch.setattr(budget, "under_cap", lambda key: seen.setdefault("under", key) or True)
+    monkeypatch.setattr(budget, "record", lambda key: seen.setdefault("record", key))
+
+    async def fake_query(endpoint, query, assertion=None):
+        return {"brain_id": "u", "answer": "ok", "documents_used": 1}
+
+    monkeypatch.setattr(brain_call, "_query_peer", fake_query)
+    r = _run(brain_call.run("u", "q"))
+    assert r.ok is True
+    assert seen["under"] == "brain_call:u"
+    assert seen["record"] == "brain_call:u"

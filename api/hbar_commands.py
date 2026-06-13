@@ -65,6 +65,17 @@ def _save_peers(peers: list) -> None:
     _PEERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     _PEERS_PATH.write_text(json.dumps(peers, indent=2), encoding="utf-8")
 
+def find_peer_by_brain_id(brain_id: str) -> dict | None:
+    """Look up an introduced peer by its brain_id. Used to verify an inbound
+    federation assertion against the peer's pinned public key. Returns None if
+    the brain_id is unknown or has no pinned key."""
+    if not brain_id:
+        return None
+    for p in _load_peers():
+        if p.get("brain_id") == brain_id and p.get("public_key"):
+            return p
+    return None
+
 # ── audit log path ─────────────────────────────────────────────────────────────
 _AUDIT_PATH = Path("brainfoundry/audit.jsonl")
 
@@ -258,9 +269,15 @@ async def handle_hbar_command(
             identity = resp.json()
         peers = _load_peers()
         brain_id = identity.get("brain_id", endpoint)
+        # Pin the peer's federation public key from its /identity so inbound
+        # assertions from this peer can be verified against the introduced-peers
+        # directory (no separate out-of-band known_peers edit needed for the
+        # public-read federation path).
+        public_key = identity.get("public_key") or ""
         existing_ids = {p["brain_id"] for p in peers}
         if brain_id not in existing_ids:
             peers.append({"brain_id": brain_id, "endpoint": endpoint,
+                          "public_key": public_key,
                           "introduced_at": datetime.now(timezone.utc).isoformat()})
             _save_peers(peers)
         return {"introduced": True, "peer": brain_id, "identity": identity}

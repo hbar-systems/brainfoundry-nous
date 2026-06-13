@@ -221,3 +221,82 @@ This is the territory claim. Test privately, announce publicly the same day it w
 | `.env.example` | `BRAIN_PRIVATE_KEY`, `BRAIN_PUBLIC_KEY` documented |
 
 Intra-brain permits (loop permits, operator assertions) continue to use HMAC-SHA256 via `issue_permit()` / `verify_permit()` — the symmetric system is unchanged and appropriate for single-brain use.
+
+---
+
+## Federation MVP — cross-brain READ, caps, audit, introduce
+
+The assertion layer above answers *"is this really Brain A?"*. On top of it sits
+the first concrete federation capability: a brain can **read** from a peer's
+public-scoped corpus. This is the MVP ceiling — scoped/private memory-share
+(peer reads my `research` layer) is federation v1.0 and depends on the
+not-yet-built RED per-call approval flow.
+
+### Read path
+
+- **Inbound** — `POST /v1/federation/query` answers a peer's question from *this*
+  brain's public-scoped corpus (`PUBLIC_CHAT_LAYERS` / `PUBLIC_CHAT_SCOPE`
+  gate — federation never exposes more than the public chat surface). Read-only,
+  non-streaming JSON.
+- **Outbound** — the `brain_call` tool (YELLOW tier) lets the agentic loop ask a
+  peer a question and synthesize the answer *with attribution*. The callable
+  directory is the introduced-peers list (`data/peers.json`).
+
+### Per-peer caps
+
+Throttling is per-peer, not just per-IP:
+
+- **Inbound** (`FederationRateLimiter`, Redis-backed, fail-closed) — a caller
+  presenting a verified ED25519 assertion is keyed by `brain_id`; anonymous
+  public callers fall back to their IP. Per-window cap
+  `FEDERATION_RATE_LIMIT_MAX` (default 30) / `FEDERATION_RATE_LIMIT_WINDOW`
+  (default 60s) plus a per-caller daily cap `FEDERATION_DAILY_MAX` (default
+  1000, set 0 to disable). Over-cap → `429` with `retry_after`.
+- **Outbound** — a per-peer monthly call budget keyed `brain_call:<peer_id>` in
+  the existing `api/tools/budget.py` store, capped by
+  `FEDERATION_OUTBOUND_MONTHLY_CAP` (default 500). Exhaustion refuses the call
+  with a clear message *before* any network round-trip, and is audit-logged.
+
+To let a peer identify (and cap) us rather than our IP, `brain_call` signs each
+outbound request with a short-lived federation assertion in the
+`X-Brain-Assertion` header — best-effort: if this brain has no keypair the call
+still goes out anonymously.
+
+### Cross-brain audit log
+
+`api/tools/federation_audit.py` writes one append-only JSONL line per federation
+event, both directions, to `/app/runtime/federation_audit.jsonl` (volume-mounted,
+survives rebuilds). Fields: `ts, direction(in|out), peer_brain_id,
+query_summary, documents_used, answer_len, verified, trust, outcome`. Read it
+via `GET /v1/federation/log` (operator-authed) or the Settings → Security &
+Federation activity-log panel.
+
+### Sanctioned introduce path
+
+`peers.introduce` as a kernel command is a `STATE_MUTATION` (403 in this build)
+and needs a signed assertion raw curl can't mint — so the only path used to be
+hand-editing `data/peers.json` inside the container. The operator-authed REST
+endpoints close that gap (the console is basic-auth + BFF-api-key, so an
+api-key call *is* the operator's authority):
+
+| Endpoint | Action |
+|---|---|
+| `GET /v1/federation/peers` | list the introduced-peers directory |
+| `POST /v1/federation/peers/introduce` `{endpoint}` | SSRF-validate, fetch `/identity`, pin `public_key`, persist |
+| `POST /v1/federation/peers/ping` `{id\|endpoint}` | health-check a peer |
+| `DELETE /v1/federation/peers/{brain_id}` | remove a peer |
+
+The Settings → Security & Federation panel surfaces this as an "Introduce peer"
+form with per-peer ping + remove actions.
+
+### Implementation
+
+| File | Role |
+|------|------|
+| `api/main.py` `/v1/federation/query` | inbound READ + per-peer limiter + inbound audit |
+| `api/main.py` `/v1/federation/peers*`, `/v1/federation/log` | introduce path + log surface |
+| `api/tools/brain_call.py` | outbound READ + outbound budget + signed assertion + audit |
+| `api/tools/federation_audit.py` | append-only cross-brain event log |
+| `api/kernel/rate_limiter.py` `FederationRateLimiter` | per-peer/per-IP inbound caps |
+| `api/tools/budget.py` | per-peer monthly outbound cap (`brain_call:<id>` key) |
+| `ui/pages/settings.js` `SecurityPanel` | peers manager + federation activity log |

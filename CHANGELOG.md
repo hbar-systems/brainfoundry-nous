@@ -6,6 +6,25 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- federation: **federation MVP — per-peer caps, cross-brain audit log, sanctioned
+  introduce path.** The proven cross-brain READ path is now operationally safe to
+  leave on.
+  - **Per-peer caps.** Inbound `/v1/federation/query` gains a `FederationRateLimiter`
+    keyed by verified-peer `brain_id` (signed assertion) or IP for anonymous
+    callers — per-window + per-caller daily cap (`FEDERATION_RATE_LIMIT_*`,
+    `FEDERATION_DAILY_MAX`). Outbound `brain_call` gets a per-peer monthly budget
+    (`brain_call:<id>` key, `FEDERATION_OUTBOUND_MONTHLY_CAP`) that refuses before
+    the round-trip and audit-logs the refusal. `brain_call` now signs each request
+    so the peer can cap *us*, not just our IP.
+  - **Cross-brain audit log.** `api/tools/federation_audit.py` writes one
+    append-only JSONL line per federation event, both directions
+    (`ts, direction, peer_brain_id, query_summary, documents_used, answer_len,
+    verified, trust, outcome`). `GET /v1/federation/log` (operator-authed) + a
+    Settings → Security & Federation activity-log panel.
+  - **Sanctioned introduce path.** Operator-authed REST endpoints
+    (`/v1/federation/peers` list/introduce/ping + `DELETE …/{id}`) replace
+    hand-editing `data/peers.json`; introduce pins the peer's `/identity` public
+    key. Settings panel gains an "Introduce peer" form with per-peer ping/remove.
 - integrations: **connect your real world — email, calendar, Telegram, MCP (the
   no-OAuth way).** A new **Integrations** tab plus agentic tools so the brain can
   act on your life. Modeled on Odysseus's productivity suite but using

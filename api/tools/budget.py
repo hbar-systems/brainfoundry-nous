@@ -44,10 +44,18 @@ def _save(data: Dict[str, Dict[str, int]]) -> None:
 
 
 def cap(tool: str) -> int:
-    """Monthly cap for a tool, from settings. Defaults are conservative."""
+    """Monthly cap for a tool (or composite key), from settings/env.
+
+    Composite keys let one budget module serve per-instance caps without a new
+    store: `brain_call:<peer_id>` is the per-peer outbound federation cap (one
+    ceiling per peer brain), tunable via FEDERATION_OUTBOUND_MONTHLY_CAP.
+    """
     from api import settings_store
     if tool == "web_search":
         return settings_store.get_web_search_budget()
+    if tool.startswith("brain_call:"):
+        # Per-peer outbound federation call ceiling (calendar month, UTC).
+        return int(os.getenv("FEDERATION_OUTBOUND_MONTHLY_CAP", "500"))
     # Unknown tools get a safe default until they declare their own cap.
     return 1000
 
