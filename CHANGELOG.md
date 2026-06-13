@@ -6,6 +6,32 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- ops: **CI + automated backups — the safety net under the fleet.** 12+ brains
+  deploy by `git pull` from `main`, and a brain holds its owner's accumulated
+  cognition; there was no test gate before `main` reached them and no backup
+  under their memory. This closes both.
+  - **CI (`.github/workflows/ci.yml`).** Runs on push + PR to `main`:
+    `lint` (byte-compile, fails in seconds on a typo) → `unit` (the full pytest
+    suite with no external services; the live-DB tests in `test_substrate.py`
+    self-skip) + `integration` (those same live-DB tests run for real against a
+    `pgvector/pgvector:pg16` service container, so "needs a DB" never means
+    "silently skipped"). Operator flips on branch protection to make the checks
+    block merge — until then they report but do not enforce.
+  - **`scripts/backup_brain.sh`.** One sovereign, local, restorable artifact per
+    run: `pg_dump` of the whole vector DB (gzipped) + a tar of the per-brain
+    runtime state that is not in git (`settings.json`, `brain_persona.local.md`,
+    `peers.json`, the federation/tool/governance audit logs, `brain-apps/`).
+    Secrets are excluded by design (same rule as `export_brain.py`). Rotating
+    retention (7 daily + 4 weekly + 10 pre-update, every prune logged), a
+    host-cron schedule, and a `--pre-update` mode. Never phones home.
+  - **Pre-update snapshot.** `scripts/update_brain.sh` now takes a
+    `--pre-update` backup *before* it pulls and rebuilds against the live
+    Postgres volume — a bad deploy costs minutes, not a brain. Best-effort by
+    default; `REQUIRE_BACKUP=1` makes a missing snapshot abort the update.
+  - **`scripts/restore_brain.sh` + `docs/BACKUP_RESTORE.md`.** Fresh box →
+    `docker compose up` → restore the dump + untar runtime → brain is back. The
+    runbook proves the restore, not just that the dump runs.
+
 - security: **write-lane hardening — scan + classify every path into memory
   (cognitive-OS gap #3, write side).** The read side already demoted untrusted
   chunks; the write side was unguarded — several endpoints wrote straight into

@@ -98,6 +98,31 @@ echo "==> Changes coming in:"
 git log --oneline "$LOCAL".."$REMOTE" | head -20
 echo ""
 
+# Pre-update snapshot — the safety net. Before we pull and rebuild against the
+# live Postgres volume, capture a restorable backup so a bad deploy costs
+# minutes (scripts/restore_brain.sh) instead of a brain's memory. Snapshots go
+# UNDER the bind-mounted brain dir (.brain-backups/) so they survive the rebuild
+# even when this script runs inside the api container — the host-side
+# /home/hbar/brain-backups is not mounted in. Best-effort by default: a backup
+# failure warns loudly but does not block the update (volumes persist across an
+# ff-only pull + rebuild, and the rollback commit + revert_brain.sh remain). Set
+# REQUIRE_BACKUP=1 to abort the update if the snapshot cannot be taken.
+if [ -x "$BRAIN_DIR/scripts/backup_brain.sh" ]; then
+    echo "==> Pre-update snapshot..."
+    if BACKUP_DIR="${PREUPDATE_BACKUP_DIR:-$BRAIN_DIR/.brain-backups}" \
+        "$BRAIN_DIR/scripts/backup_brain.sh" --pre-update --label "$(git rev-parse --short "$REMOTE")"; then
+        echo "✓ Pre-update snapshot taken (restore with scripts/restore_brain.sh)"
+    else
+        echo "⚠ Pre-update snapshot FAILED."
+        if [ "${REQUIRE_BACKUP:-0}" = "1" ]; then
+            echo "✗ REQUIRE_BACKUP=1 — aborting before any change. Brain is unchanged."
+            exit 1
+        fi
+        echo "  Continuing without a snapshot (REQUIRE_BACKUP=1 to enforce)."
+    fi
+    echo ""
+fi
+
 # Backup .env
 if [ -f .env ]; then
     cp .env ".env.bak-$TS"

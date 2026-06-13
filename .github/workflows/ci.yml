@@ -1,0 +1,118 @@
+# CI — the test gate under the fleet.
+#
+# 12+ brains deploy by `git pull` from `main`. A bad `main` propagates to every
+# one of them on their next update, and a brain holds its owner's accumulated
+# cognition. This workflow is the gate that keeps `main` always-tested:
+#
+#   lint        — syntax check, fails in seconds on a typo (no deps).
+#   unit        — the full pytest suite with NO external services. The live-DB
+#                 tests in test_substrate.py self-skip (they need
+#                 SUBSTRATE_PG_TEST=1 + DATABASE_URL, set only in `integration`).
+#   integration — the same live-DB tests, run for real against a pgvector
+#                 service container so "needs a DB" never means "silently
+#                 skipped". This job is what proves the persistence layer.
+#
+# Branch protection (operator action, one-time): make `lint`, `unit`, and
+# `integration` required status checks on `main` so a red check blocks merge.
+# Until that setting is flipped these checks report but do not enforce.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Python pinned to 3.11 to match the api Dockerfile (FROM python:3.11-slim);
+# CI should test what actually ships.
+env:
+  PYTHON_VERSION: "3.11"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Fast gate: syntax/compile. Fails in seconds on a typo, before we pay
+  #    for the heavier dependency install in `unit`.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Byte-compile all Python (api + scripts + tests)
+        run: python -m compileall -q api scripts tests
+
+  # ── Unit tests: the whole suite, no external services. The substrate
+  #    live-DB tests skip themselves here; everything else must pass green.
+  unit:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            api/requirements.txt
+      - name: Install dependencies
+        # The api/ test modules (test_vendor_disavowal imports api.main,
+        # test_native_tools imports api.providers) pull the full runtime stack,
+        # so we install api/requirements.txt — not just the minimal root set.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r api/requirements.txt
+          pip install pytest
+      - name: Run unit suite (live-DB tests auto-skip)
+        run: pytest tests/ -v
+        # SUBSTRATE_PG_TEST is intentionally unset here: the persistence tests
+        # skip, and the `integration` job below runs them against a real DB.
+
+  # ── Integration: the live-DB tests, against a real pgvector service.
+  #    This is the half that "needs a DB" — wired, not skipped.
+  integration:
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: llm_db
+        ports:
+          - 5432:5432
+        # Wait until Postgres accepts connections before the test job starts.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SUBSTRATE_PG_TEST: "1"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/llm_db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            api/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r api/requirements.txt
+          pip install pytest
+      - name: Run live-DB integration tests
+        # Targeted at the modules that exercise the DB. The skipif guard is now
+        # satisfied (SUBSTRATE_PG_TEST=1 + DATABASE_URL), so these run for real.
+        run: pytest tests/test_substrate.py -v

@@ -119,3 +119,9 @@ api/brain_persona.md
 # update_brain.sh, read by revert_brain.sh / the console Revert button.
 # Per-brain runtime state, never committed.
 .update-prev-commit
+
+# Pre-update snapshots written by backup_brain.sh when invoked from the
+# in-container Update path. Lives inside the bind-mounted brain dir so it
+# survives the rebuild (the parent /home/hbar/brain-backups is not mounted
+# into the container). Gitignored so it never blocks a pull / dirties status.
+.brain-backups/
