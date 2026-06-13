@@ -77,6 +77,14 @@ jobs:
           pip install -r requirements.txt
           pip install -r api/requirements.txt
           pip install pytest
+      - name: Provision writable /app/runtime (mirrors the container volume)
+        # api/main.py creates /app/runtime/proposal_texts at import time — in the
+        # real deployment /app/runtime is the api_runtime volume. The runner has
+        # no /app, so make it writable; faithful to the container layout and
+        # avoids changing shipped code just to run the tests.
+        run: |
+          sudo mkdir -p /app/runtime
+          sudo chown -R "$(id -u):$(id -g)" /app
       - name: Run unit suite (live-DB tests auto-skip)
         run: pytest tests/ -v
         # SUBSTRATE_PG_TEST is intentionally unset here: the persistence tests
