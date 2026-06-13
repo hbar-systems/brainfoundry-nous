@@ -6,6 +6,32 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- security: **write-lane hardening — scan + classify every path into memory
+  (cognitive-OS gap #3, write side).** The read side already demoted untrusted
+  chunks; the write side was unguarded — several endpoints wrote straight into
+  `document_embeddings` with no injection scan and no memory-type stamp, so a
+  poisoned document written once re-injected into every future session that
+  retrieved it, and the read-side rerank gave zero defense. Now **every** write
+  path scans (`injection_scan.scan_text`) and classifies
+  (`memory_type.classify_write`) before persisting:
+  - **Operator-direct** writes (chat Store button `/memory/store`, approved
+    upload) → `semantic`, not demoted; the scan band is recorded in provenance
+    for audit. Closes the `/memory/store` gap where `mem_type` was never stamped.
+  - **Non-interactive / external** writes (`/memory/append`, automated
+    `brain_ingest`, stored tool/peer answers) → `untrusted` (0.4× at retrieval)
+    by default; a **high**-severity hit additionally **quarantines** the chunk
+    (persisted with provenance, excluded from retrieval via `memory_type.rerank`
+    until the operator releases it — logged, never silently dropped). Never
+    `semantic`. A brain app can't launder its content up to `semantic` or clear
+    a quarantine via passthrough metadata.
+  - `brain_ingest` rides the already-hardened document-upload propose/approve
+    flow (scan at propose, classify at approve), with operator approval in loop.
+  - The dev-gated kernel `MEMORY_APPEND` handler stamps the same scan +
+    classification (jsonl-only today, so it carries the gate forward if ever
+    pointed at the vector store).
+  - `THREAT_MODEL.md` §6 gap #3 narrowed from "principal residual surface" to
+    "heuristic-coverage residual".
+
 - federation: **federation MVP — per-peer caps, cross-brain audit log, sanctioned
   introduce path.** The proven cross-brain READ path is now operationally safe to
   leave on.

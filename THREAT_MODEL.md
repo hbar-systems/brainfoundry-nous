@@ -79,17 +79,34 @@ content, never credentials.
    not have run regardless. The gate's value is that *when a write tool is added
    later, it is already default-denied* — it pre-empts a future hole, it did not
    plug a currently-open one.
-3. **Memory-poisoning persists through the write lane, which the gate cannot
-   touch.** A poisoned document approved at ingest is re-injected into every
-   session that retrieves it; `injection_scan.py` flags it at approval time, but
-   approval is a fallible human judgement, and retrieved content is demoted to
-   data but still *seen*. Critically, the brain's memory *formation* does not go
-   through the tool gate at all — it persists via the kernel `MEMORY_APPEND`
-   execution class and direct `INSERT INTO document_embeddings` SQL, a separate
-   governance lane. If injected content can shape what `MEMORY_APPEND` persists,
-   that poison re-injects every turn and the §4 gate provides no defense. This
-   work demotes *reads* and gates *tools*; it does **not** close the write-lane
-   poisoning path. That path is the principal residual memory-injection surface.
+3. **Memory-poisoning through the write lane — now scanned + classified at every
+   write, substantially narrowed.** A poisoned document re-injects into
+   every session that retrieves it, and the §4 tool gate cannot touch memory
+   *formation* — it persists via direct `INSERT INTO document_embeddings` SQL and
+   the kernel `MEMORY_APPEND` class, a separate governance lane. Previously
+   several of those write paths (`/memory/append`, `/memory/store`) wrote with no
+   injection scan and no memory-type stamp, so the read-side rerank (which only
+   demotes by an *already-stamped* `mem_type`) gave zero defense against them.
+   That gap is now closed: **every** write path runs `injection_scan.scan_text`
+   and stamps `mem_type` + provenance before persisting (`memory_type.classify_write`):
+   - Operator-direct writes (chat Store button, approved upload) → `semantic`,
+     not demoted — the operator's own curated memory is trusted, but the scan
+     band is still recorded in provenance.
+   - Non-interactive / external writes (a brain app via `/memory/append`,
+     automated `brain_ingest`, a stored tool/peer answer) → `untrusted` (0.4× at
+     retrieval) by default; a **high**-severity scan hit additionally
+     **quarantines** the chunk (persisted with provenance, excluded from
+     retrieval by `memory_type.rerank` until the operator releases it — logged,
+     never silently dropped). Never `semantic`.
+   - `brain_ingest` rides the already-hardened document-upload propose/approve
+     flow (scan at propose, `classify_upload` at approve), so it is covered by
+     the same mechanism with an operator approval in the loop.
+   Residual: this is heuristic detection, not a guarantee — a novel injection
+   phrasing the scanner misses still lands `untrusted` (demoted) on the
+   non-interactive lanes but `semantic` on the operator-direct lanes, where the
+   operator's judgement at Store/approve time remains the backstop. Retrieved
+   content is also still *seen* (demoted to data, not erased). Narrowed from
+   "principal residual surface" to "heuristic-coverage residual".
 4. **No shell/filesystem sandbox.** The brain does not sandbox the (currently
    blocked) RED tools. Mitigation is the deployment discipline in SERVERS.md and
    routing untrusted installers to the quarantine box — not in-process isolation.

@@ -61,6 +61,14 @@ _DEFAULT_TRUST = 1.0
 # forever), not only a one-time UI warning at approval.
 _RISKY_BANDS = {"medium", "high"}
 
+# Scan band at/above which a NON-INTERACTIVE write (no operator in the loop at
+# write time: /memory/append, automated brain_ingest, a stored tool/peer answer)
+# is QUARANTINED — persisted with its provenance but excluded from retrieval
+# until the operator releases it. Below this band the content still lands
+# `untrusted` (demoted 0.4× at retrieval), so the choice is demote-vs-quarantine,
+# never hard-refuse — legitimate automated ingest is not broken, only deferred.
+QUARANTINE_BAND = "high"
+
 
 def trust_prior(mem_type: Optional[str]) -> float:
     """Retrieval weight for a memory type. Unknown/None -> semantic (1.0)."""
@@ -78,6 +86,37 @@ def classify_upload(injection_risk: Optional[str]) -> str:
     return SEMANTIC
 
 
+def classify_write(injection_risk: Optional[str], *, operator_authored: bool):
+    """Memory type + quarantine decision for ANY write into the corpus.
+
+    The write-lane analogue of `classify_upload` (which only covers the
+    operator-approved document-upload flow). It splits on provenance, not on a
+    blanket demote:
+
+    `operator_authored=True` — the operator typed or approved this directly
+        (the chat "Store this" button, an approved upload). The operator is the
+        one trusted source of instructions, so their own note is `semantic`
+        (trust 1.0) and is NEVER quarantined, whatever the scan says — a scan
+        hit on operator-authored text is recorded in provenance for visibility
+        but does not demote it. Returns ``(SEMANTIC, False)``.
+
+    `operator_authored=False` — non-interactive / external ingest with no
+        operator in the loop at write time (a brain app via /memory/append,
+        automated `brain_ingest`, a stored tool result or federation peer
+        answer). Default classify-and-demote: nothing unvetted enters the corpus
+        fully trusted, so it lands `untrusted` (demoted 0.4× at retrieval). If
+        the scan crosses `QUARANTINE_BAND` it is additionally quarantined
+        (stored but excluded from retrieval until the operator releases it).
+        Returns ``(UNTRUSTED, quarantined: bool)``.
+
+    Returns a ``(mem_type, quarantined)`` tuple.
+    """
+    if operator_authored:
+        return SEMANTIC, False
+    quarantined = bool(injection_risk and injection_risk.lower() == QUARANTINE_BAND)
+    return UNTRUSTED, quarantined
+
+
 def provenance(
     *,
     mem_type: str,
@@ -86,6 +125,8 @@ def provenance(
     content_hash: Optional[str] = None,
     ingested_at: Optional[str] = None,
     ingested_by: str = "operator",
+    injection_risk: Optional[str] = None,
+    quarantined: bool = False,
 ) -> Dict[str, Any]:
     """Build the flat provenance block merged into a chunk's metadata JSONB.
 
@@ -95,6 +136,12 @@ def provenance(
     `content_hash` is the join key back to the signed `artifact_attestations`
     ledger (api/substrate.py) — the link that was missing between a chunk and
     its attested provenance.
+
+    `injection_risk` records the scan band the content scored at write time
+    (kept even when it didn't change the type — e.g. an operator-authored note
+    that scanned `high` stays `semantic` but carries the band for audit).
+    `quarantined=True` flags a chunk that is persisted but excluded from
+    retrieval (see `rerank`) pending operator release.
     """
     block: Dict[str, Any] = {
         "mem_type": mem_type,
@@ -107,6 +154,10 @@ def provenance(
         block["content_hash"] = content_hash
     if ingested_at:
         block["ingested_at"] = ingested_at
+    if injection_risk:
+        block["injection_risk"] = injection_risk
+    if quarantined:
+        block["quarantined"] = True
     return block
 
 
@@ -116,16 +167,24 @@ def effective_score(similarity_score: float, mem_type: Optional[str]) -> float:
 
 
 def rerank(results: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
-    """Drop ephemeral, demote by trust prior, keep the top `limit`.
+    """Drop ephemeral + quarantined, demote by trust prior, keep the top `limit`.
 
     Stable: equal effective scores keep their incoming (pure-similarity) order,
     so an all-`semantic` result set is returned unchanged. Reads `mem_type` from
     each result's `metadata`; a result with no metadata/type is treated as
     `semantic` and therefore not demoted.
+
+    Quarantined chunks (`metadata.quarantined` truthy) are excluded entirely —
+    the non-interactive write lanes set this on high-severity injection hits, so
+    a poisoned automated ingest never reaches a model's context until the
+    operator releases it. This is the retrieval chokepoint; a quarantined chunk
+    is also stamped `untrusted`, so even a retrieval path that bypassed rerank
+    would only ever see it demoted, never trusted.
     """
     kept = [
         r for r in results
         if (r.get("metadata") or {}).get("mem_type") != EPHEMERAL
+        and not (r.get("metadata") or {}).get("quarantined")
     ]
     kept.sort(
         key=lambda r: effective_score(

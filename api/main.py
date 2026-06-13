@@ -5935,6 +5935,61 @@ def admin_revert(api_key: str = Depends(get_api_key)):
     )
 
 
+# --- write-lane injection gate (cognitive-OS gap #3, write side) ---
+#
+# Every path that puts content into document_embeddings must scan it for
+# prompt-injection and stamp a memory type + provenance BEFORE it persists —
+# otherwise a poisoned chunk written once re-injects into every future session
+# that retrieves it, and the read-side rerank (which only demotes by an
+# already-stamped mem_type) gives zero defense. The document-upload propose/
+# approve flow already does this (injection_scan.scan_text at propose,
+# memory_type.classify_upload at approve); this helper extends the SAME
+# mechanism to the other write lanes instead of inventing a new one.
+#
+# Provenance split (see memory_type.classify_write):
+#   operator_authored=True  — operator typed/approved it (the chat Store button,
+#                             an approved upload). Stays `semantic`; never
+#                             demoted or quarantined. Scan band is still recorded.
+#   operator_authored=False — non-interactive/external (brain app, automated
+#                             brain_ingest, stored tool/peer answer). Lands
+#                             `untrusted`; quarantined (excluded from retrieval)
+#                             above QUARANTINE_BAND. Never SEMANTIC.
+
+def _scan_and_classify_write(
+    text: str,
+    *,
+    source: str,
+    operator_authored: bool,
+    content_hash: Optional[str] = None,
+):
+    """Scan write content for injection and build its provenance block.
+
+    Returns ``(provenance: dict, scan: dict|None, quarantined: bool)``. The
+    provenance dict is merged into the chunk metadata; `scan` is surfaced to the
+    caller for the response/log; `quarantined` tells the lane whether to record
+    a quarantine and (for non-interactive lanes) log it.
+    """
+    from api import injection_scan as _injection_scan
+    from api import memory_type as _memtype
+    try:
+        scan = _injection_scan.scan_text(text)
+    except Exception as _scan_err:
+        print(f"[write-gate] injection scan failed ({source}): {_scan_err}", flush=True)
+        scan = None
+    risk = (scan or {}).get("risk")
+    mem_type, quarantined = _memtype.classify_write(risk, operator_authored=operator_authored)
+    prov = _memtype.provenance(
+        mem_type=mem_type,
+        source=source,
+        derivation=_memtype.OBSERVED,
+        content_hash=content_hash,
+        ingested_by="operator" if operator_authored else "automated",
+        injection_risk=risk,
+        quarantined=quarantined,
+    )
+    return prov, scan, quarantined
+
+
 # --- /memory/append — brain-app memory write surface ---
 #
 # Generic single-shot memory write used by installed brain apps via the
@@ -5972,13 +6027,37 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
         raise HTTPException(status_code=422, detail={"error": "chunking_produced_nothing"})
     embeddings = generate_embeddings(chunks)
 
+    # Write-lane injection gate. /memory/append is non-interactive (an installed
+    # brain app writes here via the bridge — no operator at write time), so the
+    # content is classify-and-demoted: it lands `untrusted` (0.4× at retrieval),
+    # and a high-severity injection hit additionally quarantines it (stored,
+    # excluded from retrieval until the operator releases it). Never SEMANTIC.
+    from api import substrate as _substrate
+    _content_hash = _substrate.content_hash_of(content)
+    provenance, scan, quarantined = _scan_and_classify_write(
+        content, source=source, operator_authored=False, content_hash=_content_hash,
+    )
+    if quarantined:
+        # No silent drops: a quarantined ingest is logged with its signals so the
+        # operator can find and review it. It is stored, not discarded.
+        print(
+            f"[memory/append] QUARANTINED source={source} doc={doc_name} "
+            f"risk={(scan or {}).get('risk')} score={(scan or {}).get('score')} "
+            f"signals={[s.get('label') for s in (scan or {}).get('signals', [])]}",
+            flush=True,
+        )
+
     metadata_base = {
         "layer": req.layer,
         "source": source,
         "appended_at": datetime.utcnow().isoformat(),
+        **provenance,
     }
     if isinstance(req.metadata, dict):
-        # Don't let caller overwrite layer / source / appended_at — they're load-bearing.
+        # Don't let caller overwrite load-bearing keys (layer / source /
+        # appended_at) OR any provenance/gate key (mem_type, quarantined,
+        # source_trust, …) — a brain app must not be able to launder its own
+        # content up to `semantic` or clear a quarantine via passthrough metadata.
         for k, v in req.metadata.items():
             if k not in metadata_base:
                 metadata_base[k] = v
@@ -6010,12 +6089,18 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
 
     # Return the first chunk's id as the "drop id" — the iframe stores this
     # against its localStorage entry so the user can see "in brain" status.
+    # `mem_type` / `quarantined` / `injection_scan` let the caller (and the
+    # operator) see that automated writes land demoted, and whether this one
+    # was held back for review.
     return {
         "ok": True,
         "id": stored_ids[0] if stored_ids else None,
         "chunk_ids": stored_ids,
         "doc_name": doc_name,
         "layer": req.layer,
+        "mem_type": provenance.get("mem_type"),
+        "quarantined": quarantined,
+        "injection_scan": scan,
     }
 
 
@@ -6189,6 +6274,17 @@ JSON object only."""
     if layer not in ("episodic", "semantic", "procedural"):
         layer = "episodic"
 
+    # Surface the injection scan in the proposal so the operator sees the risk
+    # band BEFORE they accept (the actual persist via /memory/store re-scans).
+    # /memory/store/propose itself does not write to document_embeddings — it
+    # only classifies — so no provenance is stamped here; this is operator
+    # visibility, not the gate.
+    try:
+        from api import injection_scan as _injection_scan
+        scan = _injection_scan.scan_text(proposal.get("content") or content)
+    except Exception:
+        scan = None
+
     return {
         "layer": layer,
         "organizational_layer": proposal.get("organizational_layer"),
@@ -6198,6 +6294,7 @@ JSON object only."""
         "content": proposal.get("content") or content,
         "rationale": (proposal.get("rationale") or "").strip()[:300],
         "model": model,
+        "injection_scan": scan,
     }
 
 
@@ -6270,6 +6367,23 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         raise HTTPException(status_code=422, detail={"error": "chunking_produced_nothing"})
     embeddings = generate_embeddings(chunks)
 
+    # Write-lane injection gate. The Store button is operator-direct: the
+    # operator chose this content and clicked Store, so it is `semantic`
+    # (trust 1.0) and is NOT demoted — we don't punish the operator's own
+    # curated memory. We still scan (the band is recorded in provenance for
+    # audit) and, crucially, STAMP mem_type + provenance — closing the gap where
+    # /memory/store wrote chunks with no mem_type at all, leaving them untagged
+    # (which the rerank then treats as semantic by default anyway, but now it is
+    # explicit and carries source/derivation/source_trust).
+    from api import substrate as _substrate
+    _content_hash = _substrate.content_hash_of(content)
+    provenance, scan, _quarantined = _scan_and_classify_write(
+        content,
+        source=req.source or "chat-store-button",
+        operator_authored=True,
+        content_hash=_content_hash,
+    )
+
     metadata_base: dict = {
         "layer": layer,
         "source": req.source or "chat-store-button",
@@ -6277,6 +6391,7 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         "store_mode": req.mode,
         "session_id": req.session_id,
         "message_role": req.message_role,
+        **provenance,
     }
     # Phase B metadata — tags + title persist alongside the chunk so the
     # Browse view and any future search-by-tag can use them.
@@ -6347,6 +6462,8 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         "layer": layer,
         "decision": decision,
         "mode": req.mode,
+        "mem_type": provenance.get("mem_type"),
+        "injection_scan": scan,
     }
 
 

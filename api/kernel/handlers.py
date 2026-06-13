@@ -184,14 +184,32 @@ def handle_memory_append(ctx: dict, payload: dict) -> dict:
     """
     DEV-safe memory append placeholder.
     Appends an event to a local jsonl file (no DB yet).
+
+    Write-lane injection gate (cognitive-OS gap #3, write side): this is a
+    non-interactive kernel path, so the appended text is scanned and classified
+    the same way the live write lanes are — `untrusted` by default, quarantined
+    above the high band. The event is jsonl-only today (it does NOT enter
+    document_embeddings, so it cannot re-inject into retrieval), but the scan +
+    classification are stamped now so that IF this placeholder is ever pointed at
+    the vector store, the gate already travels with the content rather than
+    having to be remembered as a follow-up.
     """
     import json
     from pathlib import Path
     from datetime import datetime, timezone
 
+    from api import injection_scan, memory_type
+
     text = (payload or {}).get("text")
     if not isinstance(text, str) or not text.strip():
         return {"ok": False, "error": "payload.text_required"}
+
+    try:
+        scan = injection_scan.scan_text(text)
+    except Exception:
+        scan = None
+    risk = (scan or {}).get("risk")
+    mem_type, quarantined = memory_type.classify_write(risk, operator_authored=False)
 
     event = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -199,6 +217,9 @@ def handle_memory_append(ctx: dict, payload: dict) -> dict:
         "operator_id": ctx.get("operator_id"),
         "strain_id": ctx.get("strain_id"),
         "text": text,
+        "mem_type": mem_type,
+        "injection_risk": risk,
+        "quarantined": quarantined,
     }
 
     out = Path("data")
@@ -207,7 +228,13 @@ def handle_memory_append(ctx: dict, payload: dict) -> dict:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event) + "\n")
 
-    return {"appended": True, "bytes": len(text.encode("utf-8"))}
+    return {
+        "appended": True,
+        "bytes": len(text.encode("utf-8")),
+        "mem_type": mem_type,
+        "quarantined": quarantined,
+        "injection_risk": risk,
+    }
 
 
 
