@@ -2795,7 +2795,10 @@ PUBLIC_PERSONA = _load_public_persona()
 _VENDOR_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bchatgpt\b", re.IGNORECASE), "ChatGPT"),
     (re.compile(r"\bopenai\b", re.IGNORECASE), "OpenAI"),
-    (re.compile(r"\bgpt[\s\-]?[0-9]+(?:\.[0-9]+)?\b", re.IGNORECASE), "GPT"),
+    # Trailing [a-z]* catches lettered model suffixes like "gpt 4o" / "gpt-4o"
+    # (GPT-4o is a real OpenAI model). Without it the digits had to end on a
+    # word boundary, so "4o" never matched and the disavowal missed it.
+    (re.compile(r"\bgpt[\s\-]?[0-9]+(?:\.[0-9]+)?[a-z]*\b", re.IGNORECASE), "GPT"),
     (re.compile(r"\bclaude\b", re.IGNORECASE), "Claude"),
     (re.compile(r"\banthropic\b", re.IGNORECASE), "Anthropic"),
     (re.compile(r"\bgemini\b", re.IGNORECASE), "Gemini"),

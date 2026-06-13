@@ -6,6 +6,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- fix: **vendor disavowal now catches lettered model suffixes (`gpt 4o` /
+  `gpt-4o`).** The GPT pattern required the version digits to end on a word
+  boundary, so `4o` never matched and `_detect_named_vendors` missed GPT-4o
+  identity questions. Surfaced by the new CI unit job (`test_gpt_versioned_pattern`).
+
 - ops: **CI + automated backups — the safety net under the fleet.** 12+ brains
   deploy by `git pull` from `main`, and a brain holds its owner's accumulated
   cognition; there was no test gate before `main` reached them and no backup
