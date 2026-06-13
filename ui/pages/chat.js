@@ -659,6 +659,36 @@ export default function Chat() {
   const [proposal, setProposal] = useState(null)  // original from server
   const [draft, setDraft] = useState(null)        // operator-editable copy
 
+  // RED tool approval cards. When the brain proposes a red-tier tool (e.g.
+  // send_telegram_message), the turn surfaces a proposal; the operator approves
+  // (mints a single-use token + executes) or rejects (nothing runs). Keyed by
+  // proposal_id → { busy, status: 'sent'|'rejected'|'error', detail }.
+  const [approvalState, setApprovalState] = useState({})
+
+  const decideApproval = async (proposalId, action) => {
+    if (!proposalId) return
+    setApprovalState(prev => ({ ...prev, [proposalId]: { ...prev[proposalId], busy: true, status: null, detail: null } }))
+    try {
+      const r = await fetch(`/api/bf/tools/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposal_id: proposalId }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        setApprovalState(prev => ({ ...prev, [proposalId]: { busy: false, status: 'error', detail: data.detail || `error ${r.status}` } }))
+        return
+      }
+      if (action === 'approve') {
+        setApprovalState(prev => ({ ...prev, [proposalId]: { busy: false, status: data.executed ? 'sent' : 'error', detail: data.executed ? (data.content || 'Sent.') : (data.error || 'Tool did not run.') } }))
+      } else {
+        setApprovalState(prev => ({ ...prev, [proposalId]: { busy: false, status: 'rejected', detail: 'Declined — nothing was sent.' } }))
+      }
+    } catch (e) {
+      setApprovalState(prev => ({ ...prev, [proposalId]: { busy: false, status: 'error', detail: String(e) } }))
+    }
+  }
+
   // Raw-inbox path — Phase A behavior. Triggered by shift-click on store.
   const storeRawInbox = async (idx, msg) => {
     if (storedMessages.has(idx) || storingIndex !== null) return
@@ -1175,7 +1205,8 @@ export default function Chat() {
         const webSearch = data?.rag_metadata?.web_search || null
         const corroboration = data?.rag_metadata?.corroboration || null
         const toolEvents = Array.isArray(data?.rag_metadata?.tool_events) ? data.rag_metadata.tool_events : []
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents }])
+        const pendingApprovals = Array.isArray(data?.rag_metadata?.pending_approvals) ? data.rag_metadata.pending_approvals : []
+        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents, pendingApprovals }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
@@ -1273,10 +1304,11 @@ export default function Chat() {
                 const webSearch = parsed.rag_metadata.web_search || null
                 const corroboration = parsed.rag_metadata.corroboration || null
                 const toolEvents = Array.isArray(parsed.rag_metadata.tool_events) ? parsed.rag_metadata.tool_events : []
+                const pendingApprovals = Array.isArray(parsed.rag_metadata.pending_approvals) ? parsed.rag_metadata.pending_approvals : []
                 setMessages(prev => {
                   if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
                   const next = [...prev]
-                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration, toolEvents }
+                  next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration, toolEvents, pendingApprovals }
                   return next
                 })
                 continue
@@ -2033,6 +2065,55 @@ export default function Chat() {
                         {ev.detail ? <span style={{ opacity: 0.7 }}> → {ev.detail}</span> : null}
                       </span>
                     ))}
+                  </div>
+                )}
+
+                {/* RED tool approval cards — the brain wants to act (send/write).
+                    Nothing has run; the operator approves (mints a single-use,
+                    args-bound token + executes) or rejects. This is the line
+                    between a brain that reads and one that acts. */}
+                {msg.role === 'assistant' && Array.isArray(msg.pendingApprovals) && msg.pendingApprovals.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    {msg.pendingApprovals.map((ap, ai) => {
+                      const st = approvalState[ap.proposal_id] || {}
+                      const decided = st.status === 'sent' || st.status === 'rejected'
+                      const previewText = ap?.preview?.message || JSON.stringify(ap?.preview || {})
+                      return (
+                        <div key={ap.proposal_id || ai} style={{
+                          border: `1px solid ${st.status === 'sent' ? '#5fae6b55' : st.status === 'rejected' ? '#88888855' : '#d9777755'}`,
+                          borderRadius: 8, padding: '10px 12px', marginTop: 6,
+                          background: 'var(--card-bg, rgba(217,119,119,0.04))', fontSize: 12,
+                        }}>
+                          <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 11, color: '#d97777', marginBottom: 4 }}>
+                            ⚠ approval required · <strong>{ap.tool}</strong>
+                          </div>
+                          {/* Full, untruncated args — the operator must see the
+                              exact thing they authorize. Scrolls if very long so
+                              the layout holds, but nothing is hidden. */}
+                          <div style={{ color: 'var(--fg)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', opacity: 0.9, marginBottom: 8, fontFamily: 'DM Mono, monospace', fontSize: 11, maxHeight: 220, overflowY: 'auto' }}>
+                            {previewText}
+                          </div>
+                          {decided || st.status === 'error' ? (
+                            <div style={{ fontSize: 11, color: st.status === 'sent' ? '#5fae6b' : st.status === 'error' ? '#d97777' : 'var(--muted)' }}>
+                              {st.status === 'sent' ? '✓ ' : st.status === 'rejected' ? '✕ ' : '⚠ '}{st.detail}
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                disabled={st.busy}
+                                onClick={() => decideApproval(ap.proposal_id, 'approve')}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #5fae6b', background: '#5fae6b22', color: '#5fae6b', cursor: st.busy ? 'wait' : 'pointer', fontSize: 12 }}
+                              >{st.busy ? '…' : 'Approve & send'}</button>
+                              <button
+                                disabled={st.busy}
+                                onClick={() => decideApproval(ap.proposal_id, 'reject')}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid var(--muted)', background: 'transparent', color: 'var(--muted)', cursor: st.busy ? 'wait' : 'pointer', fontSize: 12 }}
+                              >Reject</button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 

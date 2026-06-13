@@ -153,16 +153,24 @@ async def dispatch(
     *,
     operator_authorized: bool = False,
     approval_token: Optional[str] = None,
+    approvals_available: bool = False,
     admin: bool = False,
 ) -> ToolResult:
     """Run a registered tool through the governance gate.
 
     `operator_authorized` is the caller's assertion that the operator has
     granted standing authorization for YELLOW-tier execution (in practice: the
-    relevant settings toggle is on). RED tools additionally require a valid
-    per-call `approval_token`, which is not yet issued anywhere — so RED is
-    refused until that flow exists. Failures are returned as `ok=False`
-    ToolResults, never raised, so a tool call can never crash the chat turn.
+    relevant settings toggle is on).
+
+    RED tools additionally require a valid per-call `approval_token`, minted by
+    the operator approving an exact (tool, args) proposal (`api/tools/approvals`):
+      - WITH a token → it is verified and burned, then the tool runs.
+      - WITHOUT a token, and `approvals_available` (an interactive operator is
+        present to see the card) → a PROPOSAL is returned; nothing runs.
+      - WITHOUT a token and no approval surface (headless lanes — Telegram, cron)
+        → the brain's original RED refusal stands. Never auto-approve.
+    Failures are returned as `ok=False` ToolResults, never raised, so a tool call
+    can never crash the chat turn.
 
     `admin` defaults to False — the safe posture for the autonomous agentic loop,
     where the model (not a human) chose the tool name. It only relaxes the
@@ -176,7 +184,15 @@ async def dispatch(
     # is the structural backstop behind the prompt-layer untrusted wrapper — a
     # poisoned document that smuggles "call delete_memory" past the model still
     # dies here.
-    if is_blocked_tool(name, admin=admin):
+    #
+    # Carve-out: a tool that is REGISTERED and tier==RED is a sanctioned outbound
+    # capability whose governance is the per-call approval gate below — its name
+    # may legitimately be in a dangerous family (send_*, write_*). Let those
+    # through to the approval gate (itself fail-closed). Malformed names, the
+    # mcp__ namespace, and unregistered dangerous names are still blocked here.
+    _reg = REGISTRY.get(name) if isinstance(name, str) else None
+    _sanctioned_red = _reg is not None and _reg.tier == RED
+    if not _sanctioned_red and is_blocked_tool(name, admin=admin):
         audit.log({"tool": name if isinstance(name, str) else repr(name),
                    "ok": False, "reason": "blocked_tool_gate", "admin": admin})
         shown = name if isinstance(name, str) else type(name).__name__
@@ -196,12 +212,43 @@ async def dispatch(
         return ToolResult(ok=False, error=f"{name} is a yellow-tier tool and "
                           "requires the operator to enable it first.")
     if tool.tier == RED:
-        # Per-call approval is intentionally not yet implemented. Fail closed.
-        audit.log({"tool": name, "tier": tool.tier, "ok": False,
-                   "reason": "red_tier_blocked"})
-        return ToolResult(ok=False, error=f"{name} is a red-tier tool "
-                          "(write/exec/send) — per-call approval is not yet "
-                          "available, so it is blocked.")
+        from api.tools import approvals
+        if not approval_token:
+            # No token. If an operator is present to decide, surface a PROPOSAL
+            # (Approve/Reject card); otherwise hold the brain's original RED
+            # refusal — a headless lane must never auto-approve a send.
+            if not approvals_available:
+                audit.log({"tool": name, "tier": tool.tier, "ok": False,
+                           "reason": "red_no_approver"})
+                return ToolResult(ok=False, error=f"{name} is a red-tier tool "
+                                  "(write/exec/send) and needs per-call operator "
+                                  "approval; no approver is present, so it is "
+                                  "refused.")
+            # The card preview gets the FULL, untruncated args — it is the
+            # operator's informed-consent surface, so they must see the exact
+            # thing they are authorizing (a poisoned proposal must not be able
+            # to hide content in a truncated tail). The audit log, by contrast,
+            # keeps the _summarize() trim — it must not store huge payloads.
+            proposal = approvals.propose(name, args, preview=dict(args))
+            audit.log({"tool": name, "tier": tool.tier, "ok": False,
+                       "reason": "red_proposed", "args": _summarize(args),
+                       "proposal_id": proposal["proposal_id"]})
+            return ToolResult(ok=False, error=(
+                f"{name} needs operator approval before it runs — an "
+                "Approve/Reject card has been surfaced. Tell the operator you "
+                "have requested approval; do not retry."),
+                meta={"approval": proposal})
+        # A token is present — verify it matches THIS exact (tool, args), is
+        # unexpired and unused, and burn it. Anything else fails closed.
+        ok_token, reason = approvals.verify_and_consume(name, args, approval_token)
+        if not ok_token:
+            audit.log({"tool": name, "tier": tool.tier, "ok": False,
+                       "reason": f"red_token_{reason}", "args": _summarize(args)})
+            return ToolResult(ok=False, error=(
+                f"{name}: approval token {reason} — refused. A RED action runs "
+                "only against a fresh, matching, operator-minted approval."))
+        # Verified + consumed → fall through to budget + run. The successful
+        # execution is audited below with tier=red so the trail shows the act.
 
     # ── Budget gate ──────────────────────────────────────────────────────
     if not budget.under_cap(name):
@@ -233,6 +280,13 @@ async def dispatch(
         "result": (result.error if not result.ok
                    else f"{len(result.provenance)} source(s)"),
     }
+    # A RED tool only reaches here through a verified, burned approval token —
+    # mark the line so the audit trail plainly shows an approved outbound act
+    # (not just a read), with its outcome.
+    if tool.tier == RED:
+        entry["reason"] = "red_executed"
+        entry["result"] = (result.error if not result.ok
+                           else (result.content[:200] if result.content else "ok"))
     # Keep the actual sources (title + url) on the record so the audit surface
     # can let the operator click through to what the brain actually read — not
     # just a count. Capped so the log line stays small.
@@ -270,7 +324,8 @@ import sys as _sys             # noqa: E402
 for _mod in ("api.tools.web_search", "api.tools.fetch_url", "api.tools.memory_search",
              "api.tools.brain_call", "api.tools.calendar_read",
              "api.tools.drive_search", "api.tools.inbox_read",
-             "api.tools.task_add", "api.tools.task_list"):
+             "api.tools.task_add", "api.tools.task_list",
+             "api.tools.send_telegram"):
     if _mod in _sys.modules:
         _importlib.reload(_sys.modules[_mod])
     else:

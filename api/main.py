@@ -1079,6 +1079,85 @@ def tools_audit_endpoint(limit: int = 50, api_key: str = Depends(get_api_key)):
     return {"entries": _tool_audit.tail(max(1, min(int(limit), 500)))}
 
 
+# ── RED tool per-call approval (PROPOSE → approve → execute) ─────────────────
+# The operator's half of the approval gate. The model PROPOSES a RED tool inside
+# the agentic loop (dispatch returns a card, nothing runs); these endpoints are
+# how the operator decides. Approve mints a single-use, args-bound token and
+# immediately re-runs the SAME (tool, args) through dispatch — the one place an
+# approved RED action actually executes. Reject discards it. See
+# api/tools/approvals.py for the token contract.
+class ToolApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    proposal_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+@app.post("/tools/approve")
+async def tools_approve_endpoint(req: ToolApprovalRequest, api_key: str = Depends(get_api_key)):
+    """Operator approves a pending RED proposal → execute it once, audited."""
+    from api.tools import approvals as _approvals, audit as _tool_audit
+    from api import tools as _tools
+
+    rec = _approvals.get(req.proposal_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired proposal.")
+
+    token, full, err = _approvals.approve(req.proposal_id)
+    if err:
+        # already decided / expired — surface plainly, nothing executes
+        raise HTTPException(status_code=409, detail=f"Cannot approve proposal: {err}.")
+
+    tool_name = full["tool"]
+    args = full.get("args") or {}
+
+    # EGRESS-GUARD SEAM ──────────────────────────────────────────────────────
+    # This is the single chokepoint where an approved RED call's outbound args
+    # become real before they execute. The planned egress guard (scan args for
+    # private-scope / secret content — ops/ideas.md) slots in HERE: inspect
+    # (tool_name, args) and refuse before the dispatch below. Intentionally left
+    # as a clean hook; not built in this change.
+
+    # Re-dispatch the exact approved (tool, args) WITH the minted token. dispatch
+    # verifies the token matches this binding, is unexpired and unused, burns it,
+    # and runs the tool — the success is audited there with reason=red_executed.
+    result = await _tools.dispatch(
+        tool_name, args, approval_token=token, approvals_available=True)
+
+    _tool_audit.log({
+        "tool": tool_name, "tier": "red", "ok": bool(result.ok),
+        "reason": "red_approved", "approver": "operator",
+        "proposal_id": req.proposal_id,
+        "result": (result.error if not result.ok
+                   else (result.content[:200] if result.content else "ok")),
+    })
+
+    return {
+        "ok": bool(result.ok),
+        "executed": bool(result.ok),
+        "tool": tool_name,
+        "content": result.content if result.ok else None,
+        "error": None if result.ok else result.error,
+    }
+
+
+@app.post("/tools/reject")
+def tools_reject_endpoint(req: ToolApprovalRequest, api_key: str = Depends(get_api_key)):
+    """Operator rejects a pending RED proposal → nothing runs; logged."""
+    from api.tools import approvals as _approvals, audit as _tool_audit
+
+    rec = _approvals.get(req.proposal_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired proposal.")
+    ok_rej, err = _approvals.reject(req.proposal_id)
+    if not ok_rej:
+        raise HTTPException(status_code=409, detail=f"Cannot reject proposal: {err}.")
+    _tool_audit.log({
+        "tool": rec.get("tool"), "tier": "red", "ok": False,
+        "reason": "red_rejected", "approver": "operator",
+        "proposal_id": req.proposal_id,
+    })
+    return {"ok": True, "rejected": True, "tool": rec.get("tool")}
+
+
 class FactCheckRequest(BaseModel):
     sources: List[Dict[str, Any]]  # [{title, url, snippet}]
 
@@ -2647,13 +2726,25 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
         except Exception:
             pass
 
+        # RED proposals raised during this agentic turn. The /chat surface has a
+        # live operator who can see an Approve/Reject card, so RED dispatch is
+        # told an approver is available (approvals_available=True) and returns a
+        # PROPOSAL instead of the headless refusal. Each proposal is collected
+        # here and surfaced in rag_metadata so the UI can render the card.
+        _pending_approvals: list = []
+
         async def _agentic_dispatch(name, args):
             # MCP tools route to the connected server (operator granted them by
             # connecting it); everything else goes through the tier-gated dispatch.
             if isinstance(name, str) and name.startswith("mcp__"):
                 from api.integrations import mcp_client as _mcp
                 return await _mcp.call(name, args)
-            return await _agentic_tools.dispatch(name, args, operator_authorized=_web_ok)
+            res = await _agentic_tools.dispatch(
+                name, args, operator_authorized=_web_ok, approvals_available=True)
+            ap = (getattr(res, "meta", None) or {}).get("approval")
+            if ap:
+                _pending_approvals.append(ap)
+            return res
 
         # ── Streaming path (SSE) ──────────────────────────────────────
         if do_stream:
@@ -2669,6 +2760,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                             "web_search": web_meta,
                             "corroboration": rag_corroboration,
                             "tool_events": events,
+                            "pending_approvals": _pending_approvals,
                         },
                     }
 
@@ -2737,7 +2829,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events, "pending_approvals": _pending_approvals},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 
