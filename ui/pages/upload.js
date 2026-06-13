@@ -92,6 +92,12 @@ export default function Upload() {
   // flag) or Empty Trash (the only actually-destructive action).
   const [trash, setTrash] = useState([]);
   const [trashExpanded, setTrashExpanded] = useState(false);
+  // Quarantine: chunks the write-lane injection gate held back (high-severity
+  // scan on a non-interactive write). Persisted but excluded from retrieval
+  // until the operator reviews them here. Default expanded — it's a review
+  // queue that needs attention, not an archive.
+  const [quarantine, setQuarantine] = useState([]);
+  const [quarantineExpanded, setQuarantineExpanded] = useState(true);
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -239,6 +245,55 @@ export default function Upload() {
     }
   };
 
+  // Quarantine loader. Reloaded after every release / delete so the review
+  // queue stays in sync with the working set.
+  const loadQuarantine = () => {
+    fetch(`${API_BASE}/documents/quarantine`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setQuarantine(d?.documents || []))
+      .catch(() => {});
+  };
+
+  // Release = "safe to surface". Lands untrusted (0.4×), never fully trusted —
+  // consistent with the upload-approve rule (approval of flagged content never
+  // earns semantic; only authorship does). Re-author via the Store button to
+  // fully trust it.
+  const releaseDoc = async (name) => {
+    if (!confirm(`Release "${name}" into the brain's memory?\n\nThis document was held back because it scanned as a possible prompt injection. Releasing it makes it retrievable again — it stays demoted (untrusted, 0.4× weight), not fully trusted. To fully trust it, re-author it with the chat Store button instead. Only release content you've reviewed.`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}/release`, { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        pushLog(`RELEASED ${name}: ${j.chunks_released ?? 0} chunk(s) now retrievable (untrusted)`);
+        loadStats(); loadAllDocs(); loadQuarantine();
+      } else {
+        const body = await r.text();
+        pushLog(`FAIL release ${name}: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL release ${name}: ${err.message}`);
+    }
+  };
+
+  // Delete = "actually malicious". Hard-deletes the quarantined chunks outright
+  // (scoped server-side to still-quarantined chunks) — no trash, no undo.
+  const deleteQuarantined = async (name) => {
+    if (!confirm(`Permanently delete "${name}"?\n\nUse this for content that is actually malicious. It hard-deletes every quarantined chunk of this document — no trash, no undo.`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}/quarantine/delete`, { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        pushLog(`DELETED ${name}: ${j.chunks_deleted ?? 0} quarantined chunk(s) purged`);
+        loadStats(); loadAllDocs(); loadQuarantine();
+      } else {
+        const body = await r.text();
+        pushLog(`FAIL delete ${name}: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL delete ${name}: ${err.message}`);
+    }
+  };
+
   const emptyTrash = async () => {
     if (!trash.length) return;
     if (!confirm(`Permanently delete ${trash.length} document${trash.length === 1 ? '' : 's'} from the trash?\n\nThis removes every chunk for good. Cannot be undone.`)) return;
@@ -265,6 +320,7 @@ export default function Upload() {
     loadStats();
     loadAllDocs();
     loadTrash();
+    loadQuarantine();
   }, []);
 
   const onSelect = (e) => setFiles(filterHidden(Array.from(e.target.files || [])));
@@ -435,6 +491,7 @@ export default function Upload() {
         loadStats();
         loadAllDocs();
         loadTrash();
+        loadQuarantine();
       } else {
         pushLog(`FAIL trash ${name}: ${r.status} — ${body.slice(0, 200)}`);
       }
@@ -651,6 +708,75 @@ export default function Upload() {
                       <span style={{ color: "#d97777", opacity: 0.8 }}>[{s.severity}]</span> {s.excerpt}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Quarantine — write-lane injection-review queue.
+          A non-interactive write (a brain app via /memory/append, automated
+          brain_ingest) that scanned high-severity for prompt injection is held
+          here: persisted with its provenance but excluded from retrieval until
+          the operator reviews it. Release puts it back (demoted, untrusted);
+          the × forgets it to trash. */}
+      {quarantine.length > 0 && (
+        <section style={{ padding: 20, border: `1px solid #d9777755`, background: "#160e0e", borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8, gap: 10, flexWrap: "wrap" }}>
+            <h2
+              onClick={() => setQuarantineExpanded(v => !v)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setQuarantineExpanded(v => !v); } }}
+              style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: "#d97777", cursor: "pointer", userSelect: "none" }}
+              title={quarantineExpanded ? "Collapse quarantine" : "Expand quarantine"}
+            >
+              {quarantineExpanded ? "▾" : "▸"} ⚠ Quarantine &mdash; {quarantine.length} {quarantine.length === 1 ? "doc" : "docs"} held for review
+            </h2>
+          </div>
+          {quarantineExpanded && (
+            <div style={{ color: MUTED, fontSize: 11.5, lineHeight: 1.6, marginBottom: 12 }}>
+              These were written by an automated source and scanned as a possible prompt injection — instructions aimed at the AI, not at you.
+              They are <strong style={{ color: TEXT }}>not</strong> in the brain's memory yet. Read each one, then <strong style={{ color: APPROVE }}>Release</strong> it
+              (re-enters memory, demoted as untrusted) or <strong style={{ color: REJECT }}>Delete</strong> it (hard-delete, for actually-malicious content). Every decision is logged.
+            </div>
+          )}
+          {quarantineExpanded && quarantine.map((d, i) => (
+            <div key={`${d.name}-${i}`} style={{ padding: "10px 12px", border: `1px solid #d9777733`, borderRadius: 6, marginBottom: 8, background: BG }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 200px", minWidth: 0 }}>{d.name}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                  {(d.layers || []).map(l => (
+                    <LayerBadge key={l} layer={l} />
+                  ))}
+                  <span style={{ color: "#d97777", fontSize: 10, fontFamily: "DM Mono, monospace", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", border: "1px solid #d9777755", borderRadius: 999, padding: "2px 8px" }}>
+                    {d.injection_risk || "flagged"} risk
+                  </span>
+                  <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.ingested_by ? ` · ${d.ingested_by}` : ""}{d.source ? ` · ${d.source}` : ""}{d.held_at ? ` · ${new Date(d.held_at).toLocaleString()}` : ""}</span>
+                  <button
+                    onClick={() => releaseDoc(d.name)}
+                    title={`Release "${d.name}" into memory (demoted, untrusted)`}
+                    style={{ background: "transparent", border: `1px solid ${APPROVE}66`, color: APPROVE, borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+                    onMouseOver={e => e.currentTarget.style.background = "#0a1a0a"}
+                    onMouseOut={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    Release
+                  </button>
+                  <button
+                    onClick={() => deleteQuarantined(d.name)}
+                    title={`Delete "${d.name}" — hard-delete, for malicious content`}
+                    style={{ background: "transparent", border: `1px solid ${REJECT}66`, color: REJECT, borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, fontFamily: "DM Mono, monospace" }}
+                    onMouseOver={e => e.currentTarget.style.background = "#1a0a0a"}
+                    onMouseOut={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+              {d.preview && (
+                <div style={{ color: MUTED, fontSize: 11.5, fontFamily: "DM Mono, monospace", lineHeight: 1.6, marginTop: 8, padding: "8px 10px", background: "#0e0c0b", border: `1px solid ${BORDER}`, borderRadius: 6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {d.preview}{d.preview.length >= 280 ? "…" : ""}
                 </div>
               )}
             </div>

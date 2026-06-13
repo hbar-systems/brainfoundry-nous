@@ -3972,6 +3972,149 @@ def restore_document(document_name: str, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
 
 
+@app.post("/documents/{document_name:path}/release")
+def release_quarantined_document(document_name: str, api_key: str = Depends(get_api_key)):
+    """Release every quarantined chunk of a document back into retrieval — at
+    the `untrusted` tier, always.
+
+    The non-interactive write lanes (/memory/append, automated brain_ingest,
+    the kernel MEMORY_APPEND class) quarantine a chunk when the injection scan
+    crosses the high band — it is persisted with its provenance but excluded
+    from retrieval (memory_type.rerank drops it) until an operator reviews it.
+    Release clears the `quarantined` flag so the document re-enters the working
+    set, landing `untrusted` (source_trust 0.4) — still demoted 0.4× at
+    retrieval.
+
+    Release does NOT promote to `semantic`, by design and for consistency:
+    `classify_upload` already caps an operator-APPROVED medium/high upload at
+    `untrusted` — nowhere in the system does mere approval of injection-flagged
+    content earn full trust. Only operator *authorship* earns 1.0. To fully
+    trust this content, re-author it through the operator-direct lane (the chat
+    Store button), which establishes genuine operator provenance.
+
+    Audited: every release writes a line to api/quarantine_audit.py.
+    """
+    if not document_name.strip():
+        raise HTTPException(status_code=400, detail="document_name is required")
+
+    from api import memory_type as _memtype
+    from api import quarantine_audit as _qaudit
+    new_trust = _memtype.trust_prior(_memtype.UNTRUSTED)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Capture the band that quarantined it (for the audit line) before clearing.
+        cursor.execute(
+            "SELECT MAX(metadata->>'injection_risk') FROM document_embeddings "
+            "WHERE document_name = %s AND (metadata->>'quarantined') IS NOT NULL",
+            (document_name,),
+        )
+        risk_row = cursor.fetchone()
+        injection_risk = risk_row[0] if risk_row else None
+
+        # Clear the quarantine flag; stamp untrusted + its trust prior explicitly.
+        cursor.execute(
+            """
+            UPDATE document_embeddings
+            SET metadata = (metadata - 'quarantined')
+                           || jsonb_build_object('mem_type', %s, 'source_trust', %s::numeric)
+            WHERE document_name = %s
+              AND (metadata->>'quarantined') IS NOT NULL
+            """,
+            (_memtype.UNTRUSTED, new_trust, document_name),
+        )
+        released = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if released == 0:
+            raise HTTPException(status_code=404, detail=f"No quarantined chunks found for document: {document_name}")
+
+        _qaudit.record_decision(
+            action="release", document_name=document_name, chunks=released,
+            new_tier=_memtype.UNTRUSTED, injection_risk=injection_risk,
+        )
+        print(f"[quarantine] RELEASED doc={document_name} chunks={released} (now untrusted, retrievable)", flush=True)
+        return {
+            "document_name": document_name,
+            "chunks_released": released,
+            "mem_type": _memtype.UNTRUSTED,
+            "source_trust": new_trust,
+            "status": "released",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Release failed: {str(e)}")
+
+
+@app.post("/documents/{document_name:path}/quarantine/delete")
+def delete_quarantined_document(document_name: str, api_key: str = Depends(get_api_key)):
+    """Hard-delete every quarantined chunk of a document — the "this is actually
+    malicious" half of quarantine triage.
+
+    POST (not DELETE) on purpose: the soft-delete catch-all
+    `DELETE /documents/{name:path}` is registered earlier and its greedy path
+    converter would swallow a `DELETE /documents/{name}/quarantine`, routing it
+    to soft-delete instead. A distinct POST suffix avoids the collision.
+
+    Scoped on purpose: this only destroys chunks that are STILL quarantined
+    (`metadata.quarantined` set). It is not a general hard-delete bypass of the
+    soft-delete/trash flow — a released chunk is no longer quarantined and so is
+    untouched here; use the normal forget→trash→empty path for those.
+
+    No undo. Audited: every delete writes a line to api/quarantine_audit.py.
+    """
+    if not document_name.strip():
+        raise HTTPException(status_code=400, detail="document_name is required")
+
+    from api import quarantine_audit as _qaudit
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(metadata->>'injection_risk') FROM document_embeddings "
+            "WHERE document_name = %s AND (metadata->>'quarantined') IS NOT NULL",
+            (document_name,),
+        )
+        risk_row = cursor.fetchone()
+        injection_risk = risk_row[0] if risk_row else None
+
+        cursor.execute(
+            "DELETE FROM document_embeddings "
+            "WHERE document_name = %s AND (metadata->>'quarantined') IS NOT NULL",
+            (document_name,),
+        )
+        deleted = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if deleted == 0:
+            raise HTTPException(status_code=404, detail=f"No quarantined chunks found for document: {document_name}")
+
+        _qaudit.record_decision(
+            action="delete", document_name=document_name, chunks=deleted,
+            new_tier=None, injection_risk=injection_risk,
+        )
+        print(f"[quarantine] DELETED doc={document_name} chunks={deleted} (purged as malicious)", flush=True)
+        return {"document_name": document_name, "chunks_deleted": deleted, "status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quarantine delete failed: {str(e)}")
+
+
+@app.get("/documents/quarantine/log")
+def quarantine_audit_log(limit: int = 50, api_key: str = Depends(get_api_key)):
+    """Recent quarantine decisions (release/delete) — the operator's audit trail."""
+    from api import quarantine_audit as _qaudit
+    n = max(1, min(int(limit or 50), 1000))
+    return {"events": _qaudit.tail(n), "limit": n}
+
+
 @app.get("/documents/trash")
 def list_trash(api_key: str = Depends(get_api_key)):
     """List every soft-deleted document, grouped by document_name with the
@@ -4015,6 +4158,62 @@ def list_trash(api_key: str = Depends(get_api_key)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trash list failed: {str(e)}")
+
+
+@app.get("/documents/quarantine")
+def list_quarantine(api_key: str = Depends(get_api_key)):
+    """List every quarantined document — the operator's injection-review queue.
+
+    Quarantined chunks are persisted but excluded from retrieval (see
+    /documents/{name}/release and memory_type.rerank). Grouped by document_name
+    with chunk count, layer/source, the injection-scan risk band recorded at
+    write time, when it was held, and a short content preview so the operator
+    can eyeball the flagged material before deciding to release or forget it.
+    Trashed docs are excluded (a forgotten quarantine doesn't need review).
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT document_name,
+                   COUNT(*) AS chunks,
+                   MAX(metadata->>'injection_risk') AS injection_risk,
+                   MAX(metadata->>'source') AS source,
+                   MAX(metadata->>'ingested_by') AS ingested_by,
+                   MAX(COALESCE(metadata->>'ingested_at', metadata->>'appended_at')) AS held_at,
+                   ARRAY_AGG(DISTINCT metadata->>'layer')
+                       FILTER (WHERE metadata->>'layer' IS NOT NULL
+                               AND metadata->>'layer' <> '') AS layers,
+                   (ARRAY_AGG(content ORDER BY id))[1] AS preview
+            FROM document_embeddings
+            WHERE (metadata->>'quarantined') IS NOT NULL
+              AND (metadata->>'deleted_at' IS NULL)
+            GROUP BY document_name
+            ORDER BY MAX(COALESCE(metadata->>'ingested_at', metadata->>'appended_at')) DESC NULLS LAST
+            """,
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {
+            "documents": [
+                {
+                    "name": r[0],
+                    "chunks": r[1],
+                    "injection_risk": r[2],
+                    "source": r[3],
+                    "ingested_by": r[4],
+                    "held_at": r[5],
+                    "layers": r[6] or [],
+                    "preview": (r[7] or "")[:280],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quarantine list failed: {str(e)}")
 
 
 @app.post("/documents/trash/empty")

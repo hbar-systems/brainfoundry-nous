@@ -29,6 +29,23 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   - The dev-gated kernel `MEMORY_APPEND` handler stamps the same scan +
     classification (jsonl-only today, so it carries the gate forward if ever
     pointed at the vector store).
+  - **Operator review UI + audit.** Knowledge tab gains a Quarantine review
+    queue (`GET /documents/quarantine`) listing held docs with risk band,
+    source, `ingested_by`, held-at, and a content preview so the operator sees
+    *why* it was held. Two triage actions:
+    - **Release** (`POST /documents/{name}/release`) clears the quarantine flag
+      so the doc re-enters retrieval, landing `untrusted` (0.4×). It does **not**
+      promote to `semantic`, by design and for consistency: `classify_upload`
+      already caps operator-*approved* medium/high uploads at `untrusted` —
+      nowhere does approval of injection-flagged content earn full trust, only
+      operator *authorship* does. To fully trust it, re-author via the Store
+      button.
+    - **Delete** (`POST /documents/{name}/quarantine/delete`) hard-deletes the
+      quarantined chunks — the "actually malicious" path (scoped to
+      still-quarantined chunks; not a general hard-delete bypass).
+    Every release/delete is written to an append-only `api/quarantine_audit.py`
+    log (mirrors `federation_audit.py`), queryable via
+    `GET /documents/quarantine/log`.
   - `THREAT_MODEL.md` §6 gap #3 narrowed from "principal residual surface" to
     "heuristic-coverage residual".
 
