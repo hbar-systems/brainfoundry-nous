@@ -6,6 +6,51 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- integrations: **connect your real world — email, calendar, Telegram, MCP (the
+  no-OAuth way).** A new **Integrations** tab plus agentic tools so the brain can
+  act on your life. Modeled on Odysseus's productivity suite but using
+  app-password/link auth, not OAuth, so setup is minutes not a cloud-console maze.
+  - **Email (IMAP)** — host + email + app password (Gmail/Outlook/Fastmail/iCloud/
+    self-hosted). Tool `inbox_read` (recent/unread, search). `api/integrations/email_imap.py`.
+  - **Calendar (iCal link)** — paste the "secret iCal (.ics)" URL any provider
+    exposes. Tool `calendar_read`. `api/integrations/calendar_ics.py`.
+  - **Telegram** — `@BotFather` token → secret-protected webhook; chat your brain
+    from your phone, answered from its memory + reasoner. First chat is pinned as
+    owner; strangers refused. `api/integrations/telegram.py`.
+  - **MCP servers** — connect a remote MCP server (Streamable-HTTP); its tools
+    become `mcp__<server>__<tool>` in the agentic loop. `api/integrations/mcp_client.py`.
+  - **Google Drive (OAuth, optional)** — the one connector that still needs OAuth;
+    `drive_search`. Email/calendar do NOT use OAuth.
+- research: **Deep Research** — a new **Research** tab + `POST /research` (SSE).
+  Plans search queries, reads multiple sources via `web_search` + the new
+  `fetch_url` tool, and writes a cited report, streamed live. `api/research.py`.
+- tasks: **Tasks / reminders** — a **Tasks** tab + `/tasks` CRUD + tools
+  `task_add`/`task_list`. "remind me to … tomorrow" creates a task; a due time
+  pings your connected Telegram. `api/tasks_store.py`.
+- tools: **`fetch_url`** — read a single web page (SSRF-guarded, untrusted-wrapped),
+  the companion to `web_search`. Surfaced to the agentic loop.
+- security: **prompt-injection hardening** (Odysseus-modeled, MIT — see NOTICE).
+  `api/security/untrusted.py` wraps every external surface (RAG hits, web/page
+  output, email/calendar/MCP results) as untrusted data with a do-not-follow
+  header; a fail-closed tool gate (`is_blocked_tool`) default-denies shell/file/
+  email/settings/`mcp__*` for the model-driven loop; `THREAT_MODEL.md` shipped.
+- models: **BYOK frontier as the default reasoner.** When a cloud key is set,
+  operator chat defaults to a frontier model matched to the keyed provider
+  (Anthropic → Opus); memory + RAG stay sovereign on the brain. Local Ollama is
+  the offline fallback.
+- retrieval: **default architecture is now `flat`** (similarity-only). The old
+  `tiered` default force-injected the same identity/context docs into every
+  answer regardless of relevance ("why the same citations every time").
+  Model-aware RAG context budget added so a small local model's window isn't
+  swamped (cloud keeps full document bodies).
+- fix: **persona persists across rebuilds** — it now lives in the `/app/runtime`
+  volume, not the image-baked `api/` dir that `docker compose up --build` wiped
+  (the "brain forgot its name after every deploy" bug).
+- fix: **reliable deploys** — `repair_repo_ownership()` self-heals a root-owned
+  bind-mounted repo so host `git pull` stops silently failing. See `docs/DEPLOYMENT.md`.
+- fix: **Firefox loads behind Basic Auth** — the service worker no longer
+  intercepts navigations (it couldn't resolve the 401 auth challenge in Firefox).
+
 - ui: **math renders again, and the tool trail names the peer.** (1) Inline
   LaTeX (`$\hat{A}^\dagger = \hat{A}$`, `$P(H|D)$`) was showing as raw source
   because `singleDollarTextMath` was turned OFF to stop prose dollar amounts

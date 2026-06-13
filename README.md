@@ -54,6 +54,12 @@ database for the single-owner bootstrap case. See `SECURITY.md` and Section
 - Redis — rate limiting
 - Docker Compose — everything runs in containers
 
+**Connect your world (Integrations tab):** read-only, untrusted-by-default, mostly
+no-OAuth — **email** (IMAP app password), **calendar** (iCal link), **Telegram**
+(chat your brain from your phone), **Deep Research** (cited multi-source web
+synthesis), **Tasks/reminders** (due → Telegram ping), **MCP** servers (any tool),
+and **Drive** (OAuth). Setup steps in [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md).
+
 ---
 
 ## Models — Bring Your Own Key

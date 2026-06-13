@@ -104,11 +104,31 @@ Set `OLLAMA_MODEL=llama3.2:3b` in `.env` and restart the API container.
 ## Updating
 
 ```bash
-git pull
+sudo chown -R $USER:$USER ~/brain 2>/dev/null   # see note below
+git pull origin main
 docker compose up -d --build
 ```
 
+**Why the `chown` first.** The api container runs as root and bind-mounts the
+repo (`BRAIN_HOST_DIR`); its git ops (the Update-tab "latest on origin" fetch,
+`/admin/update`) and a past root checkout can leave `.git` and working-tree files
+root-owned. A host `git pull` then fails *silently* (`cannot open .git/FETCH_HEAD:
+Permission denied` / `unable to unlink old …`) and `docker compose up --build`
+quietly rebuilds the **old** code. The chown-first is harmless when ownership is
+already correct and guarantees the pull lands. The brain also **self-heals** at
+boot — `repair_repo_ownership()` (`api/git_ownership.py`) re-owns the repo to the
+host operator on every container start — but that runs *after* your pull, so lead
+with the chown.
+
+**Persona / settings survive rebuilds.** The personalized persona, API keys,
+integration credentials, and tasks live in the `api_runtime` named volume
+(`/app/runtime`), not in the image — `docker compose up --build` preserves them.
+
 ## Troubleshooting
+
+**"I deployed but nothing changed."** Almost always the root-owned-repo issue
+above — your `git pull` silently failed. Run the `chown` line and pull again;
+confirm with `git rev-parse --short HEAD` matching `origin/main`.
 
 **API container fails to start**: Check `docker compose logs api`. Most common cause is a missing required secret in `.env`.
 

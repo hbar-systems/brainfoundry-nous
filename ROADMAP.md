@@ -124,11 +124,27 @@ The brain currently has no formal way to call out to the world. Tools are the su
 - [ ] **Permit classes** — read-only tools (web search, fetch, calendar read) auto-permit with audit log. Write tools (mail send, blog post, federation call) gated by PROPOSE/CONFIRM. Hard monthly budget cap per tool.
 - [ ] **Provenance tagging** — every tool result entering memory tagged with source, tool name, timestamp, session id. Required for commercial use — must be able to answer "where did this claim come from."
 - [x] **First reference tool: web search** — Brave Search API (commercial-clean, soloist-friendly: paid tier ~$3/1k queries, no contract). Shipped 2026-05-30 as `api/tools/` (registry + tiered dispatcher), `web_search` tool, audit log, monthly budget cap, untrusted-result safety wrapping, Settings UI + chat composer toggle. v0 is operator-driven (deterministic toggle); native model-driven invocation lands with permission-tier enforcement.
+- [x] **`fetch_url`** — read a single web page (SSRF-guarded, untrusted-wrapped).
+      Shipped 2026-06; companion to `web_search`, agentic-loop surfaced.
+- [x] **Integrations suite (no-OAuth)** — shipped 2026-06-10→13 (Integrations tab):
+      **email** (IMAP `inbox_read`), **calendar** (iCal-link `calendar_read`),
+      **Telegram** bot (chat from phone), **MCP** client (remote servers' tools as
+      `mcp__*`), **Drive** (OAuth `drive_search`). Modeled on Odysseus, but
+      app-password/link auth instead of OAuth. Email/calendar = Tier-2 senses below.
+- [x] **Deep Research** — `/research` (SSE) + Research tab: plan → multi-source
+      search/read → cited report. Shipped 2026-06.
+- [x] **Tasks / reminders** — Tasks tab + `task_add`/`task_list` + Telegram due-pings.
+      Shipped 2026-06.
 - [ ] **Tool tier rollout** (sequence, not all at once):
-  - Tier 1 (hands): web search + fetch, file read/write in `.hbar/`, sandboxed shell, git read
-  - Tier 2 (senses): calendar read, mail read, RSS, screenshot+OCR, audio in
-  - Tier 3 (reach): mail send, post to own systems via API, federation call, code-exec sandbox
+  - Tier 1 (hands): web search + fetch ✅, file read/write in `.hbar/`, sandboxed shell, git read
+  - Tier 2 (senses): calendar read ✅, mail read ✅, RSS, screenshot+OCR, audio in
+  - Tier 3 (reach): mail send, post to own systems via API, federation call ✅ (brain_call), code-exec sandbox
   - Tier 4 (domain): music (Spotify/Bandcamp/Ableton), finance, health bridges
+- [ ] **Harden the new integrations** (post-demo): fetch_url SSRF is DNS-rebinding
+      bypassable (pin to validated IP); MCP tools currently bypass `is_blocked_tool`
+      in the agentic loop (operator-connected = grant, but tighten); encrypt
+      sidecar secrets (app password / bot token) at rest; expand calendar RRULE
+      (recurring) events; tests for the integration modules.
 
 **Sequencing principle:** read-only first, write second, autonomous third. Most personal-AI failure modes come from giving write access before the governance layer is real. The tool registry exists *because* PROPOSE/CONFIRM exists — it's the gate every Tier 3+ tool passes through.
 
