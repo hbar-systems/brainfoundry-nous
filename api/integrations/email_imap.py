@@ -74,19 +74,33 @@ def _sync_list(query: str, max_results: int, unread_only: bool) -> List[Dict[str
         M.login(c["imap_user"], c["imap_password"])
         M.select("INBOX", readonly=True)
         criteria: List[str] = ["UNSEEN"] if unread_only else ["ALL"]
-        if query:
-            # IMAP TEXT search across the message; quote the term.
-            criteria = ["TEXT", f'"{query}"'] + (["UNSEEN"] if unread_only else [])
+        # Server-side TEXT search only for ASCII terms — imaplib ASCII-encodes
+        # search args (non-ASCII -> UnicodeEncodeError), and a raw double-quote
+        # would break IMAP token framing. Strip quotes; skip search if non-ASCII.
+        q = (query or "").replace('"', " ").replace("\\", " ").strip()
+        if q and q.isascii():
+            criteria = ["TEXT", f'"{q}"'] + (["UNSEEN"] if unread_only else [])
         typ, data = M.search(None, *criteria)
         ids = (data[0].split() if data and data[0] else [])
         ids = ids[-max_results:][::-1]  # most recent first
         out: List[Dict[str, Any]] = []
         for mid in ids:
             typ, d = M.fetch(mid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] FLAGS)")
-            if typ != "OK" or not d or not d[0]:
+            if typ != "OK" or not d:
                 continue
-            raw = d[0][1]
-            flags = d[0][0].decode("utf-8", "replace") if isinstance(d[0][0], bytes) else str(d[0][0])
+            # FLAGS can land in any element of the multi-part FETCH response
+            # (often a trailing bytes item AFTER the body literal), not d[0][0].
+            # Collect every bytes fragment and the header literal across all parts.
+            raw = b""
+            flagblob = b""
+            for part in d:
+                if isinstance(part, tuple):
+                    flagblob += part[0] or b""
+                    if part[1]:
+                        raw = part[1]
+                elif isinstance(part, (bytes, bytearray)):
+                    flagblob += bytes(part)
+            flags = flagblob.decode("utf-8", "replace")
             msg = email.message_from_bytes(raw)
             from_name, from_addr = parseaddr(_decode(msg.get("From", "")))
             date_str = msg.get("Date", "")

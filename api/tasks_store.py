@@ -86,13 +86,30 @@ def delete(task_id: str) -> bool:
     return False
 
 
-def due_unreminded(now_iso: str) -> List[Dict[str, Any]]:
-    """Tasks whose due time has passed and that haven't been reminded yet."""
+def _parse_due(due: str):
+    """Parse an ISO-8601 due string to an aware UTC datetime, or None."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat((due or "").strip().replace("Z", "+00:00"))
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    except Exception:
+        return None
+
+
+def due_unreminded(now=None) -> List[Dict[str, Any]]:
+    """Tasks whose due time has passed and that haven't been reminded yet.
+    Compares as datetimes (NOT ISO strings — string compare is wrong across
+    'Z' vs '+00:00' and non-UTC offsets)."""
+    from datetime import datetime, timezone
+    if now is None or isinstance(now, str):
+        now = _parse_due(now) if isinstance(now, str) else None
+        now = now or datetime.now(timezone.utc)
     out = []
     for t in _load():
         if t.get("done") or t.get("reminded") or not t.get("due"):
             continue
-        if t["due"] <= now_iso:
+        due = _parse_due(t["due"])
+        if due is not None and due <= now:
             out.append(t)
     return out
 

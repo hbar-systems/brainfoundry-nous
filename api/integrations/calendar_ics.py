@@ -56,7 +56,9 @@ def _parse_dt(value: str, key: str):
     """Parse an ICS DTSTART value → (datetime|date, iso_string). Best-effort."""
     v = value.strip()
     try:
-        if "VALUE=DATE" in key or (len(v) == 8 and v.isdigit()):
+        # All-day events are VALUE=DATE; must NOT match the VALUE=DATE-TIME param
+        # (which contains "VALUE=DATE" as a substring) or timed events lose their time.
+        if ("VALUE=DATE" in key and "VALUE=DATE-TIME" not in key) or (len(v) == 8 and v.isdigit()):
             d = datetime.datetime.strptime(v[:8], "%Y%m%d").date()
             return d, d.isoformat()
         if v.endswith("Z"):

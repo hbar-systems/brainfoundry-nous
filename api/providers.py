@@ -315,6 +315,30 @@ def has_cloud_key() -> bool:
         _anthropic_async, _openai, _gemini, _xai, _groq, _openrouter, _together, _mistral))
 
 
+def _byok_default_model():
+    """A frontier default matching whichever cloud provider is actually configured.
+    Anthropic (BYOK_DEFAULT_MODEL) is preferred; otherwise fall back to a sensible
+    model for the provider that IS keyed — so a brain with only an OpenAI/Gemini/etc
+    key never defaults to an unreachable Anthropic model and fails every turn."""
+    if _anthropic_async is not None:
+        return BYOK_DEFAULT_MODEL
+    if _openai is not None:
+        return "gpt-4o"
+    if _gemini is not None:
+        return "gemini-2.0-flash"
+    if _groq is not None:
+        return "groq/llama-3.3-70b-versatile"
+    if _openrouter is not None:
+        return "openrouter/deepseek/deepseek-chat"
+    if _together is not None:
+        return "together/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    if _mistral is not None:
+        return "mistral-large-latest"
+    if _xai is not None:
+        return "grok-2"
+    return None
+
+
 def default_model() -> str:
     """The model an operator chat turn uses when the request names none.
 
@@ -340,8 +364,9 @@ def default_model() -> str:
         chosen = None
     if chosen:
         return chosen
-    if has_cloud_key():
-        return BYOK_DEFAULT_MODEL
+    byok = _byok_default_model()
+    if byok:
+        return byok
     return LOCAL_FALLBACK_MODEL
 
 
