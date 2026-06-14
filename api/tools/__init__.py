@@ -205,6 +205,33 @@ async def dispatch(
     if tool is None:
         return ToolResult(ok=False, error=f"unknown tool: {name}")
 
+    # ── Egress guard (outbound argument scan) ────────────────────────────
+    # The one place that inspects what *leaves* the brain, run BEFORE the tier
+    # gates so it is the earliest content check. GREEN tools read only the
+    # brain's own memory — nothing goes out — so they are exempt. Every other
+    # tier puts an argument on an external wire (web_search/fetch_url/brain_call
+    # queries, send_telegram_message body), so a poisoned memory or a manipulated
+    # turn could steer a credential into an outbound arg. Scan first; refuse
+    # before anything leaves.
+    #
+    # Placed ahead of the RED approval block on purpose: a poisoned RED call is
+    # refused at PROPOSE time, so no Approve/Reject card is ever shown for it AND
+    # its secret-bearing args never reach the `red_proposed` audit line. The same
+    # scan still fires on the approve/execute re-dispatch (which arrives WITH a
+    # token) — so a secret buried in operator-approved args is refused even
+    # post-approval. One chokepoint, both lanes.
+    if tool.tier != GREEN:
+        from api.tools import egress
+        allow, egress_reason = egress.scan_outbound(name, args, tool.tier)
+        if not allow:
+            audit.log({"tool": name, "tier": tool.tier, "ok": False,
+                       "reason": "egress_blocked", "egress_reason": egress_reason})
+            return ToolResult(ok=False, error=(
+                f"{name} was blocked by the egress guard ({egress_reason}). The "
+                "arguments carry credential-shaped content that must not leave "
+                "the brain; the call was refused before anything was sent. Do "
+                "not retry — remove the sensitive content from the arguments."))
+
     # ── Tier gate ────────────────────────────────────────────────────────
     if tool.tier == YELLOW and not operator_authorized:
         audit.log({"tool": name, "tier": tool.tier, "ok": False,
@@ -247,34 +274,10 @@ async def dispatch(
             return ToolResult(ok=False, error=(
                 f"{name}: approval token {reason} — refused. A RED action runs "
                 "only against a fresh, matching, operator-minted approval."))
-        # Verified + consumed → fall through to egress + budget + run. The
-        # successful execution is audited below with tier=red so the trail shows
-        # the act.
-
-    # ── Egress guard (outbound argument scan) ────────────────────────────
-    # The one place that inspects what *leaves* the brain. GREEN tools read only
-    # the brain's own memory — nothing goes out — so they are exempt. Every other
-    # tier puts an argument on an external wire (web_search/fetch_url/brain_call
-    # queries, send_telegram_message body), so a poisoned memory or a manipulated
-    # turn could steer a credential into an outbound arg. Scan first; refuse
-    # before anything leaves.
-    #
-    # For RED this runs AFTER the approval token was verified above — so a secret
-    # buried in operator-approved args is STILL refused. That is deliberate: the
-    # backstop for an operator who approved a card without spotting a key in the
-    # payload. The /tools/approve EGRESS-GUARD SEAM re-dispatches the approved
-    # (tool, args) through here, so this single chokepoint covers both lanes.
-    if tool.tier != GREEN:
-        from api.tools import egress
-        allow, egress_reason = egress.scan_outbound(name, args, tool.tier)
-        if not allow:
-            audit.log({"tool": name, "tier": tool.tier, "ok": False,
-                       "reason": "egress_blocked", "egress_reason": egress_reason})
-            return ToolResult(ok=False, error=(
-                f"{name} was blocked by the egress guard ({egress_reason}). The "
-                "arguments carry credential-shaped content that must not leave "
-                "the brain; the call was refused before anything was sent. Do "
-                "not retry — remove the sensitive content from the arguments."))
+        # Verified + consumed → fall through to budget + run. The successful
+        # execution is audited below with tier=red so the trail shows the act.
+        # (The egress guard already ran above, before this block — so an approved
+        # call carrying a secret was refused before reaching here.)
 
     # ── Budget gate ──────────────────────────────────────────────────────
     if not budget.under_cap(name):

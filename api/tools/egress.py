@@ -89,9 +89,16 @@ _ENV_VALUE_NOISE = {"true", "false", "none", "null", "0", "1"}
 
 # High-entropy backstop: a contiguous opaque token that looks like a secret even
 # though it matched no named pattern. Tuned conservative — long enough and mixed
-# enough that ordinary words, URLs, and slugs do not trip it.
+# enough that ordinary words and slugs do not trip it.
 _TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{48,}")
 _ENTROPY_BITS_MIN = 4.3
+# URLs are stripped before the entropy backstop runs (see _scan_high_entropy):
+# legitimate signed/CDN URLs carry long opaque tokens that are indistinguishable
+# from secrets by entropy alone, so the backstop false-positives on them. The
+# *named* credential patterns and the env-value match still scan the FULL text
+# (URLs included), so a known-shape key or the brain's own secret embedded in a
+# URL is still caught — only the noisy generic heuristic skips URL bodies.
+_URL_RE = re.compile(r"https?://\S+")
 
 
 def _stringify(args: Dict[str, Any]) -> str:
@@ -143,7 +150,15 @@ def _scan_high_entropy(text: str) -> str:
     """Backstop for opaque secrets that match no named prefix. Requires a long
     contiguous token, high entropy, AND mixed character classes (upper, lower,
     digit) — base64/hex secrets have all three; English words and tidy URL slugs
-    do not."""
+    do not.
+
+    URLs are excised first: a legitimate signed/CDN URL carries a long opaque
+    query token that this heuristic cannot tell from a secret, so scanning URL
+    bodies here produces false positives that break ordinary fetch_url calls
+    (confirmed on the hbar live verify, 2026-06-14). Credential-in-URL exfil is
+    not lost — the named patterns and the env-value match scan the full text
+    including URLs; only this generic heuristic skips them."""
+    text = _URL_RE.sub(" ", text)
     for m in _TOKEN_RE.finditer(text):
         tok = m.group(0)
         if not (any(c.islower() for c in tok)
