@@ -1111,10 +1111,12 @@ async def tools_approve_endpoint(req: ToolApprovalRequest, api_key: str = Depend
 
     # EGRESS-GUARD SEAM ──────────────────────────────────────────────────────
     # This is the single chokepoint where an approved RED call's outbound args
-    # become real before they execute. The planned egress guard (scan args for
-    # private-scope / secret content — ops/ideas.md) slots in HERE: inspect
-    # (tool_name, args) and refuse before the dispatch below. Intentionally left
-    # as a clean hook; not built in this change.
+    # become real before they execute. The egress guard (scan args for credential-
+    # shaped / secret content — api/tools/egress.py) is enforced inside the
+    # re-dispatch below: dispatch() runs egress.scan_outbound on every non-GREEN
+    # tier AFTER the approval token verifies, so a secret buried in operator-
+    # approved args is refused here even though the operator clicked Approve. No
+    # extra check is needed at this seam — the re-dispatch is the enforcement.
 
     # Re-dispatch the exact approved (tool, args) WITH the minted token. dispatch
     # verifies the token matches this binding, is unexpired and unused, burns it,
