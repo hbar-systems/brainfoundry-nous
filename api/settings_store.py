@@ -398,6 +398,38 @@ def set_greeting(text: str) -> None:
         _save(data)
 
 
+# ── First-run onboarding ("become-you") ─────────────────────────────────────
+# A brand-new brain runs the first-run experience (brain speaks first, live
+# fact extraction, "your mind" panel) until the owner completes or dismisses it.
+# The flag defaults False so a new brain reads as not-completed — but the
+# onboarding gate ALSO requires a near-empty corpus (see api/onboarding/core.py
+# is_fresh_brain), so an established brain never re-enters first-run regardless.
+ONBOARDING_CORPUS_THRESHOLD_DEFAULT = 3
+
+
+def get_onboarding_completed() -> bool:
+    return bool(_load().get("onboarding_completed", False))
+
+
+def set_onboarding_completed(done: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["onboarding_completed"] = bool(done)
+        _save(data)
+
+
+def get_onboarding_corpus_threshold() -> int:
+    """Chunk count at/below which a brain still counts as 'near-empty' for
+    first-run. Tolerates a brain that auto-seeded a doc or two. Env-overridable."""
+    v = _load().get("onboarding_corpus_threshold")
+    if isinstance(v, int) and v >= 0:
+        return v
+    try:
+        return int(os.getenv("ONBOARDING_CORPUS_THRESHOLD", ONBOARDING_CORPUS_THRESHOLD_DEFAULT))
+    except (TypeError, ValueError):
+        return ONBOARDING_CORPUS_THRESHOLD_DEFAULT
+
+
 # ── Tools: web search (YELLOW tier) ─────────────────────────────────────────
 # Web search is the brain's first external-capability tool. It is OFF by
 # default. The operator turns it on (standing authorization for the YELLOW

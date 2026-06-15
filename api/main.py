@@ -2558,7 +2558,7 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
 
 
 @app.post("/chat/rag")
-async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)):
+async def rag_chat_completion(request: dict, http_request: Request, api_key: str = Depends(get_api_key)):
     """RAG-enhanced chat completion - chat with your documents!
 
     Set `"stream": true` in the request body for Server-Sent Events streaming
@@ -2606,6 +2606,51 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                 break
         if not user_query:
             user_query = request.get("query", "")
+
+        # ── First-run "become-you" onboarding path ───────────────────
+        # A brand-new brain (near-empty corpus + a trial key configured) runs
+        # the onboarding experience: the brain reflects sharply via the
+        # operator-funded trial reasoner and forms a model of the owner, which
+        # the UI surfaces live in the "your mind" panel. RAG is skipped (a fresh
+        # corpus has nothing to retrieve). Fully INERT for every established
+        # brain and any brain without a trial key (_onboarding_active() → False).
+        if not images_list and _onboarding_active():
+            onb_ip = _public_client_ip(http_request)
+
+            if do_stream:
+                async def onboarding_stream():
+                    turn = await _run_onboarding_turn(messages, session_id, onb_ip)
+                    meta = {"object": "chat.completion.rag_meta",
+                            "rag_metadata": {"documents_used": 0, "search_query": user_query,
+                                             "sources": [], "onboarding": True}}
+                    chunk = {"id": f"chatcmpl-onb-{uuid.uuid4()}",
+                             "object": "chat.completion.chunk", "model": "trial",
+                             "choices": [{"index": 0, "delta": {"content": turn["reply"]},
+                                          "finish_reason": None}]}
+                    facts_frame = {"object": "chat.completion.onboarding_facts",
+                                   "facts": turn["facts"],
+                                   "trial": {"session_remaining": turn["session_remaining"],
+                                             "capped": turn["capped"]}}
+                    yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    _persist_chat_turn(session_id, messages, turn["reply"])
+                    yield f"data: {json.dumps(facts_frame, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(onboarding_stream(), media_type="text/event-stream")
+
+            turn = await _run_onboarding_turn(messages, session_id, onb_ip)
+            _persist_chat_turn(session_id, messages, turn["reply"])
+            return {
+                "id": f"chatcmpl-onb-{uuid.uuid4()}",
+                "object": "chat.completion",
+                "created": int(datetime.utcnow().timestamp()),
+                "model": "trial",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": turn["reply"]}, "finish_reason": "stop"}],
+                "rag_metadata": {"documents_used": 0, "search_query": user_query, "sources": [], "onboarding": True},
+                "onboarding_facts": turn["facts"],
+                "trial": {"session_remaining": turn["session_remaining"], "capped": turn["capped"]},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
 
         # ── Vision path ──────────────────────────────────────────────
         # If one or more images are attached, bypass RAG retrieval and send a
@@ -6514,50 +6559,12 @@ JSON object only."""
         raise HTTPException(status_code=502, detail={"error": "provider_failed", "message": str(e)[:300]})
 
     # Parse — models occasionally wrap JSON in ```json fences, lead with prose,
-    # or even truncate mid-JSON. Strip fences, then walk through brace-balancing
-    # to find the longest well-formed {...} block.
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```\s*$", "", text)
-
-    def _extract_json_object(s: str):
-        """Find the longest substring starting with '{' that parses as JSON.
-        Handles preamble prose and trailing junk. Returns the parsed object or
-        None if no valid JSON object is found."""
-        start_positions = [i for i, c in enumerate(s) if c == '{']
-        for start in start_positions:
-            depth = 0
-            in_str = False
-            esc = False
-            for i in range(start, len(s)):
-                ch = s[i]
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == '\\':
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                else:
-                    if ch == '"':
-                        in_str = True
-                    elif ch == '{':
-                        depth += 1
-                    elif ch == '}':
-                        depth -= 1
-                        if depth == 0:
-                            try:
-                                return json.loads(s[start:i+1])
-                            except json.JSONDecodeError:
-                                break
-        return None
-
-    proposal = None
-    try:
-        proposal = json.loads(text)
-    except json.JSONDecodeError:
-        proposal = _extract_json_object(text)
+    # or even truncate mid-JSON. The shared util strips fences then brace-
+    # balances to find the longest well-formed {...} block (api/json_utils.py;
+    # also used by the onboarding fact extractor).
+    from api.json_utils import parse_json_loose, strip_code_fences
+    text = strip_code_fences(raw)
+    proposal = parse_json_loose(raw)
 
     if proposal is None:
         raise HTTPException(
@@ -6763,6 +6770,235 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         "mem_type": provenance.get("mem_type"),
         "injection_scan": scan,
     }
+
+
+# ============================================================================
+# First-run "become-you" onboarding — /onboarding/*
+# ============================================================================
+# A brand-new (empty-corpus) brain runs a first-run experience: the brain speaks
+# first, reflects sharply via an operator-funded trial reasoner, and visibly
+# forms a model of the owner in a "your mind" panel — all stored only in their
+# own brain. The whole surface is INERT for any established brain and for any
+# brain without a trial key configured (see api/onboarding/). These endpoints
+# never mutate the corpus except via the same hardened write path the Store
+# button uses (operator-direct → semantic, trust 1.0).
+
+
+def _onboarding_active() -> bool:
+    """The single server-side gate: fresh brain AND a trial key is configured.
+    Both default to the safe value so this is a no-op on established brains."""
+    from api.onboarding import core as _onb_core, trial_reasoner as _trial
+    return _onb_core.is_fresh_brain() and _trial.is_available()
+
+
+def _store_onboarding_fact(text: str, category: str = "identity") -> Optional[dict]:
+    """Persist one self-stated fact about the owner via the hardened write path.
+
+    Operator-direct (the owner stated it about themselves) → semantic, trust 1.0,
+    never demoted/quarantined — mirrors /memory/store. Lands in the `identity`
+    layer, tagged source='onboarding-self-stated' so the panel can list/delete
+    only these. Returns {id, text, category} or None on failure (never raises —
+    a failed fact must never break the chat turn)."""
+    try:
+        content = (text or "").strip()
+        if not content:
+            return None
+        from api import substrate as _substrate
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        doc_name = f"onboarding-{date_str}-{uuid.uuid4().hex[:8]}.md"
+        chunks = chunk_text(content)
+        if not chunks:
+            return None
+        embeddings = generate_embeddings(chunks)
+        _content_hash = _substrate.content_hash_of(content)
+        provenance, _scan, _q = _scan_and_classify_write(
+            content, source="onboarding-self-stated", operator_authored=True,
+            content_hash=_content_hash,
+        )
+        metadata_base = {
+            "layer": "identity",
+            "source": "onboarding-self-stated",
+            "category": category,
+            "stored_at": datetime.utcnow().isoformat(),
+            **provenance,
+        }
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        first_id = None
+        try:
+            for chunk, emb in zip(chunks, embeddings):
+                emb_str = "[" + ",".join(map(str, emb)) + "]"
+                cursor.execute(
+                    """
+                    INSERT INTO document_embeddings (document_name, content, embedding, metadata)
+                    VALUES (%s, %s, %s::vector, %s)
+                    RETURNING id
+                    """,
+                    (doc_name, chunk, emb_str, json.dumps(metadata_base)),
+                )
+                row = cursor.fetchone()
+                if row and first_id is None:
+                    first_id = str(row[0])
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[onboarding] fact store failed: {e}", flush=True)
+            return None
+        finally:
+            cursor.close()
+            conn.close()
+        if first_id is None:
+            return None
+        return {"id": first_id, "text": content, "category": category}
+    except Exception as e:
+        print(f"[onboarding] fact store error: {e}", flush=True)
+        return None
+
+
+def _trial_extraction_reasoner(session_id: str, ip: str):
+    """Bind (session_id, ip) into the metered extraction reasoner so core.extract_facts
+    stays auth-agnostic. Returns the {ok, text, session_remaining, reason} dict."""
+    from api.onboarding import trial_reasoner as _trial
+
+    async def _r(messages, *, system=None, max_tokens=400):
+        return await _trial.complete_for_extraction(
+            messages, session_id=session_id, ip=ip, system=system, max_tokens=max_tokens)
+    return _r
+
+
+async def _run_onboarding_turn(messages: list, session_id: str, ip: str) -> dict:
+    """Run one first-run turn: answer via the trial reasoner (system =
+    FIRST_RUN_PERSONA), then extract + store facts. Returns
+    {reply, facts, session_remaining, capped}. Never raises."""
+    from api.onboarding import core as _onb_core, trial_reasoner as _trial
+    # Answer. A fresh brain has an empty corpus, so we skip RAG and talk directly
+    # — system carries the curious/perceptive first-run persona.
+    answer = await _trial.complete_for_answer(
+        messages, session_id=session_id, ip=ip,
+        system=_onb_core.FIRST_RUN_PERSONA, max_tokens=700)
+    if not answer.get("ok"):
+        # Trial budget spent (or unavailable mid-session) → graceful conversion nudge.
+        reply = (
+            "We've reached the end of what this free trial session can think "
+            "through. Your conversation is saved only in your brain — add your "
+            "own key to keep going and make this brain fully yours."
+        )  # DRAFT copy — operator approves.
+        return {"reply": reply, "facts": [], "session_remaining": 0, "capped": True}
+    reply = answer.get("text") or ""
+    session_remaining = answer.get("session_remaining")
+    # Extract + store facts (best-effort; never costs the answer).
+    facts_out = []
+    try:
+        convo = list(messages) + [{"role": "assistant", "content": reply}]
+        result = await _onb_core.extract_facts(
+            convo, _trial_extraction_reasoner(session_id, ip))
+        if result.get("session_remaining") is not None:
+            session_remaining = result["session_remaining"]
+        for f in result.get("facts", []):
+            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"))
+            if stored:
+                facts_out.append(stored)
+    except Exception as e:
+        print(f"[onboarding] turn extraction failed: {e}", flush=True)
+    return {"reply": reply, "facts": facts_out,
+            "session_remaining": session_remaining, "capped": False}
+
+
+@app.get("/onboarding/status")
+def onboarding_status(http_request: Request, session_id: str = "", api_key: str = Depends(get_api_key)) -> dict:
+    """Single signal the chat UI reads to decide whether to run first-run mode.
+    `active` = fresh brain AND a trial key configured AND trial budget remaining."""
+    from api.onboarding import core as _onb_core, trial_reasoner as _trial
+    first_run = _onb_core.is_fresh_brain()
+    ip = _public_client_ip(http_request)
+    trial = _trial.status(session_id, ip) if first_run else {"available": False, "session_remaining": 0}
+    return {
+        "active": bool(first_run and trial.get("available")),
+        "first_run": first_run,
+        "completed": settings_store.get_onboarding_completed(),
+        "corpus_count": _onb_core.corpus_count(),
+        "trial_available": _trial.is_available(),
+        "session_remaining": trial.get("session_remaining"),
+    }
+
+
+@app.get("/onboarding/opener")
+def onboarding_opener(api_key: str = Depends(get_api_key)) -> dict:
+    """The hook the brain speaks first. Null unless the brain is genuinely in
+    first-run mode (so an established brain never gets seeded an opener)."""
+    if not _onboarding_active():
+        return {"opener": None}
+    from api.onboarding import core as _onb_core
+    return {"opener": _onb_core.opener(), "persona_mode": "first_run"}
+
+
+@app.post("/onboarding/complete")
+def onboarding_complete(api_key: str = Depends(get_api_key)) -> dict:
+    """Mark first-run done (idempotent). Called when the owner hits the
+    conversion CTA or adds their own key. Flips the brain to normal chat."""
+    settings_store.set_onboarding_completed(True)
+    return {"ok": True, "completed": True}
+
+
+@app.get("/onboarding/facts")
+def onboarding_facts(api_key: str = Depends(get_api_key)) -> dict:
+    """List the facts the owner's brain has formed during onboarding, so the
+    panel can hydrate on reload. Only source='onboarding-self-stated' rows."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT id, content, metadata->>'category'
+            FROM document_embeddings
+            WHERE metadata->>'source' = 'onboarding-self-stated'
+            ORDER BY created_at ASC
+            """
+        )
+        rows = cursor.fetchall()
+    except Exception as e:
+        print(f"[onboarding] facts list failed: {e}", flush=True)
+        rows = []
+    finally:
+        cursor.close()
+        conn.close()
+    facts = [{"id": str(r[0]), "text": r[1], "category": r[2] or "identity"} for r in rows]
+    return {"facts": facts, "count": len(facts)}
+
+
+@app.delete("/onboarding/fact/{fact_id}")
+def onboarding_fact_delete(fact_id: str, api_key: str = Depends(get_api_key)) -> dict:
+    """Remove one onboarding fact ("that's not me"). The source guard makes it
+    impossible to delete a non-onboarding memory through this surface."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    deleted = 0
+    try:
+        cursor.execute(
+            """
+            DELETE FROM document_embeddings
+            WHERE id = %s AND metadata->>'source' = 'onboarding-self-stated'
+            """,
+            (fact_id,),
+        )
+        deleted = cursor.rowcount or 0
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail={"error": "delete_failed", "message": str(e)[:200]})
+    finally:
+        cursor.close()
+        conn.close()
+    # Log as a negative example (mirrors the store-button reject feedback lane).
+    try:
+        fb = Path("/app/runtime/feedback/onboarding")
+        fb.mkdir(parents=True, exist_ok=True)
+        with open(fb / f"{datetime.utcnow().strftime('%Y-%m-%d')}.jsonl", "a") as f:
+            f.write(json.dumps({"ts": datetime.utcnow().isoformat(),
+                                "event": "fact_removed", "fact_id": fact_id}) + "\n")
+    except Exception:
+        pass
+    return {"ok": True, "deleted": deleted}
 
 
 app.include_router(router)

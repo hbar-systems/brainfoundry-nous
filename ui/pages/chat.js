@@ -141,6 +141,36 @@ export default function Chat() {
   const [greeting, setGreeting] = useState('')
   const [greetingEditing, setGreetingEditing] = useState(false)
   const [greetingDraft, setGreetingDraft] = useState('')
+  // First-run "become-you" onboarding. `onboardingActive` is true only on a
+  // genuinely fresh brain with a trial reasoner configured (server decides via
+  // /onboarding/status). When active: the brain speaks first (opener), and the
+  // "your mind" panel fills live with facts the brain forms about the owner.
+  // Every field stays inert for established brains (status returns active:false).
+  const [onboardingActive, setOnboardingActive] = useState(false)
+  const [mindFacts, setMindFacts] = useState([]) // [{id, text, category}]
+  const [trialSessionRemaining, setTrialSessionRemaining] = useState(null)
+  const [showConversionCTA, setShowConversionCTA] = useState(false)
+  const onboardingSeededRef = useRef(false)
+  const onbTurnsRef = useRef(0)
+
+  // Merge incoming onboarding facts into the panel by id (idempotent across
+  // re-renders / reloads).
+  const mergeFactsById = (prev, incoming) => {
+    const byId = new Map(prev.map(f => [f.id, f]))
+    for (const f of incoming) if (f && f.id) byId.set(f.id, f)
+    return Array.from(byId.values())
+  }
+  // "That's not me" — one-tap correction. Optimistic remove, then delete the
+  // memory server-side (source-guarded so only onboarding facts can be removed).
+  const removeMindFact = async (id) => {
+    setMindFacts(prev => prev.filter(f => f.id !== id))
+    try { await fetch(`/api/bf/onboarding/fact/${id}`, { method: 'DELETE' }) } catch { /* optimistic */ }
+  }
+  // Dismiss first-run (CTA "make it fully yours" / add a key). Flips the brain
+  // to normal chat for good.
+  const completeOnboarding = async () => {
+    try { await fetch('/api/bf/onboarding/complete', { method: 'POST' }) } catch { /* best-effort */ }
+  }
   // Build a markdown rendering of the current chat. Same format used by
   // both "copy all" and "download .md" so what lands on the clipboard
   // matches what lands in the file. Includes session title + brain name
@@ -986,6 +1016,37 @@ export default function Chat() {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setPersonaStatus(d) })
       .catch(() => {})
+
+    // First-run "become-you" onboarding. Server gates on a fresh corpus + a
+    // configured trial reasoner; if active, the brain speaks first (opener) and
+    // the "your mind" panel renders. No-op on every established brain.
+    fetch('/api/bf/onboarding/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || !d.active) return
+        setOnboardingActive(true)
+        if (typeof d.session_remaining === 'number') setTrialSessionRemaining(d.session_remaining)
+        // Hydrate facts already formed (so a reload keeps the panel populated).
+        fetch('/api/bf/onboarding/facts')
+          .then(r => r.ok ? r.json() : null)
+          .then(fd => { if (fd && Array.isArray(fd.facts)) setMindFacts(fd.facts) })
+          .catch(() => {})
+        // The brain speaks first — seed the opener as a faux assistant bubble.
+        // Marked onbOpener so it renders but is never sent back to the model
+        // (keeps the API conversation starting with the owner's first reply).
+        fetch('/api/bf/onboarding/opener')
+          .then(r => r.ok ? r.json() : null)
+          .then(od => {
+            if (od && od.opener && !onboardingSeededRef.current) {
+              onboardingSeededRef.current = true
+              setMessages(prev => prev.length === 0
+                ? [{ role: 'assistant', content: od.opener, onbOpener: true }]
+                : prev)
+            }
+          })
+          .catch(() => {})
+      })
+      .catch(() => {})
   }, [])
 
   // Scroll-along: while sticking to bottom, creep toward the latest content
@@ -1168,11 +1229,14 @@ export default function Chat() {
       }
 
       // Strip image data URLs from messages sent to backend — server doesn't need them
-      // and they'd bloat the request.
-      const messagesForBackend = updated.map(m => {
-        const { imageDataUrls, ...rest } = m
-        return rest
-      })
+      // and they'd bloat the request. Also drop the first-run opener bubble
+      // (onbOpener): it's a UI-only greeting, never part of the model conversation.
+      const messagesForBackend = updated
+        .filter(m => !m.onbOpener)
+        .map(m => {
+          const { imageDataUrls, onbOpener, ...rest } = m
+          return rest
+        })
 
       const r = await fetch('/api/bf/chat/rag', {
         method: 'POST',
@@ -1311,6 +1375,20 @@ export default function Chat() {
                   next[next.length - 1] = { ...next[next.length - 1], sources, webSearch, corroboration, toolEvents, pendingApprovals }
                   return next
                 })
+                continue
+              }
+              // First-run onboarding facts frame — the brain just formed (and
+              // stored) facts about the owner this turn. Fill the panel live and
+              // drive the conversion CTA from the trial budget / exchange count.
+              if (parsed.object === 'chat.completion.onboarding_facts') {
+                const facts = Array.isArray(parsed.facts) ? parsed.facts : []
+                if (facts.length) setMindFacts(prev => mergeFactsById(prev, facts))
+                if (parsed.trial) {
+                  if (typeof parsed.trial.session_remaining === 'number') setTrialSessionRemaining(parsed.trial.session_remaining)
+                  if (parsed.trial.capped || (typeof parsed.trial.session_remaining === 'number' && parsed.trial.session_remaining <= 0)) setShowConversionCTA(true)
+                }
+                onbTurnsRef.current += 1
+                if (onbTurnsRef.current >= 8) setShowConversionCTA(true)
                 continue
               }
               const delta = parsed.choices?.[0]?.delta?.content
@@ -2612,6 +2690,108 @@ export default function Chat() {
         </PanelGroup>
       </Panel>
       </PanelGroup>
+
+      {/* "Your mind" panel — the visible "becoming you". Only on a fresh brain
+          in first-run mode. Facts the brain has formed about the owner appear
+          live as each turn lands; the counter is the dopamine loop; each fact is
+          one-tap removable ("that's not me"); the conversion CTA appears after
+          the session hooks them (token cap or ~8 exchanges). DRAFT copy. */}
+      {onboardingActive && (
+        <div style={{
+          position: 'fixed',
+          top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px) + 14px)',
+          right: '14px',
+          width: '290px',
+          maxWidth: 'calc(100vw - 28px)',
+          maxHeight: 'calc(100vh - var(--nav-h, 52px) - 40px)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: '14px',
+          boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
+          zIndex: 40,
+          overflow: 'hidden',
+        }}>
+          <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>
+              your mind
+            </div>
+            <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: '17px', color: 'var(--accent)', marginTop: '2px' }}>
+              {mindFacts.length} {mindFacts.length === 1 ? 'thing' : 'things'}
+            </div>
+          </div>
+
+          <div style={{ overflowY: 'auto', padding: '8px 10px', flex: 1 }}>
+            {mindFacts.length === 0 ? (
+              <div style={{ fontSize: '12.5px', color: 'var(--muted)', lineHeight: 1.6, padding: '8px 6px' }}>
+                As we talk, what I learn about you appears here — and is stored
+                only in your brain.
+              </div>
+            ) : (
+              mindFacts.map(f => (
+                <div
+                  key={f.id}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '8px',
+                    padding: '9px 10px', marginBottom: '6px',
+                    background: 'var(--bg)', border: '1px solid var(--border)',
+                    borderRadius: '10px',
+                    animation: 'onbFactIn 0.4s ease',
+                  }}
+                >
+                  <div style={{ flex: 1, fontSize: '13px', lineHeight: 1.45, color: 'var(--text)' }}>
+                    {f.text}
+                  </div>
+                  <button
+                    onClick={() => removeMindFact(f.id)}
+                    title="That's not me"
+                    style={{
+                      flexShrink: 0, background: 'none', border: 'none',
+                      color: 'var(--muted)', cursor: 'pointer', fontSize: '14px',
+                      lineHeight: 1, padding: '2px 4px',
+                    }}
+                    onMouseOver={e => { e.currentTarget.style.color = 'var(--accent)' }}
+                    onMouseOut={e => { e.currentTarget.style.color = 'var(--muted)' }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {showConversionCTA && (
+            <div style={{ padding: '12px 14px', borderTop: '1px solid var(--border)', background: 'var(--bg)' }}>
+              {/* DRAFT copy — operator approves before public use. Sovereignty
+                  honesty: conversation is in your brain; thinking is on a shared
+                  trial engine until you bring your own key. */}
+              <div style={{ fontSize: '12.5px', lineHeight: 1.55, color: 'var(--text)', marginBottom: '10px' }}>
+                This is your brain now — and it remembers. Want to keep it and make
+                it fully yours? Add your own key so the thinking runs on your terms too.
+              </div>
+              <a
+                href="/settings"
+                onClick={() => { completeOnboarding() }}
+                style={{
+                  display: 'inline-block', padding: '9px 16px',
+                  background: 'var(--accent)', color: 'var(--bg)',
+                  borderRadius: '9px', fontSize: '13px', fontWeight: 600,
+                  textDecoration: 'none',
+                }}
+              >
+                Make it fully yours →
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+      <style jsx global>{`
+        @keyframes onbFactIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
 
       {/* Proposal modal — Phase B classify-and-propose flow. The brain
           proposes how to store the operator's selected message; the

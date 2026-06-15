@@ -6,6 +6,39 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- feat: **first-run "become-you" onboarding — a fresh, keyless brain that turns
+  a cold stranger into "I want one".** A brand-new (near-empty corpus) brain can
+  now run a first-run experience instead of the empty-Knowledge-tab + BYOK-wall
+  dead end: the brain speaks first with a curious hook, reflects sharply, and
+  visibly forms a model of the owner in a live "your mind" side panel — all
+  stored only in their own brain, no upload and no key required. **DRAFT copy**
+  (opener / CTA / first-run persona) ships behind the mechanism — refine before
+  public use.
+  - **Trial reasoner (`api/onboarding/trial_reasoner.py`).** A fresh brain has no
+    cloud key and the local model is too weak for sharp reflections, so the
+    operator funds a SHARED key (`TRIAL_REASONER_API_KEY`, default model
+    `claude-haiku-4-5`) used only for the first session. It is a DEDICATED client,
+    kept entirely out of `api/providers.py`, so no normal chat turn on any brain
+    can ever spend it. Every call is metered fail-closed via reserve-then-
+    reconcile against a HARD per-session token cap, a per-IP/day token cap, a
+    per-IP/day distinct-session cap, and an optional brain-wide kill-ceiling
+    (Redis primary, JSON-sidecar fallback; counters configured-but-unreachable →
+    refuse, never proceed unmetered). Source IP is hashed in the audit log.
+  - **Live fact extraction + "your mind" panel.** After each turn a structured
+    extraction call pulls high-confidence facts about the owner; self-stated
+    facts are written operator-direct → `semantic` (trust 1.0) through the same
+    hardened write path the Store button uses (`source=onboarding-self-stated`,
+    `identity` layer). The chat UI renders them live with a growing counter and a
+    one-tap "that's not me" removal (source-guarded delete).
+  - **Tight first-run gate (the safety contract).** Everything is inert unless
+    `is_fresh_brain()` (near-empty corpus AND onboarding-not-completed; corpus
+    read fails safe-OFF) AND a trial key is configured. With `TRIAL_REASONER_API_KEY`
+    unset — the state of every already-provisioned brain — `/onboarding/status`
+    returns `active:false`, `/chat/rag` is byte-for-byte the old path, and the UI
+    renders nothing new. New endpoints: `/onboarding/{status,opener,complete,facts}`
+    + `DELETE /onboarding/fact/{id}`. Shared JSON-extraction util lifted to
+    `api/json_utils.py` (also used by `/memory/store/propose`).
+
 - fix: **vendor disavowal now catches lettered model suffixes (`gpt 4o` /
   `gpt-4o`).** The GPT pattern required the version digits to end on a word
   boundary, so `4o` never matched and `_detect_named_vendors` missed GPT-4o
