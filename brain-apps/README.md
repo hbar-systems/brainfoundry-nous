@@ -19,6 +19,52 @@ new surfaces. An installed app:
 Manifest schema: `registry/schema/brain/app.schema.json` (in hbar.world).
 Worked example: `registry/schema/brain/app.example.yaml`.
 
+## Bridge intents
+
+_(intent catalog — last updated 2026-05-18, adds `llm.complete`)_
+
+An installed app talks to the brain by `postMessage`-ing an intent to its host
+shell (`ui/pages/apps/[id].js`) and awaiting a `reply`. The wire shape:
+
+```
+iframe -> host:  { type: <intent>, payload: <object?>, request_id: <string> }
+host -> iframe:  { type: 'reply', request_id, ok: <bool>,
+                   result?: <object>, error?: { code, ... } }
+```
+
+Permission-gated intents are checked first-line in the host shell against the
+manifest's `permissions` (and, where relevant, `requires_layers`); server-side
+enforcement at the brain API is the durable gate.
+
+| Intent | Permission | Payload | Result |
+|---|---|---|---|
+| `ping` | — | — | `'pong'` |
+| `meta.app_info` | — | — | `{ id, name, version }` |
+| `meta.brain_info` | — | — | `{ name }` |
+| `memory.write` | `memory.write` + `requires_layers` | `{ layer, content, source?, metadata? }` | `{ id, doc_name }` |
+| `llm.complete` | `llm.invoke` + `requires_layers` | `{ messages: [{role, content}, ...] }` | `{ text, model, sources: [...] }` |
+
+### `llm.complete`
+
+Asks the brain to generate a completion. The brain answers over its own
+ingested corpus (RAG) using the operator's currently selected (BYOK) model —
+the app does not pick a model and never holds a key.
+
+- **Payload:** `{ messages: [{ role: 'system'|'user'|'assistant', content }, ...] }`.
+  `messages` must be a non-empty array.
+- **Result:** `{ text, model, sources }` — `text` is the generated completion,
+  `model` is the model that produced it, `sources` lists the corpus documents
+  retrieved.
+- **Retrieval scope:** RAG is restricted to the `read`-mode layers the app
+  declared in `requires_layers` and the operator approved at install. An app
+  cannot generate over a layer it did not declare.
+- **Trust:** the host shell mints a loop permit (NodeOS `POST /v1/loops/request`,
+  attributed `app:<id>`) and proxies it to the brain `POST /chat/rag`. The
+  permit `permit_id` / `permit_token` are held in the host shell — the iframe
+  never sees them.
+- **v0 limitation:** non-streaming — the full completion returns in one reply.
+  SSE streaming is a follow-up.
+
 ## Files in this directory
 
 - `installed.json` — the registry of installed apps. Source of truth on disk.

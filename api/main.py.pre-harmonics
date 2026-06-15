@@ -119,69 +119,11 @@ except OSError:
     BRAIN_VERSION = "0.0.0-unknown"
 
 APP_DIR = Path(__file__).resolve().parent
-
-# Track J1 — the persona is split into a tracked blank template and a
-# gitignored personalized copy, so a `git pull` (Track J) can never overwrite
-# a brain's identity. The runtime loads .local.md if present, else .template.md.
-PERSONA_TEMPLATE_PATH = APP_DIR / "brain_persona.template.md"
-PERSONA_LOCAL_PATH = APP_DIR / "brain_persona.local.md"
-# Pre-J1 single-file path. Migrated into .local.md on startup, then removed.
-PERSONA_LEGACY_PATH = APP_DIR / "brain_persona.md"
-
-
-def _host_api_dir():
-    """The api/ directory inside the host brain repo (bind-mounted at
-    BRAIN_HOST_DIR), or None when there is no distinct host mount (dev installs
-    where /app/api is already the working copy)."""
-    host_dir = os.getenv("BRAIN_HOST_DIR", "")
-    if not host_dir:
-        return None
-    host_api = Path(host_dir) / "api"
-    try:
-        if host_api.resolve() == APP_DIR.resolve():
-            return None
-    except Exception:
-        return None
-    return host_api
-
-
-def _run_persona_migration() -> None:
-    """Run the J1 legacy-persona migration in both the running container's
-    api/ dir and the host brain repo, so an already-personalized brain's
-    identity is preserved durably into the gitignored .local.md. Idempotent —
-    safe on every startup."""
-    from api.persona_tools import migrate_legacy_persona
-    dirs = [APP_DIR]
-    host_api = _host_api_dir()
-    if host_api and host_api.is_dir():
-        dirs.append(host_api)
-    for d in dirs:
-        try:
-            result = migrate_legacy_persona(
-                d / "brain_persona.template.md",
-                d / "brain_persona.local.md",
-                d / "brain_persona.md",
-            )
-            if result in ("migrated", "removed-redundant"):
-                # flush=True — this one-time migration runs at import time,
-                # before uvicorn sets up, and Python buffers stdout off a tty.
-                print(f"persona migration ({d}): {result}", flush=True)
-        except Exception as e:
-            print(f"WARNING: persona migration failed for {d}: {e}", flush=True)
-
-
-_run_persona_migration()
-
-
-def active_persona_path() -> Path:
-    """The persona file the runtime loads — the personalized .local.md if it
-    exists, otherwise the tracked blank template."""
-    return PERSONA_LOCAL_PATH if PERSONA_LOCAL_PATH.exists() else PERSONA_TEMPLATE_PATH
-
+PERSONA_PATH = APP_DIR / "brain_persona.md"
 
 def load_persona_text() -> str:
     try:
-        return active_persona_path().read_text(encoding="utf-8").strip()
+        return PERSONA_PATH.read_text(encoding="utf-8").strip()
     except Exception:
         return ""  # safe fallback
 
@@ -367,122 +309,8 @@ def capabilities():
 
 @app.get("/persona")
 def get_persona(api_key: str = Depends(get_api_key)):
-    """Return the loaded brain persona text — backs the console persona editor."""
+    """Return the loaded brain persona text (debug/verification)."""
     return {"persona": BRAIN_PERSONA}
-
-
-class PersonaUpdateRequest(BaseModel):
-    persona: str
-
-
-@app.put("/persona")
-def put_persona(req: PersonaUpdateRequest, api_key: str = Depends(get_api_key)):
-    """Overwrite the brain's persona — the system prompt injected on every turn.
-
-    Writes the gitignored brain_persona.local.md ONLY, never the tracked
-    template (Track J1), so a `git pull` can't clobber it; also persists to the
-    host brain repo so a rebuild keeps it. Reloads it live — the next chat turn
-    uses the edited persona.
-    """
-    global BRAIN_PERSONA
-    text = req.persona or ""
-
-    try:
-        PERSONA_LOCAL_PATH.write_text(text, encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not write persona file: {e}")
-
-    host_api = _host_api_dir()
-    if host_api:
-        try:
-            host_api.mkdir(parents=True, exist_ok=True)
-            (host_api / "brain_persona.local.md").write_text(text, encoding="utf-8")
-        except Exception as e:
-            print(f"WARNING: could not persist persona to host path {host_api}: {e}")
-
-    BRAIN_PERSONA = text.strip()
-    return {"ok": True, "persona": BRAIN_PERSONA}
-
-
-@app.get("/persona/status")
-def get_persona_status(api_key: str = Depends(get_api_key)):
-    """Report whether the brain has been personalized yet.
-
-    A brain is "configured" once a personalized brain_persona.local.md exists;
-    until then it runs the tracked blank template and the console chat
-    surfaces the in-chat "name your brain" onboarding. (Track J1: presence of
-    .local.md is the signal — not text inspection of the persona.)
-    """
-    from api.persona_tools import detect_placeholders
-    local_exists = PERSONA_LOCAL_PATH.exists()
-    return {
-        "configured": local_exists,
-        "is_template": not local_exists,
-        "placeholders": detect_placeholders(BRAIN_PERSONA),
-    }
-
-
-class PersonalizePersonaRequest(BaseModel):
-    brain_name: str
-    owner_name: str
-
-
-@app.post("/persona/personalize")
-def post_persona_personalize(req: PersonalizePersonaRequest, api_key: str = Depends(get_api_key)):
-    """Run the persona personalization the provisioner normally does by hand.
-
-    Substitutes [BRAIN_NAME]/[OWNER_NAME] into the tracked blank template,
-    strips the TEMPLATE banner, and writes the result to the gitignored
-    brain_persona.local.md — never a tracked file (Track J1), so a later
-    `git pull` cannot overwrite the brain's identity. Reloads it as the live
-    system prompt and persists it to the host brain repo so a rebuild keeps
-    the named persona. Same logic as scripts/personalize_persona.py.
-    """
-    global BRAIN_PERSONA
-    from api.persona_tools import personalize_text
-
-    brain_name = (req.brain_name or "").strip()
-    owner_name = (req.owner_name or "").strip()
-    if not brain_name or not owner_name:
-        raise HTTPException(status_code=400, detail="brain_name and owner_name are both required")
-    if len(brain_name) > 80 or len(owner_name) > 80:
-        raise HTTPException(status_code=400, detail="brain_name and owner_name must each be 80 characters or fewer")
-
-    # Always personalize from the tracked blank template, so re-naming an
-    # already-named brain works (the template still carries the placeholders).
-    try:
-        template_text = PERSONA_TEMPLATE_PATH.read_text(encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not read persona template: {e}")
-
-    updated = personalize_text(template_text, brain_name, owner_name)
-
-    # Write the personalized identity to the gitignored .local.md ONLY. The
-    # running container's copy is updated so /persona reflects it immediately.
-    try:
-        PERSONA_LOCAL_PATH.write_text(updated, encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not write persona file: {e}")
-
-    # Also write the host brain repo (bind-mounted at BRAIN_HOST_DIR) so the
-    # named persona survives a `docker compose up --build`. Best-effort: dev
-    # installs may not have a distinct host mount. .local.md is gitignored and
-    # rsync-excluded, so it is never clobbered by a deploy or a git pull.
-    host_api = _host_api_dir()
-    if host_api:
-        try:
-            host_api.mkdir(parents=True, exist_ok=True)
-            (host_api / "brain_persona.local.md").write_text(updated, encoding="utf-8")
-        except Exception as e:
-            print(f"WARNING: could not persist persona to host path {host_api}: {e}")
-
-    BRAIN_PERSONA = updated.strip()
-    return {
-        "ok": True,
-        "brain_name": brain_name,
-        "owner_name": owner_name,
-        "configured": True,
-    }
 
 
 class FederationAssertionRequest(BaseModel):
@@ -607,13 +435,6 @@ class SetMemoryLayersRequest(BaseModel):
     layers: List[MemoryLayer]
 
 
-class SetRetrievalArchitectureRequest(BaseModel):
-    architecture: str
-    # Only meaningful for the 'layer_scoped' architecture. None = leave the
-    # stored scope unchanged; [] = scope to all declared layers.
-    layer_scope: Optional[List[str]] = None
-
-
 @app.get("/settings/keys")
 def settings_get_keys(api_key: str = Depends(get_api_key)):
     """Return masked key state per provider. Never returns full secrets."""
@@ -659,39 +480,6 @@ def settings_get_memory_layers(api_key: str = Depends(get_api_key)):
 def settings_set_memory_layers(req: SetMemoryLayersRequest, api_key: str = Depends(get_api_key)):
     settings_store.set_memory_layers([l.model_dump() for l in req.layers])
     return {"ok": True, "layers": settings_store.get_memory_layers()}
-
-
-@app.get("/settings/retrieval-architecture")
-def settings_get_retrieval_architecture(api_key: str = Depends(get_api_key)):
-    """The active "Mind Architecture" — which retrieval strategy /chat/rag uses.
-
-    The console front page renders this as the selectable Mind Architecture
-    section (Track C3).
-    """
-    return {
-        "active": settings_store.get_retrieval_architecture(),
-        "available": list(settings_store.RETRIEVAL_ARCHITECTURES),
-        "layer_scope": settings_store.get_layer_scope(),
-        "declared_layers": settings_store.get_layer_names(),
-    }
-
-
-@app.post("/settings/retrieval-architecture")
-def settings_set_retrieval_architecture(req: SetRetrievalArchitectureRequest,
-                                        api_key: str = Depends(get_api_key)):
-    """Switch the active retrieval architecture. Persisted to the settings
-    sidecar — the choice survives restarts and rebuilds."""
-    try:
-        settings_store.set_retrieval_architecture(req.architecture)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if req.layer_scope is not None:
-        settings_store.set_layer_scope(req.layer_scope)
-    return {
-        "ok": True,
-        "active": settings_store.get_retrieval_architecture(),
-        "layer_scope": settings_store.get_layer_scope(),
-    }
 
 
 @app.get("/settings/federation")
@@ -862,13 +650,6 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] substrate init skipped: {e}", flush=True)
 
-    # hbar.harmonics — coherence_events ledger
-    try:
-        from api import harmonics
-        harmonics.init_tables()
-    except Exception as e:
-        print(f"[startup] harmonics init skipped: {e}", flush=True)
-
 
 # Mount federation DM router
 try:
@@ -876,13 +657,6 @@ try:
     app.include_router(_federation_dm_router)
 except Exception as e:
     print(f"[startup] federation_dm router mount skipped: {e}", flush=True)
-
-# Mount hbar.harmonics router
-try:
-    from api.harmonics import router as _harmonics_router
-    app.include_router(_harmonics_router)
-except Exception as e:
-    print(f"[startup] harmonics router mount skipped: {e}", flush=True)
 
 # Mount brain-apps router (install / list / uninstall / enable / disable).
 # All endpoints gated by the existing api_key dep — same posture as /settings.
@@ -958,17 +732,15 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
 
-def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None,
-                              architecture: Optional[str] = None) -> List[Dict[str, Any]]:
+def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Search for similar documents.
 
-    Retrieval modes (Track C3 — "Mind Architecture"):
-    - **Flat similarity:** `architecture='flat'` — one cosine-similarity sweep
-      over the whole corpus, no tier weighting, no layer filter.
-    - **Layer-scoped / layer-filtered (v0.8):** if `layers` is non-empty, run a
-      single similarity query restricted to chunks whose `metadata->>'layer'`
-      is in that list. Tier logic is bypassed.
-    - **Tiered (default):** if `layers` is None/empty and not flat, run the
+    Two modes:
+    - **Layer-filtered (v0.8):** if `layers` is non-empty, run a single
+      similarity query restricted to chunks whose `metadata->>'layer'` is in
+      that list. Tier logic is bypassed — layers are an explicit user-driven
+      scoping mechanism and shouldn't be silently mixed with auto-injection.
+    - **Tier-weighted (legacy):** if `layers` is None or empty, run the
       original tier1/tier2/tier3 folder-based behavior described below.
 
 
@@ -995,34 +767,6 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         conn = get_db_connection()
         cursor = conn.cursor()
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
-
-        # ── Flat similarity path (C3) ────────────────────────────────
-        # One similarity sweep across the entire corpus — no tiers, no layer
-        # filter. The simplest retrieval architecture.
-        if architecture == "flat":
-            cursor.execute(
-                """
-                SELECT document_name, content, metadata,
-                       embedding <-> %s::vector as distance
-                FROM document_embeddings
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <-> %s::vector
-                LIMIT %s
-                """,
-                (embedding_str, embedding_str, limit),
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            return [
-                {
-                    "document_name": r[0],
-                    "content": r[1],
-                    "metadata": r[2] or {},
-                    "similarity_score": float(1 - r[3]),
-                }
-                for r in rows
-            ]
 
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
@@ -1320,15 +1064,6 @@ async def consolidate_session(session_id: str, request: dict, api_key: str = Dep
         _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model", os.getenv("OLLAMA_MODEL", "llama3.2:3b"))
 
-        # Memory layer the consolidated chat lands in (the episodic / semantic /
-        # procedural model). The console "Save to memory" control lets the
-        # operator choose; default episodic — a saved conversation is, by
-        # nature, an episodic memory.
-        layer = (request.get("layer") or "episodic").strip().lower()
-        if layer not in ("episodic", "semantic", "procedural"):
-            raise HTTPException(400, f"Invalid memory layer: {layer!r} "
-                                     f"(expected episodic, semantic, or procedural)")
-
         # Read session messages + session title (for human-readable doc name)
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1398,7 +1133,7 @@ Summary:"""
                     "session_id": session_id,
                     "consolidated_at": datetime.utcnow().isoformat(),
                     "chunk_index": stored,
-                    "layer": layer,
+                    "layer": "episodic",
                     "source": "consolidation_v0.5",
                 }))
             )
@@ -1422,7 +1157,7 @@ Summary:"""
             "doc_name": doc_name,
             "chunks_stored": stored,
             "summary_preview": summary[:300] + ("..." if len(summary) > 300 else ""),
-            "layer": layer,
+            "layer": "episodic",
         }
     except HTTPException:
         raise
@@ -1455,62 +1190,17 @@ def _persist_chat_turn(session_id: str, messages: list, reply: str):
 
 
 def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int):
-    """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs).
-
-    Track C3: the retrieval architecture is a persisted brain setting (the
-    "Mind Architecture"). The legacy `layers` argument is retained for API
-    compatibility but the configured architecture governs retrieval.
-    """
-    arch = settings_store.get_retrieval_architecture()
-    if arch == "flat":
-        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
-    elif arch == "layer_scoped":
-        # Restrict to the configured layer subset; an empty subset means
-        # "all declared layers". With no declared layers at all, there is
-        # nothing to scope to — fall back to a flat sweep.
-        scope = settings_store.get_layer_scope() or settings_store.get_layer_names()
-        if scope:
-            relevant_docs = search_similar_documents(
-                user_query, limit=search_limit, layers=scope, architecture="layer_scoped")
-        else:
-            relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
-    else:  # 'tiered' — the default folder-weighted retrieval
-        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered")
+    """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs)."""
+    relevant_docs = search_similar_documents(user_query, limit=search_limit, layers=layers)
     context = ""
     if relevant_docs:
         context = "\n\nRelevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
             context += f"\n[Document {i}: {doc['document_name']}]\n{doc['content']}\n"
-    # Persona: only use it as the system prompt once it is actually
-    # configured. An unconfigured brain still loads the blank
-    # brain_persona.template.md — feeding that "# TEMPLATE — edit this file
-    # before first use" banner verbatim makes the brain recite setup text at
-    # a brand-new user (cohort feedback, 2026-05-17). Use a clean default
-    # until the owner sets a persona.
-    from api.persona_tools import is_template, detect_placeholders
-    persona_set = bool(BRAIN_PERSONA) and not is_template(BRAIN_PERSONA) \
-        and not detect_placeholders(BRAIN_PERSONA)
-    if persona_set:
-        prompt = BRAIN_PERSONA
-    else:
-        prompt = ("You are a personal brain — a private AI whose owner is "
-                  "still setting it up. You have not been given a persona "
-                  "yet. Answer helpfully and directly. Never recite setup, "
-                  "template, or configuration instructions back to the user.")
-    prompt += ("\n\nUse the provided documents to answer questions "
-               "accurately. When a document informs your answer, cite it "
-               "inline by its name in square brackets — e.g. "
-               "[projects/ops/FOCUS.md]. Cite every document you draw on.")
+    prompt = BRAIN_PERSONA if BRAIN_PERSONA else "You are a helpful assistant."
+    prompt += "\n\nUse the provided documents to answer questions accurately."
     if context:
         prompt += context
-    else:
-        # Empty corpus — no documents added yet. Tell the model to say so
-        # plainly instead of answering from the (possibly template) persona.
-        prompt += ("\n\nThis brain has no knowledge base yet — no documents "
-                   "have been added. If the question depends on stored "
-                   "knowledge, say plainly that you have no knowledge yet and "
-                   "that the owner can add documents in the Knowledge tab. "
-                   "Do not invent facts.")
     prompt += "\n\nConversation:\n"
     for msg in messages:
         role = msg.get("role", "user")
@@ -1619,7 +1309,6 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
                         "documents_used": len(relevant_docs),
                         "search_query": user_query,
                         "sources": sources,
-                        "architecture": settings_store.get_retrieval_architecture(),
                     },
                 }
                 yield f"data: {json.dumps(meta, ensure_ascii=False)}\n\n"
@@ -1655,7 +1344,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture()},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources},
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 
@@ -1674,7 +1363,7 @@ async def rag_chat_completion(request: dict, api_key: str = Depends(get_api_key)
 #   2. RAG is hard-scoped to layer="public". The request body cannot
 #      override; only documents tagged metadata.layer = "public" are visible.
 #   3. Persona is brain_persona_nous.md (the public-demo persona), not the
-#      operator's brain_persona.local.md. The personal persona must never leak
+#      operator's brain_persona.md. The personal persona must never leak
 #      onto the public surface.
 #
 # The endpoint reads the LAST hop of X-Forwarded-For (the IP Caddy itself
@@ -4047,7 +3736,6 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
     latest = None
     behind_by = None
     error = None
-    rollback_to = None
 
     try:
         if os.path.isdir(os.path.join(BRAIN_HOST_DIR, ".git")):
@@ -4075,37 +3763,6 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
                     behind_by = int(r2.stdout.strip())
                 except ValueError:
                     pass
-
-            # Prefer the real checkout HEAD over the build-arg env: it survives
-            # button-triggered rebuilds (which don't pass BRAIN_GIT_COMMIT) and
-            # is what "currently running" actually means.
-            r3 = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
-            )
-            head_sha = r3.stdout.strip() if r3.returncode == 0 else None
-            if head_sha:
-                current = head_sha
-
-            # Rollback target — the commit update_brain.sh stamped before the
-            # last update. Surfaced so the console can offer a one-step revert.
-            try:
-                stamp = os.path.join(BRAIN_HOST_DIR, ".update-prev-commit")
-                if os.path.isfile(stamp):
-                    with open(stamp) as _fh:
-                        prev = _fh.read().strip()
-                    if prev and prev != head_sha:
-                        rs = subprocess.run(
-                            ["git", "log", "-1", "--format=%s", prev],
-                            cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
-                        )
-                        rollback_to = {
-                            "sha": prev,
-                            "short": prev[:7],
-                            "subject": rs.stdout.strip() if rs.returncode == 0 else None,
-                        }
-            except Exception:
-                pass
         else:
             error = f"BRAIN_HOST_DIR={BRAIN_HOST_DIR} is not a git checkout (or not mounted)."
     except FileNotFoundError:
@@ -4120,7 +3777,6 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
         "behind_by": behind_by,
         "brain_version": BRAIN_VERSION,
         "preflight_error": _update_preflight(),
-        "rollback_to": rollback_to,
         "error": error,
     }
 
@@ -4169,66 +3825,6 @@ def admin_update(api_key: str = Depends(get_api_key)):
             for line in proc.stdout:
                 # Each iteration is one log line — flush as a separate SSE event
                 # so the UI can render it immediately.
-                yield frame({"type": "log", "line": line.rstrip("\n")})
-            proc.wait(timeout=600)
-            yield frame({"type": "done", "returncode": proc.returncode})
-        except Exception as e:
-            yield frame({"type": "error", "message": f"{type(e).__name__}: {e}"})
-        finally:
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/admin/revert")
-def admin_revert(api_key: str = Depends(get_api_key)):
-    """Run scripts/revert_brain.sh and stream its output as SSE.
-
-    One-step undo of the last update — rolls the brain back to the commit
-    update_brain.sh recorded in .update-prev-commit. Like /admin/update, the
-    final `docker compose up -d --build` restarts the api container, so this
-    stream drops mid-way; the UI polls /admin/version-info to confirm.
-    """
-    err = _update_preflight()
-    if err:
-        raise HTTPException(status_code=503, detail=err)
-
-    script = os.path.join(BRAIN_HOST_DIR, "scripts", "revert_brain.sh")
-    if not os.path.isfile(script):
-        raise HTTPException(status_code=503,
-                            detail=f"revert_brain.sh not found at {script}. Pull a newer template, then retry.")
-
-    def event_stream():
-        def frame(obj):
-            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
-
-        yield frame({"type": "start", "cwd": BRAIN_HOST_DIR})
-
-        try:
-            proc = subprocess.Popen(
-                ["bash", script],
-                cwd=BRAIN_HOST_DIR,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                text=True,
-                env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR},
-            )
-        except Exception as e:
-            yield frame({"type": "error", "message": f"failed to spawn: {type(e).__name__}: {e}"})
-            yield "data: [DONE]\n\n"
-            return
-
-        try:
-            assert proc.stdout is not None
-            for line in proc.stdout:
                 yield frame({"type": "log", "line": line.rstrip("\n")})
             proc.wait(timeout=600)
             yield frame({"type": "done", "returncode": proc.returncode})

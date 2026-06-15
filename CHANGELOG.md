@@ -4,6 +4,71 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased
+
+- brain-apps: install no longer leaves root-owned dirs on the host. The api
+  container clones as root, so `brain-apps/<id>/` used to land root-owned on
+  the bind-mounted host filesystem — the operator could not `rm` a stale dir
+  without sudo and `app_dir_exists` blocked reinstall. After every successful
+  `git clone` (install preview, install, update preview, update) the new
+  tree is now chown'd to the bind-mount owner (or to `BRAIN_USER_UID:GID` if
+  set). A one-shot startup migration in `mount_installed_apps` re-owns any
+  already-existing app dirs that were left root-owned by the old path.
+- brain-apps: `brain-apps/installed.json` is no longer tracked in git. It is
+  per-brain runtime state and `_load_installed()` creates it on first request;
+  tracking it as an empty stub meant every template-repo deploy could
+  overwrite a brain's populated registry ("apps gone"). The stub is removed
+  and `brain-apps/installed.json` is gitignored. The deploy rsync example in
+  SERVERS.md gains `--exclude='brain-apps/installed.json'` and
+  `--exclude='brain-apps/*/'` as defense in depth.
+- brain-apps: an installed app can now be updated in place — no
+  uninstall/reinstall. `POST /apps/{id}/update/preview` clones the repo at
+  HEAD and reports whether it is up to date and whether the manifest
+  changes the app's permission/memory-layer scope; `POST /apps/{id}/update`
+  re-pins the SHA, swaps the served bundle (recoverable backup), refreshes
+  installed.json, and hot-remounts. The app token and install date
+  survive. A scope-changing update is refused unless `accept_scope_change`
+  is set, so an update can never silently widen access. The Apps page card
+  gets an Update button: silent one-click when scope is unchanged, a
+  re-approval card showing the added/removed scope when it changed.
+- ui/apps: brain-app install moved out of Settings onto the Apps page
+  (`/apps`). The GitHub-URL field, manifest preview, permission/layer
+  scope approval, just-installed token reveal, and per-app enable/disable
+  + uninstall now all live on `/apps`. Settings -> Apps is reduced to a
+  quiet, faded pointer back to the page (no controls there by design).
+- ui/chat: composer newline handling is now device-aware. On touch
+  devices (on-screen keyboard, no Shift) plain Enter inserts a newline and
+  the Send button is the only way to send; on a real keyboard Enter still
+  sends and Shift+Enter is the newline. The composer hint adapts to match
+  (`↵ new line · tap Send` vs `⇧↵ newline`).
+- rag: /chat/rag prompt now instructs the model to cite source documents
+  inline (Event 14 follow-up).
+- brain-apps: new `llm.complete` bridge intent. An installed app that
+  declares the `llm.invoke` permission can ask the brain to generate a
+  completion over its own corpus using the operator's selected (BYOK)
+  model. The host shell (`ui/pages/apps/[id].js`) mints + holds the loop
+  permit and proxies to `/chat/rag`; the iframe never sees the permit.
+  RAG retrieval is scoped to the app's `read`-mode `requires_layers`.
+  `ui/pages/api/permit.js` now accepts optional `agent_id` / `reason` so
+  app-originated permits are attributable in the audit trail. Schema:
+  `app.schema.json` adds `llm.invoke` to the `permissions` enum + an
+  `allOf` rule requiring `requires_layers`. Non-streaming in v0.
+- providers: local Ollama models now win over name-prefix routing.
+  `_resolve` checks the live Ollama tag list (`GET /api/tags`, cached 60s,
+  fail-soft) before the prefix heuristics, so an open-weight model whose
+  name carries a foreign prefix (e.g. `gpt-oss:120b`) routes to local
+  Ollama instead of erroring "API key not configured".
+- ui: markdown tables in the chat no longer collapse. The message bubble's
+  `word-break: break-word` was squeezing columns to ~1 char and wrapping
+  header text letter-per-line; `MessageRenderer` now sets `table-layout`,
+  a header `nowrap`, and a cell min-width, with horizontal scroll on
+  overflow.
+- ui: the Save-to-memory layer dropdown is now the themed `CustomSelect`
+  instead of a native `<select>` — matches the rest of the chat header.
+- ui: composer toolbar now shows a `⇧↵ newline` hint — plain Enter sends,
+  Shift+Enter starts a new line. Previously invisible, so multi-line input
+  (e.g. a bullet list built with the ≡ button) wasn't discoverable.
+
 ## 0.8.4 — 2026-05-11 — recency anchor for 1b public-chat
 
 **Fix only.** 0.8.3 wasn't enough. Post-deploy probes showed the 1b

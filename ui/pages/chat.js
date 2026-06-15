@@ -317,6 +317,19 @@ export default function Chat() {
   const textareaRef = useRef(null)
   const [stickToBottom, setStickToBottom] = useState(true)
 
+  // On touch devices the on-screen keyboard has no Shift, so Shift+Enter
+  // cannot make a newline. There, plain Enter inserts a newline and the
+  // Send button is the only way to send — the messaging-app convention.
+  const [isTouch, setIsTouch] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(pointer: coarse)')
+    const update = () => setIsTouch(mq.matches)
+    update()
+    mq.addEventListener?.('change', update)
+    return () => mq.removeEventListener?.('change', update)
+  }, [])
+
   // Typewriter reveal: while streaming, deltas accumulate in revealRef.full
   // and a rAF releases them into the visible message at the chosen cps.
   const revealRef = useRef({ full: '', shown: 0, done: true, last: 0 })
@@ -694,8 +707,10 @@ export default function Chat() {
       if (k === 'i') { e.preventDefault(); applyMarkdown('*'); return }
       if (k === 'e') { e.preventDefault(); applyMarkdown('`'); return }
     }
-    // Enter sends; Shift-Enter inserts a newline.
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+    // Enter sends; Shift-Enter inserts a newline. On touch devices there
+    // is no Shift, so plain Enter falls through to a newline and the Send
+    // button is the only way to send.
+    if (e.key === 'Enter' && !e.shiftKey && !isTouch) { e.preventDefault(); sendMessage() }
   }
 
   // Cancel any in-flight typewriter rAF when the page unmounts.
@@ -960,27 +975,17 @@ export default function Chat() {
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Memory layer this chat consolidates into — episodic / semantic
                   / procedural. The status line confirms where it landed. */}
-              <select
+              <CustomSelect
                 value={saveLayer}
-                onChange={e => setSaveLayer(e.target.value)}
-                disabled={consolidating}
+                onChange={setSaveLayer}
                 title="Which memory layer Save to memory consolidates this chat into"
-                style={{
-                  padding: '7px 8px',
-                  background: 'var(--surface)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  cursor: consolidating ? 'not-allowed' : 'pointer',
-                  outline: 'none',
-                }}
-              >
-                <option value="episodic">episodic</option>
-                <option value="semantic">semantic</option>
-                <option value="procedural">procedural</option>
-              </select>
+                minWidth={124}
+                options={[
+                  { value: 'episodic', label: 'episodic' },
+                  { value: 'semantic', label: 'semantic' },
+                  { value: 'procedural', label: 'procedural' },
+                ]}
+              />
               <button
                 onClick={consolidateSession}
                 disabled={consolidating}
@@ -1245,6 +1250,17 @@ export default function Chat() {
             ))}
             <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
               markdown
+            </span>
+            {/* How to make a newline is invisible without a hint. It also
+                differs by device: desktop has Shift+Enter, touch has no
+                Shift so plain Enter is the newline and Send is the sender. */}
+            <span
+              title={isTouch
+                ? 'Enter starts a new line · tap Send to send'
+                : 'Enter sends the message · Shift+Enter starts a new line'}
+              style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: 'auto', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', opacity: 0.75 }}
+            >
+              {isTouch ? '↵ new line · tap Send' : '⇧↵ newline'}
             </span>
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', flex: 1, minHeight: 0 }}>

@@ -1,7 +1,11 @@
 # Installed app clones — landed at install time, not part of the template.
 */
 
-# Track the registry, README, and this gitignore itself.
-!installed.json
+# installed.json is per-brain runtime state. _load_installed() creates it on
+# first request. Tracking it in git meant every deploy of the template repo
+# overwrote a brain's populated registry — i.e. "apps gone". Do not track it.
+installed.json
+
+# Track the README and this gitignore itself.
 !README.md
 !.gitignore

@@ -123,6 +123,15 @@ def unmount_app(app: FastAPI, app_id: str) -> None:
 
 def mount_installed_apps(app: FastAPI) -> None:
     """Walk installed.json and mount every enabled entry. Call once at startup."""
+    # Migration: rehome any root-owned app dir to the bind-mount host owner.
+    # The api container clones as root, so dirs from the old install path are
+    # root-owned on the host — the operator cannot `rm` them without sudo and
+    # a stale dir blocks reinstall. Re-own at boot so reinstall works.
+    try:
+        from api.apps import _chown_existing_app_dirs
+        _chown_existing_app_dirs()
+    except Exception as e:
+        print(f"[brain-apps] startup chown migration skipped: {e}", flush=True)
     try:
         state = _load_installed()
     except Exception as e:

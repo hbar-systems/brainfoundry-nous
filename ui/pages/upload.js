@@ -67,6 +67,8 @@ export default function Upload() {
   const [stats, setStats] = useState(null);
   const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
   const [layerFilter, setLayerFilter] = useState(null); // null = no filter; click a badge to set, click again to clear
+  const [pasteText, setPasteText] = useState("");   // paste-text path — alternative to file upload
+  const [pasteTitle, setPasteTitle] = useState("");
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -184,6 +186,21 @@ export default function Upload() {
   const onSelect = (e) => setFiles(filterHidden(Array.from(e.target.files || [])));
   const onDrop = (e) => { e.preventDefault(); setFiles(filterHidden(Array.from(e.dataTransfer.files || []))); };
   const prevent = (e) => e.preventDefault();
+
+  // Paste-text path: turn pasted text into an in-memory .md file and add it to
+  // the upload list, so it flows through the exact same propose → approve
+  // ingestion as a dropped file (same layer, same governance, same retrieval).
+  const addPastedText = () => {
+    const text = pasteText.trim();
+    if (!text) return;
+    const slug = (pasteTitle.trim() || `pasted-${new Date().toISOString().slice(0, 10)}`)
+      .replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "pasted-note";
+    const file = new File([text], `${slug}.md`, { type: "text/markdown" });
+    setFiles((f) => [...f, file]);
+    setPasteText("");
+    setPasteTitle("");
+    pushLog(`Added pasted text as ${slug}.md — Propose for ingestion below.`);
+  };
 
   // Step 1: request a loop permit, then propose each file → get proposal_id back.
   const propose = async () => {
@@ -364,6 +381,24 @@ export default function Upload() {
     <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", fontFamily: "system-ui, -apple-system, sans-serif", color: TEXT }}>
       <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>Knowledge — Upload &amp; Search</h1>
 
+      {/* Empty-corpus guide — the cold-start fix. Shows only while the brain
+          has no documents; disappears once the first knowledge is ingested. */}
+      {stats && (stats.total_chunks || 0) === 0 && (stats.unique_documents || 0) === 0 && (
+        <section style={{ padding: 18, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>Your brain knows nothing yet.</div>
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7 }}>
+            <div>Add something below — paste text, or drop a file.</div>
+            <div>The brain answers from what you give it; an empty brain has nothing to draw on.</div>
+            <div style={{ marginTop: 8, color: TEXT }}>Good first things to add:</div>
+            <ul style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
+              <li>A note about who you are and what you&apos;re working on.</li>
+              <li>A document, article, or paper you want the brain to know.</li>
+              <li>Notes from a meeting, or a decision you just made.</li>
+            </ul>
+          </div>
+        </section>
+      )}
+
       {/* Upload */}
       <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
         <div
@@ -388,6 +423,31 @@ export default function Upload() {
           <p style={{ marginTop: 10, fontSize: 11, color: MUTED, fontStyle: "italic" }}>
             Folder upload includes all subdirectories. Hidden files (.git, .env, etc.) are skipped.
           </p>
+        </div>
+
+        {/* Paste text — alternative to file upload. The pasted text becomes an
+            in-memory .md file and joins the same upload list + propose flow. */}
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${BORDER}` }}>
+          <p style={{ marginBottom: 8, color: MUTED, fontSize: 13 }}>&hellip;or paste text directly:</p>
+          <input
+            type="text"
+            value={pasteTitle}
+            onChange={(e) => setPasteTitle(e.target.value)}
+            placeholder="Title (e.g. About me, Meeting notes)"
+            style={{ ...INPUT, width: "100%", boxSizing: "border-box", marginBottom: 8, fontFamily: "inherit" }}
+          />
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder="Paste anything your brain should know — notes, a document, facts about you…"
+            rows={5}
+            style={{ ...INPUT, width: "100%", boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" }}
+          />
+          <button
+            onClick={addPastedText}
+            disabled={!pasteText.trim()}
+            style={{ ...BTN, marginTop: 8, opacity: pasteText.trim() ? 1 : 0.5, cursor: pasteText.trim() ? "pointer" : "not-allowed" }}
+          >Add pasted text</button>
         </div>
 
         {!!files.length && (

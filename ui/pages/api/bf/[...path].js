@@ -60,14 +60,17 @@ export default async function handler(req, res) {
       return res.end();
     }
 
-    // Default: buffer + send (preserves prior behavior for JSON / text endpoints).
-    const text = await r.text();
-    if (ct.includes("application/json")) {
-      res.setHeader("content-type", "application/json");
-      return res.send(text);
-    }
-    res.setHeader("content-type", ct || "text/plain");
-    return res.send(text);
+    // Default: buffer the body as raw bytes and pass through. Using r.text()
+    // here UTF-8-decodes binary responses (PNG, GLB, fonts, etc.), corrupting
+    // them in transit. Buffer-based passthrough is binary-safe for everything
+    // — text bodies (JSON, JS, CSS, HTML) survive because their bytes ARE
+    // valid UTF-8, and the upstream content-type header decides how the
+    // browser parses them. First hit was brain-app PNGs rendering as white
+    // squares; GLBs failed to parse and silently dropped to procedural
+    // fallback.
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.setHeader("content-type", ct || "application/octet-stream");
+    return res.send(buf);
   } catch (e) {
     return res.status(502).json({ error: String(e) });
   }

@@ -30,6 +30,14 @@ import { useEffect, useRef, useState } from 'react'
 //   memory.write      -> { layer, content, source?, metadata? }
 //                        gated by manifest permissions + requires_layers;
 //                        proxies to brain POST /memory/append.
+//   llm.complete      -> { messages: [{role, content}, ...] }
+//                        gated by manifest permission 'llm.invoke'. Generates
+//                        a completion over the brain's own corpus using the
+//                        brain's selected (BYOK) model. RAG retrieval is
+//                        scoped to the read-mode layers in requires_layers.
+//                        The host mints + holds the loop permit; the iframe
+//                        never sees it. Proxies to brain POST /chat/rag.
+//                        result -> { text, model, sources: [...] }
 //
 // Reserved-but-unimplemented intents (will land when first app needs them):
 //   memory.read       -> { layer, query, limit? }
@@ -133,6 +141,80 @@ export default function AppHost() {
             return { ok: true, result: { id: body.id, doc_name: body.doc_name } }
           })
           .catch(e => ({ ok: false, error: { code: 'memory_append_network_error', detail: String(e) } }))
+      }
+
+      // llm.complete — ask the brain to generate a completion over its own
+      // ingested corpus, using the brain's selected (BYOK) model. Requires
+      // permission 'llm.invoke'. Permission gate runs server-side too; this
+      // is the first-line check.
+      //
+      // Permit handling lives entirely here: the host mints a loop permit
+      // (attributed to this app) and proxies it to /chat/rag. The iframe
+      // never sees the permit — it only ever holds the generated text.
+      //
+      // RAG retrieval is scoped to the read-mode layers the operator
+      // approved at install (requires_layers). An app cannot generate over a
+      // layer it did not declare.
+      if (type === 'llm.complete') {
+        const perms = appInfo.permissions || []
+        if (!perms.includes('llm.invoke')) {
+          return Promise.resolve({ ok: false, error: { code: 'permission_denied', detail: 'app did not declare llm.invoke' } })
+        }
+        const messages = msg.payload && msg.payload.messages
+        if (!Array.isArray(messages) || messages.length === 0) {
+          return Promise.resolve({ ok: false, error: { code: 'missing_messages', detail: 'payload.messages must be a non-empty array of {role, content}' } })
+        }
+        // Operator-approved retrieval scope: read-mode layers from the manifest.
+        const layers = (appInfo.requires_layers || [])
+          .filter(l => l.mode === 'read')
+          .map(l => l.layer)
+        // Resolve the brain's selected model and mint a loop permit in
+        // parallel, then proxy to /chat/rag.
+        return Promise.all([
+          fetch('/api/bf/settings/model')
+            .then(r => r.ok ? r.json() : Promise.reject(`settings/model ${r.status}`)),
+          fetch('/api/permit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agent_id: `app:${appInfo.id}`,
+              reason: `brain-app ${appInfo.id} llm.complete`,
+            }),
+          }).then(r => r.json()),
+        ])
+          .then(([modelInfo, permit]) => {
+            if (!permit || !permit.permit_id || !permit.permit_token) {
+              return { ok: false, error: { code: 'permit_failed', detail: (permit && (permit.detail || permit.error)) || 'NodeOS did not issue a permit' } }
+            }
+            const body = {
+              model: modelInfo && modelInfo.active,
+              messages,
+              permit_id: permit.permit_id,
+              permit_token: permit.permit_token,
+            }
+            if (layers.length) body.layers = layers
+            return fetch('/api/bf/chat/rag', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+              .then(r => r.json().then(b => ({ status: r.status, ok: r.ok, body: b })))
+              .then(({ status, ok, body }) => {
+                if (!ok) {
+                  return { ok: false, error: { code: 'llm_complete_failed', status, body } }
+                }
+                const text = body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content
+                return {
+                  ok: true,
+                  result: {
+                    text: text || '',
+                    model: body.model,
+                    sources: (body.rag_metadata && body.rag_metadata.sources) || [],
+                  },
+                }
+              })
+          })
+          .catch(e => ({ ok: false, error: { code: 'llm_complete_network_error', detail: String(e) } }))
       }
 
       return Promise.resolve({ ok: false, error: { code: 'unknown_intent', type } })
