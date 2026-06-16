@@ -418,6 +418,24 @@ def set_onboarding_completed(done: bool) -> None:
         _save(data)
 
 
+# ── "Your mind" panel (persistent self-model surface) ───────────────────────
+# The live fact panel is not onboarding-only: it is an always-on, dismissable,
+# re-openable window into what the brain knows about its owner. This per-brain
+# flag is the SHOWN/dismissed state AND the cost gate — per-turn fact extraction
+# on the normal /chat/rag path runs ONLY when the panel is shown, so an
+# established fleet brain incurs no extra model call until the owner opts in.
+# Default OFF: zero cost/behaviour change for every already-running brain.
+def get_mind_panel_shown() -> bool:
+    return bool(_load().get("mind_panel_shown", False))
+
+
+def set_mind_panel_shown(shown: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["mind_panel_shown"] = bool(shown)
+        _save(data)
+
+
 def get_onboarding_corpus_threshold() -> int:
     """Chunk count at/below which a brain still counts as 'near-empty' for
     first-run. Tolerates a brain that auto-seeded a doc or two. Env-overridable."""

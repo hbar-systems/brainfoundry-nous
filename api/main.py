@@ -2838,6 +2838,9 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                     yield f"data: {json.dumps(_meta_frame(ev), ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps(_chunk(reply_text), ensure_ascii=False)}\n\n"
                     _persist_chat_turn(session_id, messages, reply_text)
+                    mind_frame = await _maybe_extract_mind_facts(user_query, reply_text)
+                    if mind_frame:
+                        yield f"data: {json.dumps(mind_frame, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                     return
 
@@ -2855,6 +2858,11 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                 # Persist the full reply once stream completes.
                 full_reply = "".join(accumulated)
                 _persist_chat_turn(session_id, messages, full_reply)
+                # Persistent "your mind" panel: extract + store facts from this
+                # turn when the panel is shown (no-op cost otherwise).
+                mind_frame = await _maybe_extract_mind_facts(user_query, full_reply)
+                if mind_frame:
+                    yield f"data: {json.dumps(mind_frame, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -2872,6 +2880,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         else:
             reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
         _persist_chat_turn(session_id, messages, reply)
+        mind_frame = await _maybe_extract_mind_facts(user_query, reply)
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
             "object": "chat.completion",
@@ -2879,6 +2888,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
             "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events, "pending_approvals": _pending_approvals},
+            "onboarding_facts": mind_frame["facts"] if mind_frame else [],
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 
@@ -6904,6 +6914,55 @@ async def _run_onboarding_turn(messages: list, session_id: str, ip: str) -> dict
             "session_remaining": session_remaining, "capped": False}
 
 
+def _providers_extraction_reasoner():
+    """Bind the brain's own (cheap) reasoner into the core.extract_facts interface
+    for the persistent "your mind" panel on established brains. Uses a Haiku-class
+    model so the per-turn extraction never rides the operator's expensive default."""
+    async def _r(messages, *, system=None, max_tokens=400):
+        model = _providers.cheap_extraction_model()
+        msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        try:
+            text = await _providers.complete(model, msgs, max_tokens=max_tokens)
+            return {"ok": True, "text": text, "session_remaining": None}
+        except Exception as e:
+            print(f"[mind] extraction provider error: {e}", flush=True)
+            return {"ok": False, "reason": "provider_error", "session_remaining": None}
+    return _r
+
+
+async def _maybe_extract_mind_facts(user_query: str, reply: str) -> Optional[dict]:
+    """Persistent "your mind" panel on the NORMAL chat path: when the panel is
+    shown, extract durable facts about the owner from this turn and store them
+    via the SAME hardened write path the onboarding panel uses (operator-direct
+    → semantic, trust 1.0). Returns an `onboarding_facts` SSE frame dict (the UI
+    already handles it), or None.
+
+    Cost gate: runs ONLY when `get_mind_panel_shown()` is true, so an established
+    brain incurs no extra model call until the owner opens the panel. Never
+    raises — a failed extraction must never cost the turn."""
+    if not reply or not reply.strip():
+        return None
+    if not settings_store.get_mind_panel_shown():
+        return None
+    try:
+        from api.onboarding import core as _onb_core
+        convo = [{"role": "user", "content": user_query or ""},
+                 {"role": "assistant", "content": reply}]
+        result = await _onb_core.extract_facts(convo, _providers_extraction_reasoner())
+        facts_out = []
+        for f in result.get("facts", []):
+            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"))
+            if stored:
+                facts_out.append(stored)
+        if not facts_out:
+            return None
+        return {"object": "chat.completion.onboarding_facts", "facts": facts_out,
+                "trial": {"session_remaining": None, "capped": False}}
+    except Exception as e:
+        print(f"[mind] extraction failed: {e}", flush=True)
+        return None
+
+
 @app.get("/onboarding/status")
 def onboarding_status(http_request: Request, session_id: str = "", api_key: str = Depends(get_api_key)) -> dict:
     """Single signal the chat UI reads to decide whether to run first-run mode.
@@ -6999,6 +7058,31 @@ def onboarding_fact_delete(fact_id: str, api_key: str = Depends(get_api_key)) ->
     except Exception:
         pass
     return {"ok": True, "deleted": deleted}
+
+
+# ── "Your mind" panel — persistent show/hide (v0.1) ─────────────────────────
+# The live fact panel decoupled from onboarding: an always-on, dismissable,
+# re-openable window into the brain's self-model. The shown/dismissed state is
+# persisted per-brain in runtime settings and ALSO gates per-turn extraction on
+# the normal chat path (so a hidden panel costs nothing). Facts themselves reuse
+# the onboarding endpoints (/onboarding/facts, DELETE /onboarding/fact/{id}).
+
+class MindPanelRequest(BaseModel):
+    shown: bool
+
+
+@app.get("/mind/panel")
+def mind_panel_get(api_key: str = Depends(get_api_key)) -> dict:
+    """Persisted show/hide state for the "your mind" panel."""
+    return {"shown": settings_store.get_mind_panel_shown()}
+
+
+@app.post("/mind/panel")
+def mind_panel_set(req: MindPanelRequest, api_key: str = Depends(get_api_key)) -> dict:
+    """Persist show/hide. Showing the panel also enables per-turn fact extraction
+    on the normal chat path; hiding it stops both the panel and the extra call."""
+    settings_store.set_mind_panel_shown(bool(req.shown))
+    return {"ok": True, "shown": settings_store.get_mind_panel_shown()}
 
 
 app.include_router(router)

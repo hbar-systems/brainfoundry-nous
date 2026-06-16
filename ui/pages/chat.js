@@ -152,6 +152,13 @@ export default function Chat() {
   const [showConversionCTA, setShowConversionCTA] = useState(false)
   const onboardingSeededRef = useRef(false)
   const onbTurnsRef = useRef(0)
+  // v0.1: the "your mind" panel is no longer onboarding-only. `mindPanelShown`
+  // is the persisted (per-brain) show/hide state; the panel is visible when
+  // shown OR during first-run onboarding. Showing it also enables per-turn fact
+  // extraction on the normal chat path server-side (so a hidden panel costs
+  // nothing). The chat-header brain toggle and the panel's X both drive it.
+  const [mindPanelShown, setMindPanelShown] = useState(false)
+  const mindPanelOpen = onboardingActive || mindPanelShown
 
   // Merge incoming onboarding facts into the panel by id (idempotent across
   // re-renders / reloads).
@@ -170,6 +177,24 @@ export default function Chat() {
   // to normal chat for good.
   const completeOnboarding = async () => {
     try { await fetch('/api/bf/onboarding/complete', { method: 'POST' }) } catch { /* best-effort */ }
+  }
+  // Show/hide the persistent "your mind" panel and persist the choice. Opening
+  // it hydrates the current self-model so the panel isn't empty before the next
+  // turn lands a new fact.
+  const setMindPanel = async (shown) => {
+    setMindPanelShown(shown)
+    try {
+      await fetch('/api/bf/mind/panel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shown }),
+      })
+    } catch { /* best-effort persistence */ }
+    if (shown) {
+      fetch('/api/bf/onboarding/facts')
+        .then(r => r.ok ? r.json() : null)
+        .then(fd => { if (fd && Array.isArray(fd.facts)) setMindFacts(prev => mergeFactsById(prev, fd.facts)) })
+        .catch(() => {})
+    }
   }
   // Build a markdown rendering of the current chat. Same format used by
   // both "copy all" and "download .md" so what lands on the clipboard
@@ -1017,6 +1042,20 @@ export default function Chat() {
       .then(d => { if (d) setPersonaStatus(d) })
       .catch(() => {})
 
+    // Persistent "your mind" panel state (decoupled from onboarding). If the
+    // owner previously left it open, restore it and hydrate the self-model.
+    fetch('/api/bf/mind/panel')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || !d.shown) return
+        setMindPanelShown(true)
+        fetch('/api/bf/onboarding/facts')
+          .then(r => r.ok ? r.json() : null)
+          .then(fd => { if (fd && Array.isArray(fd.facts)) setMindFacts(prev => mergeFactsById(prev, fd.facts)) })
+          .catch(() => {})
+      })
+      .catch(() => {})
+
     // First-run "become-you" onboarding. Server gates on a fresh corpus + a
     // configured trial reasoner; if active, the brain speaks first (opener) and
     // the "your mind" panel renders. No-op on every established brain.
@@ -1383,12 +1422,16 @@ export default function Chat() {
               if (parsed.object === 'chat.completion.onboarding_facts') {
                 const facts = Array.isArray(parsed.facts) ? parsed.facts : []
                 if (facts.length) setMindFacts(prev => mergeFactsById(prev, facts))
-                if (parsed.trial) {
+                // The conversion CTA + trial budget are onboarding-only; the
+                // persistent panel on an established brain never shows them.
+                if (onboardingActive && parsed.trial) {
                   if (typeof parsed.trial.session_remaining === 'number') setTrialSessionRemaining(parsed.trial.session_remaining)
                   if (parsed.trial.capped || (typeof parsed.trial.session_remaining === 'number' && parsed.trial.session_remaining <= 0)) setShowConversionCTA(true)
                 }
-                onbTurnsRef.current += 1
-                if (onbTurnsRef.current >= 8) setShowConversionCTA(true)
+                if (onboardingActive) {
+                  onbTurnsRef.current += 1
+                  if (onbTurnsRef.current >= 8) setShowConversionCTA(true)
+                }
                 continue
               }
               const delta = parsed.choices?.[0]?.delta?.content
@@ -1729,6 +1772,25 @@ export default function Chat() {
             }}
           >
             {focusMode ? '⛶ exit' : '⛶'}
+          </button>
+
+          {/* "Your mind" panel toggle — always visible so the self-model surface
+              is discoverable and re-openable at any time (not gated to first-run
+              or a fresh brain). Showing it enables live per-turn fact extraction. */}
+          <button
+            onClick={() => setMindPanel(!mindPanelOpen)}
+            title={mindPanelOpen ? 'Hide your mind panel' : 'Your mind — watch your brain learn you as you talk'}
+            style={{
+              background: mindPanelOpen ? 'var(--accent)' : 'none',
+              border: '1px solid var(--border)',
+              color: mindPanelOpen ? 'var(--bg)' : 'var(--muted)',
+              padding: '6px 10px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            🧠
           </button>
 
           {/* Floating exit affordance — always visible in focus mode so the
@@ -2691,12 +2753,13 @@ export default function Chat() {
       </Panel>
       </PanelGroup>
 
-      {/* "Your mind" panel — the visible "becoming you". Only on a fresh brain
-          in first-run mode. Facts the brain has formed about the owner appear
-          live as each turn lands; the counter is the dopamine loop; each fact is
-          one-tap removable ("that's not me"); the conversion CTA appears after
-          the session hooks them (token cap or ~8 exchanges). DRAFT copy. */}
-      {onboardingActive && (
+      {/* "Your mind" panel — the visible self-model. Persistent (v0.1): shows
+          during first-run onboarding OR whenever the owner opens it from the
+          chat-header brain toggle. Facts appear live as each turn lands; the
+          counter is the dopamine loop; each fact is one-tap removable ("that's
+          not me"); X dismisses (persisted). The conversion CTA is onboarding-
+          only. DRAFT copy. */}
+      {mindPanelOpen && (
         <div style={{
           position: 'fixed',
           top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px) + 14px)',
@@ -2713,13 +2776,28 @@ export default function Chat() {
           zIndex: 40,
           overflow: 'hidden',
         }}>
-          <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>
-              your mind
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '14px 16px 10px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '11px', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>
+                your mind
+              </div>
+              <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: '17px', color: 'var(--accent)', marginTop: '2px' }}>
+                {mindFacts.length} {mindFacts.length === 1 ? 'thing' : 'things'}
+              </div>
             </div>
-            <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: '17px', color: 'var(--accent)', marginTop: '2px' }}>
-              {mindFacts.length} {mindFacts.length === 1 ? 'thing' : 'things'}
-            </div>
+            <button
+              onClick={() => setMindPanel(false)}
+              title="Hide the mind panel (re-open it any time from the brain icon in the header)"
+              style={{
+                flexShrink: 0, background: 'none', border: '1px solid var(--border)',
+                color: 'var(--muted)', cursor: 'pointer', fontSize: '13px', lineHeight: 1,
+                borderRadius: '6px', padding: '4px 8px',
+              }}
+              onMouseOver={e => { e.currentTarget.style.color = 'var(--accent)' }}
+              onMouseOut={e => { e.currentTarget.style.color = 'var(--muted)' }}
+            >
+              ✕
+            </button>
           </div>
 
           <div style={{ overflowY: 'auto', padding: '8px 10px', flex: 1 }}>

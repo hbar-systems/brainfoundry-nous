@@ -6,6 +6,37 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- feat: **persistent "your mind" panel + dashboard value card (onboarding v0.1).**
+  The live fact panel is no longer onboarding-only — it's an always-on,
+  dismissable, re-openable window into what your brain knows about you. A brain
+  icon in the chat header toggles it at any time, on any brain; the panel's X
+  hides it; both states persist per-brain in runtime settings (`mind_panel_shown`,
+  default OFF). Re-open it months later and watch a new fact land live as you
+  talk. DRAFT copy.
+  - **Per-turn extraction on the normal chat path.** When the panel is shown,
+    each authenticated `/chat/rag` turn runs the SAME verified extraction + write
+    path the onboarding panel uses (operator-direct → `semantic` trust 1.0,
+    `source=onboarding-self-stated`), surfaced as the existing `onboarding_facts`
+    SSE frame. **Cost-gated:** extraction runs ONLY when the panel is shown, and
+    on a new cheap resolver (`providers.cheap_extraction_model()` → Haiku-class,
+    never the operator's expensive default; local/free when no cloud key) — so a
+    hidden panel adds zero cost and an established fleet brain is unchanged until
+    its owner opts in. One-tap "that's not me" removal works from the persistent
+    panel too (source-guarded delete). New endpoints: `GET`/`POST /mind/panel`.
+  - **Dashboard card** states the value plainly ("Talk to your brain — it learns
+    you as you go") with a CTA into Chat — the "what is this for" the dashboard
+    was missing. No new env var (so nothing to wire into compose). Onboarding v0
+    (the trial-reasoner first-run path + its gating) is unchanged.
+
+- fix: **wire trial/onboarding env into the compose api service (was
+  dead-on-arrival).** The api service uses an explicit `environment:` allow-list
+  (not `env_file`), so none of the nine onboarding/trial vars reached the
+  container — `TRIAL_REASONER_API_KEY` set in `.env` never arrived. Wired all
+  nine as `${NAME:-}`, hardened the trial-reasoner config getters to treat
+  empty-string as "use default" (so the compose pattern can't crash `int("")`),
+  and added a regression test that asserts every `TRIAL_*`/`ONBOARDING_*` env the
+  code reads is wired into the compose api block. Caught by the e2e live-verify.
+
 - feat: **first-run "become-you" onboarding — a fresh, keyless brain that turns
   a cold stranger into "I want one".** A brand-new (near-empty corpus) brain can
   now run a first-run experience instead of the empty-Knowledge-tab + BYOK-wall

@@ -78,6 +78,32 @@ function FirstRunChecklist() {
   )
 }
 
+// "What is this for" — the value the dashboard was missing. States the core
+// loop plainly (your brain learns you as you talk) and routes into Chat, where
+// the live "your mind" panel makes it visible. DRAFT copy — operator refines.
+function MindValueCard() {
+  return (
+    <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: 24, marginBottom: 32 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 30, lineHeight: 1, flexShrink: 0 }}>🧠</div>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: '0 0 4px 0' }}>
+            Talk to your brain — it learns you as you go
+          </h2>
+          <p style={{ fontSize: 13, color: '#777', margin: 0, lineHeight: 1.5 }}>
+            As you chat, your brain forms a model of you — and shows it to you live
+            in the “your mind” panel. It’s yours, it’s private, and it remembers.
+          </p>
+        </div>
+        <a href="/chat" style={{
+          flexShrink: 0, fontSize: 13, fontWeight: 600, color: '#0e0c0b',
+          background: '#c9a96e', borderRadius: 6, padding: '9px 18px', textDecoration: 'none',
+        }}>Open Chat &rarr;</a>
+      </div>
+    </div>
+  )
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{
@@ -308,6 +334,8 @@ export default function Dashboard() {
       </div>
 
       <FirstRunChecklist />
+
+      <MindValueCard />
 
       {error && (
         <div style={{

@@ -370,6 +370,30 @@ def default_model() -> str:
     return LOCAL_FALLBACK_MODEL
 
 
+def cheap_extraction_model() -> str:
+    """Cheapest capable model for structured per-turn fact extraction (the
+    "your mind" panel). Extraction is a small, frequent, structured-output call,
+    so it must NOT ride the operator's expensive default reasoner (e.g. Opus).
+    Prefer a Haiku-class model on whatever cloud key is configured; with no cloud
+    key, fall back to the brain's default (local, which is free). No env var — so
+    nothing new to wire into compose."""
+    if _anthropic_async is not None:
+        return "claude-haiku-4-5"
+    if _openai is not None:
+        return "gpt-4o-mini"
+    if _gemini is not None:
+        return "gemini-2.0-flash"
+    if _groq is not None:
+        return "groq/llama-3.1-8b-instant"
+    if _mistral is not None:
+        return "mistral-small-latest"
+    if _together is not None:
+        return "together/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    if _openrouter is not None:
+        return "openrouter/deepseek/deepseek-chat"
+    return default_model()
+
+
 async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
     """
     Route a chat completion to the correct provider.
