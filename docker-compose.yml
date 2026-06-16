@@ -86,6 +86,20 @@ services:
       - XAI_API_KEY=${XAI_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # First-run "become-you" onboarding trial reasoner. UNSET TRIAL_REASONER_API_KEY
+      # = whole onboarding surface inert (no opener, no panel, normal chat) — safe
+      # for every already-provisioned brain. The empty default ${NAME:-} sets an
+      # empty string in-container; the code treats empty as "use default" (so the
+      # caps fall back to their documented values when not overridden in .env).
+      - TRIAL_REASONER_API_KEY=${TRIAL_REASONER_API_KEY:-}
+      - TRIAL_REASONER_MODEL=${TRIAL_REASONER_MODEL:-}
+      - TRIAL_SESSION_TOKEN_CAP=${TRIAL_SESSION_TOKEN_CAP:-}
+      - TRIAL_IP_DAILY_TOKEN_CAP=${TRIAL_IP_DAILY_TOKEN_CAP:-}
+      - TRIAL_IP_DAILY_SESSION_CAP=${TRIAL_IP_DAILY_SESSION_CAP:-}
+      - TRIAL_GLOBAL_DAILY_TOKEN_CAP=${TRIAL_GLOBAL_DAILY_TOKEN_CAP:-}
+      - TRIAL_AUDIT_DIR=${TRIAL_AUDIT_DIR:-}
+      - TRIAL_BUDGET_PATH=${TRIAL_BUDGET_PATH:-}
+      - ONBOARDING_CORPUS_THRESHOLD=${ONBOARDING_CORPUS_THRESHOLD:-}
       # Host path of this brain repo, used by /admin/update. Default mirrors the
       # provisioner's checkout location. If your install lives elsewhere, set
       # BRAIN_HOST_DIR in .env to that absolute host path.

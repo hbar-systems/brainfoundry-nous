@@ -41,34 +41,53 @@ from typing import Optional, Tuple
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 
+def _env(name: str, default: str) -> str:
+    """Read an env var, treating UNSET *and* empty-string as 'use default'.
+
+    docker-compose wires these as `${NAME:-}`, which sets an EMPTY STRING in the
+    container when the operator hasn't overridden them in .env. Plain
+    os.getenv(name, default) would then return "" (the key IS set) — and
+    int("") would crash every trial call. Falling back on empty makes the
+    compose `${NAME:-}` pattern safe and the documented defaults authoritative."""
+    v = os.getenv(name)
+    return v if (v is not None and v.strip() != "") else default
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _model() -> str:
-    return os.getenv("TRIAL_REASONER_MODEL", DEFAULT_MODEL)
+    return _env("TRIAL_REASONER_MODEL", DEFAULT_MODEL)
 
 
 def _session_token_cap() -> int:
-    return int(os.getenv("TRIAL_SESSION_TOKEN_CAP", "40000"))
+    return _int_env("TRIAL_SESSION_TOKEN_CAP", 40000)
 
 
 def _ip_daily_token_cap() -> int:
-    return int(os.getenv("TRIAL_IP_DAILY_TOKEN_CAP", "150000"))
+    return _int_env("TRIAL_IP_DAILY_TOKEN_CAP", 150000)
 
 
 def _ip_daily_session_cap() -> int:
-    return int(os.getenv("TRIAL_IP_DAILY_SESSION_CAP", "5"))
+    return _int_env("TRIAL_IP_DAILY_SESSION_CAP", 5)
 
 
 def _global_daily_token_cap() -> int:
     # 0 = disabled. A brain-wide kill-ceiling across all sessions, defence
     # against a distributed-IP attack that stays under the per-IP cap.
-    return int(os.getenv("TRIAL_GLOBAL_DAILY_TOKEN_CAP", "0"))
+    return _int_env("TRIAL_GLOBAL_DAILY_TOKEN_CAP", 0)
 
 
 def _audit_dir() -> Path:
-    return Path(os.getenv("TRIAL_AUDIT_DIR", "/app/runtime/audit/trial_reasoner"))
+    return Path(_env("TRIAL_AUDIT_DIR", "/app/runtime/audit/trial_reasoner"))
 
 
 def _file_budget_path() -> Path:
-    return Path(os.getenv("TRIAL_BUDGET_PATH", "/app/runtime/trial_budget.json"))
+    return Path(_env("TRIAL_BUDGET_PATH", "/app/runtime/trial_budget.json"))
 
 
 def _today() -> str:
