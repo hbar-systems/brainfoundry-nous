@@ -158,7 +158,11 @@ export default function Chat() {
   // extraction on the normal chat path server-side (so a hidden panel costs
   // nothing). The chat-header brain toggle and the panel's X both drive it.
   const [mindPanelShown, setMindPanelShown] = useState(false)
-  const mindPanelOpen = onboardingActive || mindPanelShown
+  // Visibility is driven SOLELY by mindPanelShown so the user can always
+  // dismiss/toggle the panel. First-run onboarding auto-shows it by setting
+  // mindPanelShown=true on activation (below) — but must NOT force it open, or
+  // a fresh brain (corpus < ONBOARDING_CORPUS_THRESHOLD) could never close it.
+  const mindPanelOpen = mindPanelShown
 
   // Merge incoming onboarding facts into the panel by id (idempotent across
   // re-renders / reloads).
@@ -1064,6 +1068,9 @@ export default function Chat() {
       .then(d => {
         if (!d || !d.active) return
         setOnboardingActive(true)
+        // Auto-show the panel for first-run (preserves the wow) — but only by
+        // setting the same shown flag the user controls, so they can still ✕ it.
+        setMindPanelShown(true)
         if (typeof d.session_remaining === 'number') setTrialSessionRemaining(d.session_remaining)
         // Hydrate facts already formed (so a reload keeps the panel populated).
         fetch('/api/bf/onboarding/facts')
