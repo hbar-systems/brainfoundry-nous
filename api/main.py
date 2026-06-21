@@ -2636,6 +2636,11 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         layers = request.get("layers") or None
         session_id = request.get("session_id")
         do_stream = request.get("stream", False)
+        # Honor an operator/app-supplied output ceiling (mirrors /chat). Falls
+        # back to the settings value, already clamped to [256, 65536]. Without
+        # this, /chat/rag pinned every answer at 2048 and silently truncated
+        # any brain-app output longer than that (NOUS_QUEUE slot 2).
+        _max_tokens = request.get("max_tokens") or settings_store.get_max_tokens()
         # Image inputs — support both single (legacy: image_base64 + image_media_type)
         # and multi (images: [{base64, media_type}, ...] up to 10).
         image_b64 = request.get("image_base64")
@@ -2892,13 +2897,13 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                     try:
                         res = await _providers.complete_with_tools(
                             model, [{"role": "user", "content": prompt}],
-                            _tools_spec, _agentic_dispatch, max_tokens=2048)
+                            _tools_spec, _agentic_dispatch, max_tokens=_max_tokens)
                         reply_text, ev = res["text"], res["tool_events"]
                     except Exception as agentic_err:
                         # Fall back to a plain (non-tool) completion so a tool
                         # path failure never costs the operator their answer.
                         reply_text = await _providers.complete(
-                            model, [{"role": "user", "content": prompt}], max_tokens=2048)
+                            model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
                         ev = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
                     yield f"data: {json.dumps(_meta_frame(ev), ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps(_chunk(reply_text), ensure_ascii=False)}\n\n"
@@ -2913,7 +2918,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                 yield f"data: {json.dumps(_meta_frame([]), ensure_ascii=False)}\n\n"
                 accumulated = []
                 try:
-                    async for text in _providers.stream(model, [{"role": "user", "content": prompt}], max_tokens=2048):
+                    async for text in _providers.stream(model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens):
                         accumulated.append(text)
                         yield f"data: {json.dumps(_chunk(text), ensure_ascii=False)}\n\n"
                 except Exception as stream_err:
@@ -2937,13 +2942,13 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
             try:
                 res = await _providers.complete_with_tools(
                     model, [{"role": "user", "content": prompt}],
-                    _tools_spec, _agentic_dispatch, max_tokens=2048)
+                    _tools_spec, _agentic_dispatch, max_tokens=_max_tokens)
                 reply, tool_events = res["text"], res["tool_events"]
             except Exception as agentic_err:
-                reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+                reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
                 tool_events = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
         else:
-            reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=2048)
+            reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
         _persist_chat_turn(session_id, messages, reply)
         mind_frame = await _maybe_extract_mind_facts(user_query, reply)
         return {

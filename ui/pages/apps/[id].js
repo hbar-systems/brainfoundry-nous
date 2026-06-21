@@ -192,6 +192,11 @@ export default function AppHost() {
               permit_id: permit.permit_id,
               permit_token: permit.permit_token,
             }
+            // Let an app raise its output ceiling (e.g. transcript->memory
+            // extraction needs more than the 2048 default). Server clamps to
+            // [256, 65536]; without this every app reply was silently truncated.
+            const mt = msg.payload && msg.payload.max_tokens
+            if (Number.isInteger(mt) && mt > 0) body.max_tokens = mt
             if (layers.length) body.layers = layers
             return fetch('/api/bf/chat/rag', {
               method: 'POST',
