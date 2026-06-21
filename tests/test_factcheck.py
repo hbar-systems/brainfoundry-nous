@@ -227,3 +227,82 @@ def test_web_shape_unchanged_after_refactor():
     assert "n_domains" in r                   # UI reads corro.n_domains
     assert r["n_domains"] == 2
     assert set(["score", "dissenters", "n_sources", "independence", "agreement", "trust", "method"]).issubset(r)
+
+
+# ── stance-aware corroboration (A+B) ──────────────────────────────────────────
+
+import asyncio  # noqa: E402
+
+
+def _stances(*labels):
+    return [{"stance": s, "reason": ""} for s in labels]
+
+
+def test_stance_contradict_lowers_score():
+    # The core defect fix: a contradicting source must pull the signal DOWN,
+    # where the legacy topical path raised it (on-topic == on-topic).
+    srcs = [_src("https://a.com/1"), _src("https://b.com/2"), _src("https://c.com/3")]
+    claim = "The treaty was signed in 1990."
+    all_support = factcheck.score_corroboration(
+        srcs, embed_fn=_identical, claim=claim, stances=_stances("support", "support", "support"))
+    one_contra = factcheck.score_corroboration(
+        srcs, embed_fn=_identical, claim=claim, stances=_stances("support", "support", "contradict"))
+    assert one_contra["score"] < all_support["score"]
+    assert one_contra["counts"]["contradict"] == 1
+    assert "https://c.com/3" in one_contra["dissenters"]
+
+
+def test_stance_components_returned_and_not_probability():
+    srcs = [_src("https://a.com/1"), _src("https://b.com/2")]
+    r = factcheck.score_corroboration(
+        srcs, embed_fn=_identical, claim="X is true", stances=_stances("support", "contradict"))
+    assert r["is_probability"] is False
+    assert "not a probability" in r["label"].lower()
+    assert set(["counts", "weights", "per_source", "stance_score", "signal"]).issubset(r)
+    assert len(r["per_source"]) == 2
+    assert r["per_source"][0]["stance"] == "support"
+    assert r["per_source"][1]["stance"] == "contradict"
+
+
+def test_stance_neutral_does_not_inflate():
+    srcs = [_src("https://a.com/1"), _src("https://b.com/2"), _src("https://c.com/3")]
+    two_support = factcheck.score_corroboration(
+        srcs[:2], embed_fn=_identical, claim="X", stances=_stances("support", "support"))
+    plus_neutral = factcheck.score_corroboration(
+        srcs, embed_fn=_identical, claim="X", stances=_stances("support", "support", "neutral"))
+    # A neutral source dilutes (never raises) the stance score.
+    assert plus_neutral["stance_score"] <= two_support["stance_score"]
+
+
+def test_stance_irrelevant_source_excluded_by_relevance_floor():
+    srcs = [_src("https://a.com/1"), _src("https://b.com/2")]
+    # embed order is [claim, a, b]: a aligned with claim, b orthogonal (off-topic).
+    def embed(texts):
+        return [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    r = factcheck.score_corroboration(
+        srcs, embed_fn=embed, claim="X", stances=_stances("support", "contradict"))
+    # b "contradicts" but is not about the claim -> excluded, not counted as dissent.
+    assert r["counts"]["irrelevant"] == 1
+    assert r["per_source"][1]["relevance"] == 0.0
+    assert "https://b.com/2" not in r["dissenters"]
+
+
+def test_classify_stances_parses_injected():
+    async def fake_complete(prompt):
+        return '[{"stance":"SUPPORT","reason":"confirms"},{"stance":"CONTRADICT","reason":"refutes"}]'
+    out = asyncio.run(factcheck.classify_stances("X", ["s1", "s2"], complete_fn=fake_complete))
+    assert out == [{"stance": "support", "reason": "confirms"},
+                   {"stance": "contradict", "reason": "refutes"}]
+
+
+def test_classify_stances_pads_short_response():
+    async def fake(prompt):
+        return '[{"stance":"SUPPORT","reason":"a"}]'
+    out = asyncio.run(factcheck.classify_stances("X", ["s1", "s2", "s3"], complete_fn=fake))
+    assert len(out) == 3 and out[1]["stance"] == "neutral"
+
+
+def test_classify_stances_bad_json_returns_none():
+    async def fake(prompt):
+        return "not json at all"
+    assert asyncio.run(factcheck.classify_stances("X", ["s1"], complete_fn=fake)) is None

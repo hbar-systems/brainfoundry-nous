@@ -1164,28 +1164,43 @@ def tools_reject_endpoint(req: ToolApprovalRequest, api_key: str = Depends(get_a
 
 class FactCheckRequest(BaseModel):
     sources: List[Dict[str, Any]]  # [{title, url, snippet}]
+    claim: Optional[str] = None    # when set, score stance toward this claim (A+B)
 
 
 @app.post("/factcheck/score")
-def factcheck_score(req: FactCheckRequest, api_key: str = Depends(get_api_key)):
-    """Corroboration score for a set of sources — a measurement of independent,
-    mutually-agreeing, trusted sourcing, NOT a truth verdict. Returns null when
-    there are fewer than 2 sourced results to corroborate."""
+async def factcheck_score(req: FactCheckRequest, api_key: str = Depends(get_api_key)):
+    """Corroboration SIGNAL for a set of sources — supporting vs contradicting
+    sourcing, NOT a truth verdict. When `claim` is supplied, each source's
+    stance toward the claim is classified (A+B) so contradicting sources lower
+    the signal; without a claim it falls back to the legacy topical measure.
+    Returns null when there are fewer than 2 sourced results."""
     from api import factcheck
-    return {"corroboration": factcheck.score_corroboration(req.sources)}
+    stances = None
+    if req.claim:
+        texts = [f"{s.get('title', '')}. {s.get('snippet', '')}".strip() for s in req.sources]
+        stances = await factcheck.classify_stances(req.claim, texts)
+    return {"corroboration": factcheck.score_corroboration(
+        req.sources, claim=req.claim if stances is not None else None, stances=stances)}
 
 
 class FactCheckRagRequest(BaseModel):
     docs: List[Dict[str, Any]]  # retrieval results [{document_name, content, metadata}]
+    claim: Optional[str] = None
 
 
 @app.post("/factcheck/score-rag")
-def factcheck_score_rag(req: FactCheckRagRequest, api_key: str = Depends(get_api_key)):
-    """Corroboration score over the brain's OWN retrieved documents (uses the
+async def factcheck_score_rag(req: FactCheckRagRequest, api_key: str = Depends(get_api_key)):
+    """Corroboration signal over the brain's OWN retrieved documents (uses the
     per-chunk provenance trust). Same measurement as /factcheck/score but for RAG
-    chunks instead of web results. Returns null for fewer than 2 chunks."""
+    chunks. When `claim` is supplied, stance is classified (A+B). Returns null
+    for fewer than 2 chunks."""
     from api import factcheck
-    return {"corroboration": factcheck.score_rag_corroboration(req.docs)}
+    stances = None
+    if req.claim:
+        texts = [(d.get("content") or "")[:600] for d in req.docs]
+        stances = await factcheck.classify_stances(req.claim, texts)
+    return {"corroboration": factcheck.score_rag_corroboration(
+        req.docs, claim=req.claim if stances is not None else None, stances=stances)}
 
 
 class SetMaxTokensRequest(BaseModel):
@@ -2734,14 +2749,22 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                         {"title": p.get("title"), "url": p.get("url")}
                         for p in tr.provenance
                     ]
-                    # Corroboration score over the retrieved sources — a
-                    # measured trust signal (independence·agreement·trust),
-                    # not a truth verdict. Guarded so a scoring hiccup never
-                    # breaks the answer.
+                    # Corroboration signal over the retrieved sources. A+B:
+                    # classify each source's stance toward the claim (the user
+                    # query) so contradicting sources pull the signal DOWN, then
+                    # score relevance·stance·trust. Not a truth verdict. Guarded
+                    # so a scoring/stance hiccup never breaks the answer; on
+                    # failure it falls back to the legacy topical path.
                     try:
                         from api import factcheck
+                        _web_results = tr.meta.get("results", [])
+                        _web_texts = [f"{r.get('title', '')}. {r.get('snippet', '')}".strip()
+                                      for r in _web_results]
+                        _web_stances = await factcheck.classify_stances(user_query, _web_texts)
                         web_meta["corroboration"] = factcheck.score_corroboration(
-                            tr.meta.get("results", []))
+                            _web_results,
+                            claim=user_query if _web_stances is not None else None,
+                            stances=_web_stances)
                     except Exception as _fc_err:
                         web_meta["corroboration"] = None
                 else:
@@ -2761,7 +2784,12 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         try:
             if len(relevant_docs) >= 2:
                 from api import factcheck
-                rag_corroboration = factcheck.score_rag_corroboration(relevant_docs)
+                _rag_texts = [(d.get("content") or "")[:600] for d in relevant_docs]
+                _rag_stances = await factcheck.classify_stances(user_query, _rag_texts)
+                rag_corroboration = factcheck.score_rag_corroboration(
+                    relevant_docs,
+                    claim=user_query if _rag_stances is not None else None,
+                    stances=_rag_stances)
         except Exception:
             rag_corroboration = None
 

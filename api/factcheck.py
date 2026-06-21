@@ -47,6 +47,24 @@ _INDEPENDENCE_TARGET = 3
 _DISSENT_THRESHOLD = 0.35
 _DEFAULT_TRUST = 0.5
 
+# ── Stance-aware corroboration (A+B) ────────────────────────────────────────
+# The defect this fixes: the legacy "agreement" factor is mean pairwise cosine
+# BETWEEN sources — topical similarity. A source that loudly contradicts the
+# claim is just as "on topic" as one that confirms it, so it raised the score
+# identically. Related is not true. When a `claim` is supplied we instead split
+# TWO signals per source: topical relevance (cosine source↔claim) and stance
+# (SUPPORT | CONTRADICT | NEUTRAL toward the claim), and score real agreement —
+# supporting weight minus contradicting weight over RELEVANT sources only.
+# Kept deliberately simple; it will be recalibrated under D (calibration gate),
+# so it is NOT presented as a probability of truth yet (see `is_probability`).
+_W_STANCE_INDEPENDENCE = 0.25
+_W_STANCE = 0.55
+_W_STANCE_TRUST = 0.20
+# A source whose cosine to the claim is below this is not "about" the claim and
+# does not contribute support OR contradiction.
+_RELEVANCE_FLOOR = 0.20
+_STANCES = ("support", "contradict", "neutral")
+
 # Seed trust priors. v0, deliberately small and conservative; operator-
 # extensible later. TLD-class rules (gov/edu) apply first, then domain lookup.
 _TRUST_DOMAINS: Dict[str, float] = {
@@ -195,9 +213,206 @@ def _corroboration_core(
     }
 
 
+def _relevance_to_claim(
+    claim: str,
+    texts: List[str],
+    embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]],
+) -> Optional[List[float]]:
+    """Per-source topical relevance: cosine(source, claim), clamped to [0,1].
+
+    This is signal (1) of the A-split — "is this source about the claim at all?"
+    — kept SEPARATE from stance. Returns None when no embedder is available, in
+    which case the caller treats every source as relevant (relevance is unknown,
+    not zero) and leans entirely on stance.
+    """
+    if embed_fn is None:
+        embed_fn = _default_embed
+    try:
+        vecs = embed_fn([claim] + list(texts))
+        if vecs is None or len(vecs) != len(texts) + 1:
+            return None
+        claim_vec = vecs[0]
+        return [max(0.0, min(1.0, _cosine(claim_vec, v))) for v in vecs[1:]]
+    except Exception:
+        return None
+
+
+def _corroboration_stance_core(
+    *,
+    identities: List[str],
+    trusts: List[float],
+    texts: List[str],
+    labels: List[str],
+    claim: str,
+    stances: List[Dict],
+    method: str,
+    embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
+) -> Optional[Dict]:
+    """Stance-aware corroboration (A+B). `stances[i]` is
+    {"stance": "support|contradict|neutral", "reason": str} aligned to the
+    sources. The rolled-up number is a corroboration SIGNAL, not a probability
+    of truth (D not done) — `is_probability` is False and the components are
+    returned prominently.
+    """
+    n = len(identities)
+    if n < 2:
+        return None
+
+    rel = _relevance_to_claim(claim, texts, embed_fn)
+    relevance = rel if rel is not None else [1.0] * n  # unknown → treat as relevant
+
+    support_w = contradict_w = neutral_w = 0.0
+    counts = {"support": 0, "contradict": 0, "neutral": 0, "irrelevant": 0}
+    per_source: List[Dict] = []
+    supporting_domains = set()
+    relevant_domains = set()
+    relevant_trusts: List[float] = []
+    dissenters: List[str] = []
+
+    for i in range(n):
+        st = (stances[i].get("stance") if i < len(stances) and isinstance(stances[i], dict) else None)
+        st = st.lower().strip() if isinstance(st, str) else "neutral"
+        if st not in _STANCES:
+            st = "neutral"
+        reason = (stances[i].get("reason", "") if i < len(stances) and isinstance(stances[i], dict) else "")
+        r = relevance[i]
+        t = trusts[i] if i < len(trusts) else _DEFAULT_TRUST
+        is_relevant = r >= _RELEVANCE_FLOOR
+        weight = t * r
+
+        per_source.append({
+            "label": labels[i] if i < len(labels) else "",
+            "domain": identities[i],
+            "relevance": round(r, 3),
+            "stance": st,
+            "reason": reason[:200],
+            "trust": round(t, 3),
+        })
+
+        if not is_relevant:
+            counts["irrelevant"] += 1
+            continue
+        relevant_domains.add(identities[i])
+        relevant_trusts.append(t)
+        counts[st] += 1
+        if st == "support":
+            support_w += weight
+            if identities[i]:
+                supporting_domains.add(identities[i])
+        elif st == "contradict":
+            contradict_w += weight
+            dissenters.append(labels[i] if i < len(labels) else "")
+        else:
+            neutral_w += weight
+
+    denom = support_w + contradict_w + neutral_w
+    # B: real agreement — supporting minus contradicting over relevant sources.
+    # Contradiction pulls DOWN; neutral dilutes but never inflates.
+    stance_score = max(0.0, (support_w - contradict_w) / denom) if denom > 0 else 0.0
+
+    independence = min(len(supporting_domains) / _INDEPENDENCE_TARGET, 1.0)
+    mean_trust = (sum(relevant_trusts) / len(relevant_trusts)) if relevant_trusts else _DEFAULT_TRUST
+
+    raw = (_W_STANCE_INDEPENDENCE * independence
+           + _W_STANCE * stance_score
+           + _W_STANCE_TRUST * mean_trust)
+    signal = int(round(100 * max(0.0, min(1.0, raw))))
+
+    return {
+        "score": signal,            # back-compat key (UI reads corro.score)
+        "signal": signal,
+        "is_probability": False,    # honesty guardrail: D not done
+        "label": "corroboration signal — supporting vs contradicting sources, "
+                 "not a probability of truth",
+        "n_sources": n,
+        "n_distinct": len(relevant_domains),
+        "independence": round(independence, 3),
+        "stance_score": round(stance_score, 3),
+        "agreement": None,          # superseded by stance_score in this path
+        "trust": round(mean_trust, 3),
+        "counts": counts,
+        "weights": {
+            "support": round(support_w, 3),
+            "contradict": round(contradict_w, 3),
+            "neutral": round(neutral_w, 3),
+        },
+        "per_source": per_source,
+        "dissenters": dissenters,   # now: relevant sources that CONTRADICT
+        "method": method,
+    }
+
+
+# ── Stance classifier (LLM bridge — the default per-source stance step) ──────
+
+_STANCE_PROMPT = (
+    "You are a strict fact-checking classifier. Given a CLAIM and a numbered list "
+    "of SOURCE snippets, decide each source's stance TOWARD THE CLAIM:\n"
+    "  SUPPORT    — the source asserts the claim is true / confirms it\n"
+    "  CONTRADICT — the source asserts the claim is false / refutes it\n"
+    "  NEUTRAL    — the source is unclear, off-point, or neither confirms nor denies\n"
+    "Topical overlap is NOT support. A source about the same subject that does not "
+    "confirm the claim is NEUTRAL. A source that says the opposite is CONTRADICT.\n"
+    "Return ONLY a JSON array, one object per source IN ORDER, like:\n"
+    '[{"stance":"SUPPORT","reason":"<=12 words"}, ...]\n\n'
+    "CLAIM: {claim}\n\nSOURCES:\n{sources}\n"
+)
+
+
+async def classify_stances(
+    claim: str,
+    texts: List[str],
+    complete_fn=None,
+    model: Optional[str] = None,
+) -> Optional[List[Dict]]:
+    """Classify each source's stance toward `claim` via the brain's own LLM
+    bridge (api.providers.complete). Returns a list aligned to `texts` of
+    {"stance", "reason"}, or None on any failure (caller then falls back to the
+    legacy topical path — graceful, clearly method-labeled). `complete_fn` is
+    injectable for tests so no model/network is touched."""
+    import json as _json
+
+    claim = (claim or "").strip()
+    if not claim or not texts:
+        return None
+    numbered = "\n".join(f"[{i + 1}] {(t or '')[:500]}" for i, t in enumerate(texts))
+    prompt = _STANCE_PROMPT.replace("{claim}", claim).replace("{sources}", numbered)
+
+    try:
+        if complete_fn is None:
+            from api import providers as _providers
+            model = model or _providers.default_model()
+            raw = await _providers.complete(
+                model, [{"role": "user", "content": prompt}], max_tokens=600)
+        else:
+            raw = await complete_fn(prompt)
+    except Exception:
+        return None
+
+    try:
+        s = (raw or "").strip()
+        start, end = s.find("["), s.rfind("]")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        arr = _json.loads(s[start:end + 1])
+        out: List[Dict] = []
+        for item in arr:
+            st = str((item or {}).get("stance", "")).lower().strip()
+            if st not in _STANCES:
+                st = "neutral"
+            out.append({"stance": st, "reason": str((item or {}).get("reason", ""))[:200]})
+        # Pad/trim to align with sources (model may drop/add entries).
+        if len(out) < len(texts):
+            out += [{"stance": "neutral", "reason": ""}] * (len(texts) - len(out))
+        return out[:len(texts)]
+    except Exception:
+        return None
+
+
 def score_corroboration(
     sources: List[Dict],
     embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
+    claim: Optional[str] = None,
+    stances: Optional[List[Dict]] = None,
 ) -> Optional[Dict]:
     """Score how well a set of WEB sources corroborate each other.
 
@@ -212,14 +427,29 @@ def score_corroboration(
         return None
 
     domains = [_registrable_domain(s["url"]) for s in items]
-    result = _corroboration_core(
-        identities=domains,
-        trusts=[_trust_for(d) for d in domains],
-        texts=[f"{s.get('title', '')}. {s.get('snippet', '')}".strip() for s in items],
-        labels=[s["url"] for s in items],
-        method="corroboration v0 (independence·agreement·trust)",
-        embed_fn=embed_fn,
-    )
+    texts = [f"{s.get('title', '')}. {s.get('snippet', '')}".strip() for s in items]
+    if claim and stances is not None:
+        # A+B: stance-aware path — relevance to claim + SUPPORT/CONTRADICT/NEUTRAL.
+        result = _corroboration_stance_core(
+            identities=domains,
+            trusts=[_trust_for(d) for d in domains],
+            texts=texts,
+            labels=[s["url"] for s in items],
+            claim=claim,
+            stances=stances,
+            method="corroboration v1 (web: relevance·stance·trust)",
+            embed_fn=embed_fn,
+        )
+    else:
+        # Legacy topical path (no claim): measures inter-source agreement only.
+        result = _corroboration_core(
+            identities=domains,
+            trusts=[_trust_for(d) for d in domains],
+            texts=texts,
+            labels=[s["url"] for s in items],
+            method="corroboration v0 (independence·agreement·trust)",
+            embed_fn=embed_fn,
+        )
     if result is not None:
         result["n_domains"] = result["n_distinct"]  # back-compat: web UI reads this
     return result
@@ -228,6 +458,8 @@ def score_corroboration(
 def score_rag_corroboration(
     docs: List[Dict],
     embed_fn: Optional[Callable[[List[str]], List[Sequence[float]]]] = None,
+    claim: Optional[str] = None,
+    stances: Optional[List[Dict]] = None,
 ) -> Optional[Dict]:
     """Score how well a set of RAG chunks corroborate the answer they grounded.
 
@@ -264,14 +496,23 @@ def score_rag_corroboration(
         from api import memory_type
         return memory_type.trust_prior(md.get("mem_type"))
 
-    result = _corroboration_core(
-        identities=[_identity(d) for d in items],
-        trusts=[_trust(d) for d in items],
-        texts=[(d.get("content") or "")[:600] for d in items],
-        labels=[d.get("document_name") or "" for d in items],
-        method="corroboration v0 (rag: independence·agreement·trust)",
-        embed_fn=embed_fn,
-    )
+    identities = [_identity(d) for d in items]
+    trusts = [_trust(d) for d in items]
+    texts = [(d.get("content") or "")[:600] for d in items]
+    labels = [d.get("document_name") or "" for d in items]
+    if claim and stances is not None:
+        result = _corroboration_stance_core(
+            identities=identities, trusts=trusts, texts=texts, labels=labels,
+            claim=claim, stances=stances,
+            method="corroboration v1 (rag: relevance·stance·trust)",
+            embed_fn=embed_fn,
+        )
+    else:
+        result = _corroboration_core(
+            identities=identities, trusts=trusts, texts=texts, labels=labels,
+            method="corroboration v0 (rag: independence·agreement·trust)",
+            embed_fn=embed_fn,
+        )
     if result is not None:
         result["n_documents"] = result["n_distinct"]
     return result
