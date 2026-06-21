@@ -325,6 +325,12 @@ try:
     router = APIRouter(prefix="/appearance", tags=["appearance"])
 
     class PatchRequest(BaseModel):
+        # TODO (next brainfoundry-nous deploy): add a Config with extra="forbid"
+        # so a direct PUT with an out-of-schema field hard-rejects (422) instead
+        # of silently dropping it. Today the field is NOT written (write-lane stays
+        # closed — validate() rejects unknown fields, and the NL path filters to
+        # ALLOWED_FIELDS), but a bare PUT returns 200 rather than rejecting.
+        # Deferred per operator 2026-06-21 (verified safe, strictness-only nicety).
         menuTitle: Optional[str] = None
         theme: Optional[str] = None
         accent: Optional[str] = None
