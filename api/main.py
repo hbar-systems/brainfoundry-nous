@@ -1741,6 +1741,15 @@ try:
 except Exception as e:
     print(f"[startup] compute_meter router mount skipped: {e}", flush=True)
 
+# Mount appearance router ("customize your brain" — constrained-config plane).
+# Gated by the operator api_key dep, same posture as settings / brain-apps.
+try:
+    from api.appearance import router as _appearance_router
+    if _appearance_router is not None:
+        app.include_router(_appearance_router, dependencies=[Depends(get_api_key)])
+except Exception as e:
+    print(f"[startup] appearance router mount skipped: {e}", flush=True)
+
 # Mount brain-apps router (install / list / uninstall / enable / disable).
 # All endpoints gated by the existing api_key dep — same posture as /settings.
 try:

@@ -50,6 +50,8 @@ const NAV_H_MAX = 88
 export default function Nav() {
   const router = useRouter()
   const [tabs, setTabs] = useState(FALLBACK_NAV)
+  // Owner-set menu header (appearance plane); null => fall back to brand name.
+  const [menuTitle, setMenuTitle] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -57,7 +59,11 @@ export default function Nav() {
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(data => {
         if (cancelled) return
+        // The /apps/list response already has hidden/reordered tabs applied
+        // server-side from the appearance config, so the Nav reflects them
+        // without any client-side filter logic.
         if (data && Array.isArray(data.tabs)) setTabs(tabsFromApi(data.tabs))
+        if (data && typeof data.menuTitle === 'string') setMenuTitle(data.menuTitle)
       })
       .catch(() => { /* keep FALLBACK_NAV on any error */ })
     return () => { cancelled = true }
@@ -131,7 +137,7 @@ export default function Nav() {
           color: 'var(--text)',
           letterSpacing: '0.01em',
         }}>
-          {process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
+          {menuTitle || process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
         </span>
       </Link>
       <div className="bf-nav-links">

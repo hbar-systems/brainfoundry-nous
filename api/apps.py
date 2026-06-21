@@ -417,7 +417,17 @@ def list_apps() -> dict:
     state = _load_installed()
     apps = state.get("apps", [])
     tabs = sorted(BUILTIN_TABS, key=lambda t: (t.get("order", 100), t["label"]))
-    return {"tabs": tabs, "apps": apps}
+    # Apply the owner's appearance config (hide/reorder + menu title). Fail-soft:
+    # any error leaves the stock tab list untouched.
+    menu_title = None
+    try:
+        from api import appearance
+        cfg = appearance.get_config()
+        tabs = appearance.apply_to_tabs(tabs, cfg)
+        menu_title = cfg.get("menuTitle")
+    except Exception:
+        pass
+    return {"tabs": tabs, "apps": apps, "menuTitle": menu_title}
 
 
 @router.post("/{app_id}/uninstall")

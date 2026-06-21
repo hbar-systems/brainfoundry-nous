@@ -174,6 +174,236 @@ function AppearancePanel() {
   )
 }
 
+// ---------- Customize your brain (server-backed config plane) ----------
+// Talks to the api appearance plane (/appearance). The ONLY thing it writes is
+// a validated config object — menu title, theme, accent, hidden/reordered tabs.
+// No code, files, SQL, or shell. menuTitle + hide/reorder take effect via the
+// nav's /apps/list fetch; theme/accent are applied live here (localStorage +
+// data-attrs) so the change is instant without a redeploy.
+function BrainLayoutPanel() {
+  const [cfg, setCfg] = useState(null)
+  const [tabs, setTabs] = useState([])
+  const [accents, setAccents] = useState(['default'])
+  const [protectedTabs, setProtectedTabs] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const [msg, setMsg] = useState(null)
+  const [nl, setNl] = useState('')
+  const [proposal, setProposal] = useState(null)
+
+  const applyLive = (c) => {
+    if (typeof window === 'undefined' || !c) return
+    if (c.theme) { localStorage.setItem('bf-theme', c.theme); document.documentElement.dataset.theme = c.theme }
+    // accent override: 'default' clears the inline override (theme accent wins)
+    if (c.accent && c.accent !== 'default') {
+      document.documentElement.style.setProperty('--accent', c.accent)
+    } else {
+      document.documentElement.style.removeProperty('--accent')
+    }
+  }
+
+  const load = async () => {
+    setErr(null)
+    try {
+      const d = await api('/appearance')
+      setCfg(d.config); setTabs(d.tabs || []); setAccents(d.accents || ['default'])
+      setProtectedTabs(d.protected_tabs || [])
+      applyLive(d.config)
+    } catch (e) { setErr(String(e.message || e)) }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (patch) => {
+    setBusy(true); setErr(null); setMsg(null)
+    try {
+      const d = await api('/appearance', { method: 'PUT', body: JSON.stringify(patch) })
+      setCfg(d.config); applyLive(d.config); setMsg('Applied.')
+    } catch (e) { setErr(String(e.message || e)) } finally { setBusy(false) }
+  }
+
+  const doRevert = async () => {
+    setBusy(true); setErr(null); setMsg(null)
+    try {
+      const d = await api('/appearance/revert', { method: 'POST' })
+      setCfg(d.config); applyLive(d.config); setMsg('Reverted to previous.')
+    } catch (e) { setErr(String(e.message || e)) } finally { setBusy(false) }
+  }
+  const doReset = async () => {
+    setBusy(true); setErr(null); setMsg(null)
+    try {
+      const d = await api('/appearance/reset', { method: 'POST' })
+      setCfg(d.config); applyLive(d.config); setMsg('Reset to default.')
+    } catch (e) { setErr(String(e.message || e)) } finally { setBusy(false) }
+  }
+
+  const proposeNL = async () => {
+    if (!nl.trim()) return
+    setBusy(true); setErr(null); setMsg(null); setProposal(null)
+    try {
+      const d = await api('/appearance/nl', { method: 'POST', body: JSON.stringify({ instruction: nl }) })
+      if (!d.diff || Object.keys(d.diff).length === 0) {
+        setErr(d.error || 'Could not express that as a config change.')
+      } else {
+        setProposal(d)
+      }
+    } catch (e) { setErr(String(e.message || e)) } finally { setBusy(false) }
+  }
+  const confirmNL = async () => {
+    if (!proposal) return
+    await save(proposal.diff)
+    setProposal(null); setNl('')
+  }
+
+  if (!cfg) {
+    return <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13 }}>
+      {err ? <span style={{ color: '#c87878' }}>{err}</span> : 'Loading…'}
+    </div>
+  }
+
+  const isHidden = (id) => (cfg.hiddenTabs || []).includes(id)
+  const toggleHidden = (id) => {
+    const next = isHidden(id)
+      ? cfg.hiddenTabs.filter(x => x !== id)
+      : [...(cfg.hiddenTabs || []), id]
+    save({ hiddenTabs: next })
+  }
+  // Effective order: tabOrder first, then any unlisted tabs in registry order.
+  const orderedIds = (() => {
+    const known = tabs.map(t => t.id)
+    const listed = (cfg.tabOrder || []).filter(id => known.includes(id))
+    const rest = known.filter(id => !listed.includes(id))
+    return [...listed, ...rest]
+  })()
+  const move = (id, dir) => {
+    const arr = [...orderedIds]
+    const i = arr.indexOf(id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= arr.length) return
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    save({ tabOrder: arr })
+  }
+  const labelFor = (id) => (tabs.find(t => t.id === id) || {}).label || id
+
+  return (
+    <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+      <p style={{ margin: '0 0 14px 0' }}>
+        Adjust your brain's header, theme, and which tabs show — saved on the
+        server (so it follows you across devices) with one-step revert. This
+        only changes appearance; your reasoner, memory, and tools are untouched.
+      </p>
+      {err && <div style={{ color: '#c87878', marginBottom: 10 }}>{err}</div>}
+      {msg && <div style={{ color: '#88a868', marginBottom: 10 }}>{msg}</div>}
+
+      {/* Menu title */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Menu header</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            style={{ ...INPUT, flex: 1 }}
+            placeholder="(default brand name)"
+            defaultValue={cfg.menuTitle || ''}
+            maxLength={40}
+            onKeyDown={(e) => { if (e.key === 'Enter') save({ menuTitle: e.currentTarget.value || null }) }}
+            id="bf-menu-title"
+          />
+          <button style={BTN} disabled={busy}
+            onClick={() => save({ menuTitle: (document.getElementById('bf-menu-title').value || null) })}>
+            Save
+          </button>
+        </div>
+      </div>
+
+      {/* Theme */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Theme</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {APPEARANCE_THEMES.map(t => (
+            <button key={t.value} onClick={() => save({ theme: t.value })} title={t.label} disabled={busy}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 6px 8px',
+                background: cfg.theme === t.value ? '#1f1a14' : 'transparent',
+                color: cfg.theme === t.value ? '#e8e0d5' : '#8b7d6e',
+                border: `1px solid ${cfg.theme === t.value ? '#c9a96e66' : '#2a2420'}`,
+                borderRadius: 8, cursor: 'pointer', fontSize: 13, fontFamily: 'DM Mono, monospace' }}>
+              <span style={{ width: 14, height: 14, borderRadius: '50%', background: t.swatch, border: '1px solid rgba(0,0,0,0.3)', display: 'inline-block' }} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Accent */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Accent</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {accents.map(a => (
+            <button key={a} onClick={() => save({ accent: a })} title={a} disabled={busy}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+                background: cfg.accent === a ? '#1f1a14' : 'transparent',
+                color: cfg.accent === a ? '#e8e0d5' : '#8b7d6e',
+                border: `1px solid ${cfg.accent === a ? '#c9a96e66' : '#2a2420'}`,
+                borderRadius: 8, cursor: 'pointer', fontSize: 12, fontFamily: 'DM Mono, monospace' }}>
+              {a !== 'default' && <span style={{ width: 12, height: 12, borderRadius: '50%', background: a, display: 'inline-block', border: '1px solid rgba(0,0,0,0.3)' }} />}
+              {a}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabs: show/hide + reorder */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tabs — show / hide / reorder</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {orderedIds.map((id, idx) => {
+            const locked = protectedTabs.includes(id)
+            return (
+              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6 }}>
+                <input type="checkbox" checked={!isHidden(id)} disabled={locked || busy}
+                  onChange={() => toggleHidden(id)} style={{ accentColor: '#c9a96e' }} />
+                <span style={{ flex: 1, color: isHidden(id) ? '#6b5f52' : '#e8e0d5' }}>
+                  {labelFor(id)} {locked && <span style={{ fontSize: 10, color: '#6b5f52' }}>(always shown)</span>}
+                </span>
+                <button onClick={() => move(id, -1)} disabled={idx === 0 || busy} title="Move up"
+                  style={{ ...BTN_GHOST, padding: '2px 8px', opacity: idx === 0 ? 0.4 : 1 }}>↑</button>
+                <button onClick={() => move(id, 1)} disabled={idx === orderedIds.length - 1 || busy} title="Move down"
+                  style={{ ...BTN_GHOST, padding: '2px 8px', opacity: idx === orderedIds.length - 1 ? 0.4 : 1 }}>↓</button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Natural-language input — thin translator to a validated diff */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Or just say it</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input style={{ ...INPUT, flex: 1 }} value={nl} placeholder='e.g. "hide the economy tab and rename the header to Praxis Müller"'
+            onChange={(e) => setNl(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') proposeNL() }} />
+          <button style={BTN_GHOST} disabled={busy} onClick={proposeNL}>Propose</button>
+        </div>
+        {proposal && (
+          <div style={{ marginTop: 10, padding: 12, background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 8 }}>
+            <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 6 }}>Proposed change:</div>
+            <pre style={{ margin: 0, color: '#e8e0d5', fontSize: 12, whiteSpace: 'pre-wrap', fontFamily: 'DM Mono, monospace' }}>
+              {JSON.stringify(proposal.diff, null, 2)}
+            </pre>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button style={BTN} disabled={busy} onClick={confirmNL}>Apply</button>
+              <button style={BTN_GHOST} disabled={busy} onClick={() => setProposal(null)}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Revert / Reset */}
+      <div style={{ display: 'flex', gap: 8, borderTop: '1px solid #2a2420', paddingTop: 14 }}>
+        <button style={BTN_GHOST} disabled={busy} onClick={doRevert}>Revert last change</button>
+        <button style={BTN_GHOST} disabled={busy} onClick={doReset}>Reset to default</button>
+      </div>
+    </div>
+  )
+}
+
 const PROVIDER_LABELS = {
   anthropic: 'Anthropic (Claude)',
   openai: 'OpenAI (GPT, o-series)',
@@ -1397,6 +1627,10 @@ export default function Settings() {
 
       <Section title="Appearance" subtitle="Palette and typography for the chat surface.">
         <AppearancePanel />
+      </Section>
+
+      <Section title="Customize your brain" subtitle="Header, theme, accent, and which tabs show — saved on the server, one-step revert.">
+        <BrainLayoutPanel />
       </Section>
 
       <Section title="Keys" subtitle="Bring your own — Anthropic, OpenAI, Gemini, and more.">
