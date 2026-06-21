@@ -1605,6 +1605,13 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] harmonics init skipped: {e}", flush=True)
 
+    # compute meter — compute_events ledger (read-only token metering)
+    try:
+        from api import compute_meter
+        compute_meter.init_tables()
+    except Exception as e:
+        print(f"[startup] compute_meter init skipped: {e}", flush=True)
+
     # Boot-time migration: re-own .git to the host user. The api container runs
     # git as root (version-info fetch, update pull), which root-clobbers
     # .git/FETCH_HEAD etc. and breaks `git pull` from the host shell. Every
@@ -1711,6 +1718,13 @@ try:
     app.include_router(_harmonics_router)
 except Exception as e:
     print(f"[startup] harmonics router mount skipped: {e}", flush=True)
+
+# Mount compute meter router (/meter/usage, /meter/ledger — read-only metering)
+try:
+    from api.compute_meter import router as _compute_meter_router
+    app.include_router(_compute_meter_router)
+except Exception as e:
+    print(f"[startup] compute_meter router mount skipped: {e}", flush=True)
 
 # Mount brain-apps router (install / list / uninstall / enable / disable).
 # All endpoints gated by the existing api_key dep — same posture as /settings.

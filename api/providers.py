@@ -394,6 +394,45 @@ def cheap_extraction_model() -> str:
     return default_model()
 
 
+# ── Compute metering (read-only) ────────────────────────────────────────────
+# Every inference passes through complete / complete_with_tools / stream. Each
+# emits exactly ONE usage record per provider response, from the raw `usage`
+# object before the text is extracted (estimating only when a provider omits
+# usage). Metering is FAIL-SOFT: it must never break inference, so _meter
+# swallows every error. See api/compute_meter.py.
+
+def _messages_text(messages: list) -> str:
+    """Concatenate message contents for token estimation fallback."""
+    out = []
+    for m in messages or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, str):
+            out.append(c)
+        elif isinstance(c, list):  # structured content blocks
+            out.append(" ".join(str(b.get("text", "")) for b in c if isinstance(b, dict)))
+    return "\n".join(out)
+
+
+def _meter(model: str, client_type: str, raw, *, fallback_prompt: str = "",
+           fallback_text: str = "", source: str | None = None) -> None:
+    """Record one usage row for a provider response. Never raises."""
+    try:
+        from api import compute_meter
+        u = compute_meter.usage_from_response(client_type, raw)
+        if u is not None:
+            pt, ct = u
+            estimated = False
+        else:
+            pt = compute_meter.estimate_tokens(fallback_prompt)
+            ct = compute_meter.estimate_tokens(fallback_text)
+            estimated = True
+        compute_meter.record_usage(
+            model=model, prompt_tokens=pt, completion_tokens=ct,
+            estimated=estimated, source=source)
+    except Exception as e:  # metering must never break inference
+        print(f"[providers] meter skipped: {e}", flush=True)
+
+
 async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
     """
     Route a chat completion to the correct provider.
@@ -411,7 +450,10 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
         r = await client.messages.create(
             model=actual_model, max_tokens=max_tokens, messages=user_msgs, **kwargs
         )
-        return r.content[0].text
+        text = r.content[0].text
+        _meter(model, "anthropic", r, fallback_prompt=_messages_text(messages),
+               fallback_text=text, source="complete")
+        return text
 
     elif client_type == "openai_compat":
         if not client:
@@ -419,7 +461,10 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
         r = await client.chat.completions.create(
             model=actual_model, max_tokens=max_tokens, messages=messages
         )
-        return r.choices[0].message.content
+        text = r.choices[0].message.content
+        _meter(model, "openai_compat", r, fallback_prompt=_messages_text(messages),
+               fallback_text=text or "", source="complete")
+        return text
 
     else:  # ollama
         async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=180)) as http:
@@ -431,7 +476,11 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
                 payload["system"] = system_msg
             resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            data = resp.json()
+            text = data["message"]["content"]
+            _meter(model, "ollama", data, fallback_prompt=_messages_text(messages),
+                   fallback_text=text, source="complete")
+            return text
 
 
 # ── Native model-driven tool use (agentic loop) ─────────────────────────────
@@ -495,7 +544,7 @@ def _event(result) -> dict:
 
 
 async def _run_anthropic_tools(client, model, system, conv, tools, dispatch_fn,
-                               max_tokens, max_rounds):
+                               max_tokens, max_rounds, on_usage=None):
     """Anthropic tool-use loop. `conv` is the running message list (no system).
     `dispatch_fn(name, args) -> ToolResult`. Returns (text, events)."""
     events: list = []
@@ -504,6 +553,8 @@ async def _run_anthropic_tools(client, model, system, conv, tools, dispatch_fn,
     for _ in range(max_rounds):
         r = await client.messages.create(
             model=model, max_tokens=max_tokens, messages=conv, tools=tools, **kwargs)
+        if on_usage:
+            on_usage(r)
         text_parts = [b.text for b in r.content if getattr(b, "type", None) == "text"]
         text_out = "".join(text_parts).strip()
         tool_uses = [b for b in r.content if getattr(b, "type", None) == "tool_use"]
@@ -524,7 +575,7 @@ async def _run_anthropic_tools(client, model, system, conv, tools, dispatch_fn,
 
 
 async def _run_openai_tools(client, model, conv, tools, dispatch_fn,
-                            max_tokens, max_rounds):
+                            max_tokens, max_rounds, on_usage=None):
     """OpenAI-compatible function-calling loop. `conv` includes the system
     message. Returns (text, events)."""
     import json as _json
@@ -533,6 +584,8 @@ async def _run_openai_tools(client, model, conv, tools, dispatch_fn,
     for _ in range(max_rounds):
         r = await client.chat.completions.create(
             model=model, max_tokens=max_tokens, messages=conv, tools=tools)
+        if on_usage:
+            on_usage(r)
         msg = r.choices[0].message
         text_out = (msg.content or "").strip()
         tool_calls = getattr(msg, "tool_calls", None)
@@ -553,7 +606,8 @@ async def _run_openai_tools(client, model, conv, tools, dispatch_fn,
     return text_out, events
 
 
-async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rounds):
+async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rounds,
+                            on_usage=None):
     """Local-model (Ollama) tool-calling loop. Ollama's /api/chat speaks the
     OpenAI tool shape — `tools` in, `message.tool_calls` out (arguments arrive
     as an object, occasionally a JSON string; no call id). Capable local models
@@ -569,7 +623,10 @@ async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rou
                        "stream": False, "options": _ollama_options(num_predict=max_tokens)}
             resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
             resp.raise_for_status()
-            msg = (resp.json() or {}).get("message", {}) or {}
+            j = resp.json() or {}
+            if on_usage:
+                on_usage(j)
+            msg = j.get("message", {}) or {}
             text_out = (msg.get("content") or "").strip()
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
@@ -602,6 +659,9 @@ async def complete_with_tools(model: str, messages: list, tools_spec: list,
     {"text", "tool_events"}. Raises ValueError if the model can't do native
     tools (caller should fall back to plain complete())."""
     client_type, client, actual_model = _resolve(model)
+    # One usage row per provider round-trip (an agentic turn is several calls).
+    def _on_usage(ct):
+        return lambda raw: _meter(model, ct, raw, source="complete_with_tools")
     if client_type == "anthropic":
         if not client:
             raise ValueError("ANTHROPIC_API_KEY is not set")
@@ -609,7 +669,7 @@ async def complete_with_tools(model: str, messages: list, tools_spec: list,
         conv = [m for m in messages if m.get("role") != "system"]
         text, events = await _run_anthropic_tools(
             client, actual_model, system_msg, conv, _anthropic_tool_specs(tools_spec),
-            dispatch_fn, max_tokens, max_rounds)
+            dispatch_fn, max_tokens, max_rounds, on_usage=_on_usage("anthropic"))
         return {"text": text, "tool_events": events}
     elif client_type == "openai_compat":
         if not client:
@@ -617,13 +677,13 @@ async def complete_with_tools(model: str, messages: list, tools_spec: list,
         conv = list(messages)
         text, events = await _run_openai_tools(
             client, actual_model, conv, _openai_tool_specs(tools_spec),
-            dispatch_fn, max_tokens, max_rounds)
+            dispatch_fn, max_tokens, max_rounds, on_usage=_on_usage("openai_compat"))
         return {"text": text, "tool_events": events}
     else:  # ollama (local) — sovereign tool-calling, no cloud dependency
         conv = list(messages)
         text, events = await _run_ollama_tools(
             actual_model, conv, _openai_tool_specs(tools_spec),
-            dispatch_fn, max_tokens, max_rounds)
+            dispatch_fn, max_tokens, max_rounds, on_usage=_on_usage("ollama"))
         return {"text": text, "tool_events": events}
 
 
@@ -648,6 +708,12 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
         ) as s:
             async for text in s.text_stream:
                 yield text
+            # Exact usage is on the final message — free here.
+            try:
+                final = await s.get_final_message()
+                _meter(model, "anthropic", final, source="stream")
+            except Exception as e:
+                print(f"[providers] stream meter skipped: {e}", flush=True)
 
     elif client_type == "openai_compat":
         if not client:
@@ -655,10 +721,16 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
         stream_resp = await client.chat.completions.create(
             model=actual_model, max_tokens=max_tokens, messages=messages, stream=True
         )
+        _acc: list = []
         async for chunk in stream_resp:
             delta = chunk.choices[0].delta.content
             if delta:
+                _acc.append(delta)
                 yield delta
+        # No usage object on a plain stream — estimate (flagged estimated=True)
+        # rather than change request params for every openai-compat provider.
+        _meter(model, "openai_compat", None, fallback_prompt=_messages_text(messages),
+               fallback_text="".join(_acc), source="stream")
 
     else:  # ollama
         async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=300)) as http:
@@ -668,6 +740,7 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
                        "stream": True, "options": _ollama_options()}
             if system_msg:
                 payload["system"] = system_msg
+            _last: dict = {}
             async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -676,3 +749,8 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
                         text = data.get("message", {}).get("content", "")
                         if text:
                             yield text
+                        if data.get("done"):
+                            _last = data  # final line carries eval counts
+            # Exact counts from the final line; estimate only if absent.
+            _meter(model, "ollama", _last, fallback_prompt=_messages_text(messages),
+                   fallback_text="", source="stream")
