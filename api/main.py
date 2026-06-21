@@ -1584,6 +1584,13 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] federation_dm init skipped: {e}", flush=True)
 
+    # Federation publisher outbox (federation_social_outbox)
+    try:
+        from api import federation_publisher
+        federation_publisher.init_tables()
+    except Exception as e:
+        print(f"[startup] federation_publisher init skipped: {e}", flush=True)
+
     # Substrate floor (Layer 1) — artifact_attestations table
     try:
         from api import substrate
@@ -1690,6 +1697,13 @@ try:
     app.include_router(_federation_dm_router)
 except Exception as e:
     print(f"[startup] federation_dm router mount skipped: {e}", flush=True)
+
+# Mount federation publisher router (sign + POST signed posts to hbar.social)
+try:
+    from api.federation_publisher import router as _federation_publisher_router
+    app.include_router(_federation_publisher_router)
+except Exception as e:
+    print(f"[startup] federation_publisher router mount skipped: {e}", flush=True)
 
 # Mount hbar.harmonics router
 try:
