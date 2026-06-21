@@ -162,7 +162,14 @@ async def publish(payload_unsigned: dict, *, private_key_b64url: str,
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
                 relay_url, json=signed,
-                headers={"Content-Type": "application/json", "Protocol-Version": "0.5"},
+                headers={
+                    "Content-Type": "application/json",
+                    "Protocol-Version": "0.5",
+                    # Relay is behind a CDN/WAF that 403s default client UAs
+                    # (Cloudflare error 1010); identify as the brain.
+                    "User-Agent": "brainfoundry-nous-publisher/0.5 (+https://hbar.brainfoundry.ai)",
+                    "Accept": "application/json",
+                },
             )
         result["http_code"] = r.status_code
         if r.status_code == 200:

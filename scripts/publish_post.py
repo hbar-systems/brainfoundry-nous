@@ -164,7 +164,14 @@ def main() -> int:
     body = json.dumps(signed).encode("utf-8")
     req = urllib.request.Request(
         args.relay_url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "Protocol-Version": "0.5"},
+        headers={
+            "Content-Type": "application/json",
+            "Protocol-Version": "0.5",
+            # The relay sits behind a CDN/WAF that 403s the default
+            # Python-urllib UA (Cloudflare error 1010). Identify as the brain.
+            "User-Agent": "brainfoundry-nous-publisher/0.5 (+https://hbar.brainfoundry.ai)",
+            "Accept": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
