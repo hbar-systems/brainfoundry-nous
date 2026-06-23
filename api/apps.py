@@ -38,6 +38,9 @@ from pydantic import BaseModel, Field
 BRAIN_APPS_DIR = Path(os.environ.get("BRAIN_APPS_DIR", "/app/brain-apps"))
 SCHEMA_PATH = Path(__file__).parent / "schemas" / "brain-app.schema.json"
 INSTALLED_JSON = BRAIN_APPS_DIR / "installed.json"
+# Template config (tracked, read-only at runtime): the default app shelf a
+# FRESH brain pre-installs on first run. See seed_default_apps().
+DEFAULTS_JSON = BRAIN_APPS_DIR / "defaults.json"
 
 # Built-in nav entries the brain ships with. The UI Nav renders ONLY these —
 # installed apps live behind the single `_apps` hub at /apps, which lists
@@ -314,6 +317,131 @@ def _chown_existing_app_dirs() -> None:
         if child.name.startswith(".") or not child.is_dir():
             continue
         _chown_to_host_owner(child)
+
+
+# ---------- pre-installed default shelf (first-run only) ----------
+
+def _load_defaults() -> list[dict]:
+    """The curated default app set from brain-apps/defaults.json (template
+    config). Absent/unreadable -> no defaults (a brain with no manifest simply
+    ships empty)."""
+    if not DEFAULTS_JSON.exists():
+        return []
+    try:
+        data = json.loads(DEFAULTS_JSON.read_text())
+        return [a for a in (data.get("apps") or []) if a.get("repo_url")]
+    except Exception as e:
+        print(f"[brain-apps] defaults.json unreadable, skipping shelf: {e}", flush=True)
+        return []
+
+
+def _install_default(repo_url: str, ref: str, installed_ids: set[str],
+                     installed_routes: set) -> dict | None:
+    """Clone + validate + register one default app. Mirrors install_app's core
+    (minus the HTTP response + hot-mount; the startup mount loop mounts it).
+    Returns the installed.json entry, or None if the app is already present /
+    its route collides (install-if-absent). Raises on clone/validate failure so
+    the caller can log-and-continue."""
+    BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
+    staging = BRAIN_APPS_DIR / f".seed-{secrets.token_hex(8)}"
+    try:
+        commit_sha = _git_clone(repo_url, ref, staging)
+        _chown_to_host_owner(staging)
+        manifest = _read_manifest(staging)
+        _validate_manifest(manifest)
+        app_id = manifest["id"]
+        route = manifest["tab"]["route"]
+        if app_id in installed_ids:
+            shutil.rmtree(staging, ignore_errors=True)
+            return None
+        if route in RESERVED_ROUTES or route in installed_routes:
+            shutil.rmtree(staging, ignore_errors=True)
+            print(f"[brain-apps] default {app_id} route {route} conflicts; skipped", flush=True)
+            return None
+        final_dir = BRAIN_APPS_DIR / app_id
+        if final_dir.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+            return None
+        staging.rename(final_dir)
+        _chown_to_host_owner(final_dir)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    # token_hash kept for parity with install_app; the raw token is discarded —
+    # bridge auth is host-side (the host mints a loop permit with BRAIN_API_KEY),
+    # so a pre-installed app needs no returned-once token to function.
+    return {
+        "id": app_id,
+        "name": manifest["name"],
+        "version": manifest["version"],
+        "description": manifest["description"],
+        "license": manifest["license"],
+        "repo": manifest["repo"],
+        "commit_sha": commit_sha,
+        "installed_at": _now_iso(),
+        "enabled": True,
+        "tab": manifest["tab"],
+        "entries": manifest.get("entries", {}),
+        "permissions": manifest.get("permissions", []),
+        "requires_layers": manifest.get("requires_layers", []),
+        "requires_endpoints": manifest.get("requires_endpoints", []),
+        "token_hash": _hash_token(secrets.token_urlsafe(32)),
+        "preinstalled": True,
+    }
+
+
+def seed_default_apps() -> None:
+    """First-run-only: pre-install the curated shelf on a FRESH brain.
+
+    Safety contract (project_rsync_installed_json_hazard):
+    - Runs at most once per brain, gated by a `defaults_seeded` marker written
+      into installed.json — so a later operator uninstall is never undone by a
+      redeploy.
+    - NEVER clobbers a populated installed.json. An established brain (apps
+      already present) is simply marked seeded with NOTHING installed, so a
+      deploy can never inject the shelf onto a brain that already has apps.
+    - install-if-absent + fail-soft per app: a clone/validate failure for one
+      default is logged and skipped, never blocks startup or the other defaults.
+    - Metadata only: no model calls at provision/first-run (per the prompt's
+      cost guardrail). Apps call the brain API on USE, gated as usual.
+    """
+    try:
+        defaults = _load_defaults()
+        if not defaults:
+            return
+        state = _load_installed()
+        if state.get("defaults_seeded"):
+            return  # already ran once on this brain — never again
+        existing = state.get("apps", [])
+        if existing:
+            # Populated/established brain: mark seeded, install nothing.
+            state["defaults_seeded"] = _now_iso()
+            _save_installed(state)
+            print("[brain-apps] defaults: brain already populated — marked seeded, no install", flush=True)
+            return
+        # Fresh brain: install the shelf.
+        installed_ids = {a["id"] for a in existing}
+        installed_routes = {a.get("tab", {}).get("route") for a in existing}
+        added = 0
+        for d in defaults:
+            try:
+                entry = _install_default(d["repo_url"], d.get("ref", "HEAD"),
+                                         installed_ids, installed_routes)
+            except Exception as e:
+                print(f"[brain-apps] default install failed for {d.get('repo_url')}: {e}", flush=True)
+                continue
+            if entry is None:
+                continue
+            existing.append(entry)
+            installed_ids.add(entry["id"])
+            installed_routes.add(entry["tab"].get("route"))
+            added += 1
+        state["apps"] = existing
+        state["defaults_seeded"] = _now_iso()
+        _save_installed(state)
+        print(f"[brain-apps] seeded {added} default app(s) on fresh brain", flush=True)
+    except Exception as e:
+        print(f"[brain-apps] seed_default_apps skipped: {e}", flush=True)
 
 
 # ---------- router ----------

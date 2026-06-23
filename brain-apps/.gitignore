@@ -9,3 +9,8 @@ installed.json
 # Track the README and this gitignore itself.
 !README.md
 !.gitignore
+
+# Track the default-shelf manifest — template config, NOT runtime state. It is
+# the source of truth for which apps a fresh brain pre-installs (read-only at
+# runtime; seed_default_apps() never writes it).
+!defaults.json

@@ -1758,6 +1758,15 @@ try:
 except Exception as e:
     print(f"[startup] brain_apps router mount skipped: {e}", flush=True)
 
+# Pre-install the curated default app shelf on a FRESH brain (first-run only,
+# install-if-absent, never clobbers a populated installed.json). Runs BEFORE the
+# mount loop below so seeded apps get mounted in the same startup. Fail-soft.
+try:
+    from api.apps import seed_default_apps as _seed_default_apps
+    _seed_default_apps()
+except Exception as e:
+    print(f"[startup] brain_apps seed_default_apps skipped: {e}", flush=True)
+
 # Mount every previously-installed app's UI bundle and (optional) API router.
 # Reads brain-apps/installed.json and walks each enabled entry. Failures are
 # logged per app and do not block startup.
