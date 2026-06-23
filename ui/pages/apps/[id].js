@@ -300,7 +300,7 @@ export default function AppHost() {
         // Pointing at /index.html keeps the iframe document.location
         // anchored in the app's directory so relative URLs resolve right.
         src={`/api/bf/apps/${appInfo.id}/index.html`}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts allow-same-origin allow-downloads"
         style={{
           width: '100%',
           height: '100%',
