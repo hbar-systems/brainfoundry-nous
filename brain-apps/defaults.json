@@ -1,10 +1,12 @@
 {
   "dialect": "brain-apps-defaults/v1",
-  "comment": "The curated shelf a FRESH brain arrives with. Pre-installed on first run only (install-if-absent); NEVER clobbers a populated installed.json — see seed_default_apps() in api/apps.py and project_rsync_installed_json_hazard. Single source of truth — edit this list to change the default shelf. Each app installs through the normal GitHub-URL brain-app path (clone -> validate manifest -> register). `id` is the manifest id (used for the install-if-absent precheck); the authoritative id/route/version come from each repo's brain-app.yaml at install time. Domain apps (poker/quantum/health/arztbrief) stay OFF this consumer shelf.",
+  "comment": "The curated shelf a FRESH PERSONAL brain arrives with. Pre-installed on first run only (install-if-absent); NEVER clobbers a populated installed.json — see seed_default_apps() in api/apps.py and project_rsync_installed_json_hazard. Single source of truth — edit this list to change the default shelf. Each app installs through the normal GitHub-URL brain-app path (clone -> validate manifest -> register). `id` is the manifest id (used for the install-if-absent precheck); the authoritative id/route/version come from each repo's brain-app.yaml at install time. Shelf = four memory-native apps (daybook/thread/self-portrait/ink) + poker + quantum for delight/breadth (operator-confirmed 2026-06-23). HEALTH/clinical apps (arztbrief/letter-ingestion) stay OFF the personal shelf — they belong to a per-brain-type hbar.health ORG-brain shelf (deferred, not built yet).",
   "apps": [
     { "id": "daybook",             "repo_url": "https://github.com/hbar-systems/brain-app-daybook",             "ref": "HEAD" },
     { "id": "thread-consolidator", "repo_url": "https://github.com/hbar-systems/brain-app-thread-consolidator", "ref": "HEAD" },
     { "id": "self-portrait",       "repo_url": "https://github.com/hbar-systems/brain-app-self-portrait",       "ref": "HEAD" },
-    { "id": "hbar-ink",            "repo_url": "https://github.com/hbar-systems/hbar.ink",                       "ref": "HEAD" }
+    { "id": "hbar-ink",            "repo_url": "https://github.com/hbar-systems/hbar.ink",                       "ref": "HEAD" },
+    { "id": "poker-journal",       "repo_url": "https://github.com/hbar-systems/hbar-poker-journal",            "ref": "HEAD" },
+    { "id": "quantum-room",        "repo_url": "https://github.com/hbar-systems/hbar-university-quantum-room",  "ref": "HEAD" }
   ]
 }
