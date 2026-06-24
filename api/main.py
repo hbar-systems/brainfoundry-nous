@@ -1328,7 +1328,10 @@ Return ONLY a single JSON object — no prose before or after, no code fences:
   "rationale": "one sentence summarizing the overall scheme"
 }}"""
 
-    model = settings_store.get_active_model() or os.getenv("DEFAULT_MODEL") or "llama3.2:3b"
+    # Guarded resolver (BYOK fallback + drops an uninstalled-ollama stale pin) —
+    # same fix as /memory/store/propose; the raw get_active_model() chain 502'd
+    # this classify call on a stale model pin. (NOUS item 10 finding, fixed.)
+    model = _providers.default_model()
     try:
         raw = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=4096)
     except Exception as e:
@@ -6601,7 +6604,12 @@ async def memory_store_propose(req: MemoryStoreProposeRequest, api_key: str = De
     if not content:
         raise HTTPException(status_code=422, detail={"error": "empty_content"})
 
-    model = req.model or settings_store.get_active_model() or os.getenv("DEFAULT_MODEL") or "llama3.2:3b"
+    # Use the guarded resolver the chat endpoints use (default_model): it falls
+    # back to a BYOK frontier model and, crucially, drops a stale active-model
+    # pin that names an ollama model which isn't actually installed. The raw
+    # get_active_model() chain here 404'd the classify call (e.g. an "oss-brain"
+    # pin) and 502'd the whole propose. (NOUS item 10 finding, fixed.)
+    model = req.model or _providers.default_model()
 
     # The prompt lists the canonical storage layers (E/S/P) plus the
     # operator-facing organizational layer namespace; the model is told to
