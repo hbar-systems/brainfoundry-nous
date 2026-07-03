@@ -38,6 +38,11 @@ services:
       - KERNEL_RATE_LIMIT_WINDOW=60
       - PUBLIC_RATE_LIMIT_MAX=${PUBLIC_RATE_LIMIT_MAX:-10}
       - PUBLIC_RATE_LIMIT_WINDOW=${PUBLIC_RATE_LIMIT_WINDOW:-60}
+      # TRUST_PROXY_HEADERS: when true, public-surface rate limiting trusts the
+      # LAST hop of X-Forwarded-For (set ONLY behind a trusted proxy like Caddy
+      # that appends the real client IP). Default false = ignore the header and
+      # use the transport peer, so a directly-reachable brain can't be spoofed.
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
       - REDIS_URL=redis://redis:6379/0
       - DEV_ENABLE_MEMORY_APPEND=0
       - BRAIN_ID=${BRAIN_ID:-my-brain-01}
@@ -65,9 +70,10 @@ services:
       - PUBLIC_CHAT_SCOPE=${PUBLIC_CHAT_SCOPE:-}
       # PUBLIC_CHAT_DAILY_MAX: brain-wide daily cap on /v1/public/chat
       # calls. Counts ALL IPs combined; bypasses-by-IP-rotation are
-      # caught here. Default 0 = unlimited (backward compat). Returns
+      # caught here. Default 2000 (safe non-zero ceiling). Set to 0 to
+      # explicitly opt into unlimited (local-model brains only). Returns
       # 503 with retry-to-UTC-midnight when exceeded.
-      - PUBLIC_CHAT_DAILY_MAX=${PUBLIC_CHAT_DAILY_MAX:-0}
+      - PUBLIC_CHAT_DAILY_MAX=${PUBLIC_CHAT_DAILY_MAX:-2000}
       # TURNSTILE_SECRET_KEY: when set, /v1/public/chat requires a
       # Cloudflare Turnstile token verified against siteverify.
       # Stops bot loops. Unset = no Turnstile gate (default, nous behavior).
@@ -121,19 +127,16 @@ services:
       - ./prepared_docs:/app/prepared_docs:rw
       - api_data:/app/data
       - api_runtime:/app/runtime
-      # /admin/update wiring: docker socket + brain repo at the *same* host path
-      # inside the container. The "same path" trick is required so that when
-      # `docker compose up -d --build` runs from inside, the daemon resolves the
-      # bind-mount paths in this file consistently with how it sees them on the
-      # host. Security note: mounting docker.sock gives the api container
-      # root-equivalent access to the host. That's an acceptable trade in the
-      # single-tenant brain model (the owner already has root via SSH); to opt
-      # out, comment these two mounts and the Update tab will surface a clear
-      # "not configured" error while SSH-driven updates keep working.
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${BRAIN_HOST_DIR:-/home/hbar/brain}:${BRAIN_HOST_DIR:-/home/hbar/brain}:rw
-      # For live-reload during development, copy docker-compose.override.yml.example
-      # to docker-compose.override.yml — it bind-mounts ./api over /app/api.
+      # NOTE: the in-console "Update" tab (/admin/update) is OFF by default.
+      # Enabling it requires mounting /var/run/docker.sock into this container,
+      # which grants root-equivalent access to the host — an opt-in, not a
+      # default. To enable, copy docker-compose.override.yml.example to
+      # docker-compose.override.yml (it also carries the same-path brain-repo
+      # mount /admin/update needs). Without it, /admin/update returns a clear
+      # "not configured" 503 and you update via `scripts/update_brain.sh` over
+      # SSH. See docs/DEPLOYMENT.md § "Enabling in-console updates".
+      #
+      # docker-compose.override.yml is also where dev live-reload of ./api lives.
     networks:
       - llm-network
     restart: unless-stopped

@@ -1,15 +1,40 @@
-# Development override — copy this file to docker-compose.override.yml
-# to enable live-reload of the api container from your working tree.
+# Local override — copy this file to docker-compose.override.yml to enable
+# either (or both) of the opt-in capabilities below. Docker Compose auto-loads
+# docker-compose.override.yml when present and merges it over docker-compose.yml.
 #
 #   cp docker-compose.override.yml.example docker-compose.override.yml
 #
-# Docker Compose auto-loads docker-compose.override.yml when present.
-# DO NOT commit docker-compose.override.yml (it is gitignored).
+# DO NOT commit docker-compose.override.yml (it is gitignored). Keep only the
+# blocks you actually want and delete the rest.
 #
-# In production, leave this file as .example — the base docker-compose.yml
-# bakes api code into the image and does not bind-mount the host directory.
+# ─────────────────────────────────────────────────────────────────────────────
+# 1) Dev live-reload
+#    Bind-mounts your working tree ./api over /app/api so edits are picked up
+#    without rebuilding the image. Dev convenience only — never in production
+#    (the base compose bakes api code into the image on purpose).
+#
+# 2) In-console updates (/admin/update)  ⚠ SECURITY-SENSITIVE OPT-IN
+#    The "Update" tab shells out to `docker compose up -d --build` from inside
+#    the api container. That needs TWO mounts:
+#      - /var/run/docker.sock — gives this container root-equivalent control of
+#        the host Docker daemon. Only mount it if you accept that the api
+#        process can then do anything root can on the host. In the single-tenant
+#        brain model the owner already has host root via SSH, so this is a
+#        convenience trade, not a new trust boundary — but it is OFF by default.
+#      - the brain repo bind-mounted at the SAME host path inside the container,
+#        so the daemon resolves this file's bind-mount paths consistently when
+#        the rebuild runs from within. Set BRAIN_HOST_DIR in .env to your repo's
+#        absolute host path (default /home/hbar/brain).
+#    With these absent, /admin/update returns a clear "not configured" 503 and
+#    you update via `scripts/update_brain.sh` over SSH — the recommended path.
 
 services:
   api:
     volumes:
+      # --- (1) dev live-reload (active in this example; comment out if you only
+      #         want the /admin/update opt-in below) ---
       - ./api:/app/api
+
+      # --- (2) in-console /admin/update opt-in: uncomment BOTH to enable ---
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - ${BRAIN_HOST_DIR:-/home/hbar/brain}:${BRAIN_HOST_DIR:-/home/hbar/brain}:rw

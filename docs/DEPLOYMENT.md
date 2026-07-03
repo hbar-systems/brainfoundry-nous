@@ -124,6 +124,29 @@ with the chown.
 integration credentials, and tasks live in the `api_runtime` named volume
 (`/app/runtime`), not in the image — `docker compose up --build` preserves them.
 
+### Enabling in-console updates (`/admin/update`)
+
+The SSH flow above is the recommended way to update. There is also an optional
+"Update" tab in the console that runs the same `docker compose up -d --build`
+from *inside* the api container. **It is OFF by default** because it requires
+mounting `/var/run/docker.sock` into the api container, which grants that
+container root-equivalent control of the host Docker daemon.
+
+If you accept that trade (in the single-tenant brain model the owner already has
+host root via SSH), enable it by copying the override example and uncommenting
+the two `/admin/update` mounts:
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+# edit it: uncomment the docker.sock + ${BRAIN_HOST_DIR} mounts under services.api.volumes
+# set BRAIN_HOST_DIR in .env to this repo's absolute host path if it isn't /home/hbar/brain
+docker compose up -d
+```
+
+Until those mounts are present, `POST /admin/update` returns a structured `503`
+(`preflight_error` from `_update_preflight()`) explaining what's missing, and the
+console degrades gracefully — SSH-driven updates keep working.
+
 ## Troubleshooting
 
 **"I deployed but nothing changed."** Almost always the root-owned-repo issue
