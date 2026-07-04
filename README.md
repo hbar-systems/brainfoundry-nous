@@ -1,17 +1,49 @@
-# brainfoundry-node
+# BrainFoundry — a self-hosted sovereign AI brain
 
-The canonical brain node runtime for [BrainFoundryOS](https://brainfoundry.ai).
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.9.0-informational.svg)](VERSION)
+[![Stack](https://img.shields.io/badge/stack-FastAPI%20%2B%20Next.js%20%2B%20pgvector-success.svg)](#stack)
 
-Clone this to run your own sovereign personal brain.
+**BrainFoundry is an AI brain you run yourself.** It has persistent memory of your
+documents (RAG over Postgres/pgvector), talks to whatever models you choose
+(local Ollama or your own API keys), and keeps everything on *your* server —
+no vendor sees your data. Governance, an append-only audit log, and optional
+federation with other brains are built in. It's for anyone who wants a private,
+personal AI with real memory instead of a chat box that forgets.
+
+<!-- TODO(demo): replace with a real demo GIF — chat + knowledge + kernel tabs -->
+<!-- ![BrainFoundry demo](docs/assets/demo.gif) -->
+_Demo GIF coming soon — see the live public demo linked below._
+
+## Quickstart
+
+```bash
+git clone https://github.com/hbar-systems/brainfoundry-nous.git my-brain
+cd my-brain
+cp .env.example .env      # then edit: set BRAIN_* identity + `openssl rand -hex 32` secrets
+docker compose up -d      # starts api, BrainKernel, Postgres, Ollama, Redis, UI
+```
+
+Then open the console at `http://localhost:3010` and start chatting. Ingest your
+own documents with `python scripts/ingest_folder.py /path/to/docs`. Full walk-
+through (including the persona file that makes the brain *yours*) is in
+[Spin up your own brain](#spin-up-your-own-brain) below.
+
+**Links:** [brainfoundry.ai](https://brainfoundry.ai) ·
+[hbar.systems](https://hbar.systems) ·
+public demo: `https://nous.brainfoundry.ai` — a live BrainFoundry brain named *nous* _(placeholder — confirm before launch)_
 
 ---
 
 ## What this is
 
-A full-stack AI brain node. Runs on your server, connects to the models you choose,
-stores your knowledge. You own it. Nobody else has access.
+A full-stack AI brain you run on your own server. It connects to the models you
+choose, stores your knowledge, and answers with memory of it. You own it. Nobody
+else has access. (Product name: **BrainFoundry**; the governance kernel is
+**BrainKernel**, named `nodeos` in the container and env vars — see
+[docs/NAMING.md](docs/NAMING.md).)
 
-### Trust model (v0.6) — read this before you run it in production
+### Trust model (v0.9) — read this before you run it in production
 
 This repo is the **reference implementation**, not a polished appliance.
 BrainKernel is the governance kernel (named `nodeos` in the container and env vars).
@@ -38,14 +70,14 @@ The guarantees it gives you today are:
 - **Append-only audit log.** Every kernel command and every model call is
   recorded.
 
-Known v0.6 scope limits: `context.set` / `context.clear` mutate an in-process
+Known scope limits (v0.9): `context.set` / `context.clear` mutate an in-process
 dict that resets on container restart and is not yet routed through NodeOS.
 Bulk offline ingestion via `scripts/ingest_folder.py` writes directly to the
 database for the single-owner bootstrap case. See `SECURITY.md` and Section
 8 of `docs/SELF_HOSTING_GUIDE.md` for the full honest scope.
 
 
-**Stack:**
+## Stack
 - FastAPI — chat, RAG, embeddings, identity
 - BrainKernel — governance kernel (loop permits, mutation gate, append-only audit)
 - PostgreSQL + pgvector — vector memory
