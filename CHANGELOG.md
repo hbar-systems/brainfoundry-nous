@@ -6,6 +6,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- security: **pre-launch hardening (release-prep).** Fail-closed on a weak
+  Postgres password in non-dev; `PUBLIC_CHAT_DAILY_MAX` now defaults to 2000
+  (was unlimited); `X-Forwarded-For` is only trusted when `TRUST_PROXY_HEADERS=true`
+  (default false); `/var/run/docker.sock` removed from the default compose file
+  (in-console `/admin/update` is now an opt-in via `docker-compose.override.yml`).
+  See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for upgrade impact. New guards in
+  `tests/test_release_hardening.py`. Naming standardized in prose (BrainFoundry
+  product / BrainKernel kernel; `nous` reserved as an instance name) with a
+  deferred code-rename table in [`docs/NAMING.md`](docs/NAMING.md).
 - feat: **persistent "your mind" panel + dashboard value card (onboarding v0.1).**
   The live fact panel is no longer onboarding-only — it's an always-on,
   dismissable, re-openable window into what your brain knows about you. A brain
