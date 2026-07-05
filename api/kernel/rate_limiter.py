@@ -54,19 +54,21 @@ class PublicRateLimiter:
     1. **Per-IP / per-window** — PUBLIC_RATE_LIMIT_MAX (default 10) over
        PUBLIC_RATE_LIMIT_WINDOW (default 60s). Catches a single abuser.
 
-    2. **Brain-wide daily cap** — PUBLIC_CHAT_DAILY_MAX (default 0 = unlimited).
+    2. **Brain-wide daily cap** — PUBLIC_CHAT_DAILY_MAX (default 2000).
        Counts all /v1/public/chat calls regardless of IP, resets at UTC
        midnight. Catches distributed-IP attacks that bypass per-IP rate-limit
        (botnets, IP rotation). Returns 503 with retry-after = seconds-to-UTC-
-       midnight when exceeded. Default 0 preserves existing behavior; org
-       brains opt in by setting PUBLIC_CHAT_DAILY_MAX in their .env.
+       midnight when exceeded. The default is a safe non-zero ceiling so a
+       fresh public brain is never accidentally uncapped; set PUBLIC_CHAT_DAILY_MAX=0
+       to explicitly opt into unlimited (local-model brains only), or raise it
+       for a high-traffic org brain.
     """
 
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "")
         self.max_hits = int(os.getenv("PUBLIC_RATE_LIMIT_MAX", "10"))
         self.window = int(os.getenv("PUBLIC_RATE_LIMIT_WINDOW", "60"))
-        self.daily_max = int(os.getenv("PUBLIC_CHAT_DAILY_MAX", "0"))
+        self.daily_max = int(os.getenv("PUBLIC_CHAT_DAILY_MAX", "2000"))
         self._client: Optional[redis.Redis] = None
 
     def _get_client(self) -> Optional[redis.Redis]:

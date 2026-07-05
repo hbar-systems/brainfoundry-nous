@@ -73,6 +73,27 @@ if BRAIN_ENV != "dev" and not _BRAIN_API_KEY_STARTUP:
         "Generate one with: openssl rand -hex 32"
     )
 
+# Postgres password fail-closed. In the api container the credential arrives
+# embedded in DATABASE_URL (compose builds it from POSTGRES_PASSWORD), so we
+# parse the password out of the URL rather than reading POSTGRES_PASSWORD —
+# which isn't forwarded to this service. An empty or "postgres" default in a
+# non-dev deployment is a launch blocker: the db port is bound to localhost,
+# but a weak default is the first thing an attacker on the host tries.
+_WEAK_DB_PASSWORDS = {"", "postgres"}
+if BRAIN_ENV != "dev":
+    from urllib.parse import urlsplit, unquote
+
+    _db_url = os.getenv("DATABASE_URL", "")
+    if _db_url:
+        _db_pw = unquote(urlsplit(_db_url).password or "")
+        if _db_pw in _WEAK_DB_PASSWORDS:
+            raise RuntimeError(
+                "Startup refused: the Postgres password is empty or the default "
+                "'postgres' in a non-dev environment. Set POSTGRES_PASSWORD to a "
+                "strong value in .env (it flows into DATABASE_URL). "
+                "Generate one with: openssl rand -hex 32"
+            )
+
 
 try:
     # Package layout
@@ -2992,8 +3013,10 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
 #      operator's brain_persona.local.md. The personal persona must never leak
 #      onto the public surface.
 #
-# The endpoint reads the LAST hop of X-Forwarded-For (the IP Caddy itself
-# appended) — not the first, which is client-controlled and trivially spoofed.
+# For rate limiting the endpoint uses the real transport peer by default. It
+# only honors X-Forwarded-For (last hop, appended by a trusted proxy like Caddy)
+# when TRUST_PROXY_HEADERS is enabled — the first hop is client-controlled and
+# trivially spoofed, so a directly-reachable brain must never trust the header.
 # ============================================================================
 
 try:
@@ -3140,19 +3163,25 @@ _PUBLIC_MAX_TOKENS_OUT = 1024
 
 
 def _public_client_ip(request: Request) -> str:
-    """Return the IP Caddy itself appended to X-Forwarded-For (last hop).
+    """Return the client IP used for public-surface rate limiting.
 
-    Earlier entries in the XFF chain are client-controlled and can be
-    spoofed. Caddy's trusted_proxies block must be configured upstream so
-    Caddy adds the real client IP as the LAST entry; this function reads
-    that entry. Falls back to request.client.host if the header is absent
-    (direct local hits).
+    X-Forwarded-For is only trusted when TRUST_PROXY_HEADERS is enabled —
+    set that ONLY when a trusted reverse proxy (e.g. Caddy) sits in front and
+    appends the real client IP as the LAST hop. In that mode this reads the
+    last hop; earlier entries are client-controlled and trivially spoofed.
+
+    When TRUST_PROXY_HEADERS is false (the default, and the correct setting
+    for any deployment reachable directly), the header is ignored entirely and
+    the real transport peer (request.client.host) is used. This prevents a
+    directly-reachable brain from being tricked into rate-limiting a spoofed
+    IP by an attacker who simply sets their own X-Forwarded-For.
     """
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        last = xff.split(",")[-1].strip()
-        if last:
-            return last
+    if os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("true", "1", "yes"):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            last = xff.split(",")[-1].strip()
+            if last:
+                return last
     return request.client.host if request.client else "unknown"
 
 
@@ -3721,7 +3750,10 @@ def request_upload_permit(api_key: str = Depends(get_api_key)):
 # in the Next.js BFF (ui/pages/api/bf/[...path].js:41), surfacing as a 502
 # "TypeError: fetch failed" toast. Persisting text shaves the pypdf re-parse
 # (~60s) AND avoids re-sending 62MB of bytes over the wire on approve.
-PROPOSAL_TEXT_DIR = Path("/app/runtime/proposal_texts")
+# Derived from RUNTIME_DIR (the api_runtime volume, default /app/runtime) so the
+# path stays consistent with the rest of the runtime state and is overridable via
+# BRAIN_RUNTIME_DIR for off-container test runs. Prod default is unchanged.
+PROPOSAL_TEXT_DIR = RUNTIME_DIR / "proposal_texts"
 PROPOSAL_TEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
