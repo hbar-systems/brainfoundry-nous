@@ -1,12 +1,41 @@
-# Release notes — v0.9.0
+# Release notes — v0.9.1
 
-Date: 2026-07-07
+Date: 2026-07-08
 
-**Theme: pre-launch security hardening + a quickstart that runs as pasted.**
-This release makes the default configuration safe to expose publicly and makes
-a fresh clone come up with one command. Several defaults changed to fail closed;
-read the upgrade notes before deploying, because two of them can stop a
-mis-configured brain from starting (by design).
+**Theme: launch pre-flight — a quickstart that runs as pasted, plus a hardened
+public demo surface.** 0.9.1 sits on top of the 0.9.0 security release: it makes
+a fresh clone come up with one command and closes a prompt-injection gap on the
+unauthenticated public chat path. The 0.9.0 hardening (which made the default
+config safe to expose publicly) is summarized below too, since 0.9.1 is the
+first release that carries the whole launch-ready set. Several 0.9.0 defaults
+changed to fail closed; read the upgrade notes before deploying, because two of
+them can stop a mis-configured brain from starting (by design).
+
+## New in 0.9.1
+
+- **Public-chat prompt-injection wrapper.** `/v1/public/chat` and
+  `/v1/federation/query` now demote retrieved documents AND caller-supplied
+  history to fenced, do-not-follow untrusted-context blocks (`_build_public_prompt`
+  → `api/security/untrusted.py`) — the same treatment `/chat/rag` already gave
+  retrieved docs. Closes the gap where a stranger could plant instructions in a
+  public doc or forge conversation turns to make the demo brain recite its
+  persona or claim to be another vendor. Covered by
+  `tests/test_public_chat_injection.py`.
+- **One-command quickstart that runs as pasted on a clean VM.**
+  `scripts/start_docker.sh` creates `.env`, fills the four required secrets
+  (`openssl rand -hex 32`) so the api no longer crash-loops on an empty
+  `BRAIN_IDENTITY_SECRET`, builds, pulls the local models (`llama3.2:3b` + `:1b`),
+  and health-waits. README Quickstart is now `git clone` → `cd` →
+  `./scripts/start_docker.sh`, and "start chatting" returns a local-model reply
+  with no cloud key. README also leads with "private, self-hosted AI with real
+  memory", un-flags the live `nous.brainfoundry.ai` demo, and genericizes the
+  personal `/home/hbar/brain` default.
+
+## Carried from 0.9.0 — pre-launch security hardening
+
+This release makes the default configuration safe to expose publicly. Several
+defaults changed to fail closed; read the upgrade notes before deploying,
+because two of them can stop a mis-configured brain from starting (by design).
 
 ## ⚠ Upgrade impact — read before you deploy
 
@@ -37,16 +66,8 @@ mis-configured brain from starting (by design).
    updates (`scripts/update_brain.sh`) are unaffected and remain the recommended
    path. See `docs/DEPLOYMENT.md`.
 
-## Security hardening
+## Security hardening (0.9.0)
 
-- **Public-chat prompt-injection wrapper** (`api/main.py` `_build_public_prompt`,
-  `api/security/untrusted.py`). The unauthenticated `/v1/public/chat` and the
-  machine `/v1/federation/query` surfaces now demote retrieved documents AND
-  caller-supplied history to fenced, do-not-follow untrusted-context blocks —
-  the same treatment `/chat/rag` already gave retrieved docs — closing the gap
-  where a stranger could plant instructions in a public doc or forge
-  conversation turns to make the demo brain recite its persona or claim to be
-  another vendor. Covered by `tests/test_public_chat_injection.py`.
 - **Fail-closed Postgres password** in non-dev (`api/main.py`). Mirrors the
   existing `NODEOS_SIGNING_SECRET` / `BRAIN_API_KEY` startup refusals.
 - **Safe public daily cap default** (`api/kernel/rate_limiter.py`): 2000/day.
@@ -55,17 +76,6 @@ mis-configured brain from starting (by design).
   spoofed IP.
 - **`docker.sock` removed from the default compose file** — root-equivalent host
   access is now an explicit, documented opt-in.
-
-## Quickstart
-
-- **One-command bootstrap that runs as pasted on a clean VM.**
-  `scripts/start_docker.sh` creates `.env` from `.env.example` and fills the four
-  required secrets (`openssl rand -hex 32`), so the api no longer crash-loops on
-  an empty `BRAIN_IDENTITY_SECRET`; then it builds, pulls the local models the
-  brain answers with (`llama3.2:3b` + `:1b`), and waits for health. The README
-  Quickstart is now `git clone` → `cd` → `./scripts/start_docker.sh`, and "start
-  chatting" returns a local-model reply with no cloud key. An existing `.env` is
-  never overwritten.
 
 ## Docs & naming
 

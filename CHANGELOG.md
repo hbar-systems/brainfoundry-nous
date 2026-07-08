@@ -4,7 +4,11 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## 0.9.0 — 2026-07-07
+## 0.9.1 — 2026-07-08 — launch pre-flight
+
+Ships on top of the 0.9.0 security release: the quickstart now runs as pasted on
+a clean VM, and the unauthenticated public demo surface is hardened against
+prompt injection.
 
 - security: **public-chat prompt-injection hardening (launch pre-flight).** The
   unauthenticated `/v1/public/chat` (and the machine `/v1/federation/query`)
@@ -26,6 +30,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   with "private, self-hosted AI with real memory", adds a one-line name
   glossary, un-flags the live `nous.brainfoundry.ai` demo, and genericizes the
   personal `/home/hbar/brain` default.
+
+## 0.9.0 — 2026-07-05
+
 - security: **pre-launch hardening (release-prep).** Fail-closed on a weak
   Postgres password in non-dev; `PUBLIC_CHAT_DAILY_MAX` now defaults to 2000
   (was unlimited); `X-Forwarded-For` is only trusted when `TRUST_PROXY_HEADERS=true`

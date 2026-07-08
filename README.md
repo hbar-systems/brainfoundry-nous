@@ -1,7 +1,7 @@
 # BrainFoundry — private, self-hosted AI with real memory
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.0-informational.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.9.1-informational.svg)](VERSION)
 [![Stack](https://img.shields.io/badge/stack-FastAPI%20%2B%20Next.js%20%2B%20pgvector-success.svg)](#stack)
 
 **Run your own AI brain on your own server.** It remembers your documents (RAG
