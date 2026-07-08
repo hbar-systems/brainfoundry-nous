@@ -24,7 +24,7 @@
 #      - the brain repo bind-mounted at the SAME host path inside the container,
 #        so the daemon resolves this file's bind-mount paths consistently when
 #        the rebuild runs from within. Set BRAIN_HOST_DIR in .env to your repo's
-#        absolute host path (default /home/hbar/brain).
+#        absolute host path (the neutral default is /opt/brainfoundry/brain).
 #    With these absent, /admin/update returns a clear "not configured" 503 and
 #    you update via `scripts/update_brain.sh` over SSH — the recommended path.
 
@@ -37,4 +37,4 @@ services:
 
       # --- (2) in-console /admin/update opt-in: uncomment BOTH to enable ---
       # - /var/run/docker.sock:/var/run/docker.sock
-      # - ${BRAIN_HOST_DIR:-/home/hbar/brain}:${BRAIN_HOST_DIR:-/home/hbar/brain}:rw
+      # - ${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}:${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}:rw

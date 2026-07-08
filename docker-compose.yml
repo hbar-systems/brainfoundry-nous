@@ -106,10 +106,13 @@ services:
       - TRIAL_AUDIT_DIR=${TRIAL_AUDIT_DIR:-}
       - TRIAL_BUDGET_PATH=${TRIAL_BUDGET_PATH:-}
       - ONBOARDING_CORPUS_THRESHOLD=${ONBOARDING_CORPUS_THRESHOLD:-}
-      # Host path of this brain repo, used by /admin/update. Default mirrors the
-      # provisioner's checkout location. If your install lives elsewhere, set
-      # BRAIN_HOST_DIR in .env to that absolute host path.
-      - BRAIN_HOST_DIR=${BRAIN_HOST_DIR:-/home/hbar/brain}
+      # Host path of this brain repo, used only by the opt-in /admin/update tab.
+      # Set BRAIN_HOST_DIR in .env to the absolute host path where you cloned
+      # this repo (e.g. /opt/brainfoundry/brain, /srv/brain, or ~/my-brain).
+      # The default below is a neutral placeholder; /admin/update is off unless
+      # you enable it via docker-compose.override.yml, so most installs never
+      # need to touch this.
+      - BRAIN_HOST_DIR=${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}
     depends_on:
       - postgres
       - nodeos
