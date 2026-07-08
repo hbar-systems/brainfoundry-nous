@@ -1,11 +1,12 @@
-# Release notes — v0.9.0 (draft)
+# Release notes — v0.9.0
 
-Date: 2026-07-02 (draft — set on tag)
+Date: 2026-07-07
 
-**Theme: pre-launch security hardening.** This release makes the default
-configuration safe to expose publicly. Several defaults changed to fail
-closed; read the upgrade notes before deploying, because two of them can stop
-a mis-configured brain from starting (by design).
+**Theme: pre-launch security hardening + a quickstart that runs as pasted.**
+This release makes the default configuration safe to expose publicly and makes
+a fresh clone come up with one command. Several defaults changed to fail closed;
+read the upgrade notes before deploying, because two of them can stop a
+mis-configured brain from starting (by design).
 
 ## ⚠ Upgrade impact — read before you deploy
 
@@ -38,6 +39,14 @@ a mis-configured brain from starting (by design).
 
 ## Security hardening
 
+- **Public-chat prompt-injection wrapper** (`api/main.py` `_build_public_prompt`,
+  `api/security/untrusted.py`). The unauthenticated `/v1/public/chat` and the
+  machine `/v1/federation/query` surfaces now demote retrieved documents AND
+  caller-supplied history to fenced, do-not-follow untrusted-context blocks —
+  the same treatment `/chat/rag` already gave retrieved docs — closing the gap
+  where a stranger could plant instructions in a public doc or forge
+  conversation turns to make the demo brain recite its persona or claim to be
+  another vendor. Covered by `tests/test_public_chat_injection.py`.
 - **Fail-closed Postgres password** in non-dev (`api/main.py`). Mirrors the
   existing `NODEOS_SIGNING_SECRET` / `BRAIN_API_KEY` startup refusals.
 - **Safe public daily cap default** (`api/kernel/rate_limiter.py`): 2000/day.
@@ -47,10 +56,24 @@ a mis-configured brain from starting (by design).
 - **`docker.sock` removed from the default compose file** — root-equivalent host
   access is now an explicit, documented opt-in.
 
+## Quickstart
+
+- **One-command bootstrap that runs as pasted on a clean VM.**
+  `scripts/start_docker.sh` creates `.env` from `.env.example` and fills the four
+  required secrets (`openssl rand -hex 32`), so the api no longer crash-loops on
+  an empty `BRAIN_IDENTITY_SECRET`; then it builds, pulls the local models the
+  brain answers with (`llama3.2:3b` + `:1b`), and waits for health. The README
+  Quickstart is now `git clone` → `cd` → `./scripts/start_docker.sh`, and "start
+  chatting" returns a local-model reply with no cloud key. An existing `.env` is
+  never overwritten.
+
 ## Docs & naming
 
-- README rewritten: what/for-whom/quickstart up top, badges, demo placeholder,
-  links to brainfoundry.ai + hbar.systems + the public demo.
+- README rewritten: leads with "private, self-hosted AI with real memory", a
+  one-line name glossary, one-command quickstart, badges, and the live
+  `nous.brainfoundry.ai` demo (un-flagged); governance/federation moved below
+  the fold. Persona step points at `api/brain_persona.template.md` →
+  `.local.md`; the personal `/home/hbar/brain` default is genericized.
 - Naming standardized in prose: the product is **BrainFoundry**, a single
   install is **a BrainFoundry brain**, and the governance kernel is
   **BrainKernel** (internally `nodeos`). `nous` is reserved as an instance name
@@ -62,6 +85,8 @@ a mis-configured brain from starting (by design).
 
 ## Tests
 
+- New `tests/test_public_chat_injection.py` pins the public-path untrusted
+  wrapper (docs + history demotion, fence-token neutralization, live turn last).
 - New `tests/test_release_hardening.py` guards the daily-cap default, the
   `TRUST_PROXY_HEADERS` gating, and the import-time Postgres-password refusal.
 - Internal: `PROPOSAL_TEXT_DIR` now derives from `RUNTIME_DIR` (override via

@@ -4,8 +4,28 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## Unreleased
+## 0.9.0 — 2026-07-07
 
+- security: **public-chat prompt-injection hardening (launch pre-flight).** The
+  unauthenticated `/v1/public/chat` (and the machine `/v1/federation/query`)
+  prompt builder fed raw retrieved documents and caller-supplied history
+  straight into the local model beside the persona — `THREAT_MODEL.md` §2 claims
+  retrieved docs are demoted, but the public path did not do it. Both are now
+  routed through the Odysseus untrusted-context wrapper
+  (`api/security/untrusted.py`): the do-not-follow policy leads the prompt,
+  retrieved docs are fenced as untrusted data, and caller history is neutralized
+  + fenced so forged `system`/`assistant` turns cannot pose as prompt structure.
+  New guards in `tests/test_public_chat_injection.py`.
+- dx: **one-command quickstart that runs as pasted on a clean VM.**
+  `scripts/start_docker.sh` now creates `.env` and fills the four required
+  secrets with `openssl rand -hex 32` (so the api no longer crash-loops on an
+  empty `BRAIN_IDENTITY_SECRET`), pulls the local models the brain answers with
+  (`llama3.2:3b` + `:1b`), builds, and health-waits. README Quickstart is a
+  single paste (`git clone` → `cd` → `./scripts/start_docker.sh`) and "start
+  chatting" returns a local-model reply with no cloud key. README also leads
+  with "private, self-hosted AI with real memory", adds a one-line name
+  glossary, un-flags the live `nous.brainfoundry.ai` demo, and genericizes the
+  personal `/home/hbar/brain` default.
 - security: **pre-launch hardening (release-prep).** Fail-closed on a weak
   Postgres password in non-dev; `PUBLIC_CHAT_DAILY_MAX` now defaults to 2000
   (was unlimited); `X-Forwarded-For` is only trusted when `TRUST_PROXY_HEADERS=true`
