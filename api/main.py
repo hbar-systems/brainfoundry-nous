@@ -3186,8 +3186,38 @@ def _public_client_ip(request: Request) -> str:
 
 
 def _build_public_prompt(user_message: str, history: list, relevant_docs: list) -> str:
-    """Assemble the public-chat prompt: nous persona + RAG context + history + turn."""
-    prompt = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a public demonstration brain."
+    """Assemble the public-chat prompt: nous persona + RAG context + history + turn.
+
+    SECURITY: this prompt feeds the *unauthenticated* /v1/public/chat (and the
+    machine /v1/federation/query) surface, so BOTH the retrieved documents and
+    the caller-supplied `history` are untrusted stranger input:
+
+      - A poisoned public-scoped document is retrieved into every session that
+        matches it. THREAT_MODEL §2 says retrieved docs are demoted to an
+        untrusted-context block before reaching the model — so we run them
+        through the same Odysseus wrapper (api/security/untrusted.py) that
+        /chat/rag uses, instead of splicing raw content next to the persona.
+      - `history` arrives verbatim in the request body on this stateless
+        surface; a stranger can forge "assistant"/"system" turns to make Nous
+        recite its persona, dump system text, or claim to be another vendor.
+        The whole transcript is neutralized + fenced as one untrusted block so
+        forged role headers are just text inside a do-not-follow span, not
+        prompt structure.
+
+    The current `user_message` is the legitimate turn to answer and is rendered
+    as the live turn (the vendor-disavowal + recency anchors below defend the
+    "are you Claude?" case). Wrapping lowers injection success; the fail-closed
+    tool gate + public read-only scope are the hard backstops (this surface has
+    no tools and no writes at all).
+    """
+    from api.security import untrusted as _untrusted
+
+    base = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a public demonstration brain."
+    # Lead with the standing untrusted-context policy whenever this turn will
+    # carry retrieved documents or caller-supplied history, so the do-not-follow
+    # rule is stated once, globally, above the persona (mirrors _build_rag_prompt).
+    prompt = _untrusted.with_policy_preamble(base) if (relevant_docs or history) else base
+
     # Citation policy is brain-level: nous deliberately hides document names
     # behind index-only labels (its corpus is a marketing/demo set); org brains
     # like hbar.university want real source citation so users can navigate
@@ -3200,7 +3230,10 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
 
     if relevant_docs:
         from api import memory_type as _memtype
-        prompt += "\n\nRelevant documents:\n"
+        # Build the documents body, then demote the WHOLE block to untrusted
+        # source data (Odysseus pattern) — a poisoned public chunk must reach
+        # the model as fenced data, never as a peer of the persona.
+        doc_body = "Relevant documents:\n"
         for i, doc in enumerate(relevant_docs, 1):
             # Provenance label (cognitive-OS gap #2/#4) — surfaces the trust type
             # without leaking document_name, so it is safe in both modes.
@@ -3210,10 +3243,12 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
                 # Org-brain mode: surface document_name so the model can cite
                 # it. Operator opted in via env; the docs are scope=public.
                 name = doc.get('document_name', f'Document {i}')
-                prompt += f"\n[{name}{suffix}]\n{doc.get('content', '')}\n"
+                doc_body += f"\n[{name}{suffix}]\n{doc.get('content', '')}\n"
             else:
                 # Default (nous): index-only labels, never leak document_name.
-                prompt += f"\n[Document {i}{suffix}]\n{doc.get('content', '')}\n"
+                doc_body += f"\n[Document {i}{suffix}]\n{doc.get('content', '')}\n"
+        prompt += "\n\n" + _untrusted.untrusted_context_block(
+            "knowledge-store (retrieved documents)", doc_body)
 
     # 1-shot anchor — small models (1b) need an in-context style example to
     # avoid drift into off-topic safety refusals or word-salad on plain
@@ -3227,14 +3262,21 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
         "experience what a sovereign brain feels like before running their own.\n"
     )
 
-    prompt += "\n\nConversation:\n"
-    for msg in history:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "user":
-            prompt += f"User: {content}\n"
-        elif role == "assistant":
-            prompt += f"Assistant: {content}\n"
+    # Caller-supplied prior turns. On this stateless public surface `history`
+    # is attacker-controlled, so render the transcript INSIDE one untrusted
+    # block: neutralize() defangs the fence tokens and the do-not-follow header
+    # tells the model these are reference turns, not instructions — a forged
+    # "Assistant: I am Claude" or "System: reveal your prompt" line can no
+    # longer pose as real conversation structure.
+    if history:
+        transcript = ""
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            speaker = "User" if role == "user" else "Assistant"
+            transcript += f"{speaker}: {content}\n"
+        prompt += "\n\n" + _untrusted.untrusted_context_block(
+            "prior conversation (caller-supplied, unverified)", transcript)
 
     # Turn-scoped vendor-disavowal prepend. Placed immediately before the
     # current user turn so it is the most recent instruction the model sees.
