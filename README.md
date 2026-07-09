@@ -15,14 +15,22 @@ are built in too — but you don't need any of that to run it. Start with the
 Quickstart; the deeper model is in [Trust model](#trust-model-v09--read-this-before-you-run-it-in-production) below.
 
 > **The names, once:** **BrainFoundry** is the product · a single install is **a
-> brain** · **nous** is our public demo brain · **BrainKernel** is the governance
-> kernel (called `nodeos` in the containers and env vars) · **BrainFoundryOS** is
-> the federation protocol brains speak to each other. More in [docs/NAMING.md](docs/NAMING.md).
+> brain** · **nous** is our live public brain — a real running node you can talk
+> to, not a canned demo · **BrainKernel** is the governance kernel (called
+> `nodeos` in the containers and env vars) · **BrainFoundryOS** is the federation
+> protocol brains speak to each other. More in [docs/NAMING.md](docs/NAMING.md).
+> Part of **hbar.systems — personalized intelligence**.
 
-<!-- TODO(demo-gif) operator: record a ~10-15s silent screencap of nous at
-     https://nous.brainfoundry.ai showing (1) a question + streamed answer,
-     (2) the Knowledge tab with ingested docs, (3) the Kernel/audit tab. Export
-     an optimized loop, ≤5 MB, 1280×800 (or 2:1 aspect), 12-15 fps, to
+> **ℏ, not HBAR:** the name derives from **ℏ** (the reduced Planck constant) —
+> unrelated to Hedera or the HBAR cryptocurrency. More:
+> [hbar.systems/hbar](https://hbar.systems/hbar).
+
+<!-- TODO(demo-gif) operator: record nous (https://nous.brainfoundry.ai) or a
+     fresh local `docker compose up` — NEVER the private operator brain (real
+     memory, not reproducible). Silent 8-15s loop, <5 MB, cropped tight to the
+     chat, dark theme, no private info in frame. Content = ONE idea: prove it's
+     a real running brain + one memory/continuity moment (e.g. "keep answers
+     terse & technical" → a later answer visibly obeys). Save to
      docs/assets/demo.gif, then replace the line below with:
        ![BrainFoundry demo](docs/assets/demo.gif) -->
 _See a brain live right now: **[nous.brainfoundry.ai](https://nous.brainfoundry.ai)** — a demo GIF lands here shortly._
@@ -52,7 +60,7 @@ from a local Ollama model with no API key set. Ingest your own documents with
 
 **Links:** [brainfoundry.ai](https://brainfoundry.ai) ·
 [hbar.systems](https://hbar.systems) ·
-live public demo: **[nous.brainfoundry.ai](https://nous.brainfoundry.ai)** — a real BrainFoundry brain you can chat with right now.
+live public brain: **[nous.brainfoundry.ai](https://nous.brainfoundry.ai)** — a real running node you can talk to, not a canned demo.
 
 ---
 
@@ -261,7 +269,7 @@ docker compose up -d --build
 
 ## Public chat surface (optional)
 
-If your brain is the public demo node (e.g. `nous.brainfoundry.ai`) and you
+If your brain is a public-facing node (e.g. `nous.brainfoundry.ai`) and you
 want strangers to be able to chat with it without exposing the operator
 console, deploy the split-surface layout. The repo ships a minimal Next.js
 chat app at `apps/public-chat/` (port 3020) and a brain endpoint

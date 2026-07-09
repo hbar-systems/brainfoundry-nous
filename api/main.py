@@ -3212,7 +3212,7 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
     """
     from api.security import untrusted as _untrusted
 
-    base = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a public demonstration brain."
+    base = PUBLIC_PERSONA if PUBLIC_PERSONA else "You are Nous, a live public brain in the brainfoundry federation — a real running node, not a canned demo."
     # Lead with the standing untrusted-context policy whenever this turn will
     # carry retrieved documents or caller-supplied history, so the do-not-follow
     # rule is stated once, globally, above the persona (mirrors _build_rag_prompt).
