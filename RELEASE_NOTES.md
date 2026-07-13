@@ -1,17 +1,35 @@
-# Release notes — v0.9.1
+# Release notes — v0.9.2
 
-Date: 2026-07-08
+Date: 2026-07-13
 
-**Theme: launch pre-flight — a quickstart that runs as pasted, plus a hardened
-public demo surface.** 0.9.1 sits on top of the 0.9.0 security release: it makes
-a fresh clone come up with one command and closes a prompt-injection gap on the
-unauthenticated public chat path. The 0.9.0 hardening (which made the default
-config safe to expose publicly) is summarized below too, since 0.9.1 is the
-first release that carries the whole launch-ready set. Several 0.9.0 defaults
-changed to fail closed; read the upgrade notes before deploying, because two of
-them can stop a mis-configured brain from starting (by design).
+**Theme: launch freeze — secrets encrypted at rest, honest security docs.**
+0.9.2 completes the launch pre-flight set started in 0.9.0/0.9.1: the runtime
+settings sidecar (which holds operator-entered secrets) is now encrypted at
+rest, and `SECURITY.md` / `THREAT_MODEL.md` state the kernel-bypass scope
+limits plainly. The 0.9.0 hardening and 0.9.1 pre-flight work are summarized
+below, since 0.9.2 is the release that carries the whole launch-ready set.
+Several 0.9.0 defaults changed to fail closed; read the upgrade notes before
+deploying, because two of them can stop a mis-configured brain from starting
+(by design).
 
-## New in 0.9.1
+## New in 0.9.2
+
+- **Runtime secrets encrypted at rest.** The settings sidecar
+  (`/app/runtime/settings.json`) stores operator-entered secrets — model
+  provider API keys, the IMAP app password, Google OAuth client/tokens, the
+  Telegram token. It was plaintext JSON (THREAT_MODEL item 7); it is now a
+  Fernet token keyed off `BRAIN_IDENTITY_SECRET`, written mode 600. A legacy
+  plaintext sidecar migrates to the encrypted form on first read — no operator
+  action needed. Fail-closed on a rotated/wrong secret (store reads as empty;
+  re-enter secrets in the console). Honest scope in `SECURITY.md`: at-rest
+  protection, not a vault. Covered by `tests/test_settings_store_encryption.py`.
+- **Security docs say the quiet part.** `SECURITY.md` now carries one
+  consolidated paragraph on the two owner-side kernel bypasses
+  (`scripts/ingest_folder.py` direct-to-database ingestion and the
+  session-local `context.set`/`context.clear`), and its governance-scope
+  section is updated from the stale v0.6 label to v0.9.
+
+## Carried from 0.9.1 — launch pre-flight
 
 - **Public-chat prompt-injection wrapper.** `/v1/public/chat` and
   `/v1/federation/query` now demote retrieved documents AND caller-supplied

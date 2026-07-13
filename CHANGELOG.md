@@ -4,6 +4,28 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## 0.9.2 — 2026-07-13 — launch freeze
+
+The freeze-point release the Show HN points at. Completes the pre-flight set:
+secrets at rest + honest security docs. No new features.
+
+- security: **runtime settings sidecar encrypted at rest.** Operator-entered
+  secrets (provider API keys, IMAP app password, Google OAuth client/tokens,
+  Telegram token) lived in plaintext JSON at `/app/runtime/settings.json`
+  (`THREAT_MODEL.md` item 7). The sidecar is now encrypted with a Fernet key
+  derived from `BRAIN_IDENTITY_SECRET` and written mode 600; a legacy
+  plaintext file migrates on first read; a rotated/wrong secret fails closed
+  to an empty store (re-enter secrets in the console). Dev-only fallback:
+  with `BRAIN_IDENTITY_SECRET` unset the store stays plaintext (startup
+  refuses that state outside `DEV_ENABLE_MEMORY_APPEND`). New guards in
+  `tests/test_settings_store_encryption.py`.
+- docs: **consolidated kernel-bypass acknowledgment.** `SECURITY.md` states in
+  one place that `scripts/ingest_folder.py` (direct-to-database offline
+  ingestion) and `context.set`/`context.clear` (in-process session state)
+  bypass BrainKernel; governance-scope labels updated v0.6 → v0.9.
+  `THREAT_MODEL.md` item 7 updated to reflect encryption at rest.
+- chore: strip leftover exec bits from eight first-party `.md` files.
+
 ## 0.9.1 — 2026-07-08 — launch pre-flight
 
 Ships on top of the 0.9.0 security release: the quickstart now runs as pasted on
