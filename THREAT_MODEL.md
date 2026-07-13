@@ -123,11 +123,13 @@ content, never credentials.
    (connecting a server = authorizing its tools), but it means an injected
    document could drive a connected MCP tool. Don't connect an MCP server whose
    tools you wouldn't want the model to call unprompted.
-7. **Integration secrets stored in plaintext.** IMAP app password, Telegram bot
-   token, OAuth refresh token, and MCP auth live in the `/app/runtime/settings.json`
-   sidecar in cleartext (on the operator's own server). Odysseus encrypts these
-   (Fernet); we should too. Never returned by any API, but readable by anyone with
-   host/file access.
+7. **Integration secrets encrypted at rest (v0.9.2).** IMAP app password,
+   Telegram bot token, OAuth refresh token, and MCP auth live in the
+   `/app/runtime/settings.json` sidecar — since v0.9.2 encrypted with a Fernet
+   key derived from `BRAIN_IDENTITY_SECRET`, file mode 600, legacy plaintext
+   migrated on first read (the Odysseus pattern). Residual exposure: anyone
+   holding both the sidecar and `.env` can decrypt — this is at-rest
+   protection, not a vault. Never returned by any API.
 8. **No SSRF guard on caller-supplied LLM endpoints.** No chat endpoint accepts a
    caller-supplied `base_url`. If one is ever added, validate scheme + resolved
    address against an allowlist and block link-local / metadata ranges first.

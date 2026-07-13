@@ -2,20 +2,49 @@
 settings_store.py — runtime mutable settings for a brain.
 
 Stores user-configured state (API keys, memory layers, active model) in a
-sidecar JSON file at /app/runtime/settings.json. Values override matching
+sidecar file at /app/runtime/settings.json. Values override matching
 environment variables in-process, so changes take effect immediately without
 a container restart.
 
+The sidecar holds operator-entered secrets (provider API keys, the IMAP app
+password, Google OAuth client/tokens, the Telegram token), so it is encrypted
+at rest: the JSON payload is wrapped in a Fernet token whose key is derived
+from BRAIN_IDENTITY_SECRET, and the file is written mode 600. A legacy
+plaintext settings.json is migrated to the encrypted form on first read.
+If BRAIN_IDENTITY_SECRET is unset (dev-only — main.py refuses to start
+without it outside DEV_ENABLE_MEMORY_APPEND), the store falls back to
+plaintext. Rotating BRAIN_IDENTITY_SECRET orphans the stored values; the
+store then reads as empty and secrets must be re-entered in the console.
+
 Volume-mount /app/runtime to the host to persist across container rebuilds.
 """
+import base64
+import hashlib
 import os
 import json
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from cryptography.fernet import Fernet
+
 SETTINGS_PATH = Path(os.getenv("SETTINGS_PATH", "/app/runtime/settings.json"))
 _LOCK = threading.Lock()
+
+# _load() runs on every settings read; warn about an undecryptable sidecar
+# once per process, not once per request.
+_WARNED_DECRYPT_FAILURE = False
+
+
+def _fernet() -> Optional[Fernet]:
+    """Fernet keyed off BRAIN_IDENTITY_SECRET, or None when the secret is
+    unset (dev-only plaintext fallback). Read from the env on every call so
+    tests and hydrate-time changes are honored."""
+    secret = os.getenv("BRAIN_IDENTITY_SECRET", "").strip()
+    if not secret:
+        return None
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
 
 # Map from provider slug → env var name. Single source of truth.
 PROVIDER_ENV = {
@@ -41,15 +70,54 @@ def _load() -> Dict[str, Any]:
     if not SETTINGS_PATH.exists():
         return {}
     try:
-        return json.loads(SETTINGS_PATH.read_text())
+        raw = SETTINGS_PATH.read_bytes()
     except Exception:
+        return {}
+    if not raw.strip():
+        return {}
+    if raw.lstrip().startswith(b"{"):
+        # Legacy plaintext sidecar (a Fernet token is base64, never "{").
+        # Parse it, then immediately re-write encrypted so the plaintext copy
+        # stops existing on disk (migrate-on-read).
+        try:
+            data = json.loads(raw.decode())
+        except Exception:
+            return {}
+        if _fernet() is not None:
+            try:
+                _save(data)
+            except Exception:
+                pass
+        return data
+    f = _fernet()
+    if f is None:
+        # Encrypted file but no BRAIN_IDENTITY_SECRET in the environment —
+        # cannot decrypt; read as empty rather than crash the api.
+        return {}
+    try:
+        return json.loads(f.decrypt(raw).decode())
+    except Exception:
+        # Wrong/rotated secret or corrupt file: fail closed to empty. The
+        # operator re-enters secrets in the console; nothing is leaked.
+        global _WARNED_DECRYPT_FAILURE
+        if not _WARNED_DECRYPT_FAILURE:
+            _WARNED_DECRYPT_FAILURE = True
+            print(f"WARNING: settings sidecar {SETTINGS_PATH} exists but cannot "
+                  "be decrypted (rotated/wrong BRAIN_IDENTITY_SECRET, or corrupt "
+                  "file). Reading settings as empty; re-enter runtime secrets in "
+                  "the console.", flush=True)
         return {}
 
 
 def _save(data: Dict[str, Any]) -> None:
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2).encode()
+    f = _fernet()
+    if f is not None:
+        payload = f.encrypt(payload)
     tmp = SETTINGS_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_bytes(payload)
+    os.chmod(tmp, 0o600)
     tmp.replace(SETTINGS_PATH)
 
 

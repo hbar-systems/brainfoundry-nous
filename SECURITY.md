@@ -32,8 +32,21 @@ brainfoundry-nous is designed as a **personal, self-hosted node**. Its security 
 - The console UI at port 3010 forwards the `X-API-Key` header to the API, but does not implement its own session layer. Protect the UI with network-level controls (VPN, firewall, Tailscale) if you expose it.
 - `BRAIN_ENV=dev` (the default) disables several enforcement checks. Never use dev mode in production.
 - API keys for upstream model providers (Anthropic, OpenAI, …) are passed to containers as environment variables and are visible to anything with access to the Docker socket on the host. For multi-tenant or hostile-host environments, use Docker secrets or an external vault.
+- Secrets entered at runtime through the console (model provider API keys, the
+  IMAP app password, Google OAuth client/tokens, the Telegram token) are stored
+  in the settings sidecar at `/app/runtime/settings.json`, encrypted at rest
+  with a Fernet key derived from `BRAIN_IDENTITY_SECRET` and written with file
+  mode 600. A legacy plaintext sidecar is migrated to the encrypted form on
+  first read. Honest scope: this protects the file at rest (backups, copied
+  volumes, casual file access) — it does not protect against an attacker who
+  has both the sidecar and your `.env`, because `BRAIN_IDENTITY_SECRET`
+  decrypts it. It is encryption at rest, not a vault. Rotating
+  `BRAIN_IDENTITY_SECRET` orphans the stored values (the store then reads as
+  empty, fail-closed); re-enter them in the console. If
+  `BRAIN_IDENTITY_SECRET` is unset — a dev-only state, since startup refuses
+  it outside `DEV_ENABLE_MEMORY_APPEND` — the sidecar falls back to plaintext.
 
-## Governance scope (v0.6)
+## Governance scope (v0.9)
 
 BrainKernel (the `nodeos` container) is the authority for loop permits,
 memory proposals, action proposals, and the append-only audit log.
@@ -69,15 +82,17 @@ memory proposals, action proposals, and the append-only audit log.
   (service-to-service auth). NodeOS binds only to `127.0.0.1:8001` and has
   no browser proxy.
 
-**What it does not yet gate (v0.6):**
+**What it does not gate (v0.9, known bypasses):** two owner-side paths write
+around the kernel entirely, and it is worth saying so plainly.
+`scripts/ingest_folder.py` runs outside the API container and writes documents
+directly to the database — the running-server path (`POST /documents/upload`)
+is fully gated, but the offline script inherits none of the propose → approve
+→ execute flow and leaves no kernel audit entry; it exists for the
+single-owner bootstrap case. Likewise `context.set` / `context.clear` mutate
+an in-process dictionary (session-local state that resets on container
+restart) without transiting NodeOS. Both are deliberate v0.9 scope limits,
+not oversights — but anything ingested or set through them reaches the brain
+unaudited, so treat those paths as trusted-operator-only.
 
-- `context.set` / `context.clear` mutate an in-process dictionary that
-  resets on container restart. These are not yet routed through NodeOS;
-  they are session-local state, not long-term memory.
-- Bulk document ingestion via `scripts/ingest_folder.py` runs outside the
-  API container and writes directly to the database. The running-server
-  path (`POST /documents/upload`) is fully gated; the offline script is
-  intended for the single-owner bootstrap case only.
-
-Treat BrainKernel in v0.6 as a strong authority for the chat loop, external
+Treat BrainKernel in v0.9 as a strong authority for the chat loop, external
 actions, and all long-term memory writes that transit the API.

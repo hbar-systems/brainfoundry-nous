@@ -28,6 +28,12 @@ same rule as `scripts/export_brain.py`. An artifact is safe to copy around. On a
 fresh-box restore you supply `.env` yourself (you already keep it somewhere safe;
 it is the one thing only the owner has).
 
+Note that `settings.json` (inside `runtime.tar.gz`) is encrypted with a key
+derived from `BRAIN_IDENTITY_SECRET` (v0.9.2+), so restoring a backup onto a box
+whose `.env` carries a **different** `BRAIN_IDENTITY_SECRET` yields an empty
+settings store by design — re-enter those runtime secrets (provider API keys,
+IMAP password, tokens) from the operator vault.
+
 ## Backups
 
 ```bash
