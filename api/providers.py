@@ -433,6 +433,20 @@ def _meter(model: str, client_type: str, raw, *, fallback_prompt: str = "",
         print(f"[providers] meter skipped: {e}", flush=True)
 
 
+# Claude 5 family models always think (the API rejects thinking-disabled), so
+# an interactive request can stall for minutes at the default effort. Cap
+# reasoning depth to keep chat responsive. Sent via extra_body so older
+# anthropic SDK pins don't reject an unknown kwarg; other models ignore it.
+_ALWAYS_THINKING_PREFIXES = (
+    "claude-fable-5", "claude-mythos-5", "claude-opus-5", "claude-sonnet-5")
+
+
+def _anthropic_effort_kwargs(actual_model: str) -> dict:
+    if str(actual_model).startswith(_ALWAYS_THINKING_PREFIXES):
+        return {"extra_body": {"output_config": {"effort": "low"}}}
+    return {}
+
+
 async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
     """
     Route a chat completion to the correct provider.
@@ -448,9 +462,12 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
         user_msgs = [m for m in messages if m.get("role") != "system"]
         kwargs = {"system": system_msg} if system_msg else {}
         r = await client.messages.create(
-            model=actual_model, max_tokens=max_tokens, messages=user_msgs, **kwargs
+            model=actual_model, max_tokens=max_tokens, messages=user_msgs,
+            **_anthropic_effort_kwargs(actual_model), **kwargs
         )
-        text = r.content[0].text
+        # Claude 5 models return thinking blocks before text; content[0] is not
+        # guaranteed to be a TextBlock.
+        text = "".join(b.text for b in r.content if getattr(b, "type", None) == "text")
         _meter(model, "anthropic", r, fallback_prompt=_messages_text(messages),
                fallback_text=text, source="complete")
         return text
@@ -552,7 +569,8 @@ async def _run_anthropic_tools(client, model, system, conv, tools, dispatch_fn,
     text_out = ""
     for _ in range(max_rounds):
         r = await client.messages.create(
-            model=model, max_tokens=max_tokens, messages=conv, tools=tools, **kwargs)
+            model=model, max_tokens=max_tokens, messages=conv, tools=tools,
+            **_anthropic_effort_kwargs(model), **kwargs)
         if on_usage:
             on_usage(r)
         text_parts = [b.text for b in r.content if getattr(b, "type", None) == "text"]
@@ -704,7 +722,8 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
         user_msgs = [m for m in messages if m.get("role") != "system"]
         kwargs = {"system": system_msg} if system_msg else {}
         async with client.messages.stream(
-            model=actual_model, max_tokens=max_tokens, messages=user_msgs, **kwargs
+            model=actual_model, max_tokens=max_tokens, messages=user_msgs,
+            **_anthropic_effort_kwargs(actual_model), **kwargs
         ) as s:
             async for text in s.text_stream:
                 yield text

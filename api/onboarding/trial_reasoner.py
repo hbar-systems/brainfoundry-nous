@@ -456,7 +456,9 @@ async def complete(
         kwargs = {"system": system} if system else {}
         resp = await client.messages.create(
             model=_model(), max_tokens=max_tokens, messages=user_msgs, **kwargs)
-        text = resp.content[0].text if resp.content else ""
+        # Claude 5 models return thinking blocks before text; filter for text blocks.
+        text = "".join(
+            b.text for b in resp.content if getattr(b, "type", None) == "text")
         in_tok = int(getattr(resp.usage, "input_tokens", 0) or 0)
         out_tok = int(getattr(resp.usage, "output_tokens", 0) or 0)
         actual = in_tok + out_tok

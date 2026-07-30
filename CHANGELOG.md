@@ -4,6 +4,22 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## 0.9.3 — 2026-07-30 — Claude 5 compatibility
+
+Fixes for the Claude 5 model family (claude-fable-5 / claude-opus-5 /
+claude-sonnet-5), where thinking is always on and responses lead with
+thinking blocks.
+
+- fix(providers): `complete()` and the trial reasoner read `content[0].text`,
+  which crashes with `'ThinkingBlock' object has no attribute 'text'` on
+  Claude 5 models (broke Deep Research planning). Both now join all
+  `text`-type blocks — backward-compatible with every older model.
+- perf(providers): Claude 5 models cannot disable thinking, so interactive
+  requests could stall for minutes at the default effort. All Anthropic call
+  paths (chat stream, complete, tool loop) now send
+  `output_config.effort: low` for Claude 5 family models via `extra_body`
+  (safe on older anthropic SDK pins; other models unaffected).
+
 ## 0.9.2 — 2026-07-13 — launch freeze
 
 The freeze-point release the Show HN points at. Completes the pre-flight set:
