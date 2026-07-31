@@ -4,6 +4,17 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## 0.9.4 — 2026-07-31 — model resolution: console pick outranks env
+
+- fix(settings): `get_active_model()` now reads the operator's saved console
+  pick from the settings sidecar first. Previously the compose/.env
+  `OLLAMA_MODEL` infra default shadowed both the console choice and the BYOK
+  frontier default (a brain with a configured Claude key kept using the tiny
+  local model), and any console pick was silently lost on container restart.
+  Resolution order is now: sidecar pick → `OLLAMA_MODEL`/`DEFAULT_MODEL` env →
+  BYOK frontier → local fallback. Public chat is unaffected (still
+  `PUBLIC_CHAT_MODEL`, local by design).
+
 ## 0.9.3 — 2026-07-30 — Claude 5 compatibility
 
 Fixes for the Claude 5 model family (claude-fable-5 / claude-opus-5 /

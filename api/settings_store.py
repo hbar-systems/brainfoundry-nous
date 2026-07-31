@@ -293,7 +293,12 @@ def set_key(provider: str, key: str) -> None:
 
 
 def get_active_model() -> Optional[str]:
-    return os.environ.get("OLLAMA_MODEL") or os.environ.get("DEFAULT_MODEL")
+    # The operator's console pick (persisted in the sidecar) must outrank the
+    # compose/.env OLLAMA_MODEL infra default — previously the env var shadowed
+    # the saved pick, and any console choice was lost on container restart.
+    with _LOCK:
+        saved = _load().get("active_model")
+    return saved or os.environ.get("OLLAMA_MODEL") or os.environ.get("DEFAULT_MODEL")
 
 
 def set_active_model(model: str) -> None:
