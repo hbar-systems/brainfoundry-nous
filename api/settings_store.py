@@ -560,6 +560,34 @@ def set_agentic_tools_enabled(enabled: bool) -> None:
         _save(data)
 
 
+def get_autonomy_enabled() -> bool:
+    """Standing autonomous loop: let the brain run its own agentic ticks against
+    a standing goal, with no operator message. Off by default — opt-in per brain.
+    The tick is a headless lane (RED stays refused); enabling it is the operator's
+    standing authorization for its YELLOW peer reads. See api/autonomy.py."""
+    return bool(_load().get("autonomy_enabled", False))
+
+
+def set_autonomy_enabled(enabled: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["autonomy_enabled"] = bool(enabled)
+        _save(data)
+
+
+def get_autonomy_goal() -> str:
+    """The standing goal each autonomous tick pursues. Empty → autonomy.DEFAULT_GOAL."""
+    v = _load().get("autonomy_goal")
+    return v if isinstance(v, str) else ""
+
+
+def set_autonomy_goal(goal: str) -> None:
+    with _LOCK:
+        data = _load()
+        data["autonomy_goal"] = (goal or "")[:1000]
+        _save(data)
+
+
 def get_web_search_budget() -> int:
     """Operator-set monthly cap on web_search calls."""
     v = _load().get("web_search_budget")

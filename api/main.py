@@ -761,10 +761,33 @@ class SetAgenticToolsRequest(BaseModel):
     enabled: bool
 
 
+class SetAutonomyRequest(BaseModel):
+    enabled: Optional[bool] = None
+    goal: Optional[str] = None
+
+
 @app.get("/settings/agentic-tools")
 def settings_get_agentic_tools(api_key: str = Depends(get_api_key)):
     """Agentic mode status — whether the model decides when to call tools."""
     return {"enabled": settings_store.get_agentic_tools_enabled()}
+
+
+@app.get("/settings/autonomy")
+def settings_get_autonomy(api_key: str = Depends(get_api_key)):
+    """Standing autonomous loop status + the goal each tick pursues."""
+    return {"enabled": settings_store.get_autonomy_enabled(),
+            "goal": settings_store.get_autonomy_goal()}
+
+
+@app.post("/settings/autonomy")
+def settings_set_autonomy(req: SetAutonomyRequest, api_key: str = Depends(get_api_key)):
+    if req.enabled is not None:
+        settings_store.set_autonomy_enabled(req.enabled)
+    if req.goal is not None:
+        settings_store.set_autonomy_goal(req.goal)
+    return {"ok": True,
+            "enabled": settings_store.get_autonomy_enabled(),
+            "goal": settings_store.get_autonomy_goal()}
 
 
 # ── Google integration (Gmail + Calendar, read-only) ────────────────────────
@@ -3550,6 +3573,29 @@ def federation_log_endpoint(limit: int = 100, api_key: str = Depends(get_api_key
     call'. Backs the Settings → Security & Federation activity log."""
     from api.tools import federation_audit
     return {"entries": federation_audit.tail(max(1, min(int(limit), 500)))}
+
+
+@app.post("/v1/autonomy/tick")
+async def autonomy_tick(api_key: str = Depends(get_api_key)):
+    """Run ONE autonomous agentic tick — the brain acts on its standing goal
+    with no operator message. Driven by an external scheduler (launchd/cron)
+    hitting this endpoint; one call = one bounded turn. Refuses unless the
+    operator has enabled the loop in Settings (that toggle is the standing
+    authorization). RED stays refused in this headless lane by construction."""
+    if not settings_store.get_autonomy_enabled():
+        return {"ok": False, "ran": False,
+                "reason": "autonomy loop is not enabled in Settings"}
+    from api import autonomy
+    record = await autonomy.run_tick()
+    return {"ok": True, "ran": True, "tick": record}
+
+
+@app.get("/v1/autonomy/log")
+def autonomy_log_endpoint(limit: int = 50, api_key: str = Depends(get_api_key)):
+    """Recent autonomous ticks (newest last): what the brain looked at, which
+    peers it consulted unprompted, and any RED action the tier gate refused."""
+    from api import autonomy
+    return {"entries": autonomy.recent(max(1, min(int(limit), 500)))}
 
 
 # ── Sanctioned introduce path ────────────────────────────────────────────────
