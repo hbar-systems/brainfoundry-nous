@@ -1,0 +1,19 @@
+{
+  "dialect": "brain-apps-pack/v1",
+  "name": "base",
+  "version": "0.1.0",
+  "description": "The base pack: what every BrainFoundry instance ships with. The former defaults.json shelf (daybook, thread-consolidator, self-portrait, hbar-ink, poker-journal, quantum-room) plus oracle. Always installed; other packs may require it.",
+  "requires": [],
+  "apps": [
+    { "id": "daybook",             "repo_url": "https://github.com/hbar-systems/brain-app-daybook",             "ref": "HEAD" },
+    { "id": "thread-consolidator", "repo_url": "https://github.com/hbar-systems/brain-app-thread-consolidator", "ref": "HEAD" },
+    { "id": "self-portrait",       "repo_url": "https://github.com/hbar-systems/brain-app-self-portrait",       "ref": "HEAD" },
+    { "id": "hbar-ink",            "repo_url": "https://github.com/hbar-systems/hbar.ink",                       "ref": "HEAD" },
+    { "id": "poker-journal",       "repo_url": "https://github.com/hbar-systems/hbar-poker-journal",            "ref": "HEAD" },
+    { "id": "quantum-room",        "repo_url": "https://github.com/hbar-systems/hbar-university-quantum-room",  "ref": "HEAD" },
+    { "id": "oracle",              "repo_url": "https://github.com/hbar-systems/brain-app-oracle",              "ref": "v0.1.0" }
+  ],
+  "tools": [],
+  "md": [],
+  "compute": null
+}

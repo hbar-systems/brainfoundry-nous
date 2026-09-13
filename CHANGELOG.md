@@ -4,6 +4,39 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased (0.10.0): packs on a brain
+
+Branch `packs`, started 2026-09-13. VERSION stays 0.9.4 until the tag. Architecture:
+hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`.
+
+- feat(autonomy): standing autonomous loop (commit 3b1e67c, 2026-08-28,
+  shipped on main after 0.9.4 without an entry). Opt-in `POST /v1/autonomy/tick`
+  runs one bounded headless agentic turn against a standing goal; YELLOW reads
+  only, RED refused headless; off by default (`/settings/autonomy`); appends to
+  `/app/runtime/autonomy.jsonl`.
+- feat(packs): `brain-apps/packs/<name>.json`, validated by
+  `api/schemas/brain-pack.schema.json` (name, version, description, requires,
+  apps, tools, md, compute). `packs/base.json` = the former `defaults.json`
+  shelf plus oracle (`brain-app-oracle` pinned at v0.1.0). `defaults.json` is
+  kept as a compatibility alias, read only when `packs/base.json` is absent.
+- feat(packs): `seed_default_apps()` reads `BRAIN_PACKS` (comma list, default
+  `base`, base always first; wired into compose and `.env.example`), resolves
+  `requires` in order, installs each pack's apps through the existing
+  install-if-absent path, records results under `installed.json` -> `packs`.
+  The first-run contract is unchanged: the `defaults_seeded` marker gate and
+  the never-clobber-a-populated-brain rule are untouched, so an existing brain
+  sees no behaviour change.
+- feat(packs): `GET /apps/packs` (shipped packs and their state) and
+  `POST /apps/packs/{name}/install` (install a pack on a running brain,
+  requirements first, hot-mounted). Operator-key gated like the rest of /apps.
+- feat(manifest): optional `compute` block in `brain-app.schema.json`
+  (`endpoint`, `permit_class`, `health_path`) declaring a spoke. Recorded on
+  install and update; a changed block counts as a scope change requiring
+  re-approval. Declarative only in this version; permit-gated dispatch is a
+  later step.
+- tests: `test_app_shelf.py` updated for packs; `test_packs.py` added
+  (schema, alias fallback, dependency order, env parsing, compute scope diff).
+
 ## 0.9.4 — 2026-07-31 — model resolution: console pick outranks env
 
 - fix(settings): `get_active_model()` now reads the operator's saved console

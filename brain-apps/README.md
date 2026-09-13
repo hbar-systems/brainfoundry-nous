@@ -72,6 +72,32 @@ the app does not pick a model and never holds a key.
 - `<id>/` — clone of an installed app (gitignored). Created by the install
   pipeline; never hand-edited.
 
+## Packs (added 2026-09-13, unreleased 0.10.0)
+
+A pack is a domain bundle: brain-apps plus tool ids, governance `.md` files,
+and an optional compute spoke. Files live at `packs/<name>.json`, validated
+against `api/schemas/brain-pack.schema.json`, each with its own `version`.
+
+- `packs/base.json` is what every instance ships with: the former
+  `defaults.json` shelf plus oracle. Always installed. `defaults.json` stays as
+  a compatibility alias and is read as base only when `packs/base.json` is
+  absent.
+- First run: `seed_default_apps()` reads `BRAIN_PACKS` (comma list, default
+  `base`, base always first), resolves `requires` in dependency order, and
+  installs every listed app through the normal clone-validate-register path.
+  The first-run contract is unchanged: once per brain (`defaults_seeded`),
+  never on a populated `installed.json`, fail-soft per app and per pack.
+  Results are recorded under `installed.json` -> `packs`.
+- Later: `GET /apps/packs` lists the shipped packs and their state;
+  `POST /apps/packs/<name>/install` installs one on a running brain
+  (requirements first, install-if-absent, memory untouched).
+- `compute` (pack level, and the optional `compute` block in a brain-app
+  manifest) declares a spoke: `endpoint`, `permit_class`, `health_path`. In
+  this version it is recorded and shown, not dispatched; a changed compute
+  block on update counts as a scope change. Hub, not mesh: the brain calls the
+  spoke under a permit; the iframe never does; spokes never call each other.
+- `tools` and `md` are declared in this version and not yet acted on.
+
 ## Installing an app (v0)
 
 Two paths, both call the same backend:

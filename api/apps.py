@@ -41,6 +41,17 @@ INSTALLED_JSON = BRAIN_APPS_DIR / "installed.json"
 # Template config (tracked, read-only at runtime): the default app shelf a
 # FRESH brain pre-installs on first run. See seed_default_apps().
 DEFAULTS_JSON = BRAIN_APPS_DIR / "defaults.json"
+# Packs (added 2026-09-13, unreleased 0.10.0): brain-apps/packs/<name>.json.
+# A pack is a domain bundle (apps + tools + .md + optional compute spoke).
+# The base pack is the former defaults.json shelf plus oracle and is always
+# installed. defaults.json stays as a compatibility alias: when packs/base.json
+# is absent (older checkout), it is read as the base pack. See load_pack().
+PACKS_DIR = BRAIN_APPS_DIR / "packs"
+PACK_SCHEMA_PATH = Path(__file__).parent / "schemas" / "brain-pack.schema.json"
+BASE_PACK = "base"
+# Comma-separated pack names the provisioner writes into .env (BRAIN_PACKS=base,music).
+# Absent or empty means ["base"]. base is always included whatever is listed.
+PACKS_ENV = "BRAIN_PACKS"
 
 # Built-in nav entries the brain ships with. The UI Nav renders ONLY these —
 # installed apps live behind the single `_apps` hub at /apps, which lists
@@ -252,11 +263,16 @@ def _scope_diff(installed: dict, manifest: dict) -> dict:
     new_perms = set(manifest.get("permissions") or [])
     old_layers = {_layer_key(l) for l in (installed.get("requires_layers") or [])}
     new_layers = {_layer_key(l) for l in (manifest.get("requires_layers") or [])}
+    # A spoke is reach outside the brain box; a changed compute block is a
+    # scope change the operator re-approves, same as a new permission.
+    old_compute = installed.get("compute") or None
+    new_compute = manifest.get("compute") or None
     return {
         "added_permissions": sorted(new_perms - old_perms),
         "removed_permissions": sorted(old_perms - new_perms),
         "added_layers": sorted(new_layers - old_layers),
         "removed_layers": sorted(old_layers - new_layers),
+        "compute_changed": old_compute != new_compute,
     }
 
 
@@ -319,12 +335,16 @@ def _chown_existing_app_dirs() -> None:
         _chown_to_host_owner(child)
 
 
-# ---------- pre-installed default shelf (first-run only) ----------
+# ---------- packs and the pre-installed shelf (first-run only) ----------
+
+class PackError(ValueError):
+    """A pack file is missing, unreadable, or fails brain-pack.schema.json."""
+
 
 def _load_defaults() -> list[dict]:
-    """The curated default app set from brain-apps/defaults.json (template
-    config). Absent/unreadable -> no defaults (a brain with no manifest simply
-    ships empty)."""
+    """Compatibility alias: the pre-packs default shelf from brain-apps/defaults.json.
+    Absent/unreadable -> []. Kept so an older checkout (no packs/ dir) still
+    seeds its shelf; new code reads packs via load_pack()."""
     if not DEFAULTS_JSON.exists():
         return []
     try:
@@ -335,9 +355,113 @@ def _load_defaults() -> list[dict]:
         return []
 
 
+def _load_pack_schema() -> dict:
+    with PACK_SCHEMA_PATH.open() as f:
+        return json.load(f)
+
+
+def _validate_pack(pack: dict, name: str) -> None:
+    errors = sorted(Draft7Validator(_load_pack_schema()).iter_errors(pack),
+                    key=lambda e: list(e.absolute_path))
+    if errors:
+        issues = "; ".join(f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
+                           for e in errors)
+        raise PackError(f"pack {name} invalid: {issues}")
+    if pack.get("name") != name:
+        raise PackError(f"pack file {name}.json declares name {pack.get('name')!r}")
+
+
+def list_pack_names() -> list[str]:
+    """Names of the pack files shipped in brain-apps/packs/. base is listed
+    even when only the defaults.json alias exists."""
+    names: set[str] = set()
+    if PACKS_DIR.is_dir():
+        names |= {p.stem for p in PACKS_DIR.glob("*.json")}
+    if BASE_PACK not in names and DEFAULTS_JSON.exists():
+        names.add(BASE_PACK)
+    return sorted(names)
+
+
+def load_pack(name: str) -> dict:
+    """Read and validate brain-apps/packs/<name>.json. For base, fall back to
+    the defaults.json alias when packs/base.json is absent. Raises PackError."""
+    if not name or "/" in name or name.startswith("."):
+        raise PackError(f"bad pack name {name!r}")
+    path = PACKS_DIR / f"{name}.json"
+    if path.exists():
+        try:
+            pack = json.loads(path.read_text())
+        except Exception as e:
+            raise PackError(f"pack {name} unreadable: {e}") from e
+        _validate_pack(pack, name)
+        pack.setdefault("requires", [])
+        pack.setdefault("tools", [])
+        pack.setdefault("md", [])
+        pack.setdefault("compute", None)
+        return pack
+    if name == BASE_PACK:
+        apps = _load_defaults()
+        if apps or DEFAULTS_JSON.exists():
+            return {
+                "dialect": "brain-apps-pack/v1",
+                "name": BASE_PACK,
+                "version": "0.0.0-defaults",
+                "description": "base pack read from the defaults.json compatibility alias",
+                "requires": [], "apps": apps, "tools": [], "md": [], "compute": None,
+            }
+    raise PackError(f"pack {name} not found")
+
+
+def requested_packs() -> list[str]:
+    """Pack names to seed on first run: BRAIN_PACKS env (comma list), default
+    [base]. base is always first whatever is listed."""
+    raw = os.environ.get(PACKS_ENV, "") or ""
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    ordered = [BASE_PACK] + [n for n in names if n != BASE_PACK]
+    seen: set[str] = set()
+    return [n for n in ordered if not (n in seen or seen.add(n))]
+
+
+def resolve_packs(names: list[str]) -> tuple[list[dict], list[dict]]:
+    """Load packs in dependency order (requires first). Returns (packs, failures)
+    where failures is a list of {name, error}. Fail-soft per pack: a bad or
+    missing pack never blocks the others, and a pack whose requirement failed
+    is itself reported failed rather than half-installed."""
+    ordered: list[dict] = []
+    failures: list[dict] = []
+    done: set[str] = set()
+    failed: set[str] = set()
+
+    def visit(name: str, chain: tuple[str, ...]) -> None:
+        if name in done or name in failed:
+            return
+        if name in chain:
+            failed.add(name)
+            failures.append({"name": name, "error": f"requires cycle: {' -> '.join(chain + (name,))}"})
+            return
+        try:
+            pack = load_pack(name)
+        except PackError as e:
+            failed.add(name)
+            failures.append({"name": name, "error": str(e)})
+            return
+        for req in pack.get("requires") or []:
+            visit(req, chain + (name,))
+            if req in failed:
+                failed.add(name)
+                failures.append({"name": name, "error": f"requirement {req} failed"})
+                return
+        done.add(name)
+        ordered.append(pack)
+
+    for n in names:
+        visit(n, ())
+    return ordered, failures
+
+
 def _install_default(repo_url: str, ref: str, installed_ids: set[str],
                      installed_routes: set) -> dict | None:
-    """Clone + validate + register one default app. Mirrors install_app's core
+    """Clone + validate + register one pack app. Mirrors install_app's core
     (minus the HTTP response + hot-mount; the startup mount loop mounts it).
     Returns the installed.json entry, or None if the app is already present /
     its route collides (install-if-absent). Raises on clone/validate failure so
@@ -385,29 +509,68 @@ def _install_default(repo_url: str, ref: str, installed_ids: set[str],
         "permissions": manifest.get("permissions", []),
         "requires_layers": manifest.get("requires_layers", []),
         "requires_endpoints": manifest.get("requires_endpoints", []),
+        "compute": manifest.get("compute"),
         "token_hash": _hash_token(secrets.token_urlsafe(32)),
         "preinstalled": True,
     }
 
 
-def seed_default_apps() -> None:
-    """First-run-only: pre-install the curated shelf on a FRESH brain.
+def _install_pack_apps(pack: dict, state: dict) -> dict:
+    """Install every app of one pack that is absent (install-if-absent, fail-soft
+    per app) into `state` (mutated, not saved). Returns the pack record for
+    state["packs"]: {version, at, installed, skipped, failed}."""
+    existing = state.setdefault("apps", [])
+    installed_ids = {a["id"] for a in existing}
+    installed_routes = {a.get("tab", {}).get("route") for a in existing}
+    record = {"version": pack.get("version"), "at": _now_iso(),
+              "installed": [], "skipped": [], "failed": [],
+              "compute": pack.get("compute")}
+    for d in pack.get("apps") or []:
+        want = d.get("id")
+        if want and want in installed_ids:
+            record["skipped"].append(want)
+            continue
+        try:
+            entry = _install_default(d["repo_url"], d.get("ref", "HEAD"),
+                                     installed_ids, installed_routes)
+        except Exception as e:
+            print(f"[brain-apps] pack {pack.get('name')}: install failed for {d.get('repo_url')}: {e}", flush=True)
+            record["failed"].append({"id": want, "repo_url": d.get("repo_url"), "error": str(e)[:300]})
+            continue
+        if entry is None:
+            record["skipped"].append(want or d.get("repo_url"))
+            continue
+        existing.append(entry)
+        installed_ids.add(entry["id"])
+        installed_routes.add(entry["tab"].get("route"))
+        record["installed"].append(entry["id"])
+    return record
 
-    Safety contract (project_rsync_installed_json_hazard):
-    - Runs at most once per brain, gated by a `defaults_seeded` marker written
+
+def seed_default_apps() -> None:
+    """First-run-only: pre-install the requested packs on a FRESH brain.
+
+    Reads BRAIN_PACKS (default: base). base is the former defaults.json shelf
+    plus oracle; defaults.json is read as base when packs/base.json is absent.
+
+    Safety contract (project_rsync_installed_json_hazard), unchanged by packs:
+    - Runs at most once per brain, gated by the `defaults_seeded` marker written
       into installed.json — so a later operator uninstall is never undone by a
       redeploy.
     - NEVER clobbers a populated installed.json. An established brain (apps
       already present) is simply marked seeded with NOTHING installed, so a
       deploy can never inject the shelf onto a brain that already has apps.
-    - install-if-absent + fail-soft per app: a clone/validate failure for one
-      default is logged and skipped, never blocks startup or the other defaults.
+    - install-if-absent + fail-soft per app and per pack: a clone/validate
+      failure for one app, or a broken pack file, is logged and skipped, never
+      blocks startup or the other packs.
     - Metadata only: no model calls at provision/first-run (per the prompt's
       cost guardrail). Apps call the brain API on USE, gated as usual.
     """
     try:
-        defaults = _load_defaults()
-        if not defaults:
+        packs, failures = resolve_packs(requested_packs())
+        for f in failures:
+            print(f"[brain-apps] pack {f['name']} skipped: {f['error']}", flush=True)
+        if not any(p.get("apps") for p in packs):
             return
         state = _load_installed()
         if state.get("defaults_seeded"):
@@ -419,27 +582,18 @@ def seed_default_apps() -> None:
             _save_installed(state)
             print("[brain-apps] defaults: brain already populated — marked seeded, no install", flush=True)
             return
-        # Fresh brain: install the shelf.
-        installed_ids = {a["id"] for a in existing}
-        installed_routes = {a.get("tab", {}).get("route") for a in existing}
-        added = 0
-        for d in defaults:
-            try:
-                entry = _install_default(d["repo_url"], d.get("ref", "HEAD"),
-                                         installed_ids, installed_routes)
-            except Exception as e:
-                print(f"[brain-apps] default install failed for {d.get('repo_url')}: {e}", flush=True)
-                continue
-            if entry is None:
-                continue
-            existing.append(entry)
-            installed_ids.add(entry["id"])
-            installed_routes.add(entry["tab"].get("route"))
-            added += 1
+        # Fresh brain: install the packs.
         state["apps"] = existing
+        records = state.setdefault("packs", {})
+        added = 0
+        for pack in packs:
+            rec = _install_pack_apps(pack, state)
+            records[pack["name"]] = rec
+            added += len(rec["installed"])
         state["defaults_seeded"] = _now_iso()
         _save_installed(state)
-        print(f"[brain-apps] seeded {added} default app(s) on fresh brain", flush=True)
+        names = ",".join(p["name"] for p in packs)
+        print(f"[brain-apps] seeded {added} app(s) from pack(s) {names} on fresh brain", flush=True)
     except Exception as e:
         print(f"[brain-apps] seed_default_apps skipped: {e}", flush=True)
 
@@ -447,6 +601,67 @@ def seed_default_apps() -> None:
 # ---------- router ----------
 
 router = APIRouter(prefix="/apps", tags=["apps"])
+
+
+@router.get("/packs")
+def list_packs() -> dict:
+    """The packs this template ships, with their install state on this brain.
+    `requested` is what BRAIN_PACKS asks for at first run."""
+    state = _load_installed()
+    installed_ids = {a["id"] for a in state.get("apps", [])}
+    records = state.get("packs", {})
+    out = []
+    for name in list_pack_names():
+        try:
+            pack = load_pack(name)
+        except PackError as e:
+            out.append({"name": name, "error": str(e)})
+            continue
+        app_ids = [a.get("id") for a in pack.get("apps") or []]
+        out.append({
+            "name": name,
+            "version": pack.get("version"),
+            "description": pack.get("description"),
+            "requires": pack.get("requires") or [],
+            "apps": app_ids,
+            "missing": [i for i in app_ids if i not in installed_ids],
+            "tools": pack.get("tools") or [],
+            "md": pack.get("md") or [],
+            "compute": pack.get("compute"),
+            "installed": bool(app_ids) and all(i in installed_ids for i in app_ids),
+            "record": records.get(name),
+        })
+    return {"packs": out, "requested": requested_packs(),
+            "defaults_seeded": state.get("defaults_seeded")}
+
+
+@router.post("/packs/{name}/install")
+def install_pack(name: str, request: Request) -> dict:
+    """Install a pack on a running brain (its requirements first). Same path
+    as the first-run seed: install-if-absent, fail-soft per app, never touches
+    apps already present, never touches memory. Hot-mounts what it installed."""
+    packs, failures = resolve_packs([name])
+    if not any(p["name"] == name for p in packs):
+        err = next((f for f in failures if f["name"] == name), {"error": "pack not found"})
+        raise HTTPException(status_code=404, detail={"error": "pack_unavailable", "name": name,
+                                                     "reason": err["error"], "failures": failures})
+    state = _load_installed()
+    results = {}
+    new_entries = []
+    for pack in packs:
+        before = {a["id"] for a in state.get("apps", [])}
+        rec = _install_pack_apps(pack, state)
+        state.setdefault("packs", {})[pack["name"]] = rec
+        results[pack["name"]] = rec
+        new_entries += [a for a in state["apps"] if a["id"] not in before]
+    _save_installed(state)
+    for entry in new_entries:
+        try:
+            from api.apps_mount import mount_app as _mount_app
+            _mount_app(request.app, entry)
+        except Exception as e:
+            print(f"[brain-apps] hot-mount failed for {entry['id']}: {e}", flush=True)
+    return {"name": name, "packs": results, "failures": failures}
 
 
 @router.post("/install/preview", response_model=PreviewResponse)
@@ -510,6 +725,7 @@ def install_app(req: InstallRequest, request: Request) -> InstallResponse:
         "permissions": manifest.get("permissions", []),
         "requires_layers": manifest.get("requires_layers", []),
         "requires_endpoints": manifest.get("requires_endpoints", []),
+        "compute": manifest.get("compute"),
         "token_hash": _hash_token(raw_token),
     }
     existing.append(entry)
@@ -718,6 +934,7 @@ def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateRespo
         "permissions": manifest.get("permissions", []),
         "requires_layers": manifest.get("requires_layers", []),
         "requires_endpoints": manifest.get("requires_endpoints", []),
+        "compute": manifest.get("compute"),
     })
     apps[idx] = entry
     state["apps"] = apps
