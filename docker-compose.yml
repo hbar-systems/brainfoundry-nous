@@ -51,6 +51,9 @@ services:
       - BRAIN_OWNER=${BRAIN_OWNER}
       - BRAIN_PRIVATE_KEY=${BRAIN_PRIVATE_KEY}
       - BRAIN_PUBLIC_KEY=${BRAIN_PUBLIC_KEY}
+      # Packs to pre-install on first run (comma list; base is always included).
+      # The provisioner writes this from the packs field of POST /api/provision.
+      - BRAIN_PACKS=${BRAIN_PACKS:-base}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
       # Org-brain public-chat tuning. PUBLIC_CHAT_LAYERS comma-separated

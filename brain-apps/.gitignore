@@ -14,3 +14,7 @@ installed.json
 # the source of truth for which apps a fresh brain pre-installs (read-only at
 # runtime; seed_default_apps() never writes it).
 !defaults.json
+
+# Track the pack definitions — template config, read-only at runtime.
+!packs/
+!packs/*.json

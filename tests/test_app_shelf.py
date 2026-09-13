@@ -5,7 +5,9 @@ seed once on a FRESH brain, NEVER clobber a populated installed.json, and never
 re-seed after the operator uninstalls. `_install_default` is monkeypatched so no
 git/network is touched — these tests exercise the gate logic, not cloning.
 
-Created 2026-06-23.
+Created 2026-06-23. Updated 2026-09-13: the shelf is now read through packs
+(load_pack("base")); this file keeps exercising the defaults.json alias path so
+an older checkout without packs/ behaves exactly as before.
 """
 import json
 
@@ -19,6 +21,10 @@ def _tmp_apps(tmp_path, monkeypatch):
     monkeypatch.setattr(apps, "BRAIN_APPS_DIR", tmp_path)
     monkeypatch.setattr(apps, "INSTALLED_JSON", tmp_path / "installed.json")
     monkeypatch.setattr(apps, "DEFAULTS_JSON", tmp_path / "defaults.json")
+    # No packs/ dir in this fixture: exercises the defaults.json compatibility
+    # alias (packs/base.json absent -> defaults.json is read as the base pack).
+    monkeypatch.setattr(apps, "PACKS_DIR", tmp_path / "packs")
+    monkeypatch.delenv(apps.PACKS_ENV, raising=False)
     (tmp_path / "defaults.json").write_text(json.dumps({"apps": [
         {"id": "alpha", "repo_url": "https://example.com/alpha", "ref": "HEAD"},
         {"id": "beta", "repo_url": "https://example.com/beta", "ref": "HEAD"},
@@ -90,3 +96,13 @@ def test_install_if_absent_skips_already_present(monkeypatch):
     apps.seed_default_apps()
     ids = [a["id"] for a in apps._load_installed()["apps"]]
     assert ids == ["alpha"]
+
+
+def test_alias_seed_records_base_pack(monkeypatch):
+    # Through the alias, the seed still records a base pack entry so the
+    # console can show where the shelf came from.
+    _fake_install(monkeypatch)
+    apps.seed_default_apps()
+    state = apps._load_installed()
+    assert state["packs"]["base"]["version"] == "0.0.0-defaults"
+    assert state["packs"]["base"]["installed"] == ["alpha", "beta"]

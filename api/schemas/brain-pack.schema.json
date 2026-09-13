@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hbar.systems/schemas/brain/pack.schema.json",
+  "title": "Brain Pack Schema",
+  "description": "A pack is a domain bundle installed on a brain: a list of brain-apps (installed through the normal GitHub-URL path), tool ids to enable, governance .md files to install, and an optional compute spoke declaration. Files live at brain-apps/packs/<name>.json in the brainfoundry-nous template. The base pack is what every instance ships with; other packs (music, video) require it. Added 2026-09-13 (unreleased 0.10.0).",
+  "type": "object",
+  "required": ["dialect", "name", "version", "description", "apps"],
+  "properties": {
+    "dialect": {
+      "type": "string",
+      "const": "brain-apps-pack/v1"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$",
+      "description": "Pack id. Must equal the file name without .json (brain-apps/packs/<name>.json)."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.-]+)?$",
+      "description": "Semver of the pack definition itself. Each pack is versioned independently of the OS."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$" },
+      "uniqueItems": true,
+      "default": [],
+      "description": "Other packs that must be installed first. The seeder installs them in dependency order; a missing requirement fails the pack, not the brain."
+    },
+    "apps": {
+      "type": "array",
+      "description": "Brain-apps in this pack. Same shape as the old defaults.json entries: id is the manifest id (used for the install-if-absent precheck); the authoritative id, route and version come from the repo's brain-app.yaml at install time.",
+      "items": {
+        "type": "object",
+        "required": ["id", "repo_url"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" },
+          "repo_url": { "type": "string", "format": "uri", "pattern": "^https://(github\\.com|gitlab\\.com|codeberg\\.org)/" },
+          "ref": { "type": "string", "default": "HEAD", "description": "Branch, tag, or commit SHA. Pin a tag for anything a buyer receives." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": [],
+      "description": "Tool ids from api/tools/ this pack enables. Declared only in this version; enabling is a later step."
+    },
+    "md": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "purpose"],
+        "properties": {
+          "path": { "type": "string", "description": "Path inside the template repo of a governance .md this pack installs (e.g. a verb catalogue)." },
+          "purpose": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "default": [],
+      "description": "Governance .md files the pack brings. Declared only in this version."
+    },
+    "compute": {
+      "description": "Optional spoke declaration for the whole pack: a separate host owned by the same person that runs the pack's heavy jobs. Same shape as the compute block in brain-app.schema.json. null when the pack needs no spoke.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["endpoint", "permit_class"],
+          "properties": {
+            "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://" },
+            "permit_class": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$" },
+            "health_path": { "type": "string", "pattern": "^/", "default": "/health" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

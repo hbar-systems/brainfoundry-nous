@@ -158,6 +158,31 @@
       },
       "uniqueItems": true
     },
+    "compute": {
+      "type": "object",
+      "required": ["endpoint", "permit_class"],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "description": "Base URL of the app's spoke: a plain HTTP service on a separate host owned by the same person as the brain. Runs the jobs the brain box cannot (audio generation, stems, .als builds, ffmpeg renders, GPU work). Holds no memory and no keys beyond its own."
+        },
+        "permit_class": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$",
+          "description": "The permit class the brain issues for calls to this spoke (permitd, HMAC-SHA256 loop-state, PROPOSE/CONFIRM). Every call to the spoke goes through the brain under a permit of this class; the iframe never calls the spoke directly."
+        },
+        "health_path": {
+          "type": "string",
+          "pattern": "^/",
+          "default": "/health",
+          "description": "Path on the spoke that fleet-health polls."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Optional spoke declaration (added 2026-09-13, unreleased 0.10.0). Declarative in this version: the brain records it at install and shows it to the operator; permit-gated dispatch to the spoke is a later step. Hub, not mesh: spokes never call each other and never call the brain unprompted."
+    },
     "engines": {
       "type": "object",
       "properties": {
