@@ -4,7 +4,7 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## Unreleased (0.10.0): packs on a brain
+## 0.10.0 — 2026-09-13 — packs on a brain, export, first-use flow
 
 Branch `packs`, started 2026-09-13. VERSION stays 0.9.4 until the tag. Architecture:
 hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`. Upgrading a live 0.9.4
