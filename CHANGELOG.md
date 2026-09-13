@@ -6,7 +6,7 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## 0.10.0 — 2026-09-13 — packs on a brain, export, first-use flow
 
-Branch `packs`, started 2026-09-13. VERSION stays 0.9.4 until the tag. Architecture:
+Branch `packs`, started 2026-09-13; merged to main and VERSION bumped 2026-09-13. Git tag v0.10.0 follows the first verified Update-tab deploy on hbar. Architecture:
 hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`. Upgrading a live 0.9.4
 brain: `docs/UPGRADE-0.10.0.md`.
 
