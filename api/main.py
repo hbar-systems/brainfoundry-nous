@@ -1797,6 +1797,14 @@ try:
 except Exception as e:
     print(f"[startup] appearance router mount skipped: {e}", flush=True)
 
+# Mount the export router (POST /export builds, GET /export/{name} downloads).
+# Operator-key gated: an archive is the whole memory, minus secrets.
+try:
+    from api.export import router as _export_router
+    app.include_router(_export_router, dependencies=[Depends(get_api_key)])
+except Exception as e:
+    print(f"[startup] export router mount skipped: {e}", flush=True)
+
 # Mount brain-apps router (install / list / uninstall / enable / disable).
 # All endpoints gated by the existing api_key dep — same posture as /settings.
 try:

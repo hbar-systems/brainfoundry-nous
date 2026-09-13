@@ -1,5 +1,8 @@
 # Backup & Restore
 
+> For the buyer-facing one-command export and how to restore it onto any
+> brain, see `docs/EXPORT.md` (added 2026-09-13).
+
 A brain holds its owner's accumulated cognition. The vector DB and a handful of
 per-brain runtime files are **not in git** and cannot be regenerated — lose them
 and the brain's memory is gone. This is the safety net under that risk.

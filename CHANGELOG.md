@@ -36,6 +36,15 @@ hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`.
   later step.
 - tests: `test_app_shelf.py` updated for packs; `test_packs.py` added
   (schema, alias fallback, dependency order, env parsing, compute scope diff).
+- feat(export): one-command export on the brain (`api/export.py`): one
+  `.tar.gz` with memory (every chunk and embedding), chats, persona, every
+  runtime `.md`, identity config, the installed-apps registry (with the packs
+  record), and peers; manifest compatible with `scripts/import_brain.py`.
+  No secrets (env, keys, settings sidecar, private key, audit logs), enforced
+  by a post-build scan that deletes and refuses. Surfaces: `POST /export`,
+  `GET /export`, `GET /export/{name}`, `DELETE /export/{name}` (operator-key
+  gated); Settings, Export panel; `scripts/export.sh`; `python -m api.export`.
+  Restore documented in `docs/EXPORT.md`. Tests: `test_export.py`.
 
 ## 0.9.4 — 2026-07-31 — model resolution: console pick outranks env
 

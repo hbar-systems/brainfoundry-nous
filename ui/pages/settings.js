@@ -1567,6 +1567,67 @@ function AppsPanel() {
   )
 }
 
+// ---------- Export ----------
+// The one-button export (unreleased 0.10.0): everything the brain accumulated,
+// minus secrets, in one .tar.gz built on the brain and downloaded here.
+function ExportPanel() {
+  const [items, setItems] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [last, setLast] = useState(null)
+  const [err, setErr] = useState(null)
+
+  const load = () => api('/export').then(d => setItems(d.exports || [])).catch(e => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  const build = async () => {
+    setBusy(true); setErr(null); setLast(null)
+    try {
+      const d = await api('/export', { method: 'POST' })
+      setLast(d)
+      await load()
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  const remove = async (name) => {
+    setErr(null)
+    try { await api(`/export/${name}`, { method: 'DELETE' }); await load() } catch (e) { setErr(e.message) }
+  }
+
+  const mb = n => `${(n / 1e6).toFixed(2)} MB`
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: '0 0 14px 0' }}>
+        One archive with your memory (every chunk and its embedding), your chats,
+        your persona and governance .md files, the installed-apps registry, and your
+        peers. No secrets: no .env, no API keys, no settings sidecar. Built on this
+        brain, downloaded to you. Restore steps are in docs/EXPORT.md.
+      </p>
+      <button style={BTN} disabled={busy} onClick={build}>{busy ? 'Building…' : 'Export my brain'}</button>
+      {last && (
+        <div style={{ marginTop: 12, fontSize: 12, color: '#c9a96e' }}>
+          Built {last.name} ({mb(last.size)}).{' '}
+          <a href={`${API}${last.download}`} style={{ color: '#c9a96e' }}>Download</a>
+        </div>
+      )}
+      {items.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          {items.map(it => (
+            <div key={it.name} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1c1814', fontSize: 12 }}>
+              <span style={{ fontFamily: 'DM Mono, monospace', color: '#e8e0d5', flex: 1 }}>{it.name}</span>
+              <span style={{ color: '#6b5f52' }}>{mb(it.size)}</span>
+              <a href={`${API}/export/${it.name}`} style={{ color: '#c9a96e', textDecoration: 'none' }}>Download</a>
+              <button style={BTN_GHOST} onClick={() => remove(it.name)}>Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
 function AdvancedPanel() {
   return (
     <div style={{ paddingTop: 16 }}>
@@ -1655,6 +1716,10 @@ export default function Settings() {
 
       <Section title="Apps" subtitle="Sandboxed iframe extensions that add tabs to your brain. Installed and managed on the Apps page.">
         <AppsPanel />
+      </Section>
+
+      <Section title="Export" subtitle="Take your brain with you: one archive, no secrets.">
+        <ExportPanel />
       </Section>
 
       <Section title="Security & Federation" subtitle="Brain identity, public key, how other brains verify you.">
