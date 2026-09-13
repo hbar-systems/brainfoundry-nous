@@ -7009,6 +7009,40 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
 # button uses (operator-direct → semantic, trust 1.0).
 
 
+@app.get("/onboarding/first-use")
+def onboarding_first_use(api_key: str = Depends(get_api_key)):
+    """The first-use checklist (unreleased 0.10.0): key set, files dropped (of
+    ten), first app opened. Facts gathered here; logic in api/onboarding/first_use.py.
+    Fail-soft per fact so a DB hiccup never blanks the dashboard."""
+    from api.onboarding import first_use as _fu
+    has_key = False
+    try:
+        has_key = _providers.has_cloud_key() or any(settings_store.get_keys_masked().values())
+    except Exception:
+        pass
+    doc_count = chunk_count = session_count = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*), COUNT(DISTINCT document_name) FROM document_embeddings "
+                    "WHERE metadata->>'deleted_at' IS NULL")
+        row = cur.fetchone()
+        chunk_count, doc_count = int(row[0] or 0), int(row[1] or 0)
+        cur.execute("SELECT COUNT(*) FROM chat_sessions")
+        session_count = int((cur.fetchone() or [0])[0] or 0)
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[first-use] stats unavailable: {e}", flush=True)
+    installed = []
+    try:
+        from api import apps as _apps
+        installed = _apps._load_installed().get("apps", [])
+    except Exception:
+        pass
+    return _fu.build_state(has_key=has_key, doc_count=doc_count, chunk_count=chunk_count,
+                           session_count=session_count, installed=installed)
+
+
 def _onboarding_active() -> bool:
     """The single server-side gate: fresh brain AND a trial key is configured.
     Both default to the safe value so this is a no-op on established brains."""

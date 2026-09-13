@@ -529,19 +529,30 @@ export default function Upload() {
     <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", fontFamily: "system-ui, -apple-system, sans-serif", color: TEXT }}>
       <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>Knowledge — Upload &amp; Search</h1>
 
-      {/* Empty-corpus guide — the cold-start fix. Shows only while the brain
-          has no documents; disappears once the first knowledge is ingested. */}
-      {stats && (stats.total_chunks || 0) === 0 && (stats.unique_documents || 0) === 0 && (
+      {/* First-use starter prompt (unreleased 0.10.0): shows until the brain
+          holds ten documents, with progress. Replaces the empty-only guide. */}
+      {stats && (stats.unique_documents || 0) < 10 && (
         <section style={{ padding: 18, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
-          <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>Your brain knows nothing yet.</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+            <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>
+              {(stats.unique_documents || 0) === 0 ? "Your brain knows nothing yet. Drop ten files." : `Drop ten files: ${stats.unique_documents} of 10 so far.`}
+            </div>
+            <div style={{ fontSize: 12, color: MUTED }}>{stats.total_chunks || 0} chunks</div>
+          </div>
+          <div style={{ height: 4, background: BORDER, borderRadius: 2, margin: "6px 0 10px 0" }}>
+            <div style={{ height: 4, width: `${Math.min(100, 10 * (stats.unique_documents || 0))}%`, background: "#c9a96e", borderRadius: 2 }} />
+          </div>
           <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7 }}>
-            <div>Add something below — paste text, or drop a file.</div>
-            <div>The brain answers from what you give it; an empty brain has nothing to draw on.</div>
-            <div style={{ marginTop: 8, color: TEXT }}>Good first things to add:</div>
+            <div>Anything in your own words works best. The brain answers from what you give it.</div>
+            <div style={{ marginTop: 8, color: TEXT }}>Good first ten:</div>
             <ul style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
-              <li>A note about who you are and what you&apos;re working on.</li>
-              <li>A document, article, or paper you want the brain to know.</li>
-              <li>Notes from a meeting, or a decision you just made.</li>
+              <li>A note about who you are and what you are working on.</li>
+              <li>Your CV, or a bio you wrote yourself.</li>
+              <li>Three emails or messages you wrote that sound like you.</li>
+              <li>A project readme, or the plan for something you are building.</li>
+              <li>A decision you made recently, and why.</li>
+              <li>A paper, article, or book chapter you want it to know.</li>
+              <li>Notes from a meeting.</li>
             </ul>
           </div>
         </section>

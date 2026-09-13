@@ -7,7 +7,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 ## Unreleased (0.10.0): packs on a brain
 
 Branch `packs`, started 2026-09-13. VERSION stays 0.9.4 until the tag. Architecture:
-hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`.
+hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`. Upgrading a live 0.9.4
+brain: `docs/UPGRADE-0.10.0.md`.
 
 - feat(autonomy): standing autonomous loop (commit 3b1e67c, 2026-08-28,
   shipped on main after 0.9.4 without an entry). Opt-in `POST /v1/autonomy/tick`
@@ -45,6 +46,16 @@ hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`.
   `GET /export`, `GET /export/{name}`, `DELETE /export/{name}` (operator-key
   gated); Settings, Export panel; `scripts/export.sh`; `python -m api.export`.
   Restore documented in `docs/EXPORT.md`. Tests: `test_export.py`.
+- feat(first-use): the first-use flow. `GET /onboarding/first-use`
+  (`api/onboarding/first_use.py`) drives a server-side checklist on the
+  dashboard: add a model key, drop ten files (progress n of 10), open the
+  first pre-installed app. On the first login of a fresh brain (no
+  documents, no chats) the console opens that app once, then remembers.
+  Knowledge tab shows the ten-files starter prompt with progress until ten
+  documents exist (replaces the empty-only guide). Settings, Keys gains a
+  two-minute key guide (where to get a key per provider, which model to
+  pick, what no key means). Older three-step card kept as the fallback when
+  the endpoint is absent. Tests: `test_first_use.py`.
 
 ## 0.9.4 — 2026-07-31 — model resolution: console pick outranks env
 

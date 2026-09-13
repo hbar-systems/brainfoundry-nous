@@ -568,10 +568,23 @@ function KeysPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 12px 0' }}>
         Your brain calls these providers directly. Keys are stored on your brain only —
         BrainFoundry never sees them. Paste the key, save, done — no container restart.
       </p>
+      {/* Key guide (first-use flow, unreleased 0.10.0): where a key comes from,
+          which model to pick after, and what happens with no key at all. */}
+      <div style={{ border: '1px solid #2a2420', borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontSize: 12, color: '#8b7d6e', lineHeight: 1.7 }}>
+        <div style={{ color: '#e8e0d5', marginBottom: 4 }}>Getting a key, two minutes</div>
+        <div>1. Open one provider, sign in, create a key, copy it:{' '}
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Anthropic</a>,{' '}
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>OpenAI</a>,{' '}
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Gemini</a>,{' '}
+          <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Groq</a>.
+        </div>
+        <div>2. Paste it below and Save. 3. In Models, pick that provider&apos;s model (Anthropic: claude-sonnet-5).</div>
+        <div>You pay the provider directly per use; a normal month of chatting is a few euros. No key at all: the local model answers, slowly, with nothing leaving this server.</div>
+      </div>
       {state.providers.map(p => {
         const current = state.keys[p]
         return (
