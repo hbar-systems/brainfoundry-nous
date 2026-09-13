@@ -1,29 +1,48 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/router'
 import { loadModelsAndDefault } from '../lib/defaultModel'
 
-// First-run checklist — the cold-start fix. A live 3-step card on the
-// dashboard: set persona → add knowledge → start a chat. Each step reflects
-// real brain state and links to the right tab. Auto-hides once all three are
-// done; dismissible. Replaces the old static welcome modal.
+// First-use checklist (unreleased 0.10.0). Server-driven from
+// GET /onboarding/first-use: add a model key -> drop ten files (progress
+// n of 10) -> open the first pre-installed app. On the very first login of a
+// fresh brain (no documents, no chats) the console opens that app once, then
+// remembers it did (localStorage). Falls back to the older three-step card
+// when the endpoint is unavailable (a brain on 0.9.x behind a newer console).
 function FirstRunChecklist() {
-  const [steps, setSteps] = useState(null) // { persona, knowledge, chat }
+  const router = useRouter()
+  const [state, setState] = useState(null)      // first-use state from the api
+  const [legacy, setLegacy] = useState(null)    // { persona, knowledge, chat }
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (localStorage.getItem('brain_firstrun_dismissed')) { setDismissed(true); return }
-    Promise.all([
-      fetch('/api/bf/persona/status').then(r => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/bf/documents/stats').then(r => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/bf/sessions').then(r => (r.ok ? r.json() : null)).catch(() => null),
-    ]).then(([p, d, s]) => {
-      setSteps({
-        persona: !!(p && p.configured),
-        knowledge: !!(d && ((d.total_chunks || 0) > 0 || (d.unique_documents || 0) > 0)),
-        chat: !!(s && Array.isArray(s.sessions) && s.sessions.length > 0),
+    fetch('/api/bf/onboarding/first-use')
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(d => {
+        if (d && Array.isArray(d.steps)) {
+          setState(d)
+          // One app opens on first login: fresh brain, an app installed, never done before.
+          if (d.fresh && d.first_app && !localStorage.getItem('brain_first_app_opened')) {
+            localStorage.setItem('brain_first_app_opened', d.first_app.id)
+            router.replace(d.first_app.route)
+          }
+          return
+        }
+        Promise.all([
+          fetch('/api/bf/persona/status').then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch('/api/bf/documents/stats').then(r => (r.ok ? r.json() : null)).catch(() => null),
+          fetch('/api/bf/sessions').then(r => (r.ok ? r.json() : null)).catch(() => null),
+        ]).then(([p, dd, s]) => {
+          setLegacy({
+            persona: !!(p && p.configured),
+            knowledge: !!(dd && ((dd.total_chunks || 0) > 0 || (dd.unique_documents || 0) > 0)),
+            chat: !!(s && Array.isArray(s.sessions) && s.sessions.length > 0),
+          })
+        })
       })
-    })
   }, [])
 
   const dismiss = () => {
@@ -31,27 +50,39 @@ function FirstRunChecklist() {
     setDismissed(true)
   }
 
-  if (dismissed || !steps) return null
-  if (steps.persona && steps.knowledge && steps.chat) return null
+  if (dismissed) return null
 
-  const rows = [
-    { key: 'persona', done: steps.persona, label: 'Set your brain’s persona',
-      sub: 'Who it is, how it thinks — the system prompt on every turn.', href: '/persona', cta: 'Persona' },
-    { key: 'knowledge', done: steps.knowledge, label: 'Add your first knowledge',
-      sub: 'Paste text or drop a file — the brain learns from what you give it.', href: '/upload', cta: 'Knowledge' },
-    { key: 'chat', done: steps.chat, label: 'Start a chat',
-      sub: 'Talk to your brain — it answers from your persona and knowledge.', href: '/chat', cta: 'Chat' },
-  ]
+  let rows, title, intro
+  if (state) {
+    if (state.complete) return null
+    rows = state.steps
+    title = 'Your first hour'
+    intro = 'A key, ten files, one app. Then talk to it.'
+  } else if (legacy) {
+    if (legacy.persona && legacy.knowledge && legacy.chat) return null
+    rows = [
+      { key: 'persona', done: legacy.persona, label: 'Set your brain’s persona',
+        sub: 'Who it is, how it thinks — the system prompt on every turn.', href: '/persona', cta: 'Persona' },
+      { key: 'knowledge', done: legacy.knowledge, label: 'Add your first knowledge',
+        sub: 'Paste text or drop a file — the brain learns from what you give it.', href: '/upload', cta: 'Knowledge' },
+      { key: 'chat', done: legacy.chat, label: 'Start a chat',
+        sub: 'Talk to your brain — it answers from your persona and knowledge.', href: '/chat', cta: 'Chat' },
+    ]
+    title = 'Get your brain started'
+    intro = 'Three steps from a blank brain to a useful one.'
+  } else {
+    return null
+  }
 
   return (
     <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: 24, marginBottom: 32 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: 0 }}>Get your brain started</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: 0 }}>{title}</h2>
         <button onClick={dismiss} style={{ background: 'none', border: 'none', color: '#555', fontSize: 12, cursor: 'pointer' }}>
           Dismiss
         </button>
       </div>
-      <p style={{ fontSize: 13, color: '#555', margin: '0 0 16px 0' }}>Three steps from a blank brain to a useful one.</p>
+      <p style={{ fontSize: 13, color: '#555', margin: '0 0 16px 0' }}>{intro}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {rows.map(r => (
           <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: r.done ? 0.55 : 1 }}>
@@ -64,6 +95,11 @@ function FirstRunChecklist() {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, color: '#e5e5e5', textDecoration: r.done ? 'line-through' : 'none' }}>{r.label}</div>
               <div style={{ fontSize: 12, color: '#555' }}>{r.sub}</div>
+              {r.progress && !r.done && (
+                <div style={{ marginTop: 6, height: 4, background: '#1e1e1e', borderRadius: 2, maxWidth: 260 }}>
+                  <div style={{ height: 4, width: `${Math.min(100, 100 * r.progress.done / Math.max(1, r.progress.target))}%`, background: '#c9a96e', borderRadius: 2 }} />
+                </div>
+              )}
             </div>
             {!r.done && (
               <a href={r.href} style={{
