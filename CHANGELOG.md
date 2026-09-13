@@ -7,7 +7,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 ## Unreleased (0.10.0): packs on a brain
 
 Branch `packs`, started 2026-09-13. VERSION stays 0.9.4 until the tag. Architecture:
-hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`.
+hbar.world `ops/2026-09-13_brainfoundry-os-layers.md`. Upgrading a live 0.9.4
+brain: `docs/UPGRADE-0.10.0.md`.
 
 - feat(autonomy): standing autonomous loop (commit 3b1e67c, 2026-08-28,
   shipped on main after 0.9.4 without an entry). Opt-in `POST /v1/autonomy/tick`
