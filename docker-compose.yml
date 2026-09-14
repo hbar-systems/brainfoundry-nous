@@ -54,6 +54,10 @@ services:
       # Packs to pre-install on first run (comma list; base is always included).
       # The provisioner writes this from the packs field of POST /api/provision.
       - BRAIN_PACKS=${BRAIN_PACKS:-base}
+      # CC tab (0.11.0): opt-in chat surface backed by a reasoner on the box.
+      # Off unless the operator sets BRAIN_CC_ENABLED=true in .env AND runs the
+      # cc-bridge on the host (operator runbook). The api only lists the tab.
+      - BRAIN_CC_ENABLED=${BRAIN_CC_ENABLED:-}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
       # Org-brain public-chat tuning. PUBLIC_CHAT_LAYERS comma-separated

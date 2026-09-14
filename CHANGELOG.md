@@ -4,6 +4,24 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased (0.11.0): CC, a chat surface backed by a reasoner on the box
+
+Branch `cc`, started 2026-09-14. VERSION stays 0.10.0 until the tag. Operator
+runbook (box side): hbar.world `ops/2026-09-14_claude-code-tab-experiment.md`.
+
+- feat(cc): new built-in tab `_cc` ("CC", route `/cc`, order 5, first in the
+  nav), listed by `/apps/list` only when `BRAIN_CC_ENABLED=true` (env passed
+  through docker-compose.yml). `/cc` is reserved for installed apps either way.
+  `ui/pages/cc.js`: a plain chat page that POSTs to `/cc/chat` on the console
+  origin and reads `/cc/health`; one turn at a time, "new thread" resets.
+  The bridge behind `/cc/*` is not part of this repo: it runs on the host as
+  the box user, calls a headless reasoner in the brain repo with read-only
+  tools, keeps the conversation id, and answers as the brain. Without the
+  bridge the page says so. No vendor or product is named anywhere on the tab.
+- Security shape, stated plainly: the bridge is reached only through the
+  console's existing basic auth over HTTPS and binds to 127.0.0.1; it can read
+  the brain repo, not write. Widening its tool list is an operator decision.
+
 ## 0.10.0 — 2026-09-13 — packs on a brain, export, first-use flow
 
 Branch `packs`, started 2026-09-13; merged to main and VERSION bumped 2026-09-13. Git tag v0.10.0 follows the first verified Update-tab deploy on hbar. Architecture:
