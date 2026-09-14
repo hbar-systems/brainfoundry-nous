@@ -4,9 +4,9 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## Unreleased (0.11.0): CC, a chat surface backed by a reasoner on the box
+## 0.11.0 — 2026-09-14 — CC, a chat surface backed by a reasoner on the box
 
-Branch `cc`, started 2026-09-14. VERSION stays 0.10.0 until the tag. Operator
+Branch `cc`, built, merged and deployed to hbar the same day; VERSION bumped 2026-09-14. Git tag v0.11.0 follows the Update-tab deploy of this commit on hbar. First verified turn with memory: 2026-09-14, honest "memory has nothing on this" answer in 26.9 s. Operator
 runbook (box side): hbar.world `ops/2026-09-14_claude-code-tab-experiment.md`.
 
 - feat(cc): new built-in tab `_cc` ("CC", route `/cc`, order 5, first in the
@@ -18,6 +18,11 @@ runbook (box side): hbar.world `ops/2026-09-14_claude-code-tab-experiment.md`.
   the box user, calls a headless reasoner in the brain repo with read-only
   tools, keeps the conversation id, and answers as the brain. Without the
   bridge the page says so. No vendor or product is named anywhere on the tab.
+- Memory (host side, same day): the bridge composes each turn as persona
+  (api/brain_persona.local.md) + the six nearest chunks from the brain's own
+  `POST /documents/search` + the message, with the memory block declared as
+  remembered content, never instructions. The brain api key reaches the
+  bridge through a mode-600 env file on the host, never a repo.
 - Security shape, stated plainly: the bridge is reached only through the
   console's existing basic auth over HTTPS and binds to 127.0.0.1; it can read
   the brain repo, not write. Widening its tool list is an operator decision.
