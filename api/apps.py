@@ -77,9 +77,19 @@ BUILTIN_TABS: list[dict[str, Any]] = [
     {"id": "_future",       "label": "Future",       "route": "/future",       "order": 80, "builtin": True},
 ]
 
+# CC: a chat surface backed by a reasoner running headlessly ON the brain's box,
+# reached through a small bridge served on the console origin at /cc/* (outside
+# this api; see hbar.world ops/2026-09-14_claude-code-tab/). Opt-in per brain,
+# like Self-update: BRAIN_CC_ENABLED=true in .env lists the tab first in the nav.
+# Off by default so buyer brains never show a tab whose box side is not there.
+CC_ENABLED: bool = os.getenv("BRAIN_CC_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+CC_TAB: dict[str, Any] = {"id": "_cc", "label": "CC", "route": "/cc", "order": 5, "builtin": True}
+if CC_ENABLED:
+    BUILTIN_TABS.insert(0, CC_TAB)
+
 # Routes that built-ins or the API itself occupy. Installed apps cannot use
-# any of these for their tab.route.
-RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api"}
+# any of these for their tab.route. /cc stays reserved even when CC is off.
+RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", CC_TAB["route"]}
 
 
 # ---------- pydantic models ----------
