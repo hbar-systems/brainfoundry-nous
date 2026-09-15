@@ -4,9 +4,11 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## Unreleased (0.12.0): CC sign-in without a terminal; box side moves into the template
+## 0.12.0 — 2026-09-15 — CC sign-in without a terminal; box side moves into the template
 
-Branch `cc-login`, started 2026-09-15. VERSION stays 0.11.0 until the tag.
+Branch `cc-login`, built, merged and deployed to hbar the same day; disconnect and reconnect through the page verified by the operator; two memory probes answered grounded and sourced (18 s each). VERSION bumped 2026-09-15. Git tag v0.12.0 follows this commit's Update-tab deploy on hbar.
+
+- fix(cc): the bridge hands the reasoner full memory chunks (CC_CHUNK_MAX, default 4000 chars); the first version cut each at 1500 and the reasoner reported half-excerpts.
 
 - feat(cc): the box side ships in the repo: `scripts/cc/cc-bridge.py` (the bridge)
   and `scripts/cc/install.sh` (one idempotent command: web terminal, reasoner

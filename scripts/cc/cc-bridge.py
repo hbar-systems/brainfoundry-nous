@@ -66,7 +66,7 @@ BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "")
 MEMORY_K = int(os.environ.get("CC_MEMORY_K", "6"))
 PERSONA_FILE = Path(CWD) / "api" / "brain_persona.local.md"
 PERSONA_MAX = 6000
-CHUNK_MAX = 1500
+CHUNK_MAX = int(os.environ.get("CC_CHUNK_MAX", "4000"))  # a full brain chunk (~500 words); 1500 showed the reasoner half of each
 
 SYSTEM = (
     "You are the reasoning surface of this brain, speaking from inside it. "
