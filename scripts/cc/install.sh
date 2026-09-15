@@ -83,7 +83,8 @@ if [ ! -s "$ENV_FILE" ]; then
         echo "no BRAIN_API_KEY in .env; the bridge will run without memory until $ENV_FILE holds one"
     fi
 fi
-python3 -m py_compile "$BRAIN_DIR/scripts/cc/cc-bridge.py"
+# Syntax check that writes nothing: the repo dir is often root-owned (container-side git), so no __pycache__.
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$BRAIN_DIR/scripts/cc/cc-bridge.py" && echo "cc-bridge.py parses"
 sudo tee /etc/systemd/system/cc-bridge.service >/dev/null <<UNIT
 [Unit]
 Description=CC bridge: headless reasoner turns for the brain console CC tab
