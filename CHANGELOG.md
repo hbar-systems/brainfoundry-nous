@@ -4,6 +4,30 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased (0.12.0): CC sign-in without a terminal; box side moves into the template
+
+Branch `cc-login`, started 2026-09-15. VERSION stays 0.11.0 until the tag.
+
+- feat(cc): the box side ships in the repo: `scripts/cc/cc-bridge.py` (the bridge)
+  and `scripts/cc/install.sh` (one idempotent command: web terminal, reasoner
+  CLI for the brain user, two systemd units, two Caddy routes, api key copied
+  into a mode-600 env file for memory search). A brain owner gets CC from the
+  repo alone; the operator's private runbook is no longer required.
+- feat(cc): sign-in from the CC page. The bridge drives `claude auth login`
+  through a pseudo-terminal, captures the sign-in URL, the page shows it as a
+  button, the person pastes the code back, the bridge types it in and confirms
+  with `claude auth status --json`. Two doors as two buttons: Claude
+  subscription (`--claudeai`) or Anthropic Console per-use billing (`--console`).
+  New endpoints `/cc/login/start`, `/cc/login/state`, `/cc/login/code`,
+  `/cc/logout`; `/cc/health` gains `auth {loggedIn, email, method}`. The chat
+  box is disabled until a reasoner is connected; a footer shows the account and
+  a disconnect link. The terminal at /claude/ stays as the fallback door.
+- docs: `docs/CC.md`, written for a brain owner: install, switch on, sign in,
+  what it reads and never writes, where things live, accounts and terms in
+  plain words, security shape, turn off, troubleshooting.
+- tests: `tests/test_cc_bridge.py` (ANSI stripping, URL capture from noisy
+  pty output, prompt composition with and without memory).
+
 ## 0.11.0 — 2026-09-14 — CC, a chat surface backed by a reasoner on the box
 
 Branch `cc`, built, merged and deployed to hbar the same day; VERSION bumped 2026-09-14. Git tag v0.11.0 follows the Update-tab deploy of this commit on hbar. First verified turn with memory: 2026-09-14, honest "memory has nothing on this" answer in 26.9 s. Operator
