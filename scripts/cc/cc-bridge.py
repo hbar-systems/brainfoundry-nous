@@ -81,6 +81,23 @@ SYSTEM = (
     "You may read files here. From this surface you cannot change anything; say so if asked to."
 )
 
+# Hands (optional): when the One CLI is configured on this box (ONE_SECRET in the
+# bridge's env file, `one` on PATH), the reasoner may reach the person's connected
+# apps through it, read-only. Without this paragraph the reasoner tries the
+# Claude.ai connectors, finds them unauthorized, and reports the request as
+# impossible (observed 2026-09-16 on hbar).
+ONE_ENABLED = bool(os.environ.get("ONE_SECRET"))
+if ONE_ENABLED:
+    SYSTEM += (
+        " For anything about the person's calendar, email, or other connected apps, use the One CLI "
+        "that is installed and already authenticated on this server: run `one --agent list` to see the "
+        "connections, then `one --agent actions search <platform> \"<what you want>\" -t execute`, then "
+        "`one --agent actions knowledge <platform> <actionId>`, then `one --agent actions execute <platform> "
+        "<actionId> <connectionKey> [flags]`. Only read actions (GET) are permitted here; that is by design, "
+        "not a fault. Never use Claude.ai connectors or any other path to those apps; One is the only door. "
+        "Report what came back plainly, with counts and the source platform."
+    )
+
 _lock = threading.Lock()
 _version: str | None = None
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
@@ -352,7 +369,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "session": bool(_load_state().get("session_id")),
                              "reasoner": _reasoner_version(), "cwd": CWD, "tools": ALLOWED_TOOLS,
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
-                             "persona": PERSONA_FILE.exists(), "auth": _auth_status()})
+                             "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
+                             "hands": "one" if ONE_ENABLED else None})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         else:

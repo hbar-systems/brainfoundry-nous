@@ -125,3 +125,6 @@ api/brain_persona.md
 # survives the rebuild (the parent /home/hbar/brain-backups is not mounted
 # into the container). Gitignored so it never blocks a pull / dirties status.
 .brain-backups/
+
+# One CLI scoping file (CC hands), per box, never committed
+.onerc

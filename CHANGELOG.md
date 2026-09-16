@@ -4,6 +4,16 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased (0.12.1): CC hands through One
+
+- fix(cc): when the One CLI is configured on the box (ONE_SECRET in the bridge env
+  file, `.onerc` with ONE_PERMISSIONS=read in the brain dir), the bridge's system
+  prompt tells the reasoner to use it for calendar, mail and connected apps, read
+  actions only, and never the Claude.ai connectors. First attempt on hbar
+  2026-09-16 failed only because this paragraph was missing. `/cc/health` reports
+  `"hands": "one"`. `.onerc` is gitignored. Operator setup: hbar.world
+  ops/2026-09-14_claude-code-tab-experiment.md (2026-09-16 section).
+
 ## 0.12.0 — 2026-09-15 — CC sign-in without a terminal; box side moves into the template
 
 Branch `cc-login`, built, merged and deployed to hbar the same day; disconnect and reconnect through the page verified by the operator; two memory probes answered grounded and sourced (18 s each). VERSION bumped 2026-09-15. Git tag v0.12.0 follows this commit's Update-tab deploy on hbar.
