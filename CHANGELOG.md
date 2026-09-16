@@ -4,7 +4,7 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
-## Unreleased (0.12.1): CC hands through One
+## Unreleased (0.13.0): CC hands through One, writes through the permit gate
 
 - fix(cc): when the One CLI is configured on the box (ONE_SECRET in the bridge env
   file, `.onerc` with ONE_PERMISSIONS=read in the brain dir), the bridge's system
@@ -17,6 +17,18 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   `--strict-mcp-config`, so the account's Claude.ai connectors (Gmail, Calendar,
   Drive) do not appear unauthorized in the tool list and get reported instead of
   One being used. Second attempt on hbar 2026-09-16 failed on exactly that.
+- feat(cc): writes through the permit gate. The reasoner never executes a
+  write; it proposes one as a `<proposal>` block only when the person asked for
+  it in that message. The bridge turns it into a permitd permit (signed,
+  single-use, bound to the exact arguments, time-boxed, egress-guarded) and the
+  CC page shows a card with the one-line summary and Send / Cancel. Approval
+  runs that one action through One from a separate write-enabled directory;
+  the reasoner's directory stays read-only. Endpoints `/cc/permits`,
+  `/cc/permits/approve`, `/cc/permits/deny`; `/cc/health` gains `writes` and
+  `gate`. Audit: `~/.cc-bridge/permitd-audit.jsonl`, hash-chained. install.sh
+  creates `~/.cc-bridge/venv` with permitd and runs the bridge from it.
+- feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
+  already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that
   restarts cc-bridge whenever scripts/cc/cc-bridge.py changes. The Update tab
   swaps files, not host services; until now the bridge kept running old code

@@ -11,7 +11,8 @@
 #   2. installs the reasoner CLI for this user (native binary, ~/.local/bin/claude)
 #   3. systemd unit claude-tab: ttyd on 127.0.0.1:7681, base /claude, one persistent tmux
 #   4. systemd unit cc-bridge: scripts/cc/cc-bridge.py on 127.0.0.1:7682, base /cc,
-#      with the brain's api key in a mode-600 env file so the bridge can search memory
+#      with the brain's api key in a mode-600 env file so the bridge can search memory,
+#      running in a small venv that holds permitd (the permit gate for writes)
 #   5. two routes in the console's Caddy block, /claude* and /cc*, validated before reload
 #   6. starts both, checks them
 # It does not touch .env, docker, the database, or the brain repo checkout.
@@ -73,6 +74,11 @@ UNIT
 
 echo "== 4/6 unit cc-bridge"
 mkdir -p "$HOME_DIR/.cc-bridge"
+# A small venv for the bridge: permitd (the permit gate for writes; stdlib-only, tiny).
+if [ ! -x "$HOME_DIR/.cc-bridge/venv/bin/python" ]; then
+    python3 -m venv "$HOME_DIR/.cc-bridge/venv" 2>/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv >/dev/null; python3 -m venv "$HOME_DIR/.cc-bridge/venv"; }
+fi
+"$HOME_DIR/.cc-bridge/venv/bin/pip" install -q --upgrade permitd >/dev/null 2>&1 && echo "permitd $("$HOME_DIR/.cc-bridge/venv/bin/python" -c 'import permitd;print(permitd.__version__)' 2>/dev/null || echo installed)"
 if [ ! -s "$ENV_FILE" ]; then
     # The brain's api key, so the bridge can search memory. .env is root-owned on most brains.
     if sudo grep -q "^BRAIN_API_KEY=" "$BRAIN_DIR/.env" 2>/dev/null; then
@@ -100,7 +106,7 @@ Environment=CC_BASE=/cc
 Environment=CC_CWD=$BRAIN_DIR
 Environment=CC_TOOLS=Read,Grep,Glob
 EnvironmentFile=-$ENV_FILE
-ExecStart=/usr/bin/python3 $BRAIN_DIR/scripts/cc/cc-bridge.py
+ExecStart=$HOME_DIR/.cc-bridge/venv/bin/python $BRAIN_DIR/scripts/cc/cc-bridge.py
 Restart=always
 RestartSec=2
 
