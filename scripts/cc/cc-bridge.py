@@ -100,6 +100,7 @@ if ONE_ENABLED:
 
 _lock = threading.Lock()
 _version: str | None = None
+MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 
@@ -309,7 +310,11 @@ def _run_turn(message: str, session_id: str | None) -> tuple[str, str | None, bo
     prompt, used = _compose(message)
     print(f"memory chunks={used}", flush=True)
     cmd = [REASONER, "-p", prompt, "--output-format", "json",
-           "--allowedTools", ALLOWED_TOOLS, "--append-system-prompt", SYSTEM]
+           "--allowedTools", ALLOWED_TOOLS, "--append-system-prompt", SYSTEM,
+           # No MCP servers from the user's own Claude Code config: the account's
+           # Claude.ai connectors (Gmail, Calendar, Drive) otherwise sit in the tool
+           # list unauthorized and the reasoner reports them instead of using One.
+           "--mcp-config", str(MCP_EMPTY), "--strict-mcp-config"]
     if session_id:
         cmd += ["--resume", session_id]
     try:
@@ -432,6 +437,8 @@ def main() -> None:
     if not Path(REASONER).exists():
         print(f"reasoner binary not found at {REASONER}", file=sys.stderr)
         sys.exit(1)
+    STATE_DIR.mkdir(mode=0o700, exist_ok=True)
+    MCP_EMPTY.write_text('{"mcpServers": {}}')
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'}", flush=True)
     httpd.serve_forever()

@@ -108,6 +108,27 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+echo "== 4b/6 restart the bridge by itself when an Update changes its file"
+sudo tee /etc/systemd/system/cc-bridge-watch.path >/dev/null <<UNIT
+[Unit]
+Description=Restart cc-bridge when scripts/cc/cc-bridge.py changes (Update tab swaps files, not host services)
+
+[Path]
+PathChanged=$BRAIN_DIR/scripts/cc/cc-bridge.py
+Unit=cc-bridge-watch.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo tee /etc/systemd/system/cc-bridge-watch.service >/dev/null <<UNIT
+[Unit]
+Description=Restart cc-bridge after its file changed
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart cc-bridge.service
+UNIT
+
 echo "== 5/6 Caddy routes"
 add_route() {  # name base port
     local name=$1 base=$2 port=$3
@@ -142,8 +163,9 @@ add_route cc /cc "$CC_PORT"
 
 echo "== 6/6 start and check"
 sudo systemctl daemon-reload
-sudo systemctl enable claude-tab cc-bridge >/dev/null 2>&1
+sudo systemctl enable claude-tab cc-bridge cc-bridge-watch.path >/dev/null 2>&1
 sudo systemctl restart claude-tab cc-bridge
+sudo systemctl restart cc-bridge-watch.path
 sleep 2
 echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)"
 echo "terminal  /claude/ -> HTTP $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$TERM_PORT/claude/)"

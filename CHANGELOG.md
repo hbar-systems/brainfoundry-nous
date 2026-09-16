@@ -13,6 +13,14 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   2026-09-16 failed only because this paragraph was missing. `/cc/health` reports
   `"hands": "one"`. `.onerc` is gitignored. Operator setup: hbar.world
   ops/2026-09-14_claude-code-tab-experiment.md (2026-09-16 section).
+- fix(cc): the bridge runs the reasoner with `--mcp-config` (empty) and
+  `--strict-mcp-config`, so the account's Claude.ai connectors (Gmail, Calendar,
+  Drive) do not appear unauthorized in the tool list and get reported instead of
+  One being used. Second attempt on hbar 2026-09-16 failed on exactly that.
+- fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that
+  restarts cc-bridge whenever scripts/cc/cc-bridge.py changes. The Update tab
+  swaps files, not host services; until now the bridge kept running old code
+  after an Update until someone restarted it by hand.
 
 ## 0.12.0 — 2026-09-15 — CC sign-in without a terminal; box side moves into the template
 
