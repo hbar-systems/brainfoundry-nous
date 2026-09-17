@@ -40,6 +40,14 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 - fix(cc): "new thread" is now carried on the next chat request itself
   (`{"new": true}`) as well as by `/cc/new`; on hbar the separate call was lost
   and the old conversation continued under an empty screen. Both paths are logged.
+- fix(cc): looking and doing are separated. A read-only `.onerc` in the reasoner's
+  directory hid write actions from `one actions search`, so no write could ever be
+  looked up or proposed (hbar 2026-09-17). Now the reasoner's directory carries no
+  One restriction; its Bash permission is narrowed to list, search, knowledge,
+  platforms and `one-read` (a wrapper that executes from a GET-only directory);
+  it has no general execute. install.sh sets this up when ONE_SECRET is present,
+  manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
+  allowed tools as separate arguments, since entries now contain spaces.
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that

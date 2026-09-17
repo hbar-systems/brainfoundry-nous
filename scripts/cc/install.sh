@@ -114,6 +114,36 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+echo "== 4a/6 hands (only when a One key is present in the bridge env file)"
+if grep -q "^ONE_SECRET=" "$ENV_FILE" 2>/dev/null; then
+    # Looking and doing are separate. The reasoner's own directory carries NO One restriction,
+    # so its lookups see every action, reads and writes. It may run only: list, search,
+    # knowledge, and one-read. one-read executes from a directory whose .onerc allows GET only.
+    # Writes run only from the bridge, from ~/.cc-bridge/exec, with an approved permit.
+    mkdir -p "$HOME_DIR/.cc-bridge/read" "$HOME_DIR/.cc-bridge/exec" "$HOME_DIR/.local/bin"
+    echo "ONE_PERMISSIONS=read"  > "$HOME_DIR/.cc-bridge/read/.onerc"
+    echo "ONE_PERMISSIONS=write" > "$HOME_DIR/.cc-bridge/exec/.onerc"
+    cat > "$HOME_DIR/.local/bin/one-read" <<'WRAP'
+#!/usr/bin/env bash
+# one-read: run ONE read action through One. Same arguments and flags as
+# `one --agent actions execute`. Executes from a directory whose .onerc allows GET only,
+# so a write passed here is refused by the One CLI itself.
+cd "$HOME/.cc-bridge/read" || exit 1
+exec one --agent actions execute "$@"
+WRAP
+    chmod 755 "$HOME_DIR/.local/bin/one-read"
+    # An earlier setup put a read-only .onerc into the brain directory; it hides write actions
+    # from lookups. Remove it only if it is exactly that one line.
+    if [ -f "$BRAIN_DIR/.onerc" ] && [ "$(tr -d '[:space:]' < "$BRAIN_DIR/.onerc")" = "ONE_PERMISSIONS=read" ]; then
+        sudo rm -f "$BRAIN_DIR/.onerc" && echo "removed the old read-only .onerc from the brain directory"
+    fi
+    TOOLS='Read,Grep,Glob,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
+    grep -v "^CC_TOOLS=" "$ENV_FILE" > "$ENV_FILE.tmp" && echo "CC_TOOLS=$TOOLS" >> "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE" && chmod 600 "$ENV_FILE"
+    echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
+else
+    echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
+fi
+
 echo "== 4b/6 restart the bridge by itself when an Update changes its file"
 sudo tee /etc/systemd/system/cc-bridge-watch.path >/dev/null <<UNIT
 [Unit]

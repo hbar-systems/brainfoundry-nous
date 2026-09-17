@@ -45,6 +45,9 @@ def test_gate_present_and_prompt_mentions_proposal(monkeypatch, tmp_path):
     assert m.SYSTEM.rstrip().endswith("Say so if asked to.")
     assert "Apart from such proposals" in m.SYSTEM
     assert "Only read actions (GET) are permitted" not in m.SYSTEM
+    # Looking and doing are separate: lookups via `one`, reads via `one-read`, no general execute.
+    assert "one-read <platform>" in m.SYSTEM
+    assert "You cannot run `one --agent actions execute` yourself" in m.SYSTEM
 
 
 def test_extract_proposal_strips_block_and_keeps_keys(monkeypatch, tmp_path):

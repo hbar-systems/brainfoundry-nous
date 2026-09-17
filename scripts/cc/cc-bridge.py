@@ -94,12 +94,14 @@ ONE_ENABLED = bool(os.environ.get("ONE_SECRET"))
 if ONE_ENABLED:
     SYSTEM += (
         " For anything about the person's calendar, email, or other connected apps, use the One CLI "
-        "that is installed and already authenticated on this server: run `one --agent list` to see the "
-        "connections, then `one --agent actions search <platform> \"<what you want>\" -t execute`, then "
-        "`one --agent actions knowledge <platform> <actionId>`, then `one --agent actions execute <platform> "
-        "<actionId> <connectionKey> [flags]`. Read actions (GET) you run yourself. `one --agent list` will "
-        "describe your access as read-only: that describes your own directory and is expected, not a fault. "
-        "Never use Claude.ai connectors or any other path to those apps; One is the only door. "
+        "that is installed and already authenticated on this server. Look things up with `one --agent list` "
+        "(connections and their keys), `one --agent actions search <platform> \"<what you want>\" -t execute` "
+        "(candidate actions, reads and writes alike) and `one --agent actions knowledge <platform> <actionId>` "
+        "(the action's real schema; always read it). To RUN a read action (GET) use `one-read <platform> "
+        "<actionId> <connectionKey> [flags]`, which takes exactly the arguments and flags of "
+        "`one --agent actions execute` and refuses anything but GET. You cannot run `one --agent actions "
+        "execute` yourself; that is by design. Never use Claude.ai connectors or any other path to those "
+        "apps; One is the only door. "
         "Report what came back plainly, with counts and the source platform."
     )
 
@@ -167,8 +169,9 @@ if GATE is not None:
         " Writes in connected apps (POST, PUT, PATCH, DELETE: send, create, update, delete) ARE possible from "
         "here, through a proposal the person approves. You never execute a write yourself, and you never "
         "answer that a write is impossible or tell the person to do it by hand. When the person asked for "
-        "that write in this very message, do the search and knowledge steps for the write action (use "
-        "`-t execute`), then end your answer with exactly one block: "
+        "that write in this very message, look the write action up (search with `-t execute`, then its "
+        "knowledge), take the connection key from `one --agent list`, then end your answer with exactly "
+        "one block: "
         "<proposal>{\"platform\": \"...\", \"action_id\": \"...\", \"connection_key\": \"...\", \"method\": \"POST\", "
         "\"path_vars\": {}, \"query\": {}, \"data\": {...}, \"summary\": \"one line: platform, action, target\"}</proposal>. "
         "The person sees that line with a Send button; nothing is sent until they press it. Say in one "
@@ -428,8 +431,9 @@ def _compose(message: str) -> tuple[str, int]:
 def _run_turn(message: str, session_id: str | None) -> tuple[str, str | None, bool]:
     prompt, used = _compose(message)
     print(f"memory chunks={used}", flush=True)
+    tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
     cmd = [REASONER, "-p", prompt, "--output-format", "json",
-           "--allowedTools", ALLOWED_TOOLS, "--append-system-prompt", SYSTEM,
+           "--allowedTools", *tools, "--append-system-prompt", SYSTEM,
            # No MCP servers from the user's own Claude Code config: the account's
            # Claude.ai connectors (Gmail, Calendar, Drive) otherwise sit in the tool
            # list unauthorized and the reasoner reports them instead of using One.
