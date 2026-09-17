@@ -183,6 +183,8 @@ _CLOSING = (
     " From this surface you cannot change anything; say so if asked to."
 )
 SYSTEM += _CLOSING
+import hashlib as _hashlib
+PROMPT_HASH = _hashlib.sha256((SYSTEM + "|" + ALLOWED_TOOLS).encode()).hexdigest()[:16]
 
 
 def _extract_proposal(reply: str):
@@ -565,9 +567,17 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             state = _load_state()
+            # A thread started under older instructions carries their conclusions ("I can't
+            # do that") into every later turn. When the instructions changed since the
+            # thread began, start a fresh one (observed 2026-09-17: two gate tests failed
+            # only because they resumed a pre-gate conversation).
+            if state.get("session_id") and state.get("prompt_hash") != PROMPT_HASH:
+                print("instructions changed since this thread began; starting a new thread", flush=True)
+                state = {}
             reply, sid, is_error = _run_turn(message, state.get("session_id"))
             if sid:
                 state["session_id"] = sid
+                state["prompt_hash"] = PROMPT_HASH
                 _save_state(state)
         finally:
             _lock.release()

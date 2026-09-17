@@ -33,6 +33,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   add the event by hand. Now: reads run directly, writes are possible through a
   proposal, a write is never called impossible, and the "cannot change anything
   else" rule closes the prompt after both paragraphs.
+- fix(cc): a thread begun under older instructions is not resumed once the
+  instructions or the tool list change; the bridge stores a hash of both with the
+  thread and starts a fresh one on mismatch. After an Update the page looks empty
+  but the old conversation used to continue underneath, carrying stale refusals.
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that
