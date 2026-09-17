@@ -27,6 +27,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   `/cc/permits/approve`, `/cc/permits/deny`; `/cc/health` gains `writes` and
   `gate`. Audit: `~/.cc-bridge/permitd-audit.jsonl`, hash-chained. install.sh
   creates `~/.cc-bridge/venv` with permitd and runs the bridge from it.
+- fix(cc): the system prompt no longer contradicts itself about writes. The first
+  gate deploy (2026-09-17) still said "you cannot change anything" and "only read
+  actions are permitted", so the reasoner refused to propose and told the person to
+  add the event by hand. Now: reads run directly, writes are possible through a
+  proposal, a write is never called impossible, and the "cannot change anything
+  else" rule closes the prompt after both paragraphs.
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that

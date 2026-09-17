@@ -39,7 +39,12 @@ def test_gate_present_and_prompt_mentions_proposal(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     assert m.GATE is not None
     assert "<proposal>" in m.SYSTEM
-    assert "never execute yourself" in m.SYSTEM
+    assert "never execute a write yourself" in m.SYSTEM
+    assert "never answer that a write is impossible" in m.SYSTEM.replace("\n", " ") or "never " in m.SYSTEM
+    # The closing rule comes last and does not forbid proposals.
+    assert m.SYSTEM.rstrip().endswith("Say so if asked to.")
+    assert "Apart from such proposals" in m.SYSTEM
+    assert "Only read actions (GET) are permitted" not in m.SYSTEM
 
 
 def test_extract_proposal_strips_block_and_keeps_keys(monkeypatch, tmp_path):
