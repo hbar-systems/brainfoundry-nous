@@ -190,6 +190,7 @@ export default function CC() {
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
   const endRef = useRef(null)
   const boxRef = useRef(null)
+  const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
 
   const loadHealth = () =>
     fetch('/cc/health', { cache: 'no-store' })
@@ -234,7 +235,8 @@ export default function CC() {
     setTurns(t => [...t, { who: 'me', text }])
     setBusy(true)
     try {
-      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) })
+      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, new: freshRef.current }) })
+      freshRef.current = false
       const data = await r.json().catch(() => ({}))
       const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
       setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null }])
@@ -248,8 +250,10 @@ export default function CC() {
 
   async function fresh() {
     if (busy) return
-    try { await fetch('/cc/new', { method: 'POST' }) } catch {}
+    freshRef.current = true
+    try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
     setTurns([])
+    loadHealth()
   }
 
   async function signOut() {

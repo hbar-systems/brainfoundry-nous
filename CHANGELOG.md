@@ -37,6 +37,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   instructions or the tool list change; the bridge stores a hash of both with the
   thread and starts a fresh one on mismatch. After an Update the page looks empty
   but the old conversation used to continue underneath, carrying stale refusals.
+- fix(cc): "new thread" is now carried on the next chat request itself
+  (`{"new": true}`) as well as by `/cc/new`; on hbar the separate call was lost
+  and the old conversation continued under an empty screen. Both paths are logged.
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that

@@ -512,6 +512,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/new":
             _save_state({})
+            print("new thread (reset by /new)", flush=True)
             self._send(200, {"ok": True})
             return
         if route == "/login/start":
@@ -573,6 +574,11 @@ class Handler(BaseHTTPRequestHandler):
             # only because they resumed a pre-gate conversation).
             if state.get("session_id") and state.get("prompt_hash") != PROMPT_HASH:
                 print("instructions changed since this thread began; starting a new thread", flush=True)
+                state = {}
+            # The page also says so inside the chat request itself: a separate /new call can be
+            # lost (observed 2026-09-17: the button cleared the screen, the old thread went on).
+            if req.get("new") is True and state.get("session_id"):
+                print("new thread (flag on the chat request)", flush=True)
                 state = {}
             reply, sid, is_error = _run_turn(message, state.get("session_id"))
             if sid:
