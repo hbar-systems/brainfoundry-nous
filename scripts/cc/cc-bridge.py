@@ -830,6 +830,9 @@ def main() -> None:
         sys.exit(1)
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     MCP_EMPTY.write_text('{"mcpServers": {}}')
+    if BRAIN_API_KEY:
+        # Warm the memory graph (its first computation averages every chunk vector).
+        threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=300&k=3"), daemon=True).start()
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'}", flush=True)
     httpd.serve_forever()

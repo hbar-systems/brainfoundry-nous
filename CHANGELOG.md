@@ -57,6 +57,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   current turn (`/cc/health.last_sources`), hover names, click shows neighbours
   and can hand a question to the conversation. New built-in tab Graph (/graph);
   the reasoner may summon it with `<pane>/graph</pane>` ("show me my mind").
+- fix(graph): layout in pixel space with capped forces (the first version pinned
+  every node to the canvas edges); header and legend moved out of the drawing;
+  neighbour closeness shown relative to the graph's own range instead of raw
+  cosine (which sits between 0.90 and 0.98 for everything); the bridge warms the
+  graph cache at startup so the first open is fast.
 - feat(cc): the workshop. When `CC_WORLD_DIR` points at a read-only mirror of the
   owner's own repository on the box, the reasoner is told about it, gets it as an
   allowed directory (`--add-dir`), and is asked to read current files there for
