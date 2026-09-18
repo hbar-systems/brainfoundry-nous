@@ -55,6 +55,8 @@ For the write to actually succeed, the connection in One's dashboard must allow 
 
 If you reload the page with a card still waiting, it comes back at the top of the thread until you decide.
 
+Once you trust a kind of write, tick "don't ask again for this action" on its card before pressing Send. From then on that exact action on that platform runs without a card: the reasoner still proposes it, the bridge approves and runs it, and the audit still records every one. The footer shows how many actions run without asking; open the list and press "ask again" to take one back. Nothing runs without asking unless you ticked it. The list lives in `~/.cc-bridge/auto.json`.
+
 ## Where things live on the server
 
 | piece | place |

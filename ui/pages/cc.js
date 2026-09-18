@@ -71,7 +71,20 @@ function ProposalCard({ p, onDecide }) {
       </div>
     )
   }
+  const [remember, setRemember] = useState(false)
   const decided = p.decided
+  if (p.auto) {
+    const ok = p.outcome && p.outcome.ok
+    return (
+      <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '10px', border: `1px solid ${ok ? C.line : C.bad}`, backgroundColor: '#1a1610' }}>
+        <p style={{ ...mono, color: C.dim, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
+          {ok ? 'done without asking' : 'tried without asking, failed'} · {p.method || 'POST'} · {p.platform || ''}
+        </p>
+        <p style={{ margin: 0, color: C.ink, fontSize: '14px', lineHeight: 1.5 }}>{p.summary}</p>
+        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>you allowed this action earlier · permit {p.id}{ok ? '' : ` · ${(p.outcome && p.outcome.result && p.outcome.result.error) || 'error'}`}</p>
+      </div>
+    )
+  }
   return (
     <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}80`, backgroundColor: '#1a1610' }}>
       <p style={{ ...mono, color: C.gold, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
@@ -81,11 +94,17 @@ function ProposalCard({ p, onDecide }) {
       {decided ? (
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? 'sent' : 'cancelled'} · permit {p.id}</p>
       ) : (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <Btn primary onClick={() => onDecide(p.id, 'approve')} disabled={p.busy}>{p.busy ? 'sending…' : 'Send'}</Btn>
-          <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>Cancel</Btn>
-          <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}</span>
-        </div>
+        <>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? 'sending…' : 'Send'}</Btn>
+            <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>Cancel</Btn>
+            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}</span>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', color: C.dim, fontSize: '12px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} disabled={p.busy} style={{ accentColor: C.gold }} />
+            don&apos;t ask again for this action ({p.platform}, {p.method || 'POST'}); still recorded in the audit, you can undo it below
+          </label>
+        </>
       )}
     </div>
   )
@@ -188,6 +207,8 @@ export default function CC() {
   const [busy, setBusy] = useState(false)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
+  const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
+  const [showAuto, setShowAuto] = useState(false)
   const endRef = useRef(null)
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
@@ -198,19 +219,20 @@ export default function CC() {
       .then(setHealth)
       .catch(() => setHealth(false))
   const loadPending = () =>
-    fetch('/cc/permits', { cache: 'no-store' }).then(r => r.ok ? r.json() : { pending: [] }).then(d => setPending(d.pending || [])).catch(() => {})
+    fetch('/cc/permits', { cache: 'no-store' }).then(r => r.ok ? r.json() : { pending: [] }).then(d => { setPending(d.pending || []); setAuto(d.auto || []) }).catch(() => {})
   useEffect(() => { loadHealth(); loadPending() }, [])
 
   // The write gate: a proposal card's Send approves the permit and executes that one
   // action through One; Cancel denies it. Either way the audit log gets a line.
-  async function decide(id, action) {
+  async function decide(id, action, remember) {
     setTurns(t => t.map(x => (x.proposal && x.proposal.id === id ? { ...x, proposal: { ...x.proposal, busy: true } } : x)))
     let data = {}
     try {
-      const r = await fetch(`/cc/permits/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+      const r = await fetch(`/cc/permits/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, remember: !!remember }) })
       data = await r.json().catch(() => ({}))
     } catch (e) { data = { ok: false, error: 'the bridge did not answer' } }
     setPending(p => p.filter(x => x.id !== id))
+    if (remember && data.ok) loadPending()
     setTurns(t => t.map(x => (x.proposal && x.proposal.id === id ? { ...x, proposal: { ...x.proposal, busy: false, decided: action } } : x)))
     if (action === 'approve') {
       const text = data.ok
@@ -254,6 +276,14 @@ export default function CC() {
     try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
     setTurns([])
     loadHealth()
+  }
+
+  async function askAgain(a) {
+    try {
+      const r = await fetch('/cc/permits/auto/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform: a.platform, action_id: a.action_id }) })
+      const d = await r.json().catch(() => ({}))
+      setAuto(d.auto || [])
+    } catch {}
   }
 
   async function signOut() {
@@ -342,7 +372,18 @@ export default function CC() {
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
+          {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
+        {showAuto && auto.length > 0 && (
+          <ul style={{ ...mono, listStyle: 'none', padding: '8px 0 0 0', margin: 0, color: C.dim, fontSize: '11px' }}>
+            {auto.map(a => (
+              <li key={a.platform + a.action_id} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '3px 0' }}>
+                <span>{a.platform} · {a.method || 'POST'} · {a.title || a.action_id}</span>
+                <a onClick={() => askAgain(a)} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>ask again</a>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </>
   )

@@ -208,9 +208,63 @@ def _propose(p: dict) -> dict:
         return {"error": "writes are not enabled on this brain (permit gate not installed)"}
     r = GATE.call("one_execute", p)
     if r.permit:
-        return {"id": r.permit["id"], "summary": p.get("summary") or "", "platform": p.get("platform"),
+        card = {"id": r.permit["id"], "summary": p.get("summary") or "", "platform": p.get("platform"),
                 "method": p.get("method"), "action_id": p.get("action_id"), "ttl_seconds": r.permit.get("ttl_seconds")}
+        if _auto_has(p):
+            # The owner chose "don't ask again" for this platform + action: approve and run now.
+            # Still a permit, still bound to these arguments, still audited; only the click is gone.
+            print(f"auto-run {card['id']} ({p.get('platform')} {p.get('action_id')})", flush=True)
+            outcome = _run_permit(card["id"], GATE.get(card["id"]))
+            card.update({"auto": True, "decided": "approve", "outcome": outcome})
+        return card
     return {"error": r.error or r.reason}
+
+
+AUTO_FILE = STATE_DIR / "auto.json"   # actions the owner chose to run without a card
+
+
+def _auto_load() -> list:
+    try:
+        return json.loads(AUTO_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _auto_save(items: list) -> None:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    AUTO_FILE.write_text(json.dumps(items, indent=1))
+
+
+def _auto_key(platform, action_id) -> str:
+    return f"{platform or ''}::{action_id or ''}"
+
+
+def _auto_has(p: dict) -> bool:
+    k = _auto_key(p.get("platform"), p.get("action_id"))
+    return any(_auto_key(a.get("platform"), a.get("action_id")) == k for a in _auto_load())
+
+
+def _auto_add(p: dict, title: str = "") -> None:
+    items = _auto_load()
+    if not _auto_has(p):
+        items.append({"platform": p.get("platform"), "action_id": p.get("action_id"), "method": p.get("method"),
+                      "title": title or (p.get("summary") or "")[:80], "added": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        _auto_save(items)
+
+
+def _auto_remove(platform, action_id) -> None:
+    k = _auto_key(platform, action_id)
+    _auto_save([a for a in _auto_load() if _auto_key(a.get("platform"), a.get("action_id")) != k])
+
+
+def _run_permit(pid: str, pm) -> dict:
+    """Approve and execute one permit. Shared by the Send button and auto-run."""
+    GATE.approve(pid)
+    r = GATE.call("one_execute", pm.args, permit_id=pid)
+    print(f"permit {pid} executed ok={r.ok} reason={r.reason}", flush=True)
+    return {"ok": r.ok, "status": "executed" if r.ok else "failed",
+            "result": r.result if r.ok else {"error": r.error or r.reason},
+            "summary": (pm.args or {}).get("summary", "")}
 
 
 def _permit_public(pm) -> dict:
@@ -504,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, LOGIN.state())
         elif route == "/permits":
             items = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
-            self._send(200, {"pending": items, "writes": GATE is not None})
+            self._send(200, {"pending": items, "writes": GATE is not None, "auto": _auto_load() if GATE else []})
         else:
             self._send(404, {"error": "not_found"})
 
@@ -543,15 +597,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "status": "denied"})
                 return
             try:
-                GATE.approve(pid)
+                outcome = _run_permit(pid, pm)
             except Exception as e:
                 self._send(409, {"ok": False, "error": f"could not approve: {type(e).__name__}"})
                 return
-            r = GATE.call("one_execute", pm.args, permit_id=pid)
-            print(f"permit {pid} executed ok={r.ok} reason={r.reason}", flush=True)
-            body = r.result if r.ok else {"error": r.error or r.reason}
-            self._send(200 if r.ok else 502, {"ok": r.ok, "status": "executed" if r.ok else "failed",
-                                              "result": body, "summary": (pm.args or {}).get("summary", "")})
+            if req.get("remember") is True and outcome.get("ok"):
+                _auto_add(pm.args or {}, title=(pm.args or {}).get("summary", ""))
+                print(f"auto-run enabled for {(pm.args or {}).get('platform')} {(pm.args or {}).get('action_id')}", flush=True)
+            self._send(200 if outcome["ok"] else 502, outcome)
+            return
+        if route == "/permits/auto/remove":
+            _auto_remove(req.get("platform"), req.get("action_id"))
+            print(f"auto-run disabled for {req.get('platform')} {req.get('action_id')}", flush=True)
+            self._send(200, {"ok": True, "auto": _auto_load()})
             return
         if route == "/logout":
             subprocess.run([REASONER, "auth", "logout"], capture_output=True, timeout=30, env=_env())

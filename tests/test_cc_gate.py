@@ -110,3 +110,30 @@ def test_egress_guard_refuses_credential_shaped_args(monkeypatch, tmp_path):
     p["data"] = {"body": "here is my key sk-ant-api03-" + "A" * 60}
     card = m._propose(p)
     assert "error" in card and "id" not in card
+
+
+def test_auto_run_after_dont_ask_again(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path)
+    calls = []
+    m.GATE.register("one_execute", lambda **kw: (calls.append(kw) or {"status": 200}), tier=m.RED)
+    _, p = m._extract_proposal(PROPOSAL)
+    # First time: a card, nothing runs.
+    card = m._propose(p)
+    assert "id" in card and not card.get("auto") and calls == []
+    # Owner presses Send with "don't ask again": run + remember.
+    out = m._run_permit(card["id"], m.GATE.get(card["id"]))
+    assert out["ok"] and len(calls) == 1
+    m._auto_add(p)
+    assert m._auto_has(p)
+    # Second time: proposal is approved and run by the bridge, no click.
+    card2 = m._propose(p)
+    assert card2.get("auto") is True and card2["outcome"]["ok"] and len(calls) == 2
+    # A different action on the same platform still asks.
+    q = dict(p); q["action_id"] = "conn_mod_def::other"
+    card3 = m._propose(q)
+    assert "id" in card3 and not card3.get("auto") and len(calls) == 2
+    # Ask again: revoked.
+    m._auto_remove(p["platform"], p["action_id"])
+    assert not m._auto_has(p)
+    card4 = m._propose(p)
+    assert not card4.get("auto") and len(calls) == 2

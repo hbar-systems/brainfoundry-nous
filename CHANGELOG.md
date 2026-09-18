@@ -48,6 +48,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- feat(cc): "don't ask again for this action" on the write card (D56). Per platform
+  + action id, stored in `~/.cc-bridge/auto.json`; an allowed action is still
+  proposed as a permit, then approved and run by the bridge without a card, and
+  audited like any other. The footer lists allowed actions with "ask again".
+  `/cc/permits` returns `auto`; `/cc/permits/approve` takes `remember`;
+  `/cc/permits/auto/remove` revokes one.
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that
