@@ -211,6 +211,21 @@ SYSTEM += (
     "opens beside the conversation. Do not add a pane for ordinary answers."
 )
 
+# The workshop (optional): a read-only mirror of the owner's own repositories on the box
+# (CC_WORLD_DIR, e.g. /home/hbar/world, refreshed by a timer). The reasoner may read it;
+# it is added to the allowed directories per turn. Memory remembers; the mirror is looked up.
+WORLD_DIR = os.environ.get("CC_WORLD_DIR", "").strip()
+if WORLD_DIR and not Path(WORLD_DIR).is_dir():
+    print(f"CC_WORLD_DIR={WORLD_DIR} is not a directory; ignoring", flush=True)
+    WORLD_DIR = ""
+if WORLD_DIR:
+    SYSTEM += (
+        f" The person's own working repository is mirrored read-only at {WORLD_DIR} (refreshed every few "
+        "minutes from their source of truth). For questions about their current plans, notes, decisions or "
+        "documents, read the current file there rather than relying on a memory chunk; say which file you read. "
+        "Memory tells you what mattered; the mirror tells you what the file says now."
+    )
+
 _CLOSING = (
     " Apart from such proposals, you cannot change anything from this surface: not files, not memory, not "
     "settings. Say so if asked to."
@@ -592,6 +607,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False) -> tup
            # Claude.ai connectors (Gmail, Calendar, Drive) otherwise sit in the tool
            # list unauthorized and the reasoner reports them instead of using One.
            "--mcp-config", str(MCP_EMPTY), "--strict-mcp-config"]
+    if WORLD_DIR:
+        cmd += ["--add-dir", WORLD_DIR]
     if session_id:
         cmd += ["--resume", session_id]
     try:
@@ -668,7 +685,8 @@ class Handler(BaseHTTPRequestHandler):
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
                              "hands": "one" if ONE_ENABLED else None,
-                             "writes": GATE is not None, "gate": "permitd" if GATE is not None else None})
+                             "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
+                             "workshop": WORLD_DIR or None})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         elif route == "/threads":

@@ -48,6 +48,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- feat(cc): the workshop. When `CC_WORLD_DIR` points at a read-only mirror of the
+  owner's own repository on the box, the reasoner is told about it, gets it as an
+  allowed directory (`--add-dir`), and is asked to read current files there for
+  questions about plans and documents instead of relying on memory chunks.
+  `/cc/health` reports `workshop`. The mirror itself is operator tooling
+  (hbar.world ops/2026-09-18_world-mirror/).
 - feat(cc): threads live in the brain. Each CC turn is appended to a brain chat
   session (`model_name` "cc", title from the first sentence) through the new
   `POST /sessions/{id}/messages`; proposed and auto-run writes leave a line.
