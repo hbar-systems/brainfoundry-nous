@@ -25,6 +25,9 @@ export default function App({ Component, pageProps }) {
   // the one this tab loaded, surfaces a one-click reload — so "I deployed but
   // the UI looks the same" stops happening.
   const [updateReady, setUpdateReady] = useState(false)
+  // Embedded as a pane inside CC (D54): no nav, no top offset. Same origin, same auth.
+  const [embedded, setEmbedded] = useState(false)
+  useEffect(() => { try { setEmbedded(window.self !== window.top) } catch { setEmbedded(true) } }, [])
   useEffect(() => {
     if (typeof window === 'undefined') return
     const myBuild = window.__NEXT_DATA__ && window.__NEXT_DATA__.buildId
@@ -367,7 +370,7 @@ export default function App({ Component, pageProps }) {
           }
         `}</style>
       </Head>
-      <Nav />
+      {!embedded && <Nav />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
@@ -390,7 +393,7 @@ export default function App({ Component, pageProps }) {
         // both browser mode and PWA standalone mode. --nav-h is set on
         // <html> from localStorage by the hydration effect above; falls
         // back to 52px by the :root default.
-        paddingTop: 'calc(var(--nav-h) + env(safe-area-inset-top, 0px))',
+        paddingTop: embedded ? 0 : 'calc(var(--nav-h) + env(safe-area-inset-top, 0px))',
         minHeight: '100vh',
         backgroundColor: 'var(--bg)',
         color: 'var(--text)',

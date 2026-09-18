@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { loadModelsAndDefault } from '../lib/defaultModel'
+import CC from './cc'
 
 // First-use checklist (unreleased 0.10.0). Server-driven from
 // GET /onboarding/first-use: add a model key -> drop ten files (progress
@@ -332,7 +333,7 @@ function MindArchitecture() {
   )
 }
 
-export default function Dashboard() {
+export function Dashboard() {
   const [health, setHealth] = useState(null)
   const [models, setModels] = useState([])
   const [defaultModelName, setDefaultModelName] = useState('')
@@ -462,4 +463,19 @@ export default function Dashboard() {
       )}
     </div>
   )
+}
+
+
+// D54 (2026-09-18): when CC is enabled on this brain, "/" is CC, the mind you speak
+// into; the dashboard lives at /dashboard. The api says which via /apps/list.ccHome.
+export default function Home() {
+  const [ccHome, setCcHome] = useState(null)
+  useEffect(() => {
+    fetch('/api/bf/apps/list')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setCcHome(!!(d && d.ccHome)))
+      .catch(() => setCcHome(false))
+  }, [])
+  if (ccHome === null) return null
+  return ccHome ? <CC /> : <Dashboard />
 }

@@ -52,6 +52,10 @@ export default function Nav() {
   const [tabs, setTabs] = useState(FALLBACK_NAV)
   // Owner-set menu header (appearance plane); null => fall back to brand name.
   const [menuTitle, setMenuTitle] = useState(null)
+  const [drawer, setDrawer] = useState(false)
+  // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
+  const ccHome = tabs.some(t => t.id === '_cc' && t.href === '/')
+  useEffect(() => { setDrawer(false) }, [router.pathname])
 
   useEffect(() => {
     let cancelled = false
@@ -140,6 +144,30 @@ export default function Nav() {
           {menuTitle || process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
         </span>
       </Link>
+      {ccHome ? (
+        <div style={{ marginLeft: 'auto', position: 'relative' }}>
+          <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer}
+            style={{ background: drawer ? 'var(--surface2)' : 'transparent', color: 'var(--muted)', border: '1px solid var(--border)',
+                     borderRadius: '6px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.06em' }}>
+            everything
+          </button>
+          {drawer && (
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', minWidth: '220px', backgroundColor: 'var(--bg)',
+                          border: '1px solid var(--border)', borderRadius: '10px', padding: '6px', boxShadow: '0 12px 32px rgba(0,0,0,0.45)', zIndex: 200 }}>
+              {tabs.filter(t => t.id !== '_cc').map(t => {
+                const active = isActive(router, t)
+                return (
+                  <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={{
+                    display: 'block', padding: '8px 12px', borderRadius: '6px', fontSize: '13px', textDecoration: 'none',
+                    fontFamily: 'var(--font-body)', color: active ? 'var(--text)' : 'var(--muted)',
+                    backgroundColor: active ? 'var(--surface2)' : 'transparent', fontWeight: active ? 600 : 400,
+                  }}>{t.label}</Link>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="bf-nav-links">
         {tabs.map(t => {
           const active = isActive(router, t)
@@ -160,6 +188,7 @@ export default function Nav() {
           )
         })}
       </div>
+      )}
 
       {/* Drag handle — sits on the nav's bottom edge, pulls up or down
           to resize the nav height. Matches the sidebar/messages resize

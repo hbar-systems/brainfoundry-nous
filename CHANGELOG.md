@@ -48,6 +48,14 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- feat(cc): the home screen (D54). With BRAIN_CC_ENABLED the `_cc` tab takes "/"
+  and the dashboard moves to /dashboard (`ui/pages/dashboard.js`); `/apps/list`
+  returns `ccHome`; `ui/pages/index.js` renders CC or the dashboard accordingly.
+  The nav folds into one "everything" drawer in CC-home mode. Summoned panes:
+  the reasoner may end an answer with `<pane>/route</pane>` (whitelisted routes
+  or /apps/<id>), the page opens that route in a side panel (overlay when
+  narrow); first-use steps appear as one sentence each with a link that opens
+  the same panes. Pages embedded as panes hide the nav and the top offset.
 - feat(cc): "don't ask again for this action" on the write card (D56). Per platform
   + action id, stored in `~/.cc-bridge/auto.json`; an allowed action is still
   proposed as a permit, then approved and run by the bridge without a card, and

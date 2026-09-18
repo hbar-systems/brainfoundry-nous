@@ -110,6 +110,46 @@ function ProposalCard({ p, onDecide }) {
   )
 }
 
+function Pane({ pane, onClose }) {
+  // A summoned surface (D54): an existing console page, same origin and auth, shown
+  // beside the conversation and dismissed with one click. Pages hide their own nav
+  // when embedded (see _app.js). Narrow screens get it as an overlay.
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const f = () => setNarrow(window.innerWidth < 960)
+    f(); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f)
+  }, [])
+  const box = narrow
+    ? { position: 'fixed', top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px))', right: 0, bottom: 0, left: 0, zIndex: 150, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
+    : { width: 'min(48vw, 760px)', flexShrink: 0, borderLeft: `1px solid ${C.line}`, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
+  return (
+    <div style={box}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
+        <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>
+        <Btn small onClick={onClose} title="Put it away">close</Btn>
+      </div>
+      <iframe src={pane.route} title={pane.title || pane.route} style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain }} />
+    </div>
+  )
+}
+
+function FirstRun({ steps, onOpen }) {
+  // The first-use steps as sentences from the brain, on the home screen (D54). The
+  // reasoner sign-in card covers the key step, so it is not repeated here.
+  const rows = (steps || []).filter(s => s.key !== 'key')
+  if (rows.length === 0) return null
+  return (
+    <div style={{ margin: '0 0 16px 0' }}>
+      {rows.map(s => (
+        <p key={s.key} style={{ margin: '0 0 6px 0', color: s.done ? C.faint : C.dim, fontSize: '14px', lineHeight: 1.6 }}>
+          {s.done ? '\u2713 ' : ''}{s.label}{!s.done && s.sub ? `. ${s.sub}` : ''}
+          {!s.done && s.href ? <> <a onClick={() => onOpen({ route: s.href, title: s.cta || s.label })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{s.cta || 'open'}</a></> : null}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 function SignIn({ onDone, health }) {
   const [state, setState] = useState({ phase: 'idle' })
   const [code, setCode] = useState('')
@@ -209,6 +249,8 @@ export default function CC() {
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
   const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
   const [showAuto, setShowAuto] = useState(false)
+  const [pane, setPane] = useState(null)         // a summoned surface beside the conversation (D54)
+  const [firstRun, setFirstRun] = useState(null) // first-use steps from the api, until complete
   const endRef = useRef(null)
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
@@ -220,7 +262,10 @@ export default function CC() {
       .catch(() => setHealth(false))
   const loadPending = () =>
     fetch('/cc/permits', { cache: 'no-store' }).then(r => r.ok ? r.json() : { pending: [] }).then(d => { setPending(d.pending || []); setAuto(d.auto || []) }).catch(() => {})
-  useEffect(() => { loadHealth(); loadPending() }, [])
+  const loadFirstRun = () =>
+    fetch('/api/bf/onboarding/first-use', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setFirstRun(d && Array.isArray(d.steps) ? d : null)).catch(() => {})
+  useEffect(() => { loadHealth(); loadPending(); loadFirstRun() }, [])
+  const openPane = (p) => { if (p && p.route) setPane(p) }
 
   // The write gate: a proposal card's Send approves the permit and executes that one
   // action through One; Cancel denies it. Either way the audit log gets a line.
@@ -262,6 +307,7 @@ export default function CC() {
       const data = await r.json().catch(() => ({}))
       const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
       setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null }])
+      if (data.pane) openPane(data.pane)
     } catch (e) {
       setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
     } finally {
@@ -299,8 +345,9 @@ export default function CC() {
   return (
     <>
       <Head><title>CC · BrainFoundry</title></Head>
-      <div style={{ padding: '28px 32px 20px', maxWidth: '860px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif',
-                    display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 60px)' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
+      <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : '860px', margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+                    fontFamily: 'Lora, ui-serif, serif', display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 60px)' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div>
@@ -311,6 +358,8 @@ export default function CC() {
           </div>
           <Btn small onClick={fresh} disabled={busy} title="Start a new conversation">new thread</Btn>
         </div>
+
+        {firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
 
         {health === false && (
           <div style={{ padding: '12px 16px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '10px', marginBottom: '14px' }}>
@@ -384,6 +433,8 @@ export default function CC() {
             ))}
           </ul>
         )}
+      </div>
+      {pane && <Pane pane={pane} onClose={() => setPane(null)} />}
       </div>
     </>
   )

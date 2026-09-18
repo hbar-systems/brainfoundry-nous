@@ -85,11 +85,17 @@ BUILTIN_TABS: list[dict[str, Any]] = [
 CC_ENABLED: bool = os.getenv("BRAIN_CC_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 CC_TAB: dict[str, Any] = {"id": "_cc", "label": "CC", "route": "/cc", "order": 5, "builtin": True}
 if CC_ENABLED:
+    # D54 (2026-09-18): CC is the home screen. It takes "/" and the dashboard moves to
+    # /dashboard; the ui reads `ccHome` from /apps/list and renders the tab bar as a drawer.
+    for _t in BUILTIN_TABS:
+        if _t["id"] == "_dashboard":
+            _t["route"] = "/dashboard"
+    CC_TAB["route"] = "/"
     BUILTIN_TABS.insert(0, CC_TAB)
 
 # Routes that built-ins or the API itself occupy. Installed apps cannot use
-# any of these for their tab.route. /cc stays reserved even when CC is off.
-RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", CC_TAB["route"]}
+# any of these for their tab.route. /cc and /dashboard stay reserved either way.
+RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc", "/dashboard", "/"}
 
 
 # ---------- pydantic models ----------
@@ -781,7 +787,7 @@ def list_apps() -> dict:
         menu_title = cfg.get("menuTitle")
     except Exception:
         pass
-    return {"tabs": tabs, "apps": apps, "menuTitle": menu_title}
+    return {"tabs": tabs, "apps": apps, "menuTitle": menu_title, "ccHome": CC_ENABLED}
 
 
 @router.post("/{app_id}/uninstall")

@@ -71,3 +71,14 @@ def test_login_state_shape(monkeypatch, tmp_path):
     st = m.LOGIN.state()
     assert st["phase"] == "idle" and st["url"] is None and st["loggedIn"] is False
     assert m.LOGIN.send_code("abc") is False  # nothing to type into yet
+
+
+def test_pane_marker_whitelist(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    clean, pane = m._extract_pane("Here they are.\n<pane>/upload</pane>")
+    assert clean == "Here they are." and pane == {"route": "/upload", "title": "Knowledge"}
+    clean, pane = m._extract_pane("ok <pane>/apps/daybook</pane>")
+    assert pane["route"] == "/apps/daybook"
+    clean, pane = m._extract_pane("nope <pane>https://evil.example/x</pane>")
+    assert pane is None and clean == "nope"
+    assert m._extract_pane("plain") == ("plain", None)

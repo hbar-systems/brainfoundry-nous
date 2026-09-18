@@ -37,9 +37,9 @@ def test_cc_tab_first_when_enabled(monkeypatch):
     tabs = sorted(apps.BUILTIN_TABS, key=lambda t: (t.get("order", 100), t["label"]))
     assert tabs[0]["id"] == "_cc"
     assert tabs[0]["label"] == "CC"
-    assert tabs[0]["route"] == "/cc"
-    assert tabs[1]["id"] == "_dashboard"
-    assert "/cc" in apps.RESERVED_ROUTES
+    assert tabs[0]["route"] == "/"          # CC is the home screen (D54)
+    assert tabs[1]["id"] == "_dashboard" and tabs[1]["route"] == "/dashboard"
+    assert {"/cc", "/dashboard", "/"} <= apps.RESERVED_ROUTES
 
 
 def test_cc_flag_values(monkeypatch):

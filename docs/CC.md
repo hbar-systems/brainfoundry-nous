@@ -37,6 +37,10 @@ If step 4 fails, the old way still works: the terminal at `https://console.<your
 - One turn at a time per brain. A second message while one runs is refused, not queued.
 - Speed: a turn that memory can answer takes a few seconds. A turn where the reasoner has to search files takes longer, twenty to thirty seconds on a small ARM box, because each search is a round trip to the model.
 
+## The home screen
+
+With CC switched on, the console opens on CC: "/" is the conversation, and the dashboard moves to /dashboard. The tab bar folds into one "everything" button at the top right that lists every tab. Until the first-use steps are done, the brain says what is left in one line each, with a link that opens the right screen beside the conversation. When a screen would help, the reasoner can summon it the same way: the knowledge browser, an app, settings, the update view slide in as a pane on the right (an overlay on narrow screens) and go away with one click. Pages shown as panes hide their own navigation. Nothing else changes: every page still has its own address.
+
 ## Hands: connected apps through One
 
 CC can reach the world through One (https://www.withone.ai/), a service that holds the OAuth tokens for apps like Google Calendar and Gmail and proxies the calls. The brain owner sets it up on the box: install One's CLI (`npm i -g @withone/cli`, Node 18 or newer), put `ONE_SECRET=<your One API key>` into `~/.cc-bridge/env`, and run `bash scripts/cc/install.sh` again. The installer separates looking from doing: the reasoner may list connections, search actions and read their schemas without restriction, so it can find any action, but it may run only `one-read`, a small wrapper that executes from a directory where One's CLI allows GET only. It has no general execute command. Do not put a read-only `.onerc` into the brain directory: it hides write actions from lookups and the reasoner can then never propose one. In One's dashboard set every connection to Read only. `/cc/health` then reports `"hands": "one"`, and the reasoner reads your calendar or mail when you ask.
