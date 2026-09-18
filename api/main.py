@@ -4946,7 +4946,7 @@ def memory_graph(limit: int = 300, k: int = 3, api_key: str = Depends(get_api_ke
     update), edges between each document and its k nearest documents by the cosine
     similarity of their mean chunk embedding. Cached five minutes. No new tables."""
     import time as _t
-    limit = max(10, min(int(limit), 800)); k = max(1, min(int(k), 6))
+    limit = max(10, min(int(limit), 1500)); k = max(1, min(int(k), 6))
     key = (limit, k)
     if _GRAPH_CACHE["data"] is not None and _GRAPH_CACHE["key"] == key and _t.time() - _GRAPH_CACHE["at"] < 300:
         return _GRAPH_CACHE["data"]

@@ -27,7 +27,7 @@ export default function Graph() {
 
   // Load the graph once; poll the bridge for the current turn's sources.
   useEffect(() => {
-    fetch('/api/bf/graph?limit=300&k=3', { cache: 'no-store' })
+    fetch('/api/bf/graph?limit=1000&k=3', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(d => {
         const st = stateRef.current
@@ -128,7 +128,7 @@ export default function Graph() {
           if (sp > 5) { n.vx *= 5 / sp; n.vy *= 5 / sp }
           n.x = Math.min(w - 4, Math.max(4, n.x + n.vx)); n.y = Math.min(h - 4, Math.max(4, n.y + n.vy))
         }
-        st.alpha *= 0.992
+        st.alpha *= nodes.length > 500 ? 0.99 : 0.992
       }
       draw(ctx, st)
       raf = requestAnimationFrame(step)

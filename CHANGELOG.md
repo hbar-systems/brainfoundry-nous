@@ -64,6 +64,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   graph cache at startup so the first open is fast.
 - feat(cc): panes get a "wide" toggle (cover the whole console) and allow the
   embedded page to go fullscreen; the graph page has a fullscreen button.
+- fix(graph): the map shows the whole memory (limit 1000, up to 1500), not the
+  300 most recent documents; the identity layer had all but vanished under the
+  recency cut. The response carries names and links only, so size is unchanged.
 - feat(cc): the workshop. When `CC_WORLD_DIR` points at a read-only mirror of the
   owner's own repository on the box, the reasoner is told about it, gets it as an
   allowed directory (`--add-dir`), and is asked to read current files there for
