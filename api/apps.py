@@ -65,6 +65,7 @@ BUILTIN_TABS: list[dict[str, Any]] = [
     {"id": "_chat",         "label": "Chat",         "route": "/chat",         "order": 20, "builtin": True},
     {"id": "_persona",      "label": "Persona",      "route": "/persona",      "order": 25, "builtin": True},
     {"id": "_knowledge",    "label": "Knowledge",    "route": "/upload",       "order": 30, "builtin": True},
+    {"id": "_graph",        "label": "Graph",        "route": "/graph",        "order": 31, "builtin": True},
     {"id": "_apps",         "label": "Apps",         "route": "/apps",         "order": 35, "builtin": True},
     {"id": "_federation",   "label": "Federation",   "route": "/federation",   "order": 40, "builtin": True},
     {"id": "_tasks",        "label": "Tasks",        "route": "/tasks",        "order": 33, "builtin": True},

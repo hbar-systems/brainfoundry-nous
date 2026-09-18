@@ -4937,6 +4937,76 @@ def delete_chat_session(session_id: str, api_key: str = Depends(get_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
+_GRAPH_CACHE: dict = {"at": 0.0, "key": None, "data": None}
+
+
+@app.get("/graph")
+def memory_graph(limit: int = 300, k: int = 3, api_key: str = Depends(get_api_key)):
+    """The memory graph (D54, second pane): documents as nodes (layer, chunk count, last
+    update), edges between each document and its k nearest documents by the cosine
+    similarity of their mean chunk embedding. Cached five minutes. No new tables."""
+    import time as _t
+    limit = max(10, min(int(limit), 800)); k = max(1, min(int(k), 6))
+    key = (limit, k)
+    if _GRAPH_CACHE["data"] is not None and _GRAPH_CACHE["key"] == key and _t.time() - _GRAPH_CACHE["at"] < 300:
+        return _GRAPH_CACHE["data"]
+    try:
+        import numpy as np
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT document_name,
+                   COALESCE(MAX(metadata->>'layer'), '') AS layer,
+                   COUNT(*) AS chunks,
+                   MAX(created_at) AS updated,
+                   AVG(embedding)::text AS centroid
+            FROM document_embeddings
+            WHERE embedding IS NOT NULL
+            GROUP BY document_name
+            ORDER BY MAX(created_at) DESC
+            LIMIT %s
+            """, (limit,))
+        rows = cur.fetchall(); cur.close(); conn.close()
+        nodes, vecs = [], []
+        for name, layer, chunks, updated, centroid in rows:
+            try:
+                v = np.array(json.loads(centroid), dtype=np.float32)
+            except Exception:
+                continue
+            n = float(np.linalg.norm(v))
+            if n == 0:
+                continue
+            vecs.append(v / n)
+            nodes.append({"id": name, "layer": layer or "unlayered", "chunks": int(chunks),
+                          "updated": updated.isoformat() if updated else None})
+        edges = []
+        if len(nodes) > 1:
+            M = np.stack(vecs)                       # (n, d), unit vectors
+            S = M @ M.T                              # cosine similarities
+            np.fill_diagonal(S, -1.0)
+            seen = set()
+            for i in range(len(nodes)):
+                idx = np.argpartition(-S[i], k)[:k]
+                for j in idx:
+                    j = int(j)
+                    if S[i, j] <= 0:
+                        continue
+                    a_, b_ = (i, j) if i < j else (j, i)
+                    if (a_, b_) in seen:
+                        continue
+                    seen.add((a_, b_))
+                    edges.append({"s": nodes[a_]["id"], "t": nodes[b_]["id"], "w": round(float(S[i, j]), 4)})
+        layers = sorted({n["layer"] for n in nodes})
+        data = {"nodes": nodes, "edges": edges, "layers": layers, "total_docs": len(rows),
+                "generated_at": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()), "k": k}
+        _GRAPH_CACHE.update({"at": _t.time(), "key": key, "data": data})
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error building the graph: {str(e)}")
+
+
 @app.post("/sessions/{session_id}/messages")
 def append_session_message(session_id: str, request: dict, api_key: str = Depends(get_api_key)):
     """Append one message to an existing chat session. Used by the CC bridge (0.13.0) so

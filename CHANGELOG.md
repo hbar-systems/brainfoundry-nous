@@ -48,6 +48,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- feat(graph): the memory graph pane (D54, second pane). `GET /graph` returns
+  documents as nodes (layer, chunk count, last update) and edges to each
+  document's k nearest documents by cosine similarity of the mean chunk embedding
+  (pgvector `AVG(embedding)`, numpy for the pairs; cached five minutes).
+  `ui/pages/graph.js` draws it on a canvas with a small force layout: layers as
+  regions, size by chunks, rings on the documents the bridge retrieved for the
+  current turn (`/cc/health.last_sources`), hover names, click shows neighbours
+  and can hand a question to the conversation. New built-in tab Graph (/graph);
+  the reasoner may summon it with `<pane>/graph</pane>` ("show me my mind").
 - feat(cc): the workshop. When `CC_WORLD_DIR` points at a read-only mirror of the
   owner's own repository on the box, the reasoner is told about it, gets it as an
   allowed directory (`--add-dir`), and is asked to read current files there for

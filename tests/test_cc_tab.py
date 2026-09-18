@@ -39,6 +39,7 @@ def test_cc_tab_first_when_enabled(monkeypatch):
     assert tabs[0]["label"] == "CC"
     assert tabs[0]["route"] == "/"          # CC is the home screen (D54)
     assert tabs[1]["id"] == "_dashboard" and tabs[1]["route"] == "/dashboard"
+    assert any(x["id"] == "_graph" and x["route"] == "/graph" for x in tabs)
     assert {"/cc", "/dashboard", "/"} <= apps.RESERVED_ROUTES
 
 

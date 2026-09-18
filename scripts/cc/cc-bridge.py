@@ -185,7 +185,7 @@ PANE_ROUTES = {
     "/upload": "Knowledge", "/apps": "Apps", "/persona": "Persona", "/settings": "Settings",
     "/update": "Update", "/federation": "Federation", "/tasks": "Tasks", "/research": "Research",
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
-    "/integrations": "Integrations", "/future": "Future",
+    "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -206,7 +206,8 @@ def _extract_pane(reply: str):
 
 SYSTEM += (
     " Surfaces: when showing a screen would genuinely help the person (their documents, an app, "
-    "settings, the update view), end your answer with one <pane>/route</pane> block using exactly one "
+    "settings, the update view, or a map of what you remember: /graph when they ask to see their mind or "
+    "memory), end your answer with one <pane>/route</pane> block using exactly one "
     "of: " + ", ".join(f"{r} ({n})" for r, n in PANE_ROUTES.items()) + ", or /apps/<app-id>. The screen "
     "opens beside the conversation. Do not add a pane for ordinary answers."
 )
@@ -578,8 +579,13 @@ def _memory(query: str) -> list[dict]:
     return out
 
 
+LAST_SOURCES: list = []   # document names retrieved for the latest turn; the graph pane lights them up
+
+
 def _compose(message: str) -> tuple[str, int]:
+    global LAST_SOURCES
     chunks = _memory(message)
+    LAST_SOURCES = list(dict.fromkeys(c["source"] for c in chunks))[:12]
     parts = []
     persona = _persona()
     if persona:
@@ -686,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
                              "hands": "one" if ONE_ENABLED else None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
-                             "workshop": WORLD_DIR or None})
+                             "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         elif route == "/threads":

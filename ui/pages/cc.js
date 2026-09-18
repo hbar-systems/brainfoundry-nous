@@ -292,6 +292,19 @@ export default function CC() {
   }, [])
   const openPane = (p) => { if (p && p.route) setPane(p) }
 
+  // A pane may hand a question to the conversation (the graph's "ask the brain about this").
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return
+      if (e.data && e.data.type === 'cc-ask' && typeof e.data.text === 'string') {
+        setDraft(e.data.text)
+        if (boxRef.current) boxRef.current.focus()
+      }
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [])
+
   async function switchThread(th) {
     if (busy) return
     try {
