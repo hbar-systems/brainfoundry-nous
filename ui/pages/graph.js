@@ -34,10 +34,10 @@ export default function Graph() {
         const layers = d.layers || []
         // One anchor per layer around a circle: layers become regions.
         layers.forEach((l, i) => { const a = (i / Math.max(1, layers.length)) * Math.PI * 2; st.anchors[l] = { a } })
-        const W = st.w || 800, H = st.h || 600, R0 = Math.min(W, H) * 0.3
+        const W = st.w || 800, H = st.h || 600
         st.nodes = (d.nodes || []).map((n, i) => {
           const a = st.anchors[n.layer] ? st.anchors[n.layer].a : 0
-          return { ...n, x: W / 2 + Math.cos(a) * R0 + (Math.random() - 0.5) * 120, y: H / 2 + Math.sin(a) * R0 + (Math.random() - 0.5) * 120,
+          return { ...n, x: W / 2 + Math.cos(a) * W * 0.3 + (Math.random() - 0.5) * W * 0.3, y: H / 2 + Math.sin(a) * H * 0.3 + (Math.random() - 0.5) * H * 0.3,
                    vx: 0, vy: 0, r: 2.5 + Math.sqrt(n.chunks || 1) * 1.1 }
         })
         st.byId = Object.fromEntries(st.nodes.map(n => [n.id, n]))
@@ -82,9 +82,15 @@ export default function Graph() {
       const st = stateRef.current
       const { nodes, edges, w, h } = st
       if (nodes.length && st.alpha > 0.004) {
-        const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.3
+        const cx = w / 2, cy = h / 2
+        // Layer anchors sit on an ellipse that follows the pane's shape, so a tall
+        // pane stacks the regions vertically and a wide one lays them side by side.
+        const RX = w * 0.30, RY = h * 0.30
         const K = st.alpha
-        // Repulsion between all pairs (n <= 300), in pixels, capped so nothing explodes.
+        // Each dot should get about this much room; repulsion is scaled to it.
+        const s = Math.sqrt((w * h) / Math.max(1, nodes.length))
+        const rep = 0.35 * s * s
+        const cut2 = (2.5 * s) * (2.5 * s)
         for (let i = 0; i < nodes.length; i++) {
           const a = nodes[i]
           for (let j = i + 1; j < nodes.length; j++) {
@@ -92,8 +98,8 @@ export default function Graph() {
             let dx = a.x - b.x, dy = a.y - b.y
             let d2 = dx * dx + dy * dy
             if (d2 < 1) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); d2 = 1 }
-            if (d2 > 90000) continue
-            const f = Math.min(2.5, (1400 * K) / d2)
+            if (d2 > cut2) continue
+            const f = Math.min(1.5, (rep * K) / d2)
             const d = Math.sqrt(d2)
             const fx = (dx / d) * f, fy = (dy / d) * f
             a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
@@ -104,21 +110,23 @@ export default function Graph() {
           const a = st.byId[e.s], b = st.byId[e.t]
           const dx = b.x - a.x, dy = b.y - a.y
           const d = Math.sqrt(dx * dx + dy * dy) + 0.01
-          const want = 70 - 25 * (e.rel || 0)
-          const f = (d - want) * 0.012 * K
+          const want = s * (1.6 - 0.7 * (e.rel || 0))
+          const f = (d - want) * 0.01 * K
           const fx = (dx / d) * f, fy = (dy / d) * f
           a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
         }
         // Layer regions and a gentle pull to the centre; damping; a velocity cap.
+        const m = 24   // soft margin: a push back inward, not a wall
         for (const n of nodes) {
           const an = st.anchors[n.layer]
-          const ax = an ? cx + Math.cos(an.a) * R : cx, ay = an ? cy + Math.sin(an.a) * R : cy
-          n.vx += (ax - n.x) * 0.004 * K; n.vy += (ay - n.y) * 0.004 * K
-          n.vx += (cx - n.x) * 0.0008 * K; n.vy += (cy - n.y) * 0.0008 * K
-          n.vx *= 0.82; n.vy *= 0.82
+          const ax = an ? cx + Math.cos(an.a) * RX : cx, ay = an ? cy + Math.sin(an.a) * RY : cy
+          n.vx += (ax - n.x) * 0.02 * K; n.vy += (ay - n.y) * 0.02 * K
+          if (n.x < m) n.vx += (m - n.x) * 0.05; if (n.x > w - m) n.vx -= (n.x - (w - m)) * 0.05
+          if (n.y < m) n.vy += (m - n.y) * 0.05; if (n.y > h - m) n.vy -= (n.y - (h - m)) * 0.05
+          n.vx *= 0.8; n.vy *= 0.8
           const sp = Math.sqrt(n.vx * n.vx + n.vy * n.vy)
-          if (sp > 6) { n.vx *= 6 / sp; n.vy *= 6 / sp }
-          n.x = Math.min(w - 12, Math.max(12, n.x + n.vx)); n.y = Math.min(h - 12, Math.max(12, n.y + n.vy))
+          if (sp > 5) { n.vx *= 5 / sp; n.vy *= 5 / sp }
+          n.x = Math.min(w - 4, Math.max(4, n.x + n.vx)); n.y = Math.min(h - 4, Math.max(4, n.y + n.vy))
         }
         st.alpha *= 0.992
       }
