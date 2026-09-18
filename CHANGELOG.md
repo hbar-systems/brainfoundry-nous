@@ -54,6 +54,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   audited like any other. The footer lists allowed actions with "ask again".
   `/cc/permits` returns `auto`; `/cc/permits/approve` takes `remember`;
   `/cc/permits/auto/remove` revokes one.
+- fix(cc): reasoner errors reported as a JSON result (`is_error`) are read and
+  shown as one sentence, not raw JSON. "Failed to refresh OAuth token: another
+  Claude Code process is refreshing it" is retried once after four seconds. The
+  terminal door's tmux session now opens a plain shell instead of an idle
+  interactive Claude Code, which was the other process in that race (hbar,
+  2026-09-18).
 - feat(cc): the chat bubble renders markdown (react-markdown + remark-gfm,
   already in the ui), so the reasoner's emphasis and lists stop showing raw.
 - fix(cc): install.sh adds `cc-bridge-watch.path`, a systemd path unit that

@@ -10,6 +10,8 @@
 #   1. apt installs ttyd (a web terminal; the back door for maintenance, at /claude/)
 #   2. installs the reasoner CLI for this user (native binary, ~/.local/bin/claude)
 #   3. systemd unit claude-tab: ttyd on 127.0.0.1:7681, base /claude, one persistent tmux
+#      (a plain shell; type `claude` when you need it. An idle interactive Claude Code sitting
+#      there competes with the bridge's headless runs for the sign-in token refresh.)
 #   4. systemd unit cc-bridge: scripts/cc/cc-bridge.py on 127.0.0.1:7682, base /cc,
 #      with the brain's api key in a mode-600 env file so the bridge can search memory,
 #      running in a small venv that holds permitd (the permit gate for writes)
@@ -64,7 +66,7 @@ WorkingDirectory=$BRAIN_DIR
 Environment=HOME=$HOME_DIR
 Environment=PATH=$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TERM=xterm-256color
-ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -t titleFixed="terminal" -t fontSize=14 -t disableLeaveAlert=true /usr/bin/tmux new-session -A -s claude -c $BRAIN_DIR "claude; exec bash"
+ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -t titleFixed="terminal" -t fontSize=14 -t disableLeaveAlert=true /usr/bin/tmux new-session -A -s claude -c $BRAIN_DIR
 Restart=always
 RestartSec=2
 

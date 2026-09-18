@@ -482,7 +482,7 @@ def _compose(message: str) -> tuple[str, int]:
 
 
 # ----------------------------------------------------------------- turn ----
-def _run_turn(message: str, session_id: str | None) -> tuple[str, str | None, bool]:
+def _run_turn(message: str, session_id: str | None, _retry: bool = False) -> tuple[str, str | None, bool]:
     prompt, used = _compose(message)
     print(f"memory chunks={used}", flush=True)
     tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
@@ -499,13 +499,26 @@ def _run_turn(message: str, session_id: str | None) -> tuple[str, str | None, bo
     except subprocess.TimeoutExpired:
         return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
     out = proc.stdout.strip()
-    if proc.returncode != 0 or not out:
-        err = (proc.stderr or out or "no output").strip()[-600:]
-        if session_id and ("session" in err.lower() or "resume" in err.lower()):
+    # The CLI reports many failures as a JSON result with is_error; read the message out of it.
+    err_msg = None
+    try:
+        _d = json.loads(out) if out else None
+        if isinstance(_d, dict) and _d.get("is_error"):
+            err_msg = str(_d.get("result") or _d.get("error") or "")[:600]
+    except json.JSONDecodeError:
+        pass
+    if proc.returncode != 0 or not out or err_msg:
+        err = err_msg or (proc.stderr or out or "no output").strip()[-600:]
+        low = err.lower()
+        if session_id and ("session" in low or "resume" in low) and not err_msg:
             return _run_turn(message, None)
-        if "log in" in err.lower() or "login" in err.lower() or "not authenticated" in err.lower():
-            return "The reasoner is not signed in on this brain. Use Connect above.", session_id, True
-        return f"The reasoner returned an error:\n{err}", session_id, True
+        if "refresh oauth token" in low and not _retry:
+            # Two processes refreshing the same sign-in at once; the vendor calls it transient.
+            time.sleep(4)
+            return _run_turn(message, session_id, _retry=True)
+        if "log in" in low or "login" in low or "not authenticated" in low or "sign in again" in low:
+            return "The reasoner's sign-in needs renewing. Use disconnect and connect again below.", session_id, True
+        return f"The reasoner could not answer this turn: {err}", session_id, True
     try:
         data = json.loads(out)
         if isinstance(data, list):
