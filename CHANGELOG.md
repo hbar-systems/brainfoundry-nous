@@ -48,6 +48,17 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- feat(cc): threads live in the brain. Each CC turn is appended to a brain chat
+  session (`model_name` "cc", title from the first sentence) through the new
+  `POST /sessions/{id}/messages`; proposed and auto-run writes leave a line.
+  `/cc/threads` lists them, `/cc/threads/switch` resumes one; the page shows the
+  current thread's history after a reload and offers a "threads" list. `/cc/health`
+  carries `brain_session_id` and `title`.
+- feat(cc): headless sign-in for the reasoner: `scripts/cc/set-token.sh` stores a
+  long-lived token from `claude setup-token` in the bridge env file; both units
+  load it. No browser or terminal on the box.
+- feat(cc): CC uses the console's theme variables (colours, fonts) instead of a
+  fixed palette, so appearance settings apply to it.
 - feat(cc): the home screen (D54). With BRAIN_CC_ENABLED the `_cc` tab takes "/"
   and the dashboard moves to /dashboard (`ui/pages/dashboard.js`); `/apps/list`
   returns `ccHome`; `ui/pages/index.js` renders CC or the dashboard accordingly.

@@ -66,6 +66,7 @@ WorkingDirectory=$BRAIN_DIR
 Environment=HOME=$HOME_DIR
 Environment=PATH=$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TERM=xterm-256color
+EnvironmentFile=-$ENV_FILE
 ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -t titleFixed="terminal" -t fontSize=14 -t disableLeaveAlert=true /usr/bin/tmux new-session -A -s claude -c $BRAIN_DIR
 Restart=always
 RestartSec=2
@@ -144,6 +145,13 @@ WRAP
     echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
 else
     echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
+fi
+
+# Reasoner sign-in without a browser on the box: the owner runs `claude setup-token` on a
+# machine where they are signed in and stores the long-lived token here (scripts/cc/set-token.sh).
+# The CLI reads it from CLAUDE_CODE_OAUTH_TOKEN; both units load this env file.
+if grep -q "^CLAUDE_CODE_OAUTH_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+    echo "reasoner token present in $ENV_FILE (headless sign-in)"
 fi
 
 echo "== 4b/6 restart the bridge by itself when an Update changes its file"

@@ -27,6 +27,12 @@ It is off by default. A brain shows the CC tab only when its owner switches it o
 4. Open the console. CC is now the first tab. Press one of the two sign-in buttons, sign in on the page that opens, paste the code back, press Finish. That is the only time you see anything about the account.
 5. Say hello. The first turn starts a thread that continues across reloads and restarts until you press "new thread".
 
+No browser on the box, no terminal either: on any machine where you are signed in to the reasoner CLI, run `claude setup-token`, copy the token it prints, then on the box run `bash scripts/cc/set-token.sh` and paste it when prompted. The token goes into the bridge's protected env file and both the bridge and the terminal door use it. It is your token, on your server; it never enters a repo.
+
+## Threads
+
+Every CC conversation is written into the brain's own chat record as it happens, as a session named "CC: …" after your first sentence, with the reasoner's answers and a line for every proposed or auto-run write. So your threads show in the Chat tab's session list, travel with the export, and are there for consolidation. The CC page shows the current thread again after a reload, and a "threads" button lists earlier ones to switch back to. "New thread" starts a fresh conversation for both the reasoner and the record.
+
 If step 4 fails, the old way still works: the terminal at `https://console.<your brain>/claude/` runs the same CLI; `claude auth login` there does the same thing.
 
 ## What it can and cannot do

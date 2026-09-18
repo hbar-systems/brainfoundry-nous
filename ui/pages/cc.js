@@ -20,11 +20,14 @@ import remarkGfm from 'remark-gfm'
 // The tab is opt-in per brain: BRAIN_CC_ENABLED=true in .env makes the api
 // list the `_cc` tab (api/apps.py). Without the bridge the page says so.
 
+// The console's theme and font settings apply here too (Settings > appearance):
+// every colour is a CSS variable set in _app.js, not a fixed palette.
 const C = {
-  ink: '#e8e0d5', dim: '#8b7d6e', faint: '#6b5f52', gold: '#c9a96e',
-  card: '#1c1814', line: '#c9a96e40', me: '#231d18', brain: '#15120f', bad: '#7a3a2e',
+  ink: 'var(--text)', dim: 'var(--muted)', faint: 'var(--muted)', gold: 'var(--accent)',
+  card: 'var(--surface2)', line: 'var(--border)', me: 'var(--user-bg)', brain: 'var(--surface)', bad: '#7a3a2e',
+  onAccent: 'var(--bg)', codeBg: 'var(--code-bg)', codeFg: 'var(--code-fg)',
 }
-const mono = { fontFamily: 'DM Mono, monospace' }
+const mono = { fontFamily: 'var(--font-mono, monospace)' }
 
 function Btn({ children, onClick, disabled, primary, small, title }) {
   const off = !!disabled
@@ -33,8 +36,8 @@ function Btn({ children, onClick, disabled, primary, small, title }) {
       style={{
         padding: small ? '6px 12px' : '10px 16px', borderRadius: '10px', cursor: off ? 'default' : 'pointer',
         border: primary ? 'none' : `1px solid ${C.line}`,
-        backgroundColor: primary ? (off ? '#3a3520' : C.gold) : 'transparent',
-        color: primary ? (off ? C.dim : '#141210') : C.dim,
+        backgroundColor: primary ? (off ? C.card : C.gold) : 'transparent',
+        color: primary ? (off ? C.dim : C.onAccent) : C.dim,
         fontWeight: primary ? 600 : 400, fontSize: small ? '12px' : '14px', fontFamily: small ? mono.fontFamily : 'inherit',
       }}>{children}</button>
   )
@@ -51,10 +54,10 @@ function Md({ text }) {
           p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
           ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
           ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
-          code: ({ node, inline, ...props }) => <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: '#0f0e0c', padding: inline ? '1px 5px' : '8px 10px', borderRadius: '6px', display: inline ? 'inline' : 'block', whiteSpace: 'pre-wrap' }} />,
+          code: ({ node, inline, ...props }) => <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: inline ? '1px 5px' : '8px 10px', borderRadius: '6px', display: inline ? 'inline' : 'block', whiteSpace: 'pre-wrap' }} />,
           table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
           th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
-          td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}20` }} />,
+          td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
         }}>{text || ''}</ReactMarkdown>
     </div>
   )
@@ -76,7 +79,7 @@ function ProposalCard({ p, onDecide }) {
   if (p.auto) {
     const ok = p.outcome && p.outcome.ok
     return (
-      <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '10px', border: `1px solid ${ok ? C.line : C.bad}`, backgroundColor: '#1a1610' }}>
+      <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '10px', border: `1px solid ${ok ? C.line : C.bad}`, backgroundColor: C.card }}>
         <p style={{ ...mono, color: C.dim, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
           {ok ? 'done without asking' : 'tried without asking, failed'} · {p.method || 'POST'} · {p.platform || ''}
         </p>
@@ -86,7 +89,7 @@ function ProposalCard({ p, onDecide }) {
     )
   }
   return (
-    <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}80`, backgroundColor: '#1a1610' }}>
+    <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}`, backgroundColor: C.card }}>
       <p style={{ ...mono, color: C.gold, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
         proposed write · {p.method || 'POST'} · {p.platform || ''}
       </p>
@@ -207,7 +210,7 @@ function SignIn({ onDone, health }) {
             <li>Open the sign-in page and log in to your account.
               <div style={{ margin: '8px 0' }}>
                 <a href={state.url} target="_blank" rel="noreferrer"
-                   style={{ display: 'inline-block', padding: '10px 16px', borderRadius: '10px', backgroundColor: C.gold, color: '#141210', fontWeight: 600, textDecoration: 'none', fontSize: '14px' }}>
+                   style={{ display: 'inline-block', padding: '10px 16px', borderRadius: '10px', backgroundColor: C.gold, color: C.onAccent, fontWeight: 600, textDecoration: 'none', fontSize: '14px' }}>
                   Open the sign-in page
                 </a>
               </div>
@@ -251,6 +254,8 @@ export default function CC() {
   const [showAuto, setShowAuto] = useState(false)
   const [pane, setPane] = useState(null)         // a summoned surface beside the conversation (D54)
   const [firstRun, setFirstRun] = useState(null) // first-use steps from the api, until complete
+  const [threads, setThreads] = useState([])       // CC threads the brain remembers
+  const [showThreads, setShowThreads] = useState(false)
   const endRef = useRef(null)
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
@@ -264,8 +269,37 @@ export default function CC() {
     fetch('/cc/permits', { cache: 'no-store' }).then(r => r.ok ? r.json() : { pending: [] }).then(d => { setPending(d.pending || []); setAuto(d.auto || []) }).catch(() => {})
   const loadFirstRun = () =>
     fetch('/api/bf/onboarding/first-use', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setFirstRun(d && Array.isArray(d.steps) ? d : null)).catch(() => {})
-  useEffect(() => { loadHealth(); loadPending(); loadFirstRun() }, [])
+  // History: the current thread's turns come from the brain's own record, so a reload
+  // shows the conversation instead of an empty screen.
+  const loadHistory = (brainId) => {
+    if (!brainId) return
+    fetch(`/api/bf/sessions/${encodeURIComponent(brainId)}/messages`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d || !Array.isArray(d.messages)) return
+        setTurns(d.messages.map(m => ({ who: m.role === 'user' ? 'me' : 'brain', text: m.content })))
+      })
+      .catch(() => {})
+  }
+  const loadThreads = () =>
+    fetch('/cc/threads', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setThreads(d.threads || []) }).catch(() => {})
+  useEffect(() => {
+    fetch('/cc/health', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then(h => { setHealth(h); if (h && h.brain_session_id) loadHistory(h.brain_session_id) })
+      .catch(() => setHealth(false))
+    loadPending(); loadFirstRun(); loadThreads()
+  }, [])
   const openPane = (p) => { if (p && p.route) setPane(p) }
+
+  async function switchThread(th) {
+    if (busy) return
+    try {
+      const r = await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
+      if (r.ok) { setTurns([]); setPane(null); loadHistory(th.brain); loadHealth() }
+    } catch {}
+    setShowThreads(false)
+  }
 
   // The write gate: a proposal card's Send approves the permit and executes that one
   // action through One; Cancel denies it. Either way the audit log gets a line.
@@ -308,6 +342,7 @@ export default function CC() {
       const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
       setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null }])
       if (data.pane) openPane(data.pane)
+      if (turns.length === 0) loadThreads()
     } catch (e) {
       setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
     } finally {
@@ -321,7 +356,9 @@ export default function CC() {
     freshRef.current = true
     try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
     setTurns([])
+    setPane(null)
     loadHealth()
+    loadThreads()
   }
 
   async function askAgain(a) {
@@ -347,7 +384,7 @@ export default function CC() {
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
       <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : '860px', margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
-                    fontFamily: 'Lora, ui-serif, serif', display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 60px)' }}>
+                    fontFamily: 'var(--font-display, serif)', display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 60px)' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div>
@@ -356,7 +393,23 @@ export default function CC() {
             </p>
             <h1 style={{ fontSize: '26px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
           </div>
-          <Btn small onClick={fresh} disabled={busy} title="Start a new conversation">new thread</Btn>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+            {threads.length > 0 && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
+            <Btn small onClick={fresh} disabled={busy} title="Start a new conversation">new thread</Btn>
+            {showThreads && (
+              <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
+                            border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
+                {threads.map(th => (
+                  <a key={th.brain} onClick={() => switchThread(th)}
+                     style={{ display: 'block', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', textDecoration: 'none',
+                              color: health && health.brain_session_id === th.brain ? C.ink : C.dim, fontSize: '13px', lineHeight: 1.4 }}>
+                    {th.title || 'untitled'}
+                    <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{(th.last || th.started || '').slice(0, 10)}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}

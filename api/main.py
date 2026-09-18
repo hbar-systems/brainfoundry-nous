@@ -4937,6 +4937,38 @@ def delete_chat_session(session_id: str, api_key: str = Depends(get_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
+@app.post("/sessions/{session_id}/messages")
+def append_session_message(session_id: str, request: dict, api_key: str = Depends(get_api_key)):
+    """Append one message to an existing chat session. Used by the CC bridge (0.13.0) so
+    the brain's own record holds CC threads too: they show in the Chat tab's session list,
+    travel with the export, and are visible to consolidation. Roles: user | assistant."""
+    role = str(request.get("role", "")).strip()
+    content = request.get("content")
+    if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+        raise HTTPException(status_code=400, detail="role must be user|assistant and content a non-empty string")
+    if len(content) > 65536:
+        content = content[:65536]
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM chat_sessions WHERE session_id = %s", (session_id,))
+        if cursor.fetchone() is None:
+            cursor.close(); conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        cursor.execute(
+            "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+            (session_id, role, content),
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"ok": True, "session_id": session_id, "role": role}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error appending message: {str(e)}")
+
+
 @app.get("/sessions/{session_id}/messages")
 def get_session_messages(session_id: str, api_key: str = Depends(get_api_key)):
     """Get all messages for a specific session"""

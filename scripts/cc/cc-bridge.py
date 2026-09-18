@@ -299,6 +299,74 @@ def _run_permit(pid: str, pm) -> dict:
             "summary": (pm.args or {}).get("summary", "")}
 
 
+# ---- the brain's own record of CC threads ----
+THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, last}]
+
+
+def _threads_load() -> list:
+    try:
+        return json.loads(THREADS_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _threads_save(items: list) -> None:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    THREADS_FILE.write_text(json.dumps(items[-200:], indent=1))
+
+
+def _brain_api(method: str, path: str, body: dict | None = None):
+    """Call the brain's api with its own key. Returns parsed JSON or None; never raises."""
+    if not BRAIN_API_KEY:
+        return None
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{BRAIN_API_URL}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json", "X-API-Key": BRAIN_API_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read() or b"{}")
+    except Exception as e:
+        print(f"brain api {method} {path} failed: {type(e).__name__}", flush=True)
+        return None
+
+
+def _record_turn(state: dict, message: str, reply: str, card: dict | None) -> dict:
+    """Write this turn into the brain's chat record. Creates the brain session on the first
+    turn of a thread (model_name "cc", title from the first message) and registers the
+    thread. Fail-soft: CC keeps working if the api is unreachable."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not state.get("brain_session_id"):
+        title = ("CC: " + " ".join(message.split())[:70]).strip()
+        created = _brain_api("POST", "/sessions", {"model_name": "cc", "title": title})
+        if not created or not created.get("session_id"):
+            return state
+        state["brain_session_id"] = created["session_id"]
+        state["title"] = title
+        threads = _threads_load()
+        threads.append({"claude": state.get("session_id"), "brain": state["brain_session_id"],
+                        "title": title, "started": now, "last": now})
+        _threads_save(threads)
+    sid = state["brain_session_id"]
+    _brain_api("POST", f"/sessions/{sid}/messages", {"role": "user", "content": message})
+    text = reply or ""
+    if card:
+        if card.get("auto"):
+            text += f"\n\n[write done without asking: {card.get('summary','')}; permit {card.get('id','')}]"
+        elif card.get("id"):
+            text += f"\n\n[write proposed, waiting for the owner: {card.get('summary','')}; permit {card.get('id','')}]"
+    if text.strip():
+        _brain_api("POST", f"/sessions/{sid}/messages", {"role": "assistant", "content": text})
+    threads = _threads_load()
+    for th in threads:
+        if th.get("brain") == sid:
+            th["last"] = now
+            if state.get("session_id"):
+                th["claude"] = state["session_id"]
+    _threads_save(threads)
+    return state
+
+
 def _permit_public(pm) -> dict:
     d = pm.public()
     a = d.get("args") or {}
@@ -593,7 +661,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         route = self._route()
         if route == "/health":
-            self._send(200, {"ok": True, "session": bool(_load_state().get("session_id")),
+            _st = _load_state()
+            self._send(200, {"ok": True, "session": bool(_st.get("session_id")),
+                             "brain_session_id": _st.get("brain_session_id"), "title": _st.get("title"),
                              "reasoner": _reasoner_version(), "cwd": CWD, "tools": ALLOWED_TOOLS,
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
@@ -601,6 +671,10 @@ class Handler(BaseHTTPRequestHandler):
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
+        elif route == "/threads":
+            items = list(reversed(_threads_load()))[:30]
+            st = _load_state()
+            self._send(200, {"threads": items, "current": st.get("brain_session_id")})
         elif route == "/permits":
             items = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
             self._send(200, {"pending": items, "writes": GATE is not None, "auto": _auto_load() if GATE else []})
@@ -617,6 +691,19 @@ class Handler(BaseHTTPRequestHandler):
             _save_state({})
             print("new thread (reset by /new)", flush=True)
             self._send(200, {"ok": True})
+            return
+        if route == "/threads/switch":
+            want = str(req.get("brain", "")).strip()
+            th = next((x for x in _threads_load() if x.get("brain") == want), None)
+            if not th:
+                self._send(404, {"ok": False, "error": "no such thread"})
+                return
+            # Resuming an older thread is the owner's explicit choice; mark it current under
+            # today's instructions so the hash rule does not immediately reset it.
+            _save_state({"session_id": th.get("claude"), "brain_session_id": th["brain"],
+                         "title": th.get("title"), "prompt_hash": PROMPT_HASH})
+            print(f"thread switched to {th['brain'][:8]}", flush=True)
+            self._send(200, {"ok": True, "current": th["brain"]})
             return
         if route == "/login/start":
             method = "console" if str(req.get("method", "")).lower() == "console" else "claudeai"
@@ -697,6 +784,14 @@ class Handler(BaseHTTPRequestHandler):
         reply, proposal = _extract_proposal(reply)
         reply, pane = _extract_pane(reply)
         card = _propose(proposal) if proposal else None
+        try:
+            st = _load_state()
+            if st.get("session_id") == sid or not st.get("session_id"):
+                st["session_id"] = sid
+                st = _record_turn(st, message, reply, card)
+                _save_state(st)
+        except Exception as e:
+            print(f"record turn failed: {type(e).__name__}", flush=True)
         ms = int((time.time() - t0) * 1000)
         print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')}", flush=True)
         self._send(200, {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane})
