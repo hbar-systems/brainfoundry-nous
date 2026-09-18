@@ -34,14 +34,17 @@ export default function Graph() {
         const layers = d.layers || []
         // One anchor per layer around a circle: layers become regions.
         layers.forEach((l, i) => { const a = (i / Math.max(1, layers.length)) * Math.PI * 2; st.anchors[l] = { a } })
+        const W = st.w || 800, H = st.h || 600, R0 = Math.min(W, H) * 0.3
         st.nodes = (d.nodes || []).map((n, i) => {
           const a = st.anchors[n.layer] ? st.anchors[n.layer].a : 0
-          const r0 = 0.28 + Math.random() * 0.12
-          return { ...n, x: 0.5 + Math.cos(a) * r0 + (Math.random() - 0.5) * 0.08, y: 0.5 + Math.sin(a) * r0 + (Math.random() - 0.5) * 0.08,
+          return { ...n, x: W / 2 + Math.cos(a) * R0 + (Math.random() - 0.5) * 120, y: H / 2 + Math.sin(a) * R0 + (Math.random() - 0.5) * 120,
                    vx: 0, vy: 0, r: 2.5 + Math.sqrt(n.chunks || 1) * 1.1 }
         })
         st.byId = Object.fromEntries(st.nodes.map(n => [n.id, n]))
         st.edges = (d.edges || []).filter(e => st.byId[e.s] && st.byId[e.t])
+        // Closeness relative to this graph: raw cosine sits in a narrow band, so rescale to 0..1.
+        const ws = st.edges.map(e => e.w); const lo = Math.min(...ws), hi = Math.max(...ws)
+        for (const e of st.edges) e.rel = hi > lo ? (e.w - lo) / (hi - lo) : 1
         st.alpha = 1
         setMeta({ total_docs: d.total_docs, layers, generated_at: d.generated_at, k: d.k, shown: st.nodes.length, edges: st.edges.length })
       })
@@ -66,47 +69,58 @@ export default function Graph() {
       canvas.width = Math.floor(rect.width * dpr); canvas.height = Math.floor(rect.height * dpr)
       canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px'
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      stateRef.current.w = rect.width; stateRef.current.h = rect.height
+      const st = stateRef.current
+      if (st.w && st.h && st.nodes.length) {
+        const sx = rect.width / st.w, sy = rect.height / st.h
+        for (const n of st.nodes) { n.x *= sx; n.y *= sy }
+      }
+      st.w = rect.width; st.h = rect.height
     }
     resize(); window.addEventListener('resize', resize)
 
     const step = () => {
       const st = stateRef.current
       const { nodes, edges, w, h } = st
-      if (nodes.length && st.alpha > 0.005) {
-        const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.36
+      if (nodes.length && st.alpha > 0.004) {
+        const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.3
         const K = st.alpha
-        // Repulsion (all pairs; n <= 300 keeps this cheap)
+        // Repulsion between all pairs (n <= 300), in pixels, capped so nothing explodes.
         for (let i = 0; i < nodes.length; i++) {
           const a = nodes[i]
           for (let j = i + 1; j < nodes.length; j++) {
             const b = nodes[j]
-            let dx = (a.x - b.x) * w, dy = (a.y - b.y) * h
-            let d2 = dx * dx + dy * dy + 1
-            const f = (900 * K) / d2
-            const fx = dx * f, fy = dy * f
-            a.vx += fx / w; a.vy += fy / h; b.vx -= fx / w; b.vy -= fy / h
+            let dx = a.x - b.x, dy = a.y - b.y
+            let d2 = dx * dx + dy * dy
+            if (d2 < 1) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); d2 = 1 }
+            if (d2 > 90000) continue
+            const f = Math.min(2.5, (1400 * K) / d2)
+            const d = Math.sqrt(d2)
+            const fx = (dx / d) * f, fy = (dy / d) * f
+            a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
           }
         }
-        // Springs along edges
+        // Springs along edges toward a resting length; closer meaning pulls a little harder.
         for (const e of edges) {
           const a = st.byId[e.s], b = st.byId[e.t]
-          const dx = (b.x - a.x) * w, dy = (b.y - a.y) * h
+          const dx = b.x - a.x, dy = b.y - a.y
           const d = Math.sqrt(dx * dx + dy * dy) + 0.01
-          const want = 46
-          const f = ((d - want) / d) * 0.02 * K * (0.5 + e.w)
-          a.vx += dx * f / w; a.vy += dy * f / h; b.vx -= dx * f / w; b.vy -= dy * f / h
+          const want = 70 - 25 * (e.rel || 0)
+          const f = (d - want) * 0.012 * K
+          const fx = (dx / d) * f, fy = (dy / d) * f
+          a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
         }
-        // Layer gravity (regions) and centering
+        // Layer regions and a gentle pull to the centre; damping; a velocity cap.
         for (const n of nodes) {
           const an = st.anchors[n.layer]
           const ax = an ? cx + Math.cos(an.a) * R : cx, ay = an ? cy + Math.sin(an.a) * R : cy
-          n.vx += ((ax / w) - n.x) * 0.012 * K; n.vy += ((ay / h) - n.y) * 0.012 * K
-          n.vx += (0.5 - n.x) * 0.002 * K; n.vy += (0.5 - n.y) * 0.002 * K
+          n.vx += (ax - n.x) * 0.004 * K; n.vy += (ay - n.y) * 0.004 * K
+          n.vx += (cx - n.x) * 0.0008 * K; n.vy += (cy - n.y) * 0.0008 * K
           n.vx *= 0.82; n.vy *= 0.82
-          n.x = Math.min(0.97, Math.max(0.03, n.x + n.vx)); n.y = Math.min(0.97, Math.max(0.03, n.y + n.vy))
+          const sp = Math.sqrt(n.vx * n.vx + n.vy * n.vy)
+          if (sp > 6) { n.vx *= 6 / sp; n.vy *= 6 / sp }
+          n.x = Math.min(w - 12, Math.max(12, n.x + n.vx)); n.y = Math.min(h - 12, Math.max(12, n.y + n.vy))
         }
-        st.alpha *= 0.985
+        st.alpha *= 0.992
       }
       draw(ctx, st)
       raf = requestAnimationFrame(step)
@@ -124,13 +138,13 @@ export default function Graph() {
     for (const e of edges) {
       const a = st.byId[e.s], b = st.byId[e.t]
       const strong = sel && (e.s === sel.id || e.t === sel.id)
-      ctx.strokeStyle = strong ? 'rgba(201,169,110,0.7)' : `rgba(160,150,135,${0.06 + e.w * 0.18})`
-      ctx.lineWidth = strong ? 1.4 : 0.8
-      ctx.beginPath(); ctx.moveTo(a.x * w, a.y * h); ctx.lineTo(b.x * w, b.y * h); ctx.stroke()
+      ctx.strokeStyle = strong ? 'rgba(201,169,110,0.7)' : `rgba(160,150,135,${0.05 + (e.rel || 0) * 0.22})`
+      ctx.lineWidth = strong ? 1.4 : 0.7
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
     }
     // nodes
     for (const n of nodes) {
-      const x = n.x * w, y = n.y * h
+      const x = n.x, y = n.y
       const lit = st.lit.has(n.id)
       const dim = sel && !(n.id === sel.id || near.has(n.id))
       if (lit) {
@@ -146,7 +160,7 @@ export default function Graph() {
     // hover label
     const hv = st.hover ? st.byId[st.hover] : null
     if (hv) {
-      const x = hv.x * w, y = hv.y * h
+      const x = hv.x, y = hv.y
       ctx.font = '12px var(--font-mono, monospace)'
       const label = hv.id.length > 60 ? hv.id.slice(0, 57) + '…' : hv.id
       const tw = ctx.measureText(label).width
@@ -161,7 +175,7 @@ export default function Graph() {
     const px = clientX - rect.left, py = clientY - rect.top
     let best = null, bd = 1e9
     for (const n of st.nodes) {
-      const dx = n.x * st.w - px, dy = n.y * st.h - py
+      const dx = n.x - px, dy = n.y - py
       const d = dx * dx + dy * dy
       if (d < bd && d < (n.r + 6) * (n.r + 6)) { bd = d; best = n }
     }
@@ -174,7 +188,7 @@ export default function Graph() {
     st.selected = n ? n.id : null
     st.alpha = Math.max(st.alpha, 0.05)
     if (!n) { setSelected(null); return }
-    const neigh = st.edges.filter(x => x.s === n.id || x.t === n.id).map(x => ({ id: x.s === n.id ? x.t : x.s, w: x.w })).sort((a, b) => b.w - a.w)
+    const neigh = st.edges.filter(x => x.s === n.id || x.t === n.id).map(x => ({ id: x.s === n.id ? x.t : x.s, w: x.rel != null ? x.rel : x.w })).sort((a, b) => b.w - a.w)
     setSelected({ ...n, neigh })
   }
   const ask = (n) => {
@@ -186,15 +200,18 @@ export default function Graph() {
     <>
       <Head><title>Memory graph · BrainFoundry</title></Head>
       <div style={{ display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', fontFamily: 'var(--font-display, serif)', color: 'var(--text)' }}>
-        <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
-          <canvas ref={canvasRef} onMouseMove={onMove} onClick={onClick} style={{ display: 'block', cursor: 'crosshair' }} />
-          <div style={{ position: 'absolute', left: 16, top: 12, pointerEvents: 'none' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '10px 16px 6px' }}>
             <p style={{ ...mono, color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>memory · what the brain holds</p>
-            {meta && <p style={{ ...mono, color: 'var(--muted)', fontSize: '11px', margin: '4px 0 0 0' }}>{meta.shown} of {meta.total_docs} documents · {meta.edges} links · lit: what the last turn retrieved</p>}
+            {meta && <p style={{ ...mono, color: 'var(--muted)', fontSize: '11px', margin: '4px 0 0 0' }}>{meta.shown} of {meta.total_docs} documents · {meta.edges} links · rings: what the last turn retrieved</p>}
+            {!meta && !error && <p style={{ ...mono, color: 'var(--muted)', fontSize: '11px', margin: '4px 0 0 0' }}>reading the memory…</p>}
             {error && <p style={{ color: '#d08a7a', fontSize: '13px', margin: '6px 0 0 0' }}>{error}</p>}
           </div>
+          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            <canvas ref={canvasRef} onMouseMove={onMove} onClick={onClick} style={{ display: 'block', cursor: 'crosshair', position: 'absolute', inset: 0 }} />
+          </div>
           {meta && (
-            <div style={{ position: 'absolute', left: 16, bottom: 12, display: 'flex', gap: '12px', flexWrap: 'wrap', pointerEvents: 'none' }}>
+            <div style={{ padding: '6px 16px 10px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               {meta.layers.map(l => (
                 <span key={l} style={{ ...mono, color: 'var(--muted)', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                   <span style={{ width: 8, height: 8, borderRadius: 4, background: layerColor(l), display: 'inline-block' }} />{l}
@@ -209,7 +226,7 @@ export default function Graph() {
               <p style={{ ...mono, color: 'var(--accent)', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>{selected.layer} · {selected.chunks} chunk{selected.chunks === 1 ? '' : 's'}</p>
               <p style={{ margin: '0 0 12px 0', fontSize: '15px', lineHeight: 1.4, wordBreak: 'break-word' }}>{selected.id}</p>
               <button onClick={() => ask(selected)} style={{ padding: '8px 12px', borderRadius: '8px', border: 'none', background: 'var(--accent)', color: 'var(--bg)', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px' }}>ask the brain about this</button>
-              <p style={{ ...mono, color: 'var(--muted)', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '18px 0 6px 0' }}>nearest by meaning</p>
+              <p style={{ ...mono, color: 'var(--muted)', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '18px 0 6px 0' }}>nearest by meaning · closeness relative to this graph</p>
               {selected.neigh.map(n => (
                 <p key={n.id} style={{ margin: '0 0 6px 0', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.4, wordBreak: 'break-word' }}>
                   <span style={{ ...mono, color: 'var(--accent)', fontSize: '10px', marginRight: '6px' }}>{Math.round(n.w * 100)}%</span>{n.id}
