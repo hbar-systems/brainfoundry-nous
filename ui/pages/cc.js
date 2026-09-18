@@ -24,7 +24,7 @@ import remarkGfm from 'remark-gfm'
 // every colour is a CSS variable set in _app.js, not a fixed palette.
 const C = {
   ink: 'var(--text)', dim: 'var(--muted)', faint: 'var(--muted)', gold: 'var(--accent)',
-  card: 'var(--surface2)', line: 'var(--border)', me: 'var(--user-bg)', brain: 'var(--surface)', bad: '#7a3a2e',
+  card: 'var(--surface2)', line: 'var(--border)', me: 'var(--user-bg)', meText: 'var(--user-text)', brain: 'var(--surface)', bad: '#7a3a2e',
   onAccent: 'var(--bg)', codeBg: 'var(--code-bg)', codeFg: 'var(--code-fg)',
 }
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
@@ -446,7 +446,7 @@ export default function CC() {
               <div style={{
                 maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
-                color: C.ink, fontSize: '14px', lineHeight: 1.6,
+                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6,
               }}>
                 {t.who === 'brain' ? <Md text={t.text} /> : t.text}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
