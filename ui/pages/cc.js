@@ -116,22 +116,27 @@ function ProposalCard({ p, onDecide }) {
 function Pane({ pane, onClose }) {
   // A summoned surface (D54): an existing console page, same origin and auth, shown
   // beside the conversation and dismissed with one click. Pages hide their own nav
-  // when embedded (see _app.js). Narrow screens get it as an overlay.
+  // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
+  // the whole console; the page itself may go fullscreen (allowFullScreen).
   const [narrow, setNarrow] = useState(false)
+  const [wide, setWide] = useState(false)
   useEffect(() => {
     const f = () => setNarrow(window.innerWidth < 960)
     f(); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f)
   }, [])
-  const box = narrow
+  const box = (narrow || wide)
     ? { position: 'fixed', top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px))', right: 0, bottom: 0, left: 0, zIndex: 150, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
     : { width: 'min(48vw, 760px)', flexShrink: 0, borderLeft: `1px solid ${C.line}`, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
   return (
     <div style={box}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
         <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>
-        <Btn small onClick={onClose} title="Put it away">close</Btn>
+        <span style={{ display: 'flex', gap: '8px' }}>
+          {!narrow && <Btn small onClick={() => setWide(x => !x)} title={wide ? 'Back beside the conversation' : 'Cover the whole console'}>{wide ? 'beside' : 'wide'}</Btn>}
+          <Btn small onClick={onClose} title="Put it away">close</Btn>
+        </span>
       </div>
-      <iframe src={pane.route} title={pane.title || pane.route} style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain }} />
+      <iframe src={pane.route} title={pane.title || pane.route} allowFullScreen allow="fullscreen" style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain }} />
     </div>
   )
 }

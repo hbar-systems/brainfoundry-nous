@@ -62,6 +62,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   neighbour closeness shown relative to the graph's own range instead of raw
   cosine (which sits between 0.90 and 0.98 for everything); the bridge warms the
   graph cache at startup so the first open is fast.
+- feat(cc): panes get a "wide" toggle (cover the whole console) and allow the
+  embedded page to go fullscreen; the graph page has a fullscreen button.
 - feat(cc): the workshop. When `CC_WORLD_DIR` points at a read-only mirror of the
   owner's own repository on the box, the reasoner is told about it, gets it as an
   allowed directory (`--add-dir`), and is asked to read current files there for

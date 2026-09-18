@@ -209,11 +209,16 @@ export default function Graph() {
       <Head><title>Memory graph · BrainFoundry</title></Head>
       <div style={{ display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', fontFamily: 'var(--font-display, serif)', color: 'var(--text)' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '10px 16px 6px' }}>
+          <div style={{ padding: '10px 16px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+            <div>
             <p style={{ ...mono, color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: 0 }}>memory · what the brain holds</p>
             {meta && <p style={{ ...mono, color: 'var(--muted)', fontSize: '11px', margin: '4px 0 0 0' }}>{meta.shown} of {meta.total_docs} documents · {meta.edges} links · rings: what the last turn retrieved</p>}
             {!meta && !error && <p style={{ ...mono, color: 'var(--muted)', fontSize: '11px', margin: '4px 0 0 0' }}>reading the memory…</p>}
             {error && <p style={{ color: '#d08a7a', fontSize: '13px', margin: '6px 0 0 0' }}>{error}</p>}
+            </div>
+            <button onClick={() => { const el = document.documentElement; if (document.fullscreenElement) document.exitFullscreen(); else if (el.requestFullscreen) el.requestFullscreen().catch(() => {}) }}
+              style={{ ...mono, background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}
+              title="Fill the screen (Esc to leave)">fullscreen</button>
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             <canvas ref={canvasRef} onMouseMove={onMove} onClick={onClick} style={{ display: 'block', cursor: 'crosshair', position: 'absolute', inset: 0 }} />
