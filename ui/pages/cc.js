@@ -226,12 +226,12 @@ function SignIn({ onDone, health, onOpenPane }) {
                 <Btn onClick={() => start('console')}>Sign in with an Anthropic Console account</Btn>
               </>
             ) : (
-              <Btn onClick={() => onOpenPane && onOpenPane({ route: '/claude/', title: 'Terminal' })}>Sign in with a Claude subscription (opens the terminal)</Btn>
+              <Btn onClick={() => onOpenPane && onOpenPane({ route: '/claude/?arg=login', title: 'Sign in' })}>Sign in with a Claude subscription</Btn>
             )}
           </div>
           {!(health && health.signin_proxy) && (
             <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '10px 0 0 0' }}>
-              A subscription signs in through Anthropic's own flow: in the terminal type <code>claude</code>, follow the link it prints, paste the code back there. Nothing about your account passes through this page.
+              A subscription signs in through the provider's own flow, in a panel beside this one: open the link it shows, sign in, paste the code where it asks. Nothing about your account passes through this page; when it says done, close the panel and press reconnect.
             </p>
           )}
           {apiErr && <p style={{ color: '#d08a7a', fontSize: '13px', margin: '10px 0 0 0' }}>{apiErr}</p>}
@@ -538,7 +538,7 @@ export default function CC() {
           </ul>
         )}
       </div>
-      {pane && <Pane pane={pane} onClose={() => setPane(null)} />}
+      {pane && <Pane pane={pane} onClose={() => { setPane(null); loadHealth() }} />}
       </div>
     </>
   )

@@ -54,7 +54,28 @@ if [ ! -x "$HOME_DIR/.local/bin/claude" ]; then
 fi
 "$HOME_DIR/.local/bin/claude" --version
 
-echo "== 3/6 unit claude-tab (terminal back door)"
+echo "== 3/6 unit claude-tab (the door: a styled terminal that runs one thing)"
+# door.sh: what the terminal runs. No argument: a persistent shell in the brain repo (the
+# operator's back door). "login": Anthropic's own sign-in flow for the reasoner, and nothing
+# else, so the CC sign-in card can open the door straight into it. The look follows the
+# console (colours, font, no status bar) so it does not read as a terminal.
+cat > "$HOME_DIR/.cc-bridge/door.sh" <<'DOOR'
+#!/usr/bin/env bash
+export PATH="$HOME/.local/bin:$PATH" TERM=xterm-256color
+case "${1:-}" in
+  login)
+    clear
+    printf '\n  Signing in to your own account, through the provider'"'"'s own flow.\n'
+    printf '  1. A link appears below. Open it and sign in.\n  2. Copy the code it shows.\n  3. Paste the code here and press Enter.\n\n'
+    claude auth login --claudeai
+    printf '\n  Done. You can close this panel.\n'
+    sleep 3600 ;;
+  *)
+    exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;
+esac
+DOOR
+chmod 755 "$HOME_DIR/.cc-bridge/door.sh"
+THEME='{"background":"#0f0e0c","foreground":"#e8e0d5","cursor":"#c9a96e","selectionBackground":"#3a3520","black":"#0f0e0c","brightBlack":"#6b5f52","white":"#e8e0d5","brightWhite":"#ffffff","yellow":"#c9a96e","brightYellow":"#e0c48a","blue":"#8fb3c9","green":"#9fbf8f","red":"#d08a7a"}'
 sudo tee /etc/systemd/system/claude-tab.service >/dev/null <<UNIT
 [Unit]
 Description=Reasoner web terminal for the brain console (ttyd + tmux)
@@ -67,7 +88,8 @@ Environment=HOME=$HOME_DIR
 Environment=PATH=$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TERM=xterm-256color
 EnvironmentFile=-$ENV_FILE
-ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -t titleFixed="terminal" -t fontSize=14 -t disableLeaveAlert=true /usr/bin/tmux new-session -A -s claude -c $BRAIN_DIR
+Environment=BRAIN_DIR=$BRAIN_DIR
+ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -a -t titleFixed="brain" -t fontSize=15 -t fontFamily="DM Mono, Menlo, monospace" -t disableLeaveAlert=true -t 'theme=$THEME' /usr/bin/bash $HOME_DIR/.cc-bridge/door.sh
 Restart=always
 RestartSec=2
 

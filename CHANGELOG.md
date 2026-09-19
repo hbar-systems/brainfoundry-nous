@@ -54,6 +54,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   subscription sign-in to the terminal door (Anthropic's own flow). The page-driven
   pty sign-in is disabled unless `CC_SUBSCRIPTION_PROXY=1` (self-operated brains).
   `/cc/health` reports `signin_proxy` and `auto_count`.
+- feat(cc): the door. The terminal service runs `~/.cc-bridge/door.sh`: with no
+  argument a status-less shell in the brain repo (the operator's back door); with
+  `login` (reached as `/claude/?arg=login` from the sign-in card) only the provider's
+  own sign-in flow with a three-line guide. Colours and font follow the console.
 - security(cc): one audit line per turn in `~/.cc-bridge/turns.jsonl` (sizes,
   timings, thread, proposal id, pane, tool list; never content).
 - feat(settings): a CC section shows, read-only, what the reasoner may use, read
