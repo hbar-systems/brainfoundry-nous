@@ -48,6 +48,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- security(cc): hardening item 1. Sign-in doors follow Anthropic's published terms
+  for hosting Claude Code: the card offers the owner's own API key first
+  (`POST /cc/login/apikey`, stored in the bridge env file, mode 600), and sends a
+  subscription sign-in to the terminal door (Anthropic's own flow). The page-driven
+  pty sign-in is disabled unless `CC_SUBSCRIPTION_PROXY=1` (self-operated brains).
+  `/cc/health` reports `signin_proxy` and `auto_count`.
+- security(cc): one audit line per turn in `~/.cc-bridge/turns.jsonl` (sizes,
+  timings, thread, proposal id, pane, tool list; never content).
+- feat(settings): a CC section shows, read-only, what the reasoner may use, read
+  and do, plus where the audits live.
 - feat(graph): the memory graph pane (D54, second pane). `GET /graph` returns
   documents as nodes (layer, chunk count, last update) and edges to each
   document's k nearest documents by cosine similarity of the mean chunk embedding

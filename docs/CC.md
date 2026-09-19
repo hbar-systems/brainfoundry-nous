@@ -24,7 +24,7 @@ It is off by default. A brain shows the CC tab only when its owner switches it o
    echo BRAIN_CC_ENABLED=true | sudo tee -a .env
    ```
 3. Restart the api so it reads the flag: press Update in the console, or on the server `docker compose up -d api`.
-4. Open the console. CC is now the first tab. Press one of the two sign-in buttons, sign in on the page that opens, paste the code back, press Finish. That is the only time you see anything about the account.
+4. Open the console. CC is now the first tab. Connect a reasoner: paste your own Anthropic API key (it stays on your server, billed to your account), or sign in with your own Claude subscription in the terminal door that the card opens, through Anthropic's own flow (type `claude`, follow the link, paste the code there). Nothing about your account passes through the console page. On a brain you operate yourself you may enable the page-driven subscription sign-in with `CC_SUBSCRIPTION_PROXY=1` in the bridge env file; it is off by default because Anthropic's terms do not allow a third party to pass a subscription code through its own page.
 5. Say hello. The first turn starts a thread that continues across reloads and restarts until you press "new thread".
 
 No browser on the box, no terminal either: on any machine where you are signed in to the reasoner CLI, run `claude setup-token`, copy the token it prints, then on the box run `bash scripts/cc/set-token.sh` and paste it when prompted. The token goes into the bridge's protected env file and both the bridge and the terminal door use it. It is your token, on your server; it never enters a repo.
@@ -83,9 +83,13 @@ Once you trust a kind of write, tick "don't ask again for this action" on its ca
 | permit gate | `~/.cc-bridge/venv` (permitd), `~/.cc-bridge/permitd.db`, `~/.cc-bridge/permitd-audit.jsonl`, `~/.cc-bridge/exec/.onerc` (the only place writes are allowed) |
 | console routes | two `handle` blocks in `/etc/caddy/Caddyfile`, inside the console's basic-auth block; a dated backup sits beside it |
 
+## What the reasoner may do, visible
+
+Settings has a CC section that shows, read-only, what the bridge reports: which reasoner, how it is signed in, the exact tool list, memory on or off, the workshop mirror, the hands and whether writes need your Send, the write gate and how many actions run without asking. Two audit files sit on the server: `~/.cc-bridge/turns.jsonl`, one line per turn with sizes and timings and never content, and `~/.cc-bridge/permitd-audit.jsonl`, every proposed, approved, denied and executed write, hash-chained.
+
 ## Accounts and terms, plainly
 
-The reasoner runs on the brain owner's own account. A Claude subscription is personal: its login may not be shared, resold, or bundled into a product price, and CC does not do any of that. If you operate brains for other people, each brain signs in with that person's own account, or uses that person's own Console API key; you never sign in with yours, and you never fold a subscription into what you charge. When in doubt, the Console door is the plain one: per-use billing to the owner's own account. Read the current terms before you rely on either.
+The reasoner runs on the brain owner's own account. Anthropic's terms (read 2026-09-19, quoted in the operator's legal notes) permit hosting the unmodified Claude Code binary in a product when every end user authenticates with their own API key or their own subscription and nobody pays, resells or intermediates usage for them. They do not permit a third party to offer Claude.ai login inside its own page or to pass subscription credentials or session tokens through. That is why the card offers the API key first and sends a subscription to the terminal door. If you operate brains for other people: their key or their sign-in, never yours, and never a token you store for them. The hosting party accepts Anthropic's Commercial Terms.
 
 ## Security shape
 

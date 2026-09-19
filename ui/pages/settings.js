@@ -1580,6 +1580,41 @@ function AppsPanel() {
   )
 }
 
+// ---------- CC (the reasoner surface) ----------
+// Read-only facts from the bridge on the host, so what the reasoner may do is visible
+// here and not only on the CC page (hardening list, ops/2026-09-13_todo-plan.md).
+function CCPanel() {
+  const [h, setH] = useState(null)
+  const [perm, setPerm] = useState(null)
+  useEffect(() => {
+    fetch('/cc/health', { cache: 'no-store' }).then(r => (r.ok ? r.json() : false)).then(setH).catch(() => setH(false))
+    fetch('/cc/permits', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(setPerm).catch(() => {})
+  }, [])
+  const row = (k, v) => (
+    <div key={k} style={{ display: 'flex', gap: 12, padding: '6px 0', borderBottom: '1px solid rgba(201,169,110,0.12)', fontSize: 13 }}>
+      <span style={{ color: '#8b7d6e', minWidth: 160 }}>{k}</span><span style={{ color: '#e8e0d5', wordBreak: 'break-word' }}>{v}</span>
+    </div>
+  )
+  if (h === null) return <p style={{ color: '#6b5f52', fontSize: 13, paddingTop: 16 }}>reading…</p>
+  if (h === false) return <p style={{ color: '#6b5f52', fontSize: 13, paddingTop: 16 }}>The bridge is not answering on this console. CC is off, or its box side is not installed (docs/CC.md).</p>
+  return (
+    <div style={{ paddingTop: 16 }}>
+      {row('reasoner', h.reasoner || 'none')}
+      {row('signed in', h.auth && h.auth.loggedIn ? `yes · ${h.auth.method || ''}${h.auth.email ? ' · ' + h.auth.email : ''}` : 'no')}
+      {row('tools the reasoner may use', h.tools || '')}
+      {row('memory in every turn', h.memory ? `on · ${h.memory_k} chunks` : 'off')}
+      {row('workshop mirror', h.workshop || 'none')}
+      {row('hands', h.hands ? `${h.hands} · ${h.writes ? 'writes need your Send' : 'read only'}` : 'none')}
+      {row('write gate', h.gate ? `${h.gate} · ${h.auto_count || 0} action${(h.auto_count || 0) === 1 ? '' : 's'} allowed without asking` : 'off')}
+      {row('subscription sign-in in the page', h.signin_proxy ? 'enabled (self-operated brain)' : 'off · via the terminal door')}
+      {perm && Array.isArray(perm.auto) && perm.auto.length > 0 && row('allowed without asking', perm.auto.map(a => `${a.platform} · ${a.method || 'POST'} · ${a.title || a.action_id}`).join(' ; '))}
+      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '12px 0 0 0' }}>
+        Audit on the server: <code>~/.cc-bridge/turns.jsonl</code> (one line per turn, sizes and timings, no content) and <code>~/.cc-bridge/permitd-audit.jsonl</code> (every proposed, approved, denied and executed write; hash-chained). Change what runs without asking on the CC page itself.
+      </p>
+    </div>
+  )
+}
+
 // ---------- Export ----------
 // The one-button export (unreleased 0.10.0): everything the brain accumulated,
 // minus secrets, in one .tar.gz built on the brain and downloaded here.
@@ -1733,6 +1768,10 @@ export default function Settings() {
 
       <Section title="Export" subtitle="Take your brain with you: one archive, no secrets.">
         <ExportPanel />
+      </Section>
+
+      <Section title="CC" subtitle="The reasoner on your server: what it may use, read, and do.">
+        <CCPanel />
       </Section>
 
       <Section title="Security & Federation" subtitle="Brain identity, public key, how other brains verify you.">

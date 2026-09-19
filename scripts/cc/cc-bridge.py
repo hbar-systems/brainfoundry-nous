@@ -393,6 +393,43 @@ def _permit_public(pm) -> dict:
 _lock = threading.Lock()
 _version: str | None = None
 MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
+
+# Sign-in doors (hardening item 1, ops/legal/claude-code-terms-2026-09-19.md in hbar.world).
+# Anthropic permits an owner to configure their own API key on their own machine, and to
+# sign in to the unmodified binary with their own subscription through Anthropic's own flow.
+# It does not permit a third party to offer Claude.ai login inside its own page or to pass
+# credentials or session tokens through. So: the API-key door is the default; the
+# subscription door points at the terminal (Anthropic's flow, Claude Code's own prompt);
+# the page-driven pty sign-in exists only for a self-operated brain, behind this switch.
+SUBSCRIPTION_PROXY = os.environ.get("CC_SUBSCRIPTION_PROXY", "").strip().lower() in {"1", "true", "yes", "on"}
+ENV_FILE = STATE_DIR / "env"
+TURNS_LOG = STATE_DIR / "turns.jsonl"   # one audit line per turn: sizes and timings, never content
+
+
+def _env_file_set(key: str, value: str) -> None:
+    """Write KEY=value into the bridge's env file (mode 600), replacing any earlier line."""
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lines = []
+    if ENV_FILE.exists():
+        lines = [l for l in ENV_FILE.read_text().splitlines() if not l.startswith(key + "=")]
+    lines.append(f"{key}={value}")
+    ENV_FILE.write_text("\n".join(lines) + "\n")
+    os.chmod(ENV_FILE, 0o600)
+
+
+def _env_file_unset(key: str) -> None:
+    if ENV_FILE.exists():
+        lines = [l for l in ENV_FILE.read_text().splitlines() if not l.startswith(key + "=")]
+        ENV_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
+def _audit_turn(entry: dict) -> None:
+    try:
+        STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with TURNS_LOG.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:  # pragma: no cover
+        print(f"audit write failed: {type(e).__name__}", flush=True)
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 
@@ -438,6 +475,10 @@ def _auth_status(fresh: bool = False) -> dict:
     if not fresh and time.time() - _auth_cache[0] < 20:
         return _auth_cache[1]
     st = {"loggedIn": False, "email": None, "method": None}
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        st = {"loggedIn": True, "email": None, "method": "api-key"}
+        _auth_cache = (time.time(), st)
+        return st
     try:
         out = subprocess.run([REASONER, "auth", "status", "--json"], capture_output=True, text=True,
                              timeout=20, env=_env())
@@ -692,7 +733,8 @@ class Handler(BaseHTTPRequestHandler):
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
                              "hands": "one" if ONE_ENABLED else None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
-                             "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES})
+                             "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES,
+                             "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         elif route == "/threads":
@@ -729,7 +771,22 @@ class Handler(BaseHTTPRequestHandler):
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
+        if route == "/login/apikey":
+            key = str(req.get("key", "")).strip()
+            if not key.startswith("sk-ant-") or len(key) < 30:
+                self._send(400, {"ok": False, "error": "that does not look like an Anthropic API key (sk-ant-...)"})
+                return
+            _env_file_set("ANTHROPIC_API_KEY", key)
+            os.environ["ANTHROPIC_API_KEY"] = key
+            _auth_status(fresh=True)
+            print("api key set by the owner (stored in the env file, mode 600)", flush=True)
+            self._send(200, {"ok": True, "method": "api-key"})
+            return
         if route == "/login/start":
+            if not SUBSCRIPTION_PROXY:
+                self._send(409, {"ok": False, "error": "subscription sign-in happens in the terminal door, through Anthropic's own flow",
+                                 "terminal": "/claude/"})
+                return
             method = "console" if str(req.get("method", "")).lower() == "console" else "claudeai"
             LOGIN.start(method)
             self._send(200, {"ok": True, "phase": LOGIN.phase})
@@ -768,6 +825,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "auto": _auto_load()})
             return
         if route == "/logout":
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                _env_file_unset("ANTHROPIC_API_KEY")
             subprocess.run([REASONER, "auth", "logout"], capture_output=True, timeout=30, env=_env())
             _auth_status(fresh=True)
             LOGIN.reset()
@@ -818,6 +878,10 @@ class Handler(BaseHTTPRequestHandler):
             print(f"record turn failed: {type(e).__name__}", flush=True)
         ms = int((time.time() - t0) * 1000)
         print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')}", flush=True)
+        _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
+                     "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
+                     "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "proposal": (card or {}).get("id"),
+                     "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS})
         self._send(200, {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane})
 
     def log_message(self, fmt: str, *args) -> None:  # quiet: no paths, no bodies

@@ -158,11 +158,22 @@ function FirstRun({ steps, onOpen }) {
   )
 }
 
-function SignIn({ onDone, health }) {
+function SignIn({ onDone, health, onOpenPane }) {
   const [state, setState] = useState({ phase: 'idle' })
   const [code, setCode] = useState('')
   const [method, setMethod] = useState(null)
+  const [apiKey, setApiKey] = useState('')
+  const [apiErr, setApiErr] = useState(null)
   const timer = useRef(null)
+
+  async function useKey() {
+    setApiErr(null)
+    try {
+      const r = await fetch('/cc/login/apikey', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: apiKey.trim() }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.ok) { setApiKey(''); onDone() } else setApiErr(d.error || 'the key was not accepted')
+    } catch { setApiErr('the bridge did not answer') }
+  }
 
   const poll = async () => {
     try {
@@ -198,12 +209,34 @@ function SignIn({ onDone, health }) {
         Your credentials stay on your server; this brain never sees your password.
       </p>
 
-      {state.phase === 'idle' || state.phase === 'error' ? (
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <Btn primary onClick={() => start('claudeai')}>Sign in with a Claude subscription</Btn>
-          <Btn onClick={() => start('console')}>Sign in with an Anthropic Console account</Btn>
-        </div>
-      ) : null}
+      {(state.phase === 'idle' || state.phase === 'error') && (
+        <>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+            <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="paste your Anthropic API key (sk-ant-…)" type="password"
+                   style={{ flex: '1 1 280px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.brain, color: C.ink, border: `1px solid ${C.line}`, ...mono, fontSize: '13px', outline: 'none' }} />
+            <Btn primary onClick={useKey} disabled={!apiKey.trim()}>Use this key</Btn>
+          </div>
+          <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '0 0 12px 0' }}>
+            The key is stored on your server only and billed to your own account. Get one at console.anthropic.com.
+          </p>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+            {health && health.signin_proxy ? (
+              <>
+                <Btn onClick={() => start('claudeai')}>Sign in with a Claude subscription</Btn>
+                <Btn onClick={() => start('console')}>Sign in with an Anthropic Console account</Btn>
+              </>
+            ) : (
+              <Btn onClick={() => onOpenPane && onOpenPane({ route: '/claude/', title: 'Terminal' })}>Sign in with a Claude subscription (opens the terminal)</Btn>
+            )}
+          </div>
+          {!(health && health.signin_proxy) && (
+            <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '10px 0 0 0' }}>
+              A subscription signs in through Anthropic's own flow: in the terminal type <code>claude</code>, follow the link it prints, paste the code back there. Nothing about your account passes through this page.
+            </p>
+          )}
+          {apiErr && <p style={{ color: '#d08a7a', fontSize: '13px', margin: '10px 0 0 0' }}>{apiErr}</p>}
+        </>
+      )}
 
       {state.phase === 'starting' && (
         <p style={{ color: C.dim, fontSize: '13px', fontStyle: 'italic', margin: '8px 0 0 0' }}>preparing the sign-in link…</p>
@@ -242,7 +275,7 @@ function SignIn({ onDone, health }) {
         <pre style={{ ...mono, color: C.faint, fontSize: '11px', whiteSpace: 'pre-wrap', margin: '12px 0 0 0', maxHeight: '90px', overflow: 'hidden' }}>{state.tail.slice(-300)}</pre>
       )}
       <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '14px 0 0 0' }}>
-        {method === 'console' ? 'billed per use to your own Console account' : method === 'claudeai' ? 'uses your own subscription; this is your account on your server' : 'either door works; both are your own account'}
+        {method === 'console' ? 'billed per use to your own Console account' : method === 'claudeai' ? 'uses your own subscription; this is your account on your server' : 'your own key or your own subscription; nothing is ours'}
         {health && health.reasoner ? ` · ${health.reasoner}` : ''}
       </p>
     </div>
@@ -441,7 +474,7 @@ export default function CC() {
           </div>
         )}
 
-        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} />}
+        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '4px 2px' }}>
           {pending.map(p => (
