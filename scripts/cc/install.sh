@@ -32,7 +32,13 @@ CADDYFILE=${CADDYFILE:-/etc/caddy/Caddyfile}
 TERM_PORT=${TERM_PORT:-7681}
 CC_PORT=${CC_PORT:-7682}
 STAMP=$(date +%Y-%m-%d_%H%M%S)
-ENV_FILE="$HOME_DIR/.cc-bridge/env"
+# The bridge may run as a separate user without sudo (scripts/cc/harden-user.sh, hardening
+# item 3). If the unit already names one, keep it; everything of the bridge lives in that
+# user's home. The terminal door stays the brain user's (the operator's back door).
+BRIDGE_USER=${BRIDGE_USER:-$(grep -oP '^User=\K.*' /etc/systemd/system/cc-bridge.service 2>/dev/null || echo "$BRAIN_USER")}
+BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
+ENV_FILE="$BRIDGE_HOME/.cc-bridge/env"
+SUDO_AS_BRIDGE=""; [ "$BRIDGE_USER" != "$(id -un)" ] && SUDO_AS_BRIDGE="sudo -u $BRIDGE_USER"
 
 echo "== brain user $BRAIN_USER, repo $BRAIN_DIR"
 [ -f "$BRAIN_DIR/VERSION" ] || { echo "not a brain repo: $BRAIN_DIR"; exit 1; }
@@ -53,6 +59,10 @@ if [ ! -x "$HOME_DIR/.local/bin/claude" ]; then
     bash /tmp/claude-install.sh
 fi
 "$HOME_DIR/.local/bin/claude" --version
+if [ "$BRIDGE_USER" != "$BRAIN_USER" ] && ! sudo test -x "$BRIDGE_HOME/.local/bin/claude"; then
+    curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh
+    sudo -u "$BRIDGE_USER" bash /tmp/claude-install.sh >/dev/null 2>&1 && echo "reasoner CLI installed for $BRIDGE_USER"
+fi
 
 echo "== 3/6 unit claude-tab (the door: a styled terminal that runs one thing)"
 # door.sh: what the terminal runs. No argument: a persistent shell in the brain repo (the
@@ -97,18 +107,18 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
-echo "== 4/6 unit cc-bridge"
-mkdir -p "$HOME_DIR/.cc-bridge"
+echo "== 4/6 unit cc-bridge (runs as $BRIDGE_USER)"
+$SUDO_AS_BRIDGE mkdir -p "$BRIDGE_HOME/.cc-bridge"
 # A small venv for the bridge: permitd (the permit gate for writes; stdlib-only, tiny).
-if [ ! -x "$HOME_DIR/.cc-bridge/venv/bin/python" ]; then
-    python3 -m venv "$HOME_DIR/.cc-bridge/venv" 2>/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv >/dev/null; python3 -m venv "$HOME_DIR/.cc-bridge/venv"; }
+if [ ! -x "$BRIDGE_HOME/.cc-bridge/venv/bin/python" ]; then
+    $SUDO_AS_BRIDGE python3 -m venv "$BRIDGE_HOME/.cc-bridge/venv" 2>/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv >/dev/null; $SUDO_AS_BRIDGE python3 -m venv "$BRIDGE_HOME/.cc-bridge/venv"; }
 fi
-"$HOME_DIR/.cc-bridge/venv/bin/pip" install -q --upgrade permitd >/dev/null 2>&1 && echo "permitd $("$HOME_DIR/.cc-bridge/venv/bin/python" -c 'import permitd;print(permitd.__version__)' 2>/dev/null || echo installed)"
-if [ ! -s "$ENV_FILE" ]; then
+$SUDO_AS_BRIDGE "$BRIDGE_HOME/.cc-bridge/venv/bin/pip" install -q --upgrade permitd >/dev/null 2>&1 && echo "permitd $($SUDO_AS_BRIDGE "$BRIDGE_HOME/.cc-bridge/venv/bin/python" -c 'import permitd;print(permitd.__version__)' 2>/dev/null || echo installed)"
+if ! sudo test -s "$ENV_FILE"; then
     # The brain's api key, so the bridge can search memory. .env is root-owned on most brains.
     if sudo grep -q "^BRAIN_API_KEY=" "$BRAIN_DIR/.env" 2>/dev/null; then
         sudo sh -c "grep '^BRAIN_API_KEY=' '$BRAIN_DIR/.env' > '$ENV_FILE'"
-        sudo chown "$BRAIN_USER":"$BRAIN_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"
+        sudo chown "$BRIDGE_USER":"$BRIDGE_USER" "$ENV_FILE"; sudo chmod 600 "$ENV_FILE"
         echo "api key copied into $ENV_FILE (mode 600)"
     else
         echo "no BRAIN_API_KEY in .env; the bridge will run without memory until $ENV_FILE holds one"
@@ -122,16 +132,16 @@ Description=CC bridge: headless reasoner turns for the brain console CC tab
 After=network.target
 
 [Service]
-User=$BRAIN_USER
+User=$BRIDGE_USER
 WorkingDirectory=$BRAIN_DIR
-Environment=HOME=$HOME_DIR
-Environment=PATH=$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=$BRIDGE_HOME
+Environment=PATH=$BRIDGE_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CC_PORT=$CC_PORT
 Environment=CC_BASE=/cc
 Environment=CC_CWD=$BRAIN_DIR
 Environment=CC_TOOLS=Read,Grep,Glob
 EnvironmentFile=-$ENV_FILE
-ExecStart=$HOME_DIR/.cc-bridge/venv/bin/python $BRAIN_DIR/scripts/cc/cc-bridge.py
+ExecStart=$BRIDGE_HOME/.cc-bridge/venv/bin/python $BRAIN_DIR/scripts/cc/cc-bridge.py
 Restart=always
 RestartSec=2
 
@@ -140,15 +150,15 @@ WantedBy=multi-user.target
 UNIT
 
 echo "== 4a/6 hands (only when a One key is present in the bridge env file)"
-if grep -q "^ONE_SECRET=" "$ENV_FILE" 2>/dev/null; then
+if sudo grep -q "^ONE_SECRET=" "$ENV_FILE" 2>/dev/null; then
     # Looking and doing are separate. The reasoner's own directory carries NO One restriction,
     # so its lookups see every action, reads and writes. It may run only: list, search,
     # knowledge, and one-read. one-read executes from a directory whose .onerc allows GET only.
     # Writes run only from the bridge, from ~/.cc-bridge/exec, with an approved permit.
-    mkdir -p "$HOME_DIR/.cc-bridge/read" "$HOME_DIR/.cc-bridge/exec" "$HOME_DIR/.local/bin"
-    echo "ONE_PERMISSIONS=read"  > "$HOME_DIR/.cc-bridge/read/.onerc"
-    echo "ONE_PERMISSIONS=write" > "$HOME_DIR/.cc-bridge/exec/.onerc"
-    cat > "$HOME_DIR/.local/bin/one-read" <<'WRAP'
+    $SUDO_AS_BRIDGE mkdir -p "$BRIDGE_HOME/.cc-bridge/read" "$BRIDGE_HOME/.cc-bridge/exec" "$BRIDGE_HOME/.local/bin"
+    echo "ONE_PERMISSIONS=read"  | $SUDO_AS_BRIDGE tee "$BRIDGE_HOME/.cc-bridge/read/.onerc" >/dev/null
+    echo "ONE_PERMISSIONS=write" | $SUDO_AS_BRIDGE tee "$BRIDGE_HOME/.cc-bridge/exec/.onerc" >/dev/null
+    $SUDO_AS_BRIDGE tee "$BRIDGE_HOME/.local/bin/one-read" >/dev/null <<'WRAP'
 #!/usr/bin/env bash
 # one-read: run ONE read action through One. Same arguments and flags as
 # `one --agent actions execute`. Executes from a directory whose .onerc allows GET only,
@@ -156,14 +166,14 @@ if grep -q "^ONE_SECRET=" "$ENV_FILE" 2>/dev/null; then
 cd "$HOME/.cc-bridge/read" || exit 1
 exec one --agent actions execute "$@"
 WRAP
-    chmod 755 "$HOME_DIR/.local/bin/one-read"
+    $SUDO_AS_BRIDGE chmod 755 "$BRIDGE_HOME/.local/bin/one-read"
     # An earlier setup put a read-only .onerc into the brain directory; it hides write actions
     # from lookups. Remove it only if it is exactly that one line.
     if [ -f "$BRAIN_DIR/.onerc" ] && [ "$(tr -d '[:space:]' < "$BRAIN_DIR/.onerc")" = "ONE_PERMISSIONS=read" ]; then
         sudo rm -f "$BRAIN_DIR/.onerc" && echo "removed the old read-only .onerc from the brain directory"
     fi
     TOOLS='Read,Grep,Glob,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
-    grep -v "^CC_TOOLS=" "$ENV_FILE" > "$ENV_FILE.tmp" && echo "CC_TOOLS=$TOOLS" >> "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE" && chmod 600 "$ENV_FILE"
+    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$TOOLS' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
     echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
 else
     echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
@@ -172,7 +182,7 @@ fi
 # Reasoner sign-in without a browser on the box: the owner runs `claude setup-token` on a
 # machine where they are signed in and stores the long-lived token here (scripts/cc/set-token.sh).
 # The CLI reads it from CLAUDE_CODE_OAUTH_TOKEN; both units load this env file.
-if grep -q "^CLAUDE_CODE_OAUTH_TOKEN=" "$ENV_FILE" 2>/dev/null; then
+if sudo grep -q "^CLAUDE_CODE_OAUTH_TOKEN=" "$ENV_FILE" 2>/dev/null; then
     echo "reasoner token present in $ENV_FILE (headless sign-in)"
 fi
 
