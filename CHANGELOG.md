@@ -59,7 +59,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   `login` (reached as `/claude/?arg=login` from the sign-in card) only the provider's
   own sign-in flow with a three-line guide. Colours and font follow the console.
 - security(cc): one audit line per turn in `~/.cc-bridge/turns.jsonl` (sizes,
-  timings, thread, proposal id, pane, tool list; never content).
+  timings, thread, proposal id, pane, tool list, and the names of the documents
+  retrieved for the turn; never content). The retrieved names are the seed of
+  "edges from use" for the memory graph (mind chat, 2026-09-18).
 - feat(settings): a CC section shows, read-only, what the reasoner may use, read
   and do, plus where the audits live.
 - feat(graph): the memory graph pane (D54, second pane). `GET /graph` returns

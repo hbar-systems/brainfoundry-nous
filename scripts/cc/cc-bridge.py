@@ -880,7 +880,8 @@ class Handler(BaseHTTPRequestHandler):
         print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')}", flush=True)
         _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
                      "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
-                     "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "proposal": (card or {}).get("id"),
+                     "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
+                     "proposal": (card or {}).get("id"),
                      "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS})
         self._send(200, {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane})
 
