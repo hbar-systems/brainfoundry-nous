@@ -85,6 +85,7 @@ function ProposalCard({ p, onDecide }) {
   }
   const [remember, setRemember] = useState(false)
   const decided = p.decided
+  const box = p.platform === 'box'
   if (p.auto) {
     const ok = p.outcome && p.outcome.ok
     return (
@@ -100,22 +101,24 @@ function ProposalCard({ p, onDecide }) {
   return (
     <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}`, backgroundColor: C.card }}>
       <p style={{ ...mono, color: C.gold, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
-        proposed write · {p.method || 'POST'} · {p.platform || ''}
+        {box ? `on this box · ${p.method || 'action'}` : `proposed write · ${p.method || 'POST'} · ${p.platform || ''}`}
       </p>
-      <p style={{ margin: '0 0 10px 0', color: C.ink, fontSize: '14px', lineHeight: 1.5 }}>{p.summary || 'an action in a connected app'}</p>
+      <p style={{ margin: '0 0 10px 0', color: C.ink, fontSize: '14px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: box ? "'JetBrains Mono', ui-monospace, monospace" : 'inherit' }}>{p.summary || 'an action in a connected app'}</p>
       {decided ? (
-        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? 'sent' : 'cancelled'} · permit {p.id}</p>
+        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? (box ? 'allowed' : 'sent') : (box ? 'refused' : 'cancelled')} · permit {p.id}</p>
       ) : (
         <>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? 'sending…' : 'Send'}</Btn>
-            <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>Cancel</Btn>
+            <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? '…' : (box ? 'Allow' : 'Send')}</Btn>
+            <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>{box ? 'Refuse' : 'Cancel'}</Btn>
             <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}</span>
           </div>
+          {p.remember_ok !== false && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', color: C.dim, fontSize: '12px', cursor: 'pointer' }}>
             <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} disabled={p.busy} style={{ accentColor: C.gold }} />
-            don&apos;t ask again for this action ({p.platform}, {p.method || 'POST'}); still recorded in the audit, you can undo it below
+            {box ? `don't ask again for "${p.action_id}"; still recorded in the audit, you can undo it below` : `don't ask again for this action (${p.platform}, ${p.method || 'POST'}); still recorded in the audit, you can undo it below`}
           </label>
+          )}
         </>
       )}
     </div>
@@ -365,8 +368,18 @@ export default function CC() {
 
   // The write gate: a proposal card's Send approves the permit and executes that one
   // action through One; Cancel denies it. Either way the audit log gets a line.
+  function markCard(id, patch) {
+    setTurns(t => t.map(x => {
+      let y = x
+      if (x.proposal && x.proposal.id === id) y = { ...y, proposal: { ...x.proposal, ...patch } }
+      if (x.asks && x.asks.some(a => a.id === id)) y = { ...y, asks: x.asks.map(a => (a.id === id ? { ...a, ...patch } : a)) }
+      return y
+    }))
+  }
+
   async function decide(id, action, remember) {
-    setTurns(t => t.map(x => (x.proposal && x.proposal.id === id ? { ...x, proposal: { ...x.proposal, busy: true } } : x)))
+    const isBox = turns.some(x => (x.asks || []).some(a => a.id === id && a.platform === 'box')) || pending.some(p => p.id === id && p.platform === 'box')
+    markCard(id, { busy: true })
     let data = {}
     try {
       const r = await fetch(`/cc/permits/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, remember: !!remember }) })
@@ -374,7 +387,8 @@ export default function CC() {
     } catch (e) { data = { ok: false, error: 'the bridge did not answer' } }
     setPending(p => p.filter(x => x.id !== id))
     if (remember && data.ok) loadPending()
-    setTurns(t => t.map(x => (x.proposal && x.proposal.id === id ? { ...x, proposal: { ...x.proposal, busy: false, decided: action } } : x)))
+    markCard(id, { busy: false, decided: action })
+    if (isBox) return   // the reasoner continues in the same live answer; nothing more to say here
     if (action === 'approve') {
       const text = data.ok
         ? `Done: ${data.summary || 'the action ran'}.` + (data.result && data.result.status ? ` One answered ${data.result.status}.` : '')
@@ -441,6 +455,7 @@ export default function CC() {
             if (ev === 'start') upd(x => ({ ...x, model: pl.model }))
             else if (ev === 'text') upd(x => ({ ...x, text: x.text + (pl.t || '') }))
             else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
+            else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
             else if (ev === 'done') data = pl
           }
         }
@@ -566,6 +581,7 @@ export default function CC() {
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
+                {t.asks && t.asks.map(a => <ProposalCard key={a.id} p={a} onDecide={decide} />)}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
                 {t.who === 'brain' && t.steps && t.steps.length > 0 && (
                   <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px', lineHeight: 1.6 }}>
@@ -609,6 +625,7 @@ export default function CC() {
           {health && health.tools ? <span>read-only: {health.tools}</span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
+          {health && health.box ? <span>this box: edits and commands need your Allow</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>

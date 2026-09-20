@@ -37,6 +37,7 @@ never through a repo. Nothing typed is logged; only sizes and timings.
 """
 from __future__ import annotations
 
+import hmac as _hmac
 import json
 import os
 import pty
@@ -95,6 +96,13 @@ SYSTEM = (
 # Claude.ai connectors, finds them unauthorized, and reports the request as
 # impossible (observed 2026-09-16 on hbar).
 ONE_ENABLED = bool(os.environ.get("ONE_SECRET"))
+# Hands on the box itself (CC_BOX=1, set by the installer when the bridge runs as a user
+# without sudo): the reasoner may edit files and run commands here. Every such call that
+# is not already allowed raises a card in the chat; the person allows or refuses; root is
+# limited to the verbs in /etc/sudoers.d/cc-bridge. Off when the bridge user has sudo.
+BOX_ENABLED = os.environ.get("CC_BOX", "").strip() == "1"
+HOOK_SCRIPT = Path(__file__).resolve().parent / "cc-permit-hook.py"
+ASK_TOKEN = os.environ.setdefault("CC_ASK_TOKEN", __import__("secrets").token_hex(16))
 if ONE_ENABLED:
     SYSTEM += (
         " For anything about the person's calendar, email, or other connected apps, use the One CLI "
@@ -155,20 +163,32 @@ def _one_execute(platform: str, action_id: str, connection_key: str, method: str
     return parsed
 
 
+def _box_act(platform: str = "box", method: str = "", action_id: str = "", summary: str = "",
+             remember_ok: bool = True) -> dict:
+    """The RED tool for actions on the box. It does not run anything: the reasoner's own
+    tool runs the action after the permit is approved. The gate's part is the permit, the
+    click and the audit line; this function is the record that approval was given."""
+    return {"allowed": True, "tool": method, "summary": summary}
+
+
 def _make_gate():
-    if not (_PERMITD and ONE_ENABLED):
+    if not (_PERMITD and (ONE_ENABLED or BOX_ENABLED)):
         return None
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     g = Gate(db=str(STATE_DIR / "permitd.db"), audit_path=str(STATE_DIR / "permitd-audit.jsonl"),
              ttl_seconds=PERMIT_TTL)
-    g.register("one_execute", _one_execute, tier=RED,
-               description="execute one write action in a connected app through One")
+    if ONE_ENABLED:
+        g.register("one_execute", _one_execute, tier=RED,
+                   description="execute one write action in a connected app through One")
+    if BOX_ENABLED:
+        g.register("box_act", _box_act, tier=RED,
+                   description="allow one edit or command on this box by the reasoner")
     return g
 
 
 GATE = _make_gate()
 
-if GATE is not None:
+if GATE is not None and ONE_ENABLED:
     SYSTEM += (
         " Writes in connected apps (POST, PUT, PATCH, DELETE: send, create, update, delete) ARE possible from "
         "here, through a proposal the person approves. You never execute a write yourself, and you never "
@@ -231,7 +251,26 @@ if WORLD_DIR:
         "Memory tells you what mattered; the mirror tells you what the file says now."
     )
 
+if BOX_ENABLED:
+    SYSTEM += (
+        " This box is the person's own server and you have hands on it: you may read, edit and write files "
+        "and run commands with your own tools (Edit, Write, Bash). Reads run freely. Any other call raises a "
+        "card in the person's chat with the exact file or command; they allow or refuse it there, and you "
+        "get the answer as the tool result. Do not ask in words whether you may; make the call and let the "
+        "card ask. Do the work in small, inspectable steps and say what you changed. You run as a plain user "
+        "without general sudo. The only root verbs, each also behind a card: `sudo systemctl restart cc-bridge` "
+        "(restarts you; the turn ends), `sudo systemctl restart claude-tab`, `sudo systemctl status <unit>`, "
+        "`sudo journalctl -u <unit> ...`, `sudo docker ps`, `sudo docker compose --project-directory <brain repo> logs ...`, "
+        f"`sudo bash {CWD}/scripts/update_brain.sh` (the brain's Update), and `sudo brain-write <relative path>` "
+        "which writes stdin into a file of the brain repository (never .env, never .git). Anything else with "
+        "sudo fails; say so rather than trying workarounds. Never read or print secrets (.env files, "
+        "credentials, tokens)."
+    )
+
 _CLOSING = (
+    " Apart from such proposals and your own gated tools, you cannot change anything else from this surface: "
+    "not memory, not settings. Say so if asked to."
+    if BOX_ENABLED else
     " Apart from such proposals, you cannot change anything from this surface: not files, not memory, not "
     "settings. Say so if asked to."
     if GATE is not None else
@@ -256,7 +295,7 @@ def _extract_proposal(reply: str):
 
 def _propose(p: dict) -> dict:
     """Turn a proposal into a permit. Returns what the page renders."""
-    if GATE is None:
+    if GATE is None or not ONE_ENABLED:
         return {"error": "writes are not enabled on this brain (permit gate not installed)"}
     r = GATE.call("one_execute", p)
     if r.permit:
@@ -312,11 +351,104 @@ def _auto_remove(platform, action_id) -> None:
 def _run_permit(pid: str, pm) -> dict:
     """Approve and execute one permit. Shared by the Send button and auto-run."""
     GATE.approve(pid)
-    r = GATE.call("one_execute", pm.args, permit_id=pid)
+    tool = "box_act" if (pm.args or {}).get("platform") == "box" else "one_execute"
+    r = GATE.call(tool, pm.args, permit_id=pid)
     print(f"permit {pid} executed ok={r.ok} reason={r.reason}", flush=True)
     return {"ok": r.ok, "status": "executed" if r.ok else "failed",
             "result": r.result if r.ok else {"error": r.error or r.reason},
             "summary": (pm.args or {}).get("summary", "")}
+
+
+# ---- hands on the box: the reasoner's own tool calls, gated by a card ----
+# Claude Code fires a PermissionRequest hook whenever a tool call would need the person's
+# permission (edits, writes, commands not on the allowed list). The hook (cc-permit-hook.py)
+# posts the call here and waits; the page shows a card inside the live answer; the click
+# answers the hook; the reasoner's own tool then runs the action. Same permit, same audit.
+ASKS: dict = {}                         # permit id -> {"event", "decision", "message"}
+LIVE = {"emit": None, "waiting": 0}     # the current streamed turn's event sink
+BOX_NO_REMEMBER = ("rm", "dd", "mkfs", "shutdown", "reboot", "chmod", "chown", "curl", "wget", "ssh", "scp",
+                   "kill", "pkill", "userdel", "passwd", "sudo", "mv", "truncate", "shred")
+
+
+def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
+    """(action_id, summary, remember_ok) for one tool call. The action id is what
+    "don't ask again" remembers: a command's first word, or an edited file's directory."""
+    inp = inp if isinstance(inp, dict) else {}
+    if tool == "Bash":
+        cmd = str(inp.get("command", "")).strip()
+        words = cmd.split()
+        head = words[0] if words else ""
+        if head == "sudo" and len(words) > 1:
+            head = "sudo " + words[1]
+        plain = "|" not in cmd and ";" not in cmd and "&&" not in cmd and ">" not in cmd and "`" not in cmd and "$(" not in cmd
+        remember_ok = bool(head) and not any(w in BOX_NO_REMEMBER for w in head.split()) and plain
+        return head or "command", "run on the box: " + cmd[:300], remember_ok
+    if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
+        d = str(Path(fp).parent) if fp else ""
+        verb = "write" if tool == "Write" else "edit"
+        return f"{verb} {d}", f"{verb} the file {fp}", bool(d)
+    return tool, f"use {tool}", False
+
+
+def _box_ask(tool: str, inp: dict) -> dict:
+    """Called by the hook. Blocks until the person decides, or the permit expires."""
+    if not BOX_ENABLED or GATE is None:
+        return {"behavior": "deny", "message": "actions on the box are not enabled on this brain"}
+    action_id, summary, remember_ok = _box_key(tool, inp)
+    # The permit carries the summary (the command, or the file name), not the tool input: file
+    # contents are not needed to decide, and the gate's egress guard would refuse long tokens in
+    # them. A command that itself contains a secret-shaped token is refused by that guard, on purpose.
+    args = {"platform": "box", "method": tool, "action_id": action_id,
+            "summary": summary, "remember_ok": remember_ok}
+    r = GATE.call("box_act", args)
+    if not r.permit:
+        return {"behavior": "deny", "message": r.error or r.reason or "refused by the gate"}
+    pid = r.permit["id"]
+    card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
+            "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
+    if remember_ok and _auto_has(args):
+        outcome = _run_permit(pid, GATE.get(pid))
+        card.update({"auto": True, "decided": "approve", "outcome": outcome})
+        if LIVE["emit"]:
+            LIVE["emit"]("ask", card)
+        return {"behavior": "allow"}
+    if LIVE["emit"] is None:
+        GATE.deny(pid)
+        return {"behavior": "deny", "message": "nobody is watching the page to allow this; ask the person to send the request again from the page"}
+    ev = threading.Event()
+    ASKS[pid] = {"event": ev, "decision": None, "message": None}
+    LIVE["waiting"] += 1
+    try:
+        LIVE["emit"]("ask", card)
+        ev.wait(PERMIT_TTL)
+    finally:
+        LIVE["waiting"] -= 1
+        a = ASKS.pop(pid, {})
+    if a.get("decision") == "allow":
+        return {"behavior": "allow"}
+    if a.get("decision") is None:
+        try:
+            GATE.deny(pid)
+        except Exception:
+            pass
+        return {"behavior": "deny", "message": f"no answer from the person within {PERMIT_TTL // 60} minutes"}
+    return {"behavior": "deny", "message": a.get("message") or "the person refused this action"}
+
+
+def _box_settle(pid: str, decision: str, message: str = "") -> None:
+    a = ASKS.get(pid)
+    if a:
+        a["decision"] = decision
+        a["message"] = message
+        a["event"].set()
+
+
+def _hook_settings() -> str:
+    """Claude Code settings JSON for this turn: the permission hook, with a timeout that
+    outlives the permit."""
+    return json.dumps({"hooks": {"PermissionRequest": [{"hooks": [
+        {"type": "command", "command": f"{sys.executable} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}})
 
 
 # ---- the brain's own record of CC threads ----
@@ -667,11 +799,26 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
     cmd = cmd + ["--verbose", "--include-partial-messages"]
     cmd[cmd.index("json")] = "stream-json"
     proc = subprocess.Popen(cmd, cwd=CWD, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    timer = threading.Timer(TIMEOUT_S, proc.kill)
-    timer.start()
+    last = [time.time()]
+    stop = threading.Event()
+
+    def _watch():
+        # Kill a silent reasoner after TIMEOUT_S, but not while a card waits for the person;
+        # while waiting, keep the stream alive with a comment every 15 seconds.
+        while not stop.wait(5):
+            if LIVE["waiting"] > 0:
+                last[0] = time.time()
+                if int(time.time()) % 15 < 5:
+                    on_event("ping", {})
+            elif time.time() - last[0] > TIMEOUT_S:
+                proc.kill()
+                return
+    threading.Thread(target=_watch, daemon=True).start()
+    LIVE["emit"] = on_event
     result = None
     try:
         for line in proc.stdout:
+            last[0] = time.time()
             line = line.strip()
             if not line:
                 continue
@@ -694,7 +841,8 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
             elif kind == "result":
                 result = ev
     finally:
-        timer.cancel()
+        stop.set()
+        LIVE["emit"] = None
     proc.wait()
     err = (proc.stderr.read() or "").strip()[-600:]
     return result, err, proc.returncode
@@ -716,6 +864,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         cmd += ["--add-dir", WORLD_DIR]
     if _model_current():
         cmd += ["--model", _model_current()]
+    if BOX_ENABLED and GATE is not None:
+        cmd += ["--settings", _hook_settings()]
     if session_id:
         cmd += ["--resume", session_id]
     META.clear()
@@ -826,6 +976,7 @@ class Handler(BaseHTTPRequestHandler):
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
                              "hands": "one" if ONE_ENABLED else None,
                              "model": _model_current() or None,
+                             "box": BOX_ENABLED and GATE is not None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -901,6 +1052,13 @@ class Handler(BaseHTTPRequestHandler):
             ok = LOGIN.send_code(str(req.get("code", "")))
             self._send(200 if ok else 409, {"ok": ok, "phase": LOGIN.phase})
             return
+        if route == "/ask":
+            # From the permission hook on this box only (token handed to the reasoner's environment).
+            if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                self._send(403, {"behavior": "deny", "message": "not the hook"})
+                return
+            self._send(200, _box_ask(str(req.get("tool_name", "")), req.get("tool_input") or {}))
+            return
         if route in ("/permits/approve", "/permits/deny"):
             if GATE is None:
                 self._send(409, {"ok": False, "error": "writes are not enabled on this brain"})
@@ -912,6 +1070,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/permits/deny":
                 GATE.deny(pid)
+                _box_settle(pid, "deny", "the person refused this action")
                 print(f"permit denied {pid}", flush=True)
                 self._send(200, {"ok": True, "status": "denied"})
                 return
@@ -919,6 +1078,13 @@ class Handler(BaseHTTPRequestHandler):
                 outcome = _run_permit(pid, pm)
             except Exception as e:
                 self._send(409, {"ok": False, "error": f"could not approve: {type(e).__name__}"})
+                return
+            if (pm.args or {}).get("platform") == "box":
+                _box_settle(pid, "allow" if outcome.get("ok") else "deny")
+                outcome["status"] = "allowed" if outcome.get("ok") else "failed"
+                if req.get("remember") is True and outcome.get("ok") and (pm.args or {}).get("remember_ok"):
+                    _auto_add(pm.args or {}, title=(pm.args or {}).get("summary", ""))
+                self._send(200 if outcome["ok"] else 502, outcome)
                 return
             if req.get("remember") is True and outcome.get("ok"):
                 _auto_add(pm.args or {}, title=(pm.args or {}).get("summary", ""))

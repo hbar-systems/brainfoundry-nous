@@ -37,11 +37,11 @@ If step 4 fails, the old way still works: the terminal at `https://console.<your
 
 ## What it can and cannot do
 
-- It reads: the brain's persona, the nearest chunks of the brain's memory for each message, and the files in the brain repository on the server. Read, Grep, Glob, nothing else.
-- It does not write. Not to memory, not to files, not to the network. The memory write path stays the brain's governed one (propose, approve, ingest).
+- It reads freely: the brain's persona, the nearest chunks of the brain's memory for each message, the files in the brain repository on the server, and the mirror of your own repositories if you set one up.
+- It writes only with your click. Connected apps go through One with a Send card. Files and commands on the box itself go through an Allow card (see "Hands on the box"). The memory write path stays the brain's governed one (propose, approve, ingest).
 - Memory text is handed to the reasoner as remembered content and declared as such, never as instructions. The same rule the brain's own chat uses.
-- One turn at a time per brain. A second message while one runs is refused, not queued.
-- Speed: a turn that memory can answer takes a few seconds. A turn where the reasoner has to search files takes longer, twenty to thirty seconds on a small ARM box, because each search is a round trip to the model.
+- One turn at a time per brain. You can type while a turn runs; the next message queues and sends when the turn ends.
+- Speed: a turn that memory can answer takes a few seconds. A turn where the reasoner has to search files or look things up takes longer, twenty to thirty seconds on a small ARM box, because each lookup is a round trip to the model. The text streams as it forms, so you read while it works.
 
 ## The home screen
 
@@ -83,6 +83,8 @@ Once you trust a kind of write, tick "don't ask again for this action" on its ca
 | permit gate | `~/.cc-bridge/venv` (permitd), `~/.cc-bridge/permitd.db`, `~/.cc-bridge/permitd-audit.jsonl`, `~/.cc-bridge/exec/.onerc` (the only place writes are allowed) |
 | console routes | two `handle` blocks in `/etc/caddy/Caddyfile`, inside the console's basic-auth block; a dated backup sits beside it |
 
+- `scripts/cc/cc-permit-hook.py`: the permission hook the reasoner runs; `/usr/local/bin/brain-write` and `/etc/sudoers.d/cc-bridge`: the root verbs, when the box lane is on.
+
 ## What the reasoner may do, visible
 
 Settings has a CC section that shows, read-only, what the bridge reports: which reasoner, how it is signed in, the exact tool list, memory on or off, the workshop mirror, the hands and whether writes need your Send, the write gate and how many actions run without asking. Two audit files sit on the server: `~/.cc-bridge/turns.jsonl`, one line per turn with sizes and timings and never content, and `~/.cc-bridge/permitd-audit.jsonl`, every proposed, approved, denied and executed write, hash-chained.
@@ -99,6 +101,14 @@ Text appears as the reasoner writes it. Under the bubble, the last few things it
 
 Type a slash in the box: `/new` starts a thread, `/model sonnet` or `/model opus` (or a full model id) picks the reasoner's model from the next turn on, `/model` alone returns to the default, `/pane /graph` opens a pane, `/help` lists these. Any other slash command goes to the reasoner as typed, so its own custom commands work. The interactive CLI's menus (`/resume`, `/compact`, `/config`) do not exist in a headless turn; threads and the new-thread button are the equivalents here. You can type while a turn runs; the next message queues and sends when the turn ends.
 
+## Hands on the box
+
+In plain words: the reasoner in your chat can work on your server the way it would on a laptop. It can read any file it is allowed to see, change files, and run commands. The difference from a laptop is that every change and every command first appears as a card in your chat, with the exact file name or the exact command, and nothing happens until you press Allow. Refuse, and the reasoner is told you refused and carries on without it. Tick "don't ask again" on a card and that kind of action (for example, everything that starts with `git`, or edits inside one folder) runs without a card from then on; the list of what you allowed sits under the chat and each entry has an "ask again" link. Dangerous kinds (`rm`, `sudo`, pipes, redirects, `chmod`) never offer the tick.
+
+What it can never do, card or no card: it runs as a plain user without sudo. So it cannot read your brain's secrets file, cannot touch the database, Caddy, systemd or Docker, and cannot change how the console is protected. The few root actions that are useful for looking after a brain are on a fixed list the installer writes: restart the bridge or the terminal door, read service status and logs, run the brain's Update, and write a file into the brain repository through a helper that refuses secrets and git internals. Each of those also raises a card. Anything else with sudo simply fails.
+
+How it works, for the record: Claude Code fires its own PermissionRequest hook whenever a tool call would need permission. The hook (scripts/cc/cc-permit-hook.py) posts the call to the bridge and waits. The bridge mints a permit, shows the card inside the live answer, and answers the hook when you click. The reasoner's own tool then performs the action. Same permit gate, same hash-chained audit as the One writes. This lane is on only when the bridge runs as a user without sudo (`CC_BOX=1`, set by the installer after harden-user.sh); with a sudo user it stays off, because a reasoner with general sudo is the whole server, card or no card.
+
 ## Running the bridge without sudo
 
 On provisioned brains the brain user has sudo, so a reasoner running as that user is a full administrator of the box. `bash scripts/cc/harden-user.sh` moves the bridge to a plain user named cc: its own home, its own reasoner sign-in, the permits and audit moved over, the units rewritten. The terminal door stays the brain user's. Run it with `--copy-login` only on a brain you operate yourself, to copy your own reasoner sign-in to the new user; otherwise sign the new user in with your API key from the CC page or with `set-token.sh`. The installer remembers the bridge user afterwards.
@@ -107,7 +117,8 @@ On provisioned brains the brain user has sudo, so a reasoner running as that use
 
 - The bridge and the terminal bind to localhost. The only way in is the console password over HTTPS.
 - The terminal door runs as the brain user, who has sudo on provisioned brains: it is a full shell on your box behind the console password. The bridge can run as a plain user (harden-user.sh). Read docs/SOVEREIGN_SECURITY_GUIDE.md.
-- Audits: one line per turn and one per write, both on the box, both without content.
+- Audits: one line per turn and one per write or allowed action, all on the box, none with content.
+- Root for the bridge user is the fixed list in /etc/sudoers.d/cc-bridge, nothing else; the write helper /usr/local/bin/brain-write refuses .env and .git.
 
 ## Turn it off
 

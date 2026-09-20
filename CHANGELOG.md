@@ -48,6 +48,16 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: hands on the box. With `CC_BOX=1` (installer sets it once the bridge runs as a
+  user without sudo) the reasoner may edit files and run commands on the server
+  through its own tools; each call that would need permission raises an Allow card
+  inside the live answer via Claude Code's PermissionRequest hook
+  (`scripts/cc/cc-permit-hook.py` -> `POST /cc/ask` -> card -> click). Permits and
+  audit are permitd's, tool `box_act`; "don't ask again" per command word or per
+  edited folder, never for `rm`, `sudo`, pipes or redirects. Root verbs are a fixed
+  list in `/etc/sudoers.d/cc-bridge` (restart bridge or door, status, logs, Update,
+  `brain-write` helper that refuses .env and .git). Stream keeps alive while a card
+  waits; the silence timeout does not count waiting.
 - cc: streaming. `POST /cc/chat` with `stream: true` answers as server-sent events
   (`start` with the model, `text` deltas, one `tool` line per tool call, `done` with
   the full payload); the bridge runs the reasoner with `stream-json` and forwards.

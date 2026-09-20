@@ -207,6 +207,30 @@ Type=oneshot
 ExecStart=/bin/systemctl restart cc-bridge.service
 UNIT
 
+echo "== 4c/6 hands on the box (only when the bridge runs as a user without sudo)"
+# The reasoner may edit files and run commands on this box; each call the person has not
+# already allowed raises a card in the chat (PermissionRequest hook -> bridge -> card).
+# Root is limited to a fixed list of verbs, each also behind a card. When the bridge runs as
+# the brain user (who has sudo) this lane stays off: a reasoner with general sudo is the
+# whole server, card or no card.
+if [ "$BRIDGE_USER" != "$BRAIN_USER" ] && ! sudo -l -U "$BRIDGE_USER" 2>/dev/null | grep -q "(ALL"; then
+    sed "s|__BRAIN_DIR__|$BRAIN_DIR|" "$BRAIN_DIR/scripts/cc/brain-write.sh" | sudo tee /usr/local/bin/brain-write >/dev/null
+    sudo chown root:root /usr/local/bin/brain-write; sudo chmod 755 /usr/local/bin/brain-write
+    sudo tee /etc/sudoers.d/cc-bridge.tmp >/dev/null <<VERBS
+# The CC bridge user's root verbs (scripts/cc/install.sh). Each is also behind a card in the chat.
+$BRIDGE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart cc-bridge, /usr/bin/systemctl restart claude-tab, /usr/bin/systemctl status *, /usr/bin/journalctl *, /usr/bin/docker ps *, /usr/bin/docker compose --project-directory $BRAIN_DIR logs *, /usr/bin/bash $BRAIN_DIR/scripts/update_brain.sh, /usr/local/bin/brain-write *
+VERBS
+    if sudo visudo -cf /etc/sudoers.d/cc-bridge.tmp >/dev/null; then
+        sudo chmod 440 /etc/sudoers.d/cc-bridge.tmp && sudo mv /etc/sudoers.d/cc-bridge.tmp /etc/sudoers.d/cc-bridge
+        sudo grep -q "^CC_BOX=" "$ENV_FILE" 2>/dev/null || echo "CC_BOX=1" | sudo tee -a "$ENV_FILE" >/dev/null
+        echo "box hands on: edits and commands raise a card; root verbs in /etc/sudoers.d/cc-bridge; helper /usr/local/bin/brain-write"
+    else
+        sudo rm -f /etc/sudoers.d/cc-bridge.tmp; echo "sudoers check failed; box hands left off"
+    fi
+else
+    echo "box hands off: the bridge user has sudo (run scripts/cc/harden-user.sh first)"
+fi
+
 echo "== 5/6 Caddy routes"
 add_route() {  # name base port
     local name=$1 base=$2 port=$3
