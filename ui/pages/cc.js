@@ -302,6 +302,7 @@ export default function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showTools, setShowTools] = useState(false)
   const queueRef = useRef(null)                    // one message typed while a turn runs
   const sendRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
@@ -626,13 +627,16 @@ export default function CC() {
         </div>
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '10px 0 0 0', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>
-          {health && health.tools ? <span>read-only: {health.tools}</span> : null}
+          {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {health && health.box ? <span>this box: edits and commands need your Allow</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
+        {showTools && health && health.tools && (
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0', lineHeight: 1.6, wordBreak: 'break-word' }}>{health.tools.split(',').join('  ')}</p>
+        )}
         {showAuto && auto.length > 0 && (
           <ul style={{ ...mono, listStyle: 'none', padding: '8px 0 0 0', margin: 0, color: C.dim, fontSize: '11px' }}>
             {auto.map(a => (
