@@ -91,6 +91,10 @@ Settings has a CC section that shows, read-only, what the bridge reports: which 
 
 The reasoner runs on the brain owner's own account. Anthropic's terms (read 2026-09-19, quoted in the operator's legal notes) permit hosting the unmodified Claude Code binary in a product when every end user authenticates with their own API key or their own subscription and nobody pays, resells or intermediates usage for them. They do not permit a third party to offer Claude.ai login inside its own page or to pass subscription credentials or session tokens through. That is why the card offers the API key first and sends a subscription to the terminal door. If you operate brains for other people: their key or their sign-in, never yours, and never a token you store for them. The hosting party accepts Anthropic's Commercial Terms.
 
+## What you see while it works
+
+Text appears as the reasoner writes it. Under the bubble, the last few things it did (a file read, a One lookup, a command) show as they happen. When the answer is complete the footer says how long it took, which model answered, how many tokens went in and out, and how many steps the turn had. Tokens in include the cached prompt; on a subscription this is not a bill, on an API key it is what you pay for.
+
 ## Slash commands and the model
 
 Type a slash in the box: `/new` starts a thread, `/model sonnet` or `/model opus` (or a full model id) picks the reasoner's model from the next turn on, `/model` alone returns to the default, `/pane /graph` opens a pane, `/help` lists these. Any other slash command goes to the reasoner as typed, so its own custom commands work. The interactive CLI's menus (`/resume`, `/compact`, `/config`) do not exist in a headless turn; threads and the new-thread button are the equivalents here. You can type while a turn runs; the next message queues and sends when the turn ends.

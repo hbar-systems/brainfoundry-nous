@@ -48,6 +48,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: streaming. `POST /cc/chat` with `stream: true` answers as server-sent events
+  (`start` with the model, `text` deltas, one `tool` line per tool call, `done` with
+  the full payload); the bridge runs the reasoner with `stream-json` and forwards.
+  The page shows text as it forms, the last steps under the bubble while it works,
+  and a footer per answer: seconds, model, tokens in and out, steps. Slash list
+  appears when the box starts with a slash; Tab completes.
 - cc: type while a turn runs (the next message queues and sends when the turn
   ends); slash commands on the page (`/new`, `/model sonnet|opus|<id>`, `/pane`,
   `/help`; other slash commands pass to the reasoner); `POST /cc/model` stores

@@ -82,3 +82,30 @@ def test_pane_marker_whitelist(monkeypatch, tmp_path):
     clean, pane = m._extract_pane("nope <pane>https://evil.example/x</pane>")
     assert pane is None and clean == "nope"
     assert m._extract_pane("plain") == ("plain", None)
+
+
+def test_stream_turn_forwards_events_and_meta(monkeypatch, tmp_path):
+    """A fake reasoner emits stream-json lines; the bridge forwards start/text/tool and
+    reads the reply and usage out of the result event."""
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json, sys
+def p(o): print(json.dumps(o), flush=True)
+p({"type": "system", "subtype": "init", "model": "claude-x", "session_id": "s1"})
+p({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hel"}}})
+p({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "lo"}}})
+p({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/x/plan.md"}}]}})
+p({"type": "result", "result": "hello", "session_id": "s1", "is_error": False, "num_turns": 2,
+   "usage": {"input_tokens": 5, "cache_read_input_tokens": 100, "output_tokens": 7}, "modelUsage": {"claude-x": {}}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    seen = []
+    reply, sid, err = m._run_turn("hi", None, on_event=lambda k, p: seen.append((k, p)))
+    kinds = [k for k, _ in seen]
+    assert kinds == ["start", "text", "text", "tool"]
+    assert seen[3][1]["brief"] == "read: /x/plan.md"
+    assert (reply, sid, err) == ("hello", "s1", False)
+    assert m.META["model"] == "claude-x" and m.META["in"] == 105 and m.META["out"] == 7 and m.META["steps"] == 2

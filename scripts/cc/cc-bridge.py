@@ -648,7 +648,61 @@ def _compose(message: str) -> tuple[str, int]:
 
 
 # ----------------------------------------------------------------- turn ----
-def _run_turn(message: str, session_id: str | None, _retry: bool = False) -> tuple[str, str | None, bool]:
+def _tool_brief(name: str, inp: dict) -> str:
+    """One short line about a tool call, for the page's activity line. No secrets: inputs
+    are the reasoner's own arguments (paths, patterns, One action names)."""
+    inp = inp if isinstance(inp, dict) else {}
+    if name == "Bash":
+        return "ran: " + str(inp.get("command", ""))[:100]
+    if name in ("Read", "Edit", "Write"):
+        return f"{name.lower()}: " + str(inp.get("file_path", ""))[-80:]
+    if name in ("Grep", "Glob"):
+        return f"{name.lower()}: " + str(inp.get("pattern", ""))[:60]
+    return name
+
+
+def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
+    """Run the reasoner with stream-json output, forwarding events as they arrive.
+    Returns (result_event, stderr_tail, returncode)."""
+    cmd = cmd + ["--verbose", "--include-partial-messages"]
+    cmd[cmd.index("json")] = "stream-json"
+    proc = subprocess.Popen(cmd, cwd=CWD, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    timer = threading.Timer(TIMEOUT_S, proc.kill)
+    timer.start()
+    result = None
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kind = ev.get("type")
+            if kind == "system" and ev.get("subtype") == "init":
+                on_event("start", {"model": ev.get("model"), "session_id": ev.get("session_id")})
+            elif kind == "stream_event":
+                e = ev.get("event") or {}
+                d = e.get("delta") or {}
+                if e.get("type") == "content_block_delta" and d.get("type") == "text_delta":
+                    on_event("text", {"t": d.get("text", "")})
+            elif kind == "assistant":
+                for blk in ((ev.get("message") or {}).get("content") or []):
+                    if blk.get("type") == "tool_use":
+                        on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input"))})
+            elif kind == "result":
+                result = ev
+    finally:
+        timer.cancel()
+    proc.wait()
+    err = (proc.stderr.read() or "").strip()[-600:]
+    return result, err, proc.returncode
+
+
+def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_event=None) -> tuple[str, str | None, bool]:
+    """A turn. With on_event, the reasoner streams (start / text / tool events) and the
+    same reply comes back at the end; META holds the last turn's usage for the page."""
     prompt, used = _compose(message)
     print(f"memory chunks={used}", flush=True)
     tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
@@ -664,39 +718,72 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False) -> tup
         cmd += ["--model", _model_current()]
     if session_id:
         cmd += ["--resume", session_id]
-    try:
-        proc = subprocess.run(cmd, cwd=CWD, env=_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
-    out = proc.stdout.strip()
-    # The CLI reports many failures as a JSON result with is_error; read the message out of it.
-    err_msg = None
-    try:
-        _d = json.loads(out) if out else None
-        if isinstance(_d, dict) and _d.get("is_error"):
-            err_msg = str(_d.get("result") or _d.get("error") or "")[:600]
-    except json.JSONDecodeError:
-        pass
-    if proc.returncode != 0 or not out or err_msg:
-        err = err_msg or (proc.stderr or out or "no output").strip()[-600:]
-        low = err.lower()
-        if session_id and ("session" in low or "resume" in low) and not err_msg:
-            return _run_turn(message, None)
-        if "refresh oauth token" in low and not _retry:
-            # Two processes refreshing the same sign-in at once; the vendor calls it transient.
-            time.sleep(4)
-            return _run_turn(message, session_id, _retry=True)
-        if "log in" in low or "login" in low or "not authenticated" in low or "sign in again" in low:
-            return "The reasoner's sign-in needs renewing. Use disconnect and connect again below.", session_id, True
-        return f"The reasoner could not answer this turn: {err}", session_id, True
-    try:
-        data = json.loads(out)
-        if isinstance(data, list):
-            data = next((d for d in reversed(data) if d.get("type") == "result"), data[-1])
-    except json.JSONDecodeError:
-        return out[-4000:], session_id, False
+    META.clear()
+    if on_event:
+        emitted = {"any": False}
+        def _fwd(kind, payload):
+            if kind == "text" and payload.get("t"):
+                emitted["any"] = True
+            on_event(kind, payload)
+        data, stderr, rc = _stream_turn(cmd, _fwd)
+        if data is None and rc == -9:
+            return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
+        out = json.dumps(data) if data else ""
+        err_msg = str(data.get("result") or data.get("error") or "")[:600] if data and data.get("is_error") else None
+        if rc != 0 or not out or err_msg:
+            err = err_msg or (stderr or out or "no output").strip()[-600:]
+            low = err.lower()
+            if session_id and ("session" in low or "resume" in low) and not err_msg and not emitted["any"]:
+                return _run_turn(message, None, on_event=on_event)
+            if "refresh oauth token" in low and not _retry and not emitted["any"]:
+                time.sleep(4)
+                return _run_turn(message, session_id, _retry=True, on_event=on_event)
+            if "log in" in low or "login" in low or "not authenticated" in low or "sign in again" in low:
+                return "The reasoner's sign-in needs renewing. Use disconnect and connect again below.", session_id, True
+            return f"The reasoner could not answer this turn: {err}", session_id, True
+    else:
+        try:
+            proc = subprocess.run(cmd, cwd=CWD, env=_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
+        out = proc.stdout.strip()
+        # The CLI reports many failures as a JSON result with is_error; read the message out of it.
+        err_msg = None
+        try:
+            _d = json.loads(out) if out else None
+            if isinstance(_d, dict) and _d.get("is_error"):
+                err_msg = str(_d.get("result") or _d.get("error") or "")[:600]
+        except json.JSONDecodeError:
+            pass
+        if proc.returncode != 0 or not out or err_msg:
+            err = err_msg or (proc.stderr or out or "no output").strip()[-600:]
+            low = err.lower()
+            if session_id and ("session" in low or "resume" in low) and not err_msg:
+                return _run_turn(message, None)
+            if "refresh oauth token" in low and not _retry:
+                # Two processes refreshing the same sign-in at once; the vendor calls it transient.
+                time.sleep(4)
+                return _run_turn(message, session_id, _retry=True)
+            if "log in" in low or "login" in low or "not authenticated" in low or "sign in again" in low:
+                return "The reasoner's sign-in needs renewing. Use disconnect and connect again below.", session_id, True
+            return f"The reasoner could not answer this turn: {err}", session_id, True
+        try:
+            data = json.loads(out)
+            if isinstance(data, list):
+                data = next((d for d in reversed(data) if d.get("type") == "result"), data[-1])
+        except json.JSONDecodeError:
+            return out[-4000:], session_id, False
+    usage = data.get("usage") or {}
+    models = list((data.get("modelUsage") or {}).keys())
+    META.update({"model": models[0] if models else (_model_current() or None),
+                 "in": int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0),
+                 "out": int(usage.get("output_tokens") or 0), "steps": int(data.get("num_turns") or 0),
+                 "cost": data.get("total_cost_usd")})
     reply = data.get("result") or data.get("text") or json.dumps(data)[:2000]
     return reply, data.get("session_id") or session_id, bool(data.get("is_error"))
+
+
+META: dict = {}   # the last turn's model and token counts, shown on the page
 
 
 # ----------------------------------------------------------------- http ----
@@ -863,6 +950,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(409, {"error": "busy", "reply": "One turn is still running. Wait for it."})
             return
         t0 = time.time()
+        stream = req.get("stream") is True
+        on_event = None
+        if stream:
+            # Server-sent events: the page reads text as it forms, sees each tool call, and
+            # gets the same final payload as the plain answer in a closing "done" event.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            def on_event(kind, payload):
+                try:
+                    self.wfile.write(f"event: {kind}\ndata: {json.dumps(payload)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
         try:
             state = _load_state()
             # A thread started under older instructions carries their conclusions ("I can't
@@ -877,7 +980,7 @@ class Handler(BaseHTTPRequestHandler):
             if req.get("new") is True and state.get("session_id"):
                 print("new thread (flag on the chat request)", flush=True)
                 state = {}
-            reply, sid, is_error = _run_turn(message, state.get("session_id"))
+            reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=on_event)
             if sid:
                 state["session_id"] = sid
                 state["prompt_hash"] = PROMPT_HASH
@@ -902,7 +1005,11 @@ class Handler(BaseHTTPRequestHandler):
                      "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                      "proposal": (card or {}).get("id"),
                      "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS})
-        self._send(200, {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane})
+        payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META)}
+        if stream:
+            on_event("done", payload)
+        else:
+            self._send(200, payload)
 
     def log_message(self, fmt: str, *args) -> None:  # quiet: no paths, no bodies
         return

@@ -29,6 +29,15 @@ const C = {
 }
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 
+function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '') }
+function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
+const SLASH = [
+  { c: '/new', d: 'start a new thread' },
+  { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
+  { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
+  { c: '/help', d: 'this list' },
+]
+
 function Btn({ children, onClick, disabled, primary, small, title }) {
   const off = !!disabled
   return (
@@ -410,11 +419,39 @@ export default function CC() {
     setTurns(t => [...t, { who: 'me', text }])
     setBusy(true)
     try {
-      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, new: freshRef.current }) })
+      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, new: freshRef.current, stream: true }) })
       freshRef.current = false
-      const data = await r.json().catch(() => ({}))
-      const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
-      setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null }])
+      let data = null
+      if (r.ok && (r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
+        // The bridge streams: text as it forms, one line per tool call, then "done" with
+        // the same payload a plain answer carries. The live bubble is the last turn.
+        setTurns(t => [...t, { who: 'brain', text: '', live: true, steps: [] }])
+        const upd = f => setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = f(c[i]); return c })
+        const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
+        for (;;) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          let idx
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2)
+            const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const dl = (chunk.match(/^data: (.*)$/m) || [])[1]
+            if (!ev || !dl) continue
+            let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
+            if (ev === 'start') upd(x => ({ ...x, model: pl.model }))
+            else if (ev === 'text') upd(x => ({ ...x, text: x.text + (pl.t || '') }))
+            else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
+            else if (ev === 'done') data = pl
+          }
+        }
+        if (!data) data = { reply: 'The stream ended without an answer.', error: true }
+        const reply = data.reply || '(no answer)'
+        setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
+      } else {
+        data = await r.json().catch(() => ({}))
+        const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
+        setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
+      }
       if (data.pane) openPane(data.pane)
       if (turns.length === 0) loadThreads()
     } catch (e) {
@@ -452,6 +489,10 @@ export default function CC() {
 
   sendRef.current = send
   function onKey(e) {
+    if (e.key === 'Tab' && draft.startsWith('/') && !/\s/.test(draft)) {
+      const m = SLASH.find(s => s.c.startsWith(draft))
+      if (m) { e.preventDefault(); setDraft(m.c + ' '); return }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
@@ -524,18 +565,37 @@ export default function CC() {
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
               }}>
-                {t.who === 'brain' ? <Md text={t.text} /> : t.text}
+                {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
+                {t.who === 'brain' && t.steps && t.steps.length > 0 && (
+                  <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px', lineHeight: 1.6 }}>
+                    {(t.live ? t.steps.slice(-3) : t.steps.slice(-6)).map((s, j) => <div key={j}>{s}</div>)}
+                    {!t.live && t.steps.length > 6 ? <div>and {t.steps.length - 6} more</div> : null}
+                  </div>
+                )}
                 {t.who === 'brain' && typeof t.ms === 'number' && (
-                  <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px' }}>{(t.ms / 1000).toFixed(1)} s</div>
+                  <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px' }}>
+                    {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && t.meta.in ? ` · ${kTok(t.meta.in)} in · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}
+                  </div>
                 )}
               </div>
             </div>
           ))}
-          {busy && <div style={{ color: C.dim, fontSize: '13px', fontStyle: 'italic', margin: '8px 0' }}>thinking on the box…</div>}
+          {busy && !(turns.length && turns[turns.length - 1].live) && <div style={{ color: C.dim, fontSize: '13px', fontStyle: 'italic', margin: '8px 0' }}>thinking on the box…</div>}
           <div ref={endRef} />
         </div>
 
+        {draft.startsWith('/') && !/\s/.test(draft) && SLASH.some(s => s.c.startsWith(draft)) && (
+          <div style={{ ...mono, marginTop: '12px', border: `1px solid ${C.line}`, borderRadius: '10px', backgroundColor: C.card, padding: '6px 0', fontSize: '12px' }}>
+            {SLASH.filter(s => s.c.startsWith(draft)).map(s => (
+              <div key={s.c} onClick={() => { setDraft(s.c + ' '); boxRef.current && boxRef.current.focus() }}
+                style={{ display: 'flex', gap: '14px', padding: '5px 12px', cursor: 'pointer', color: C.ink }}>
+                <span style={{ color: C.gold, minWidth: '64px' }}>{s.c}</span><span style={{ color: C.dim }}>{s.d}</span>
+              </div>
+            ))}
+            <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
             placeholder={!loggedIn ? 'connect a reasoner first' : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
