@@ -286,6 +286,8 @@ export default function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const queueRef = useRef(null)                    // one message typed while a turn runs
+  const sendRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
   const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
@@ -380,10 +382,31 @@ export default function CC() {
 
   const loggedIn = !!(health && health.auth && health.auth.loggedIn)
 
-  async function send() {
-    const text = draft.trim()
-    if (!text || busy) return
-    setDraft('')
+  // Typed with a slash: a few things the page handles itself, like the CLI's own commands.
+  // Anything else starting with a slash goes to the reasoner (its custom commands still work).
+  async function slash(text) {
+    const [cmd, ...rest] = text.slice(1).split(/\s+/); const arg = rest.join(' ').trim()
+    if (cmd === 'new') { fresh(); return true }
+    if (cmd === 'model') {
+      const r = await fetch('/cc/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: arg }) })
+      const d = await r.json().catch(() => ({}))
+      setTurns(t => [...t, { who: 'brain', text: r.ok ? `Model: ${d.model || 'the reasoner\'s default'}. Takes effect on the next turn.` : (d.error || 'not set'), error: !r.ok }])
+      loadHealth(); return true
+    }
+    if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
+    if (cmd === 'help' || cmd === '') {
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      return true
+    }
+    return false
+  }
+
+  async function send(forced) {
+    const text = (typeof forced === 'string' ? forced : draft).trim()
+    if (!text) return
+    if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    if (busy) { queueRef.current = text; if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true }]); return }
+    if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
     setBusy(true)
     try {
@@ -398,6 +421,7 @@ export default function CC() {
       setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
     } finally {
       setBusy(false)
+      if (queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
       if (boxRef.current) boxRef.current.focus()
     }
   }
@@ -426,6 +450,7 @@ export default function CC() {
     loadHealth()
   }
 
+  sendRef.current = send
   function onKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
@@ -497,7 +522,7 @@ export default function CC() {
               <div style={{
                 maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
-                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6,
+                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.who === 'brain' ? <Md text={t.text} /> : t.text}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
@@ -513,11 +538,11 @@ export default function CC() {
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
-            placeholder={!loggedIn ? 'connect a reasoner first' : busy ? 'one turn at a time' : 'Ask your brain. Enter sends, Shift+Enter for a new line.'}
-            disabled={busy || !loggedIn}
+            placeholder={!loggedIn ? 'connect a reasoner first' : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            disabled={!loggedIn}
             style={{ flex: 1, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
                      border: `1px solid ${C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
-          <Btn primary onClick={send} disabled={busy || !draft.trim() || !loggedIn}>send</Btn>
+          <Btn primary onClick={send} disabled={!draft.trim() || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
         </div>
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '10px 0 0 0', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>

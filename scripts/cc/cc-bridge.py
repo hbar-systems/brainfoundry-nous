@@ -60,6 +60,10 @@ STATE = STATE_DIR / "state.json"
 TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "300"))
 MAX_BODY = 64 * 1024
 ALLOWED_TOOLS = os.environ.get("CC_TOOLS", "Read,Grep,Glob")
+# The reasoner's model, chosen by the owner from the page (/model sonnet, /model opus, or a full
+# model id). Empty means the CLI's own default. Kept in the env file as CC_MODEL.
+def _model_current() -> str:
+    return os.environ.get("CC_MODEL", "").strip()
 
 BRAIN_API_URL = os.environ.get("BRAIN_API_URL", "http://127.0.0.1:8010").rstrip("/")
 BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "")
@@ -656,6 +660,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False) -> tup
            "--mcp-config", str(MCP_EMPTY), "--strict-mcp-config"]
     if WORLD_DIR:
         cmd += ["--add-dir", WORLD_DIR]
+    if _model_current():
+        cmd += ["--model", _model_current()]
     if session_id:
         cmd += ["--resume", session_id]
     try:
@@ -732,6 +738,7 @@ class Handler(BaseHTTPRequestHandler):
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
                              "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
                              "hands": "one" if ONE_ENABLED else None,
+                             "model": _model_current() or None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -757,6 +764,18 @@ class Handler(BaseHTTPRequestHandler):
             _save_state({})
             print("new thread (reset by /new)", flush=True)
             self._send(200, {"ok": True})
+            return
+        if route == "/model":
+            m = str(req.get("model", "")).strip()
+            if len(m) > 80 or any(c in m for c in " \n\t\"'"):
+                self._send(400, {"ok": False, "error": "not a model name"})
+                return
+            if m:
+                _env_file_set("CC_MODEL", m); os.environ["CC_MODEL"] = m
+            else:
+                _env_file_unset("CC_MODEL"); os.environ.pop("CC_MODEL", None)
+            print(f"model set to {m or 'default'}", flush=True)
+            self._send(200, {"ok": True, "model": m or None})
             return
         if route == "/threads/switch":
             want = str(req.get("brain", "")).strip()

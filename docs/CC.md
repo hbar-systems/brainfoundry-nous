@@ -91,6 +91,10 @@ Settings has a CC section that shows, read-only, what the bridge reports: which 
 
 The reasoner runs on the brain owner's own account. Anthropic's terms (read 2026-09-19, quoted in the operator's legal notes) permit hosting the unmodified Claude Code binary in a product when every end user authenticates with their own API key or their own subscription and nobody pays, resells or intermediates usage for them. They do not permit a third party to offer Claude.ai login inside its own page or to pass subscription credentials or session tokens through. That is why the card offers the API key first and sends a subscription to the terminal door. If you operate brains for other people: their key or their sign-in, never yours, and never a token you store for them. The hosting party accepts Anthropic's Commercial Terms.
 
+## Slash commands and the model
+
+Type a slash in the box: `/new` starts a thread, `/model sonnet` or `/model opus` (or a full model id) picks the reasoner's model from the next turn on, `/model` alone returns to the default, `/pane /graph` opens a pane, `/help` lists these. Any other slash command goes to the reasoner as typed, so its own custom commands work. The interactive CLI's menus (`/resume`, `/compact`, `/config`) do not exist in a headless turn; threads and the new-thread button are the equivalents here. You can type while a turn runs; the next message queues and sends when the turn ends.
+
 ## Running the bridge without sudo
 
 On provisioned brains the brain user has sudo, so a reasoner running as that user is a full administrator of the box. `bash scripts/cc/harden-user.sh` moves the bridge to a plain user named cc: its own home, its own reasoner sign-in, the permits and audit moved over, the units rewritten. The terminal door stays the brain user's. Run it with `--copy-login` only on a brain you operate yourself, to copy your own reasoner sign-in to the new user; otherwise sign the new user in with your API key from the CC page or with `set-token.sh`. The installer remembers the bridge user afterwards.

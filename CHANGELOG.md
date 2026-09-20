@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: type while a turn runs (the next message queues and sends when the turn
+  ends); slash commands on the page (`/new`, `/model sonnet|opus|<id>`, `/pane`,
+  `/help`; other slash commands pass to the reasoner); `POST /cc/model` stores
+  the owner's model choice as `CC_MODEL` and the bridge passes `--model`.
 - security(cc): hardening item 3. `scripts/cc/harden-user.sh` moves the bridge to a
   plain user without sudo (state, skills, optional own-login copy); the installer
   keeps the bridge user from the unit thereafter.
