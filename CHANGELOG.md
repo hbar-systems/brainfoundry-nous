@@ -48,6 +48,13 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: after the first live hour with hands: inline code renders inline again
+  (react-markdown 9 dropped `inline`; block look moved to `pre`); the footer
+  separates fresh tokens from cached ones; an identical call allowed earlier in
+  the same turn gets no second card; the reasoner is told its own user and home
+  versus the person's, and to report briefly; read-only shell verbs (ls, git
+  status/log/diff, systemctl status, ...) join the allowed list when the box lane
+  is on, so looking around raises no card.
 - cc: hands on the box. With `CC_BOX=1` (installer sets it once the bridge runs as a
   user without sudo) the reasoner may edit files and run commands on the server
   through its own tools; each call that would need permission raises an Allow card

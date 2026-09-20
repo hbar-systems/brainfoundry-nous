@@ -223,6 +223,15 @@ VERBS
     if sudo visudo -cf /etc/sudoers.d/cc-bridge.tmp >/dev/null; then
         sudo chmod 440 /etc/sudoers.d/cc-bridge.tmp && sudo mv /etc/sudoers.d/cc-bridge.tmp /etc/sudoers.d/cc-bridge
         sudo grep -q "^CC_BOX=" "$ENV_FILE" 2>/dev/null || echo "CC_BOX=1" | sudo tee -a "$ENV_FILE" >/dev/null
+        # Looking around needs no card: read-only shell verbs join the allowed list (the reasoner
+        # already reads files in its working directories freely; these only save clicks). No cat/head/
+        # grep here: they would read outside those directories without a card. Writes and root still card.
+        RO='Bash(ls:*),Bash(wc:*),Bash(stat:*),Bash(file:*),Bash(pwd),Bash(id:*),Bash(whoami),Bash(date:*),Bash(df:*),Bash(du:*),Bash(ps:*),Bash(uptime),Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git branch:*),Bash(git -C * status:*),Bash(git -C * log:*),Bash(git -C * diff:*),Bash(git -C * show:*),Bash(systemctl status:*),Bash(systemctl is-active:*)'
+        CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" | cut -d= -f2-)
+        if [ -n "$CUR" ] && ! printf '%s' "$CUR" | grep -q 'Bash(git status'; then
+            sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$CUR,$RO' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+            echo "read-only shell verbs allowed without a card (ls, git status/log/diff, systemctl status, ...; file contents go through Read, which stays inside the working directories)"
+        fi
         echo "box hands on: edits and commands raise a card; root verbs in /etc/sudoers.d/cc-bridge; helper /usr/local/bin/brain-write"
     else
         sudo rm -f /etc/sudoers.d/cc-bridge.tmp; echo "sudoers check failed; box hands left off"

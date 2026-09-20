@@ -63,7 +63,11 @@ function Md({ text }) {
           p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
           ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
           ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
-          code: ({ node, inline, ...props }) => <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: inline ? '1px 5px' : '8px 10px', borderRadius: '6px', display: inline ? 'inline' : 'block', whiteSpace: 'pre-wrap' }} />,
+          // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
+          // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
+          // inline code rendered as full-width boxes and broke sentences apart).
+          pre: ({ node, ...props }) => <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 10px', borderRadius: '6px', margin: '4px 0 8px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />,
+          code: ({ node, ...props }) => <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />,
           table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
           th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
           td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
@@ -94,7 +98,7 @@ function ProposalCard({ p, onDecide }) {
           {ok ? 'done without asking' : 'tried without asking, failed'} · {p.method || 'POST'} · {p.platform || ''}
         </p>
         <p style={{ margin: 0, color: C.ink, fontSize: '14px', lineHeight: 1.5 }}>{p.summary}</p>
-        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>you allowed this action earlier · permit {p.id}{ok ? '' : ` · ${(p.outcome && p.outcome.result && p.outcome.result.error) || 'error'}`}</p>
+        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>{p.why || 'you allowed this action earlier'} · permit {p.id}{ok ? '' : ` · ${(p.outcome && p.outcome.result && p.outcome.result.error) || 'error'}`}</p>
       </div>
     )
   }
@@ -591,7 +595,7 @@ export default function CC() {
                 )}
                 {t.who === 'brain' && typeof t.ms === 'number' && (
                   <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px' }}>
-                    {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && t.meta.in ? ` · ${kTok(t.meta.in)} in · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}
+                    {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && (t.meta.in || t.meta.cached) ? ` · ${kTok(t.meta.in)} in${t.meta.cached ? ` (+${kTok(t.meta.cached)} cached)` : ''} · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}
                   </div>
                 )}
               </div>

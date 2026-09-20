@@ -265,6 +265,11 @@ if BOX_ENABLED:
         "which writes stdin into a file of the brain repository (never .env, never .git). Anything else with "
         "sudo fails; say so rather than trying workarounds. Never read or print secrets (.env files, "
         "credentials, tokens)."
+        f" You run as the Unix user {__import__('getpass').getuser()} with home {Path.home()}; the person's own "
+        f"home is {Path(CWD).parent} and is closed to you except the brain repository {CWD}"
+        + (f" and the mirror {WORLD_DIR}" if WORLD_DIR else "") +
+        ". 'Your home' means yours; 'my home' means theirs. Report briefly: what you did and what you found, "
+        "a line each, no preamble; inline code only for names and paths."
     )
 
 _CLOSING = (
@@ -365,7 +370,7 @@ def _run_permit(pid: str, pm) -> dict:
 # posts the call here and waits; the page shows a card inside the live answer; the click
 # answers the hook; the reasoner's own tool then runs the action. Same permit, same audit.
 ASKS: dict = {}                         # permit id -> {"event", "decision", "message"}
-LIVE = {"emit": None, "waiting": 0}     # the current streamed turn's event sink
+LIVE = {"emit": None, "waiting": 0, "allowed": set()}   # the current streamed turn's event sink; what it allowed
 BOX_NO_REMEMBER = ("rm", "dd", "mkfs", "shutdown", "reboot", "chmod", "chown", "curl", "wget", "ssh", "scp",
                    "kill", "pkill", "userdel", "passwd", "sudo", "mv", "truncate", "shred")
 
@@ -407,9 +412,13 @@ def _box_ask(tool: str, inp: dict) -> dict:
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
-    if remember_ok and _auto_has(args):
+    same_turn = (tool, summary) in LIVE["allowed"]
+    if (remember_ok and _auto_has(args)) or same_turn:
+        # Already allowed: by the owner's standing choice, or the identical call earlier in this
+        # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
         outcome = _run_permit(pid, GATE.get(pid))
-        card.update({"auto": True, "decided": "approve", "outcome": outcome})
+        card.update({"auto": True, "decided": "approve", "outcome": outcome,
+                     "why": "same call, allowed a moment ago" if same_turn else "you allowed this action earlier"})
         if LIVE["emit"]:
             LIVE["emit"]("ask", card)
         return {"behavior": "allow"}
@@ -426,6 +435,7 @@ def _box_ask(tool: str, inp: dict) -> dict:
         LIVE["waiting"] -= 1
         a = ASKS.pop(pid, {})
     if a.get("decision") == "allow":
+        LIVE["allowed"].add((tool, summary))
         return {"behavior": "allow"}
     if a.get("decision") is None:
         try:
@@ -815,6 +825,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
                 return
     threading.Thread(target=_watch, daemon=True).start()
     LIVE["emit"] = on_event
+    LIVE["allowed"] = set()
     result = None
     try:
         for line in proc.stdout:
@@ -926,7 +937,10 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
     usage = data.get("usage") or {}
     models = list((data.get("modelUsage") or {}).keys())
     META.update({"model": models[0] if models else (_model_current() or None),
-                 "in": int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0),
+                 # "in" is what was newly read this turn; "cached" is the thread and instructions
+                 # re-read from the cache (cheap on an API key, not a fresh read on a subscription).
+                 "in": int(usage.get("input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0),
+                 "cached": int(usage.get("cache_read_input_tokens") or 0),
                  "out": int(usage.get("output_tokens") or 0), "steps": int(data.get("num_turns") or 0),
                  "cost": data.get("total_cost_usd")})
     reply = data.get("result") or data.get("text") or json.dumps(data)[:2000]

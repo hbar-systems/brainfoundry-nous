@@ -108,4 +108,4 @@ p({"type": "result", "result": "hello", "session_id": "s1", "is_error": False, "
     assert kinds == ["start", "text", "text", "tool"]
     assert seen[3][1]["brief"] == "read: /x/plan.md"
     assert (reply, sid, err) == ("hello", "s1", False)
-    assert m.META["model"] == "claude-x" and m.META["in"] == 105 and m.META["out"] == 7 and m.META["steps"] == 2
+    assert m.META["model"] == "claude-x" and m.META["in"] == 5 and m.META["cached"] == 100 and m.META["out"] == 7 and m.META["steps"] == 2
