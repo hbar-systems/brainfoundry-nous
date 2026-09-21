@@ -268,7 +268,9 @@ if BOX_ENABLED:
         f" You run as the Unix user {__import__('getpass').getuser()} with home {Path.home()}; the person's own "
         f"home is {Path(CWD).parent} and is closed to you except the brain repository {CWD}"
         + (f" and the mirror {WORLD_DIR}" if WORLD_DIR else "") +
-        ". 'Your home' means yours; 'my home' means theirs. Report briefly: what you did and what you found, "
+        ". 'Your home' means yours; 'my home' means theirs. The person chooses a posture: 'cards' (every edit "
+        "and command asks) or 'auto' (ordinary edits and commands run; sudo and connected-app writes still ask). "
+        "Report briefly: what you did and what you found, "
         "a line each, no preamble; inline code only for names and paths."
     )
 
@@ -454,11 +456,30 @@ def _box_settle(pid: str, decision: str, message: str = "") -> None:
         a["event"].set()
 
 
+# The owner's posture for actions on their own box (CC_POSTURE in the env file):
+#   cards  (default): every edit and command that would need permission raises a card.
+#   auto: Claude Code's own classifier decides ordinary edits and commands, as it does on the
+#         owner's laptop; cards remain for anything with sudo (an ask rule below) and for One
+#         writes (those never pass through here). Only the owner of this brain can choose it,
+#         and only where the box lane is on. Requested by the operator 2026-09-21 after the
+#         first day of use: "the cards are not attractive for my own files on my own box".
+POSTURES = ("cards", "auto")
+ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
+
+
+def _posture_current() -> str:
+    v = os.environ.get("CC_POSTURE", "cards").strip().lower()
+    return v if v in POSTURES else "cards"
+
+
 def _hook_settings() -> str:
     """Claude Code settings JSON for this turn: the permission hook, with a timeout that
-    outlives the permit."""
-    return json.dumps({"hooks": {"PermissionRequest": [{"hooks": [
-        {"type": "command", "command": f"{sys.executable} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}})
+    outlives the permit; in the auto posture also the ask rules that keep sudo on a card."""
+    s = {"hooks": {"PermissionRequest": [{"hooks": [
+        {"type": "command", "command": f"{sys.executable} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}}
+    if _posture_current() == "auto":
+        s["permissions"] = {"ask": ASK_ALWAYS}
+    return json.dumps(s)
 
 
 # ---- the brain's own record of CC threads ----
@@ -877,6 +898,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         cmd += ["--model", _model_current()]
     if BOX_ENABLED and GATE is not None:
         cmd += ["--settings", _hook_settings()]
+        if _posture_current() == "auto":
+            cmd += ["--permission-mode", "auto"]
     if session_id:
         cmd += ["--resume", session_id]
     META.clear()
@@ -991,6 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
                              "hands": "one" if ONE_ENABLED else None,
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
+                             "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -1016,6 +1040,18 @@ class Handler(BaseHTTPRequestHandler):
             _save_state({})
             print("new thread (reset by /new)", flush=True)
             self._send(200, {"ok": True})
+            return
+        if route == "/posture":
+            want = str(req.get("posture", "")).strip().lower()
+            if not (BOX_ENABLED and GATE is not None):
+                self._send(409, {"ok": False, "error": "the box lane is off on this brain; the posture applies only there"})
+                return
+            if want not in POSTURES:
+                self._send(400, {"ok": False, "error": "posture is 'cards' or 'auto'"})
+                return
+            _env_file_set("CC_POSTURE", want); os.environ["CC_POSTURE"] = want
+            print(f"posture set to {want}", flush=True)
+            self._send(200, {"ok": True, "posture": want})
             return
         if route == "/model":
             m = str(req.get("model", "")).strip()

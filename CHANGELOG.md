@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: owner posture for own-box actions. `/posture auto` runs the reasoner with
+  `--permission-mode auto` (Claude Code's classifier decides ordinary edits and
+  commands) plus an ask rule for `sudo`, so sudo and One writes still raise cards;
+  `/posture cards` (default) asks for everything. `CC_POSTURE` in the env file,
+  `POST /cc/posture`, shown in health and the page footer. Box lane only.
 - cc: after the first live hour with hands: inline code renders inline again
   (react-markdown 9 dropped `inline`; block look moved to `pre`); the footer
   separates fresh tokens from cached ones; an identical call allowed earlier in

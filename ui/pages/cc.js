@@ -34,6 +34,7 @@ function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >
 const SLASH = [
   { c: '/new', d: 'start a new thread' },
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
+  { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks) or /posture auto (the classifier decides; sudo and app writes still ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/help', d: 'this list' },
 ]
@@ -415,6 +416,12 @@ export default function CC() {
   async function slash(text) {
     const [cmd, ...rest] = text.slice(1).split(/\s+/); const arg = rest.join(' ').trim()
     if (cmd === 'new') { fresh(); return true }
+    if (cmd === 'posture') {
+      const r = await fetch('/cc/posture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture: arg }) })
+      const d = await r.json().catch(() => ({}))
+      setTurns(t => [...t, { who: 'brain', text: r.ok ? (d.posture === 'auto' ? 'Posture: auto. Ordinary edits and commands on this box run without a card; sudo and connected-app writes still ask. From the next turn.' : 'Posture: cards. Every edit and command on this box asks. From the next turn.') : (d.error || 'not set'), error: !r.ok }])
+      loadHealth(); return true
+    }
     if (cmd === 'model') {
       const r = await fetch('/cc/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: arg }) })
       const d = await r.json().catch(() => ({}))
@@ -423,7 +430,7 @@ export default function CC() {
     }
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
     if (cmd === 'help' || cmd === '') {
-      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto (how much your own box asks), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
     }
     return false
@@ -630,7 +637,7 @@ export default function CC() {
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
-          {health && health.box ? <span>this box: edits and commands need your Allow</span> : null}
+          {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : 'edits and commands need your Allow'}</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
