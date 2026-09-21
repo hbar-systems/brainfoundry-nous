@@ -11,8 +11,11 @@
 # Run ON the box as the brain user, from the brain repo:
 #     bash scripts/cc/harden-user.sh            # migrate state; the reasoner needs a sign-in for "cc"
 #     bash scripts/cc/harden-user.sh --copy-login   # also copy this user's reasoner sign-in to "cc"
-#                                                    (your own credential onto your own second user;
-#                                                     only on a brain you operate yourself)
+#                                                    (a stopgap: two copies of one sign-in share a
+#                                                     refresh token, and the first to refresh logs the
+#                                                     other out, observed 2026-09-21. Sign "cc" in on
+#                                                     its own afterwards: the CC page's sign-in panel,
+#                                                     or sudo -u cc -H claude auth login --claudeai)
 # Then, if you did not copy the login: from the CC page paste your API key, or run
 #     sudo -u cc -H bash scripts/cc/set-token.sh
 set -euo pipefail

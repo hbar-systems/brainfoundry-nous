@@ -77,13 +77,22 @@ case "${1:-}" in
     clear
     printf '\n  Signing in to your own account, through the provider'"'"'s own flow.\n'
     printf '  1. A link appears below. Open it and sign in.\n  2. Copy the code it shows.\n  3. Paste the code here and press Enter.\n\n'
-    claude auth login --claudeai
-    printf '\n  Done. You can close this panel.\n'
+    # The sign-in must land with the user the bridge runs as. After harden-user.sh that is
+    # not the door's user; signing in here as the door's user left the bridge disconnected
+    # (observed 2026-09-21). __BRIDGE_USER__ is filled in by the installer.
+    if [ "__BRIDGE_USER__" != "$(id -un)" ]; then
+        sudo -n -u "__BRIDGE_USER__" -H env PATH="/home/__BRIDGE_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM" claude auth login --claudeai \
+            || printf '\n  Could not switch to the bridge user from here. In a terminal on the box run:\n  sudo -u __BRIDGE_USER__ -H claude auth login --claudeai\n'
+    else
+        claude auth login --claudeai
+    fi
+    printf '\n  Done. Close this panel and press reconnect.\n'
     sleep 3600 ;;
   *)
     exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;
 esac
 DOOR
+sed -i "s|__BRIDGE_USER__|$BRIDGE_USER|g" "$HOME_DIR/.cc-bridge/door.sh"
 chmod 755 "$HOME_DIR/.cc-bridge/door.sh"
 THEME='{"background":"#0f0e0c","foreground":"#e8e0d5","cursor":"#c9a96e","selectionBackground":"#3a3520","black":"#0f0e0c","brightBlack":"#6b5f52","white":"#e8e0d5","brightWhite":"#ffffff","yellow":"#c9a96e","brightYellow":"#e0c48a","blue":"#8fb3c9","green":"#9fbf8f","red":"#d08a7a"}'
 sudo tee /etc/systemd/system/claude-tab.service >/dev/null <<UNIT

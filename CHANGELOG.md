@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(cc): the sign-in panel signs in the user the bridge runs as. After
+  harden-user.sh the door signed in the brain user while the bridge ran as cc, so
+  "Login successful" left CC disconnected. A copied sign-in (`--copy-login`) is now
+  documented as a stopgap: both copies share one refresh token and the first
+  refresh logs the other out.
 - cc: `CC_WORK_DIR`, writable clones of the owner's repositories on the box (one folder
   per repo), added to the reasoner's directories and instructions when the box lane is
   on: build there, pull before editing, push only on the owner's word.
