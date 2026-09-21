@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: `CC_WORK_DIR`, writable clones of the owner's repositories on the box (one folder
+  per repo), added to the reasoner's directories and instructions when the box lane is
+  on: build there, pull before editing, push only on the owner's word.
 - cc: owner posture for own-box actions. `/posture auto` runs the reasoner with
   `--permission-mode auto` (Claude Code's classifier decides ordinary edits and
   commands) plus an ask rule for `sudo`, so sudo and One writes still raise cards;

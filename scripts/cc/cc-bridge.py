@@ -251,6 +251,21 @@ if WORLD_DIR:
         "Memory tells you what mattered; the mirror tells you what the file says now."
     )
 
+# The work directory (optional, CC_WORK_DIR): writable clones of the person's own repositories
+# on the box, one folder per repo, pushed with the person's scoped token. This is where the
+# reasoner builds; the mirror is where it looks things up. Added 2026-09-21 ("replace the laptop").
+WORK_DIR = os.environ.get("CC_WORK_DIR", "").strip()
+if WORK_DIR and not Path(WORK_DIR).is_dir():
+    print(f"CC_WORK_DIR={WORK_DIR} is not a directory; ignoring", flush=True)
+    WORK_DIR = ""
+if WORK_DIR and BOX_ENABLED:
+    SYSTEM += (
+        f" The person's working copies of their repositories live at {WORK_DIR}, one folder per repository, "
+        "writable, with their own git identity and push access. Build there: edit, run tests, commit with clear "
+        "messages, and push only when the person says push. Before editing, `git pull --ff-only`; if the pull "
+        "fails, say so and stop. Never commit secrets or files under .env."
+    )
+
 if BOX_ENABLED:
     SYSTEM += (
         " This box is the person's own server and you have hands on it: you may read, edit and write files "
@@ -894,6 +909,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
            "--mcp-config", str(MCP_EMPTY), "--strict-mcp-config"]
     if WORLD_DIR:
         cmd += ["--add-dir", WORLD_DIR]
+    if WORK_DIR and BOX_ENABLED:
+        cmd += ["--add-dir", WORK_DIR]
     if _model_current():
         cmd += ["--model", _model_current()]
     if BOX_ENABLED and GATE is not None:
@@ -1016,7 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
-                             "workshop": WORLD_DIR or None, "last_sources": LAST_SOURCES,
+                             "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
