@@ -184,7 +184,11 @@ WRAP
         sudo rm -f "$BRAIN_DIR/.onerc" && echo "removed the old read-only .onerc from the brain directory"
     fi
     TOOLS='Read,Grep,Glob,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
-    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$TOOLS' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+    # Merge: the One lookups first, then whatever the owner added since (read-only verbs,
+    # tool-pack entries such as mcp__...), each kept once. A rerun never drops an entry.
+    EXISTING=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+    MERGED=$(printf '%s,%s' "$TOOLS" "$EXISTING" | tr ',' '\n' | awk 'NF && !seen[$0]++' | paste -sd, -)
+    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$MERGED' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
     echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
 else
     echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
