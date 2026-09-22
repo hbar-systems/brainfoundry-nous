@@ -679,14 +679,14 @@ export default function Upload() {
           </div>
           {pending.map((p, i) => (
             <div key={p.proposal_id} style={{ padding: 14, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                <div>
-                  <div style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 13 }}>{p.filename}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 13, wordBreak: "break-all" }}>{p.filename}</div>
                   <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
                     layer: {p.layer || "(unscoped)"} · proposal: {p.proposal_id.slice(0, 8)}…
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                   <button
                     onClick={() => decide(i, "APPROVE")}
                     disabled={p.deciding}
