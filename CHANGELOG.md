@@ -48,6 +48,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(cc): the installer creates ~/.cc-bridge before writing the door script; on a
+  fresh box step 3 failed with "No such file or directory" (found on e2e).
 - fix(cc): "n documents wait for your approval" asks the brain live (cached 20 s)
   instead of the reconciler's summary, which lags up to half an hour after an
   approval.

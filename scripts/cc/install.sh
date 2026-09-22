@@ -71,6 +71,7 @@ echo "== 3/6 unit claude-tab (the door: a styled terminal that runs one thing)"
 # operator's back door). "login": Anthropic's own sign-in flow for the reasoner, and nothing
 # else, so the CC sign-in card can open the door straight into it. The look follows the
 # console (colours, font, no status bar) so it does not read as a terminal.
+mkdir -p "$HOME_DIR/.cc-bridge"   # a fresh box has no state dir yet (found on e2e 2026-09-22)
 cat > "$HOME_DIR/.cc-bridge/door.sh" <<'DOOR'
 #!/usr/bin/env bash
 export PATH="$HOME/.local/bin:$PATH" TERM=xterm-256color
