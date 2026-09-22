@@ -55,7 +55,8 @@ def test_cc_flag_values(monkeypatch):
 def test_terminal_tab_only_with_cc(monkeypatch):
     on = _load_apps(monkeypatch, "true")
     assert any(x["id"] == "_terminal" and x["route"] == "/terminal" for x in on.BUILTIN_TABS)
-    assert "/terminal" in on.RESERVED_ROUTES and "/claude" in on.RESERVED_ROUTES
+    assert "/terminal" in on.RESERVED_ROUTES and "/claude" in on.RESERVED_ROUTES and "/files" in on.RESERVED_ROUTES
+    assert any(x["id"] == "_files" and x["route"] == "/files" for x in on.BUILTIN_TABS)
     off = _load_apps(monkeypatch, "false")
     assert not any(x["id"] == "_terminal" for x in off.BUILTIN_TABS)
     _load_apps(monkeypatch, None)

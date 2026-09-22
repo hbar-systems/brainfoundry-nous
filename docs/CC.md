@@ -113,6 +113,14 @@ Two postures, chosen by the owner with `/posture` in the chat. `cards`, the defa
 
 How it works, for the record: Claude Code fires its own PermissionRequest hook whenever a tool call would need permission. The hook (scripts/cc/cc-permit-hook.py) posts the call to the bridge and waits. The bridge mints a permit, shows the card inside the live answer, and answers the hook when you click. The reasoner's own tool then performs the action. Same permit gate, same hash-chained audit as the One writes. This lane is on only when the bridge runs as a user without sudo (`CC_BOX=1`, set by the installer after harden-user.sh); with a sudo user it stays off, because a reasoner with general sudo is the whole server, card or no card.
 
+## Files, jobs and attachments
+
+Files: the drawer lists Files, and the reasoner opens it as a pane when it makes something. Five places: out (what the reasoner made, under ~/out/<date>/), in (what you attached), work (your repositories), world (the read-only mirror), brain (the brain's own code). Audio and video play in the pane and seek; images, PDFs and text show; anything downloads; "ask the brain" drops the file's path into the chat.
+
+Jobs: a command that may run longer than a few minutes is started with `cc-job run -C <dir> -t "<title>" -- <command>`; it runs on after the turn ends, logs to ~/out/jobs/<id>.log, and the page shows "n jobs running" under the chat. When one finishes, a small card appears with the last lines and a button to have the brain read the log. Jobs never run sudo. `/jobs` lists them.
+
+Attachments: the attach button, or drop files on the box where you type. They upload to ~/in/<date>/ on your server and the message names their paths; the reasoner reads them from there. Up to 50 MB per upload.
+
 ## The terminal, in the console
 
 With CC on, the drawer lists Terminal: a shell on your box as its owner, framed inside the console behind the same password. The reasoner can also open it as a pane. It is the same door the sign-in uses. Nothing you do there is seen by the reasoner. After the first install, nothing about CC needs a laptop terminal: the bridge restarts itself when an Update changes it, and the installer reruns itself when an Update changes the installer (log in ~/.cc-bridge/install.log). Work clones, if set up, fast-forward every five minutes; a clone with local changes is left alone.

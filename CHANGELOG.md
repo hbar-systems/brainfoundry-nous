@@ -48,6 +48,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: files, jobs and attachments (session 2 of "replace the laptop"). Files page
+  (`/files`, drawer and pane) browses five roots through the bridge (`GET /cc/files`,
+  `GET /cc/files/raw` with byte ranges, so audio and video seek). Jobs that outlive
+  a turn: `cc-job run -- <cmd>` (`POST /cc/jobs/start` with the hook token), detached,
+  logged under ~/out/jobs/, listed on the page, a card when one finishes, never sudo.
+  Attachments: `POST /cc/upload` (multipart, 50 MB) to ~/in/<date>/, named in the
+  message. The reasoner is told to put outputs under ~/out/<date>/ and to open the
+  Files pane on them; ~/out and ~/in are reasoner directories. Silence timeout 900 s
+  with the box lane. `scripts/cc/cc_extras.py`, `scripts/cc/cc-job.py`.
 - cc: Terminal in the drawer (`/terminal`, frames the door at /claude/; pane route
   too), shown only with CC on. The installer reruns itself after an Update
   (`cc-install-watch.path`, log in ~/.cc-bridge/install.log). Work clones

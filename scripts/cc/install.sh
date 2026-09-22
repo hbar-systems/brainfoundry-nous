@@ -301,7 +301,11 @@ VERBS
             sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$CUR,$RO' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
             echo "read-only shell verbs allowed without a card (ls, git status/log/diff, systemctl status, ...; file contents go through Read, which stays inside the working directories)"
         fi
-        echo "box hands on: edits and commands raise a card; root verbs in /etc/sudoers.d/cc-bridge; helper /usr/local/bin/brain-write"
+        # cc-job: commands that outlive a turn, started through the bridge (scripts/cc/cc-job.py).
+        $SUDO_AS_BRIDGE mkdir -p "$BRIDGE_HOME/.local/bin" "$BRIDGE_HOME/out" "$BRIDGE_HOME/in"
+        $SUDO_AS_BRIDGE cp "$BRAIN_DIR/scripts/cc/cc-job.py" "$BRIDGE_HOME/.local/bin/cc-job"
+        $SUDO_AS_BRIDGE chmod 755 "$BRIDGE_HOME/.local/bin/cc-job"
+        echo "box hands on: edits and commands raise a card; root verbs in /etc/sudoers.d/cc-bridge; helper /usr/local/bin/brain-write; cc-job installed"
     else
         sudo rm -f /etc/sudoers.d/cc-bridge.tmp; echo "sudoers check failed; box hands left off"
     fi

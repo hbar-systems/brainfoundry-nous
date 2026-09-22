@@ -58,7 +58,7 @@ CWD = os.environ.get("CC_CWD", str(Path.home() / "brain"))
 REASONER = os.environ.get("CC_BIN", str(Path.home() / ".local" / "bin" / "claude"))
 STATE_DIR = Path.home() / ".cc-bridge"
 STATE = STATE_DIR / "state.json"
-TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "300"))
+TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "900" if os.environ.get("CC_BOX", "").strip() == "1" else "300"))
 MAX_BODY = 64 * 1024
 ALLOWED_TOOLS = os.environ.get("CC_TOOLS", "Read,Grep,Glob")
 # The reasoner's model, chosen by the owner from the page (/model sonnet, /model opus, or a full
@@ -210,7 +210,7 @@ PANE_ROUTES = {
     "/update": "Update", "/federation": "Federation", "/tasks": "Tasks", "/research": "Research",
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
-    "/terminal": "Terminal",
+    "/terminal": "Terminal", "/files": "Files",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -222,6 +222,9 @@ def _extract_pane(reply: str):
         return reply, None
     route = m.group(1).strip()
     clean = (reply[:m.start()] + reply[m.end():]).strip()
+    base_route = route.split("?", 1)[0]
+    if base_route == "/files" and len(route) < 600:
+        return clean, {"route": route, "title": "Files"}
     if route in PANE_ROUTES:
         return clean, {"route": route, "title": PANE_ROUTES[route]}
     if _APP_ROUTE.match(route):
@@ -265,6 +268,31 @@ if WORK_DIR and BOX_ENABLED:
         "writable, with their own git identity and push access. Build there: edit, run tests, commit with clear "
         "messages, and push only when the person says push. Before editing, `git pull --ff-only`; if the pull "
         "fails, say so and stop. Never commit secrets or files under .env."
+    )
+
+# Files, jobs and uploads (scripts/cc/cc_extras.py). The reasoner's outputs go under
+# ~/out/<date>/, the person's attachments under ~/in/<date>/; both are reasoner directories
+# and both show in the Files pane. Jobs outlive a turn and are listed on the page.
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cc_extras  # noqa: E402
+OUT_DIR = Path.home() / "out"
+IN_DIR = Path.home() / "in"
+OUT_DIR.mkdir(exist_ok=True); IN_DIR.mkdir(exist_ok=True)
+FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), "work": WORK_DIR, "world": WORLD_DIR, "brain": CWD})
+JOBS = cc_extras.Jobs(OUT_DIR, lambda: _env())
+UPLOADS = cc_extras.Uploads(IN_DIR)
+SYSTEM += (
+    f" Files: anything you produce for the person (audio, images, video, documents, data) goes under {OUT_DIR}/<date>/ "
+    f"with a clear name, and you end the answer with <pane>/files?path=<that folder or file></pane> so they see and hear it "
+    f"beside the chat. Files the person attaches arrive under {IN_DIR}/<date>/ and are named in the message; read them from there."
+)
+if BOX_ENABLED:
+    SYSTEM += (
+        " Long work: a command that may run longer than a few minutes (renders, separations, installs, test suites) "
+        "is started with `cc-job run -C <dir> -t \"<title>\" -- <command>`; it runs on after your turn ends, the "
+        "person sees it on the page, and you check it later with `cc-job status <id>`. Say the job id. Never wrap "
+        "sudo in a job."
     )
 
 if BOX_ENABLED:
@@ -912,6 +940,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         cmd += ["--add-dir", WORLD_DIR]
     if WORK_DIR and BOX_ENABLED:
         cmd += ["--add-dir", WORK_DIR]
+    cmd += ["--add-dir", str(OUT_DIR), "--add-dir", str(IN_DIR)]
     if _model_current():
         cmd += ["--model", _model_current()]
     if BOX_ENABLED and GATE is not None:
@@ -1004,6 +1033,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _query(self) -> dict:
+        from urllib.parse import parse_qs
+        q = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return {k: v[0] for k, v in parse_qs(q, keep_blank_values=True).items()}
+
     def _route(self) -> str:
         p = self.path.split("?", 1)[0]
         p = p[len(BASE):] if p.startswith(BASE) else p
@@ -1033,6 +1067,7 @@ class Handler(BaseHTTPRequestHandler):
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
+                             "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -1045,11 +1080,24 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/permits":
             items = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
             self._send(200, {"pending": items, "writes": GATE is not None, "auto": _auto_load() if GATE else []})
+        elif route == "/files":
+            self._send(200, FILES.listing(self._query().get("path")))
+        elif route == "/files/raw":
+            FILES.serve(self, self._query().get("path", ""))
+        elif route == "/jobs":
+            self._send(200, {"jobs": JOBS.list(), "finished": JOBS.take_unseen() if self._query().get("take") == "1" else []})
+        elif route.startswith("/jobs/"):
+            j = JOBS.get(route[len("/jobs/"):], int(self._query().get("tail") or 4000))
+            self._send(200 if j else 404, j or {"error": "no such job"})
         else:
             self._send(404, {"error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
         route = self._route()
+        if route == "/upload":
+            d = UPLOADS.save_multipart(self)
+            self._send(200 if d.get("ok") else 400, d)
+            return
         req = self._json()
         if req is None:
             self._send(400, {"error": "bad_body"})
@@ -1119,6 +1167,14 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/login/code":
             ok = LOGIN.send_code(str(req.get("code", "")))
             self._send(200 if ok else 409, {"ok": ok, "phase": LOGIN.phase})
+            return
+        if route == "/jobs/start":
+            if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                self._send(403, {"error": "not the reasoner"})
+                return
+            d = JOBS.start(str(req.get("command", "")), req.get("cwd") or None, str(req.get("title", "")))
+            print(f"job {'started ' + d['id'] if d.get('id') else 'refused: ' + str(d.get('error'))}", flush=True)
+            self._send(200 if d.get("id") else 400, d)
             return
         if route == "/ask":
             # From the permission hook on this box only (token handed to the reasoner's environment).

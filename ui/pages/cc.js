@@ -36,6 +36,8 @@ const SLASH = [
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
   { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks) or /posture auto (the classifier decides; sudo and app writes still ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
+  { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
+  { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
 
@@ -302,6 +304,9 @@ function SignIn({ onDone, health, onOpenPane }) {
 export default function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
+  const [files, setFiles] = useState([])            // attachments chosen for the next message
+  const [jobs, setJobs] = useState([])              // recent jobs on the box (cc-job)
+  const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [showTools, setShowTools] = useState(false)
   const queueRef = useRef(null)                    // one message typed while a turn runs
@@ -347,8 +352,28 @@ export default function CC() {
       .then(h => { setHealth(h); if (h && h.brain_session_id) loadHistory(h.brain_session_id) })
       .catch(() => setHealth(false))
     loadPending(); loadFirstRun(); loadThreads()
+    try { const q = new URLSearchParams(window.location.search).get('ask'); if (q) setDraft(q) } catch {}
   }, [])
-  const openPane = (p) => { if (p && p.route) setPane(p) }
+  const openPane = (p) => { if (!p) return; if (typeof p === 'string') p = { route: p, title: p.replace(/^\//, '').split('?')[0] || 'pane' }; if (p.route) setPane(p) }
+
+  // Jobs that outlive a turn: poll while any runs; a finished one lands as a small card.
+  useEffect(() => {
+    let stop = false
+    const tick = async () => {
+      try {
+        const r = await fetch('/cc/jobs?take=1', { cache: 'no-store' })
+        const d = r.ok ? await r.json() : null
+        if (!d || stop) return
+        setJobs(d.jobs || [])
+        for (const j of (d.finished || [])) {
+          setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
+        }
+      } catch {}
+    }
+    tick()
+    const iv = setInterval(tick, 15000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [])
 
   // A pane may hand a question to the conversation (the graph's "ask the brain about this").
   useEffect(() => {
@@ -429,6 +454,12 @@ export default function CC() {
       loadHealth(); return true
     }
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
+    if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
+    if (cmd === 'jobs') {
+      const running = jobs.filter(j => j.ended === null), done = jobs.filter(j => j.ended !== null).slice(0, 5)
+      setTurns(t => [...t, { who: 'brain', text: (running.length ? running.map(j => `running: ${j.id} ${j.title}`).join('\n') : 'No job running.') + (done.length ? '\n\nRecent: ' + done.map(j => `${j.id} exit ${j.rc}, ${j.title}`).join('; ') : '') }])
+      return true
+    }
     if (cmd === 'help' || cmd === '') {
       setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto (how much your own box asks), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
@@ -437,9 +468,22 @@ export default function CC() {
   }
 
   async function send(forced) {
-    const text = (typeof forced === 'string' ? forced : draft).trim()
-    if (!text) return
+    let text = (typeof forced === 'string' ? forced : draft).trim()
+    if (!text && files.length === 0) return
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    if (typeof forced !== 'string' && files.length > 0) {
+      // Attachments go to the box first (in/<date>/), then the message names them.
+      const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
+      let saved = []
+      try {
+        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok || !d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
+        saved = d.files || []
+      } catch { setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
+      setFiles([])
+      text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ')
+    }
     if (busy) { queueRef.current = text; if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true }]); return }
     if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
@@ -592,6 +636,14 @@ export default function CC() {
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
               }}>
+                {t.job && (
+                  <div>
+                    <p style={{ ...mono, color: t.job.rc === 0 ? C.dim : '#d08a7a', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>job finished · {t.job.rc === 0 ? 'ok' : `exit ${t.job.rc}`} · {Math.round(((t.job.ended || 0) - t.job.started) / 60)} min</p>
+                    <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '14px' }}>{t.job.title}</p>
+                    <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(t.job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>
+                    <Btn small onClick={() => send(`Read the log of job ${t.job.id} (${t.job.log}) and tell me the result in a few lines; if it made files, open them beside the chat.`)}>ask the brain about it</Btn>
+                  </div>
+                )}
                 {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
                 {t.asks && t.asks.map(a => <ProposalCard key={a.id} p={a} onDecide={decide} />)}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
@@ -628,16 +680,25 @@ export default function CC() {
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
             placeholder={!loggedIn ? 'connect a reasoner first' : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
+            onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             style={{ flex: 1, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
                      border: `1px solid ${C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
-          <Btn primary onClick={send} disabled={!draft.trim() || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
+          <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
+          <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">attach</Btn>
+          <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
         </div>
+        {files.length > 0 && (
+          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px' }}>{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
+          </p>
+        )}
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '10px 0 0 0', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : 'edits and commands need your Allow'}</span> : null}
+          {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
