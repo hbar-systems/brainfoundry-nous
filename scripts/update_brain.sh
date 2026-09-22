@@ -16,7 +16,12 @@
 set -e
 
 BRAIN_DIR="${BRAIN_DIR:-/home/hbar/brain}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8010/health}"
+# Inside the api container (the Update tab's path) the api listens on 8000 and the
+# host's 8010 does not exist, so the old default failed every time the script lived
+# long enough to check (found 2026-09-16, understood 2026-09-22: a false "unhealthy").
+if [ -z "${HEALTH_URL:-}" ]; then
+    if [ -f /.dockerenv ]; then HEALTH_URL="http://127.0.0.1:8000/health"; else HEALTH_URL="http://127.0.0.1:8010/health"; fi
+fi
 TS=$(date +%Y%m%d-%H%M%S)
 
 cd "$BRAIN_DIR"
@@ -243,17 +248,32 @@ echo "✓ Rollback point recorded: $(git rev-parse --short "$LOCAL")"
 echo ""
 echo "==> Rebuilding services (this can take 1-3 minutes)..."
 echo "    Your chats, documents, and models persist — only code is rebuilt."
+# Bake the commit and build time into the api image (last layer, cheap), so the
+# Update tab can show what is actually running, not what is checked out.
+export BRAIN_GIT_COMMIT="$(git rev-parse HEAD)"
+export BRAIN_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+API_IMAGE="$(basename "$BRAIN_DIR")-api"
+API_IMAGE_BEFORE=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
 docker compose build
+API_IMAGE_AFTER=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
 docker compose up -d --no-deps --no-build nodeos ui public-chat
-echo "==> Recreating the api container via a detached helper..."
-docker run -d --rm \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
-    "$(basename "$BRAIN_DIR")-api" \
-    docker compose up -d --no-deps --no-build api
-echo "    api is restarting on the new image. If you ran this from the brain's"
-echo "    Update tab, the live log stops here — that is expected; the tab polls"
-echo "    until the new version is up."
+HELPER_LOG="$BRAIN_DIR/.update-helper.log"
+if [ "$API_IMAGE_AFTER" = "$API_IMAGE_BEFORE" ]; then
+    echo "==> api image unchanged; the api container is kept as it is."
+    API_RECREATE=0
+else
+    echo "==> Recreating the api container via a detached helper (log: .update-helper.log)..."
+    API_RECREATE=1
+    : > "$HELPER_LOG"
+    docker run -d --rm \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
+        "$API_IMAGE" \
+        bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'"
+    echo "    api is restarting on the new image. If you ran this from the brain's"
+    echo "    Update tab, the live log stops here — that is expected; the tab polls"
+    echo "    until the running commit matches."
+fi
 
 # Health check
 echo ""
@@ -270,18 +290,20 @@ done
 
 if [ $HEALTHY -eq 1 ]; then
     echo ""
-    echo "✓ Update complete. Brain is healthy."
+    if [ "${API_RECREATE:-0}" = "1" ]; then
+        echo "✓ Update complete. Brain is healthy (api recreated on the new image)."
+    else
+        echo "✓ Update complete. Brain is healthy (api image unchanged, container kept)."
+    fi
     echo ""
-    echo "==> Now running:"
+    echo "==> Now checked out:"
     git log --oneline -1
     echo ""
     echo "Backup of previous .env: .env.bak-$TS (safe to delete after a day)"
 else
     echo ""
-    echo "✗ Brain did not return to healthy state after update."
-    echo "  Restoring .env from backup. Check 'docker compose logs' for errors."
-    if [ -f ".env.bak-$TS" ]; then
-        cp ".env.bak-$TS" .env
-    fi
+    echo "✗ Brain did not answer $HEALTH_URL within 65 seconds."
+    echo "  Nothing was rolled back: this script never edits .env, so the backup is only"
+    echo "  for you. Check 'docker compose logs api' on the host."
     exit 1
 fi

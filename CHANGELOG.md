@@ -48,6 +48,17 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(update): the Update tab's two lies, found 09-16, understood 09-22. (1) Inside
+  the api container the script checked the host's port 8010, which does not exist
+  there, so whenever the api image was unchanged (container correctly kept) it
+  printed "not healthy", restored .env and exited 1; now it checks 8000 in-container
+  and never touches .env. (2) "currently running" was the git checkout, not the
+  image; now the script bakes `BRAIN_GIT_COMMIT` and `BRAIN_BUILD_TIME` (Dockerfile
+  args moved to the last layer, so it costs seconds), `/admin/version-info` reports
+  `running`, `checkout` and `api_built_at`, the script recreates the api only when
+  its image changed and says which, the helper logs to `.update-helper.log`, and the
+  tab succeeds only when the running commit matches the checkout or the image was
+  unchanged.
 - cc: `CC_INGEST_SUMMARY` (default ~/.world-propose/summary.json): if an external
   reconciler writes a summary of documents it proposed to memory, health carries it
   and the page shows "n documents wait for your approval", opening Knowledge.

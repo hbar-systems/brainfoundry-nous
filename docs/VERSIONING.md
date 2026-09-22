@@ -41,16 +41,19 @@ built from. That value comes from a separate Docker build-arg
 plumbing is in `api/Dockerfile` (`ARG BRAIN_GIT_COMMIT`) and
 `docker-compose.yml` (`args: { BRAIN_GIT_COMMIT: ${BRAIN_GIT_COMMIT:-unknown} }`).
 
-If the host env var isn't set when you run `docker compose up --build`,
-the image is baked with `BRAIN_GIT_COMMIT=unknown` and the Update tab
-shows "unknown" for the current commit. To bake the real commit:
+Since 2026-09-22 `scripts/update_brain.sh` exports `BRAIN_GIT_COMMIT` and
+`BRAIN_BUILD_TIME` before the build, and the Dockerfile bakes them in its
+last layer, so a new commit costs one cheap layer. `/admin/version-info`
+reports `running` (the baked commit), `checkout` (git HEAD on the host)
+and `api_built_at`; `current` is `running` when known, else `checkout`
+(images built before this change carry "unknown"). The Update tab's
+success test is: the checkout moved, and the running api matches it or
+the script said the api image was unchanged (then the container is
+correctly kept). If you build by hand:
 
 ```sh
 BRAIN_GIT_COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 ```
-
-This is host-side ergonomics — not a brain-code concern. The deploy
-script (or operator-side wrapper) is the right place to set this.
 
 ## What about pre-0.8.2 history?
 

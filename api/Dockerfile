@@ -1,10 +1,5 @@
 FROM python:3.11-slim
 
-ARG BRAIN_GIT_COMMIT=unknown
-ARG BRAIN_BUILD_TIME=unknown
-ENV BRAIN_GIT_COMMIT=${BRAIN_GIT_COMMIT}
-ENV BRAIN_BUILD_TIME=${BRAIN_BUILD_TIME}
-
 # git + docker CLI are needed by /admin/update so the console "Update" tab can
 # run scripts/update_brain.sh end-to-end (git pull + docker compose up --build).
 # We install via Docker's official apt repo to get docker compose v2 plugin.
@@ -50,6 +45,16 @@ COPY api /app/api
 COPY VERSION /app/VERSION
 
 RUN ls -la /app/api && echo "----" && (ls -la /app/api/identity || true)
+
+# The commit and build time are baked LAST, so a new commit changes only this
+# layer (seconds) and never invalidates the apt/pip layers above. Moved here on
+# 2026-09-22: at the top they made baking the commit cost a full rebuild, so the
+# update script never passed it and the Update tab could not tell the running
+# image from the checkout.
+ARG BRAIN_GIT_COMMIT=unknown
+ARG BRAIN_BUILD_TIME=unknown
+ENV BRAIN_GIT_COMMIT=${BRAIN_GIT_COMMIT}
+ENV BRAIN_BUILD_TIME=${BRAIN_BUILD_TIME}
 
 EXPOSE 8000
 

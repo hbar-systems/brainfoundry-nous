@@ -36,6 +36,7 @@ export default function Update() {
   const [logs, setLogs] = useState([]) // [{kind:'log'|'meta'|'error'|'done', text}]
   const [errorMsg, setErrorMsg] = useState(null)
   const [postUpdateCommit, setPostUpdateCommit] = useState(null)
+  const apiUnchangedRef = useRef(false)   // the script said the api image did not change
   const [jobKind, setJobKind] = useState('update') // 'update' | 'revert'
   const startCommitRef = useRef(null) // commit at click time, for "did it change?"
   const logBoxRef = useRef(null)
@@ -80,7 +81,8 @@ export default function Update() {
     setPostUpdateCommit(null)
     setJobKind(kind)
     setPhase('running')
-    startCommitRef.current = version?.current || null
+    startCommitRef.current = version?.checkout || version?.current || null
+    apiUnchangedRef.current = false
 
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -142,6 +144,11 @@ export default function Update() {
             // rather than as a network error.
             if (typeof parsed.line === 'string' && /Rebuilding services/i.test(parsed.line)) {
               sawRebuildMarker = true
+            }
+            // The script says so when the api image did not change: the container is kept,
+            // so "running" will still show the older commit and that is correct.
+            if (typeof parsed.line === 'string' && /api image unchanged/i.test(parsed.line)) {
+              apiUnchangedRef.current = true
             }
           } else if (parsed.type === 'start') {
             appendLog({ kind: 'meta', text: `started in ${parsed.cwd}` })
@@ -206,7 +213,11 @@ export default function Update() {
         const r = await fetch('/api/bf/admin/version-info')
         if (r.ok) {
           const data = await r.json()
-          if (data?.current && data.current !== 'unknown' && data.current !== startCommit) {
+          // Success means the checkout moved AND, when the image carries a commit, the
+          // running api matches the checkout (recreated) or the api image was unchanged.
+          const moved = data?.checkout && data.checkout !== startCommit
+          const runningOk = !data?.running || data.running === data.checkout || apiUnchangedRef.current
+          if (moved && runningOk && data.current && data.current !== 'unknown') {
             setVersion(data)
             setPostUpdateCommit(data.current)
             setPhase('success')
@@ -219,7 +230,7 @@ export default function Update() {
       await new Promise((res) => setTimeout(res, 4000))
     }
 
-    setErrorMsg('Brain did not come back online within 3 minutes. Check `docker compose logs api` on the host.')
+    setErrorMsg('The api did not come up on the new commit within 3 minutes. Check `docker compose logs api` and .update-helper.log on the host.')
     setPhase('error')
   }
 
@@ -281,7 +292,7 @@ export default function Update() {
           fontSize: '12px',
         }}>
           <div>
-            <div style={{ color: COLORS.mutedDim, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '4px' }}>currently running</div>
+            <div style={{ color: COLORS.mutedDim, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '4px' }}>{version?.running ? 'running (api image)' : 'checked out'}</div>
             <div style={{ color: COLORS.text, fontSize: '14px' }}>
               {versionLoading ? '…' : shortSha(version?.current)}
               {version?.brain_version ? <span style={{ color: COLORS.muted, marginLeft: '8px' }}>v{version.brain_version}</span> : null}
@@ -439,7 +450,7 @@ export default function Update() {
             fontFamily: 'system-ui, sans-serif',
           }}>
             {jobKind === 'revert' ? 'Reverted to ' : 'Updated to '}
-            <strong style={{ fontFamily: 'DM Mono, monospace' }}>{shortSha(postUpdateCommit)}</strong>. Brain is healthy.
+            <strong style={{ fontFamily: 'DM Mono, monospace' }}>{shortSha(postUpdateCommit)}</strong>. Brain is healthy{apiUnchangedRef.current ? ' (api image unchanged, container kept)' : version?.running ? ' (api recreated on the new image)' : ''}.
           </div>
         )}
 

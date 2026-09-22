@@ -6387,7 +6387,10 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
     Best-effort: 'latest' may be null if the host dir or git aren't reachable
     from inside the container — the UI degrades gracefully when that happens.
     """
-    current = os.getenv("BRAIN_GIT_COMMIT", "unknown")
+    baked = os.getenv("BRAIN_GIT_COMMIT", "unknown")
+    running = baked if baked and baked != "unknown" else None   # what this api image was built from
+    checkout = None                                              # what the host checkout is at
+    current = baked
     latest = None
     behind_by = None
     error = None
@@ -6429,16 +6432,18 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
                 except ValueError:
                     pass
 
-            # Prefer the real checkout HEAD over the build-arg env: it survives
-            # button-triggered rebuilds (which don't pass BRAIN_GIT_COMMIT) and
-            # is what "currently running" actually means.
+            # The checkout HEAD is what is on disk; the baked commit is what runs.
+            # Until 2026-09-22 "current" was HEAD, so the Update tab could not tell
+            # a recreated api from a kept one. Now: current = running when the image
+            # carries a commit, else HEAD (older images baked "unknown").
             r3 = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=BRAIN_HOST_DIR, capture_output=True, text=True, timeout=5,
             )
             head_sha = r3.stdout.strip() if r3.returncode == 0 else None
             if head_sha:
-                current = head_sha
+                checkout = head_sha
+                current = running or head_sha
 
             # Rollback target — the commit update_brain.sh stamped before the
             # last update. Surfaced so the console can offer a one-step revert.
@@ -6469,6 +6474,9 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
 
     return {
         "current": current,
+        "running": running,
+        "checkout": checkout,
+        "api_built_at": os.getenv("BRAIN_BUILD_TIME") if os.getenv("BRAIN_BUILD_TIME", "unknown") != "unknown" else None,
         "latest": latest,
         "behind_by": behind_by,
         "brain_version": BRAIN_VERSION,
