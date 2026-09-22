@@ -34,7 +34,7 @@ function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >
 const SLASH = [
   { c: '/new', d: 'start a new thread' },
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
-  { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks) or /posture auto (the classifier decides; sudo and app writes still ask)' },
+  { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks), /posture auto (the vendor classifier decides), /posture judged (TypeSafe scores each action; harmless runs, the rest ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
   { c: '/jobs', d: 'list jobs running on the box' },
@@ -133,7 +133,7 @@ function ProposalCard({ p, onDecide }) {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? '…' : (box ? 'Allow' : 'Send')}</Btn>
             <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>{box ? 'Refuse' : 'Cancel'}</Btn>
-            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}</span>
+            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}{p.judge ? ` · judged: safe ${p.judge.safe.toFixed(2)}, on request ${p.judge.intent.toFixed(2)}, risk ${p.judge.risk.toFixed(1)}` : ''}</span>
           </div>
           {p.remember_ok !== false && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', color: C.dim, fontSize: '12px', cursor: 'pointer' }}>
@@ -463,7 +463,10 @@ export default function CC() {
     if (cmd === 'posture') {
       const r = await fetch('/cc/posture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture: arg }) })
       const d = await r.json().catch(() => ({}))
-      setTurns(t => [...t, { who: 'brain', text: r.ok ? (d.posture === 'auto' ? 'Posture: auto. Ordinary edits and commands on this box run without a card; sudo and connected-app writes still ask. From the next turn.' : 'Posture: cards. Every edit and command on this box asks. From the next turn.') : (d.error || 'not set'), error: !r.ok }])
+      const said = d.posture === 'auto' ? 'Posture: auto. Ordinary edits and commands on this box run without a card; sudo and connected-app writes still ask. From the next turn.'
+        : d.posture === 'judged' ? 'Posture: judged. Each action is scored by TypeSafe: safe, on request, risk. Above the thresholds it runs and the card shows the numbers; below, it asks. sudo always asks. From the next turn.'
+        : 'Posture: cards. Every edit and command on this box asks. From the next turn.'
+      setTurns(t => [...t, { who: 'brain', text: r.ok ? said : (d.error || 'not set'), error: !r.ok }])
       loadHealth(); return true
     }
     if (cmd === 'model') {
@@ -726,7 +729,7 @@ export default function CC() {
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
-          {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : 'edits and commands need your Allow'}</span> : null}
+          {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}

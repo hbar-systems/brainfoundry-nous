@@ -48,6 +48,12 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: judged posture (`/posture judged`), the first TypeSafe experiment. Each action
+  that would card is first scored by Jev (`POST /v1/systemone`, three typed questions:
+  safe unasked, on request, worst-outcome severity); above `CC_JUDGE_SAFE` 0.90,
+  `CC_JUDGE_INTENT` 0.70 and at most `CC_JUDGE_RISK` 1.0 it runs with the numbers on
+  the card, otherwise the card asks and shows them. sudo never judged; no key, error
+  or timeout means ask. `TYPESAFE_API_KEY` in the bridge env; health reports `judge`.
 - api: `DELETE /documents/{name}?before=<iso>` trashes only the chunks created before
   that moment, so a re-ingest of a changed document can retire its older version and
   keep the new one (re-ingest on change; the reconciler on hbar uses it).

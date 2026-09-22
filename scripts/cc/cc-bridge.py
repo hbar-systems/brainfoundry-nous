@@ -313,7 +313,8 @@ if BOX_ENABLED:
         f"home is {Path(CWD).parent} and is closed to you except the brain repository {CWD}"
         + (f" and the mirror {WORLD_DIR}" if WORLD_DIR else "") +
         ". 'Your home' means yours; 'my home' means theirs. The person chooses a posture: 'cards' (every edit "
-        "and command asks) or 'auto' (ordinary edits and commands run; sudo and connected-app writes still ask). "
+        "and command asks), 'auto' (ordinary edits and commands run; sudo and connected-app writes still ask), or 'judged' "
+        "(a small typed-judgment model scores each action; harmless ones run with the score shown, the rest ask). "
         "Report briefly: what you did and what you found, "
         "a line each, no preamble; inline code only for names and paths."
     )
@@ -468,6 +469,17 @@ def _box_ask(tool: str, inp: dict) -> dict:
         if LIVE["emit"]:
             LIVE["emit"]("ask", card)
         return {"behavior": "allow"}
+    if _posture_current() == "judged" and not action_id.startswith("sudo"):
+        verdict = _judge(tool, inp, summary)
+        if verdict is not None:
+            card["judge"] = verdict
+            if verdict["ok"]:
+                outcome = _run_permit(pid, GATE.get(pid))
+                card.update({"auto": True, "decided": "approve", "outcome": outcome,
+                             "why": f"judged safe {verdict['safe']:.2f}, on request {verdict['intent']:.2f}, risk {verdict['risk']:.1f}"})
+                if LIVE["emit"]:
+                    LIVE["emit"]("ask", card)
+                return {"behavior": "allow"}
     if LIVE["emit"] is None:
         GATE.deny(pid)
         return {"behavior": "deny", "message": "nobody is watching the page to allow this; ask the person to send the request again from the page"}
@@ -507,8 +519,75 @@ def _box_settle(pid: str, decision: str, message: str = "") -> None:
 #         writes (those never pass through here). Only the owner of this brain can choose it,
 #         and only where the box lane is on. Requested by the operator 2026-09-21 after the
 #         first day of use: "the cards are not attractive for my own files on my own box".
-POSTURES = ("cards", "auto")
+POSTURES = ("cards", "auto", "judged")
 ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
+
+# The judged posture (2026-09-22, first TypeSafe experiment): every action still reaches the
+# bridge, but before a card is shown a System One model (TypeSafe Jev) answers three typed
+# questions about it: is it safe to run without asking, does it serve the person's last
+# request, how severe is the worst outcome. Above the thresholds it runs, with the numbers
+# printed on the card; below, the card asks as usual. sudo is never judged. No key, an
+# error, or a timeout means: ask. Their model judges; the gate still consents and records.
+TYPESAFE_KEY = os.environ.get("TYPESAFE_API_KEY", "").strip()
+TYPESAFE_URL = os.environ.get("TYPESAFE_URL", "https://api.typesafe.ai/v1/systemone")
+JUDGE_SAFE = float(os.environ.get("CC_JUDGE_SAFE", "0.90"))      # noul: safe to run unasked
+JUDGE_INTENT = float(os.environ.get("CC_JUDGE_INTENT", "0.70"))  # noul: serves the last request
+JUDGE_RISK = float(os.environ.get("CC_JUDGE_RISK", "1.0"))       # score 0..3, at most "mild"
+LAST_MESSAGE = {"text": ""}                                       # the person's current request, for the judge
+
+
+def _judge(tool: str, inp: dict, summary: str) -> dict | None:
+    """Ask TypeSafe about one action. Returns {"safe", "intent", "risk", "ok"} or None when it
+    could not judge (no key, error, timeout), which the caller treats as: ask the person."""
+    if not TYPESAFE_KEY:
+        return None
+    inp = inp if isinstance(inp, dict) else {}
+    state = {
+        "person_request": (LAST_MESSAGE.get("text") or "")[:4000],
+        "action": {"tool": tool, "summary": summary[:1000],
+                   "command": str(inp.get("command", ""))[:2000] if tool == "Bash" else None,
+                   "file": str(inp.get("file_path") or inp.get("notebook_path") or "")[:400] or None,
+                   "working_directory": CWD},
+        "context": ("The action is proposed by an AI reasoner working on the person's own server, as a plain user "
+                    "without sudo, inside their brain's repository, their work clones and its own home. The person "
+                    "chose to let harmless actions run without being asked."),
+    }
+    questions = {
+        "safe": {"type": "noul",
+                 "instructions": "Would a careful owner let this action run on their own server without being asked first? "
+                                 "Reads, builds, tests, edits inside the working directories, and reversible changes are fine. "
+                                 "Deleting data, changing system configuration, sending anything off the machine, touching "
+                                 "credentials or secrets, or force-pushing shared history are not.",
+                 "criteria": {"true": "safe to run without asking", "false": "the owner should be asked first"}},
+        "intent": {"type": "noul",
+                   "instructions": "Does this action plausibly serve `person_request`, as a step a competent engineer would take for it?",
+                   "criteria": {"true": "a reasonable step for that request", "false": "unrelated to, or beyond, what was asked"}},
+        "risk": {"type": "score",
+                 "instructions": "How bad is the worst realistic outcome if this action is wrong?",
+                 "criteria": ["Nothing lasting: read-only, or trivially undone by the reasoner itself",
+                              "Mild: a file or state the owner can restore from git or a backup in minutes",
+                              "Serious: data or configuration lost or changed with real effort to recover",
+                              "Severe: secrets exposed, data leaves the machine, or the server becomes unusable"]},
+    }
+    import urllib.request
+    body = json.dumps({"model": "jev-latest", "state": state, "questions": questions}).encode()
+    req = urllib.request.Request(TYPESAFE_URL, data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {TYPESAFE_KEY}"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            d = json.loads(r.read() or b"{}")
+    except Exception as e:  # noqa: BLE001
+        print(f"judge failed: {type(e).__name__}", flush=True)
+        return None
+    a = d.get("answers") or {}
+    try:
+        safe = float(a["safe"]["noul"]); intent = float(a["intent"]["noul"]); risk = float(a["risk"]["score"])
+    except (KeyError, TypeError, ValueError):
+        print("judge answered in an unexpected shape", flush=True)
+        return None
+    ok = safe >= JUDGE_SAFE and intent >= JUDGE_INTENT and risk <= JUDGE_RISK
+    return {"safe": round(safe, 3), "intent": round(intent, 3), "risk": round(risk, 2), "ok": ok,
+            "tokens": (d.get("usage") or {}).get("input_tokens")}
 
 
 def _posture_current() -> str:
@@ -1121,6 +1200,7 @@ class Handler(BaseHTTPRequestHandler):
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
+                             "judge": bool(TYPESAFE_KEY),
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
@@ -1175,7 +1255,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(409, {"ok": False, "error": "the box lane is off on this brain; the posture applies only there"})
                 return
             if want not in POSTURES:
-                self._send(400, {"ok": False, "error": "posture is 'cards' or 'auto'"})
+                self._send(400, {"ok": False, "error": "posture is 'cards', 'auto' or 'judged'"})
+                return
+            if want == "judged" and not TYPESAFE_KEY:
+                self._send(409, {"ok": False, "error": "judged needs TYPESAFE_API_KEY in the bridge env (enter it on the box)"})
                 return
             _env_file_set("CC_POSTURE", want); os.environ["CC_POSTURE"] = want
             print(f"posture set to {want}", flush=True)
@@ -1298,6 +1381,7 @@ class Handler(BaseHTTPRequestHandler):
         if not message:
             self._send(400, {"error": "empty_message"})
             return
+        LAST_MESSAGE["text"] = message
         if not _lock.acquire(blocking=False):
             self._send(409, {"error": "busy", "reply": "One turn is still running. Wait for it."})
             return

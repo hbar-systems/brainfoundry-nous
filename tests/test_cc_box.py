@@ -131,3 +131,57 @@ def test_posture_auto_adds_ask_rules_and_mode(monkeypatch, tmp_path):
     assert s["hooks"]["PermissionRequest"]           # the card hook stays
     monkeypatch.setenv("CC_POSTURE", "nonsense")
     assert m._posture_current() == "cards"
+
+
+def test_judged_posture_runs_or_asks(monkeypatch, tmp_path):
+    import io, urllib.request
+    monkeypatch.setenv("TYPESAFE_API_KEY", "t")
+    monkeypatch.setenv("CC_POSTURE", "judged")
+    m = _load(monkeypatch, tmp_path)
+    assert m._posture_current() == "judged"
+    answers = {"safe": 0.97, "intent": 0.95, "risk": 0.2}
+
+    class R:
+        def __init__(self, body): self.body = body
+        def read(self): return json.dumps(self.body).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    seen = {}
+    def fake_open(req, timeout=0):
+        seen["body"] = json.loads(req.data)
+        seen["auth"] = req.headers.get("Authorization")
+        return R({"answers": {"safe": {"noul": answers["safe"]}, "intent": {"noul": answers["intent"]},
+                              "risk": {"score": answers["risk"]}}, "usage": {"input_tokens": 300}})
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    m.LAST_MESSAGE["text"] = "run the tests"
+    cards = []
+    m.LIVE["emit"] = lambda k, p: cards.append(p)
+    d = m._box_ask("Bash", {"command": "pytest -q"})
+    assert d == {"behavior": "allow"} and cards[-1]["auto"] is True and "judged safe 0.97" in cards[-1]["why"]
+    assert seen["auth"] == "Bearer t" and seen["body"]["state"]["person_request"] == "run the tests"
+    assert set(seen["body"]["questions"]) == {"safe", "intent", "risk"}
+    # below the threshold: a card is shown, with the numbers on it, and the ask waits
+    answers.update({"safe": 0.4, "risk": 2.5})
+    cards.clear()
+    th = threading.Thread(target=lambda: m._box_ask("Bash", {"command": "rm -rf build"}))
+    th.start()
+    for _ in range(50):
+        if cards:
+            break
+        time.sleep(0.05)
+    assert cards and not cards[0].get("auto") and cards[0]["judge"]["ok"] is False
+    m.GATE.deny(cards[0]["id"]); m._box_settle(cards[0]["id"], "deny"); th.join(3)
+    # sudo is never judged
+    cards.clear()
+    th = threading.Thread(target=lambda: m._box_ask("Bash", {"command": "sudo systemctl restart cc-bridge"}))
+    th.start()
+    for _ in range(50):
+        if cards:
+            break
+        time.sleep(0.05)
+    assert cards and "judge" not in cards[0]
+    m.GATE.deny(cards[0]["id"]); m._box_settle(cards[0]["id"], "deny"); th.join(3)
+    # judge unreachable: ask
+    def broken(req, timeout=0): raise OSError("down")
+    monkeypatch.setattr(urllib.request, "urlopen", broken)
+    assert m._judge("Bash", {"command": "ls"}, "run on the box: ls") is None
