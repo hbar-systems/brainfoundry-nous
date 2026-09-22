@@ -48,6 +48,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(appearance): a built-in tab added after the owner saved a tab order (Graph,
+  Files, Terminal) slots in by its natural order instead of piling up at the end.
 - cc: judged posture (`/posture judged`), the first TypeSafe experiment. Each action
   that would card is first scored by Jev (`POST /v1/systemone`, three typed questions:
   safe unasked, on request, worst-outcome severity); above `CC_JUDGE_SAFE` 0.90,

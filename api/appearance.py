@@ -230,11 +230,24 @@ def apply_to_tabs(tabs: List[Dict[str, Any]], config: Optional[Dict[str, Any]] =
     if not order:
         return visible
     rank = {tid: i for i, tid in enumerate(order)}
-    # Listed tabs first (in tabOrder), then the rest in their incoming order.
+    # Listed tabs in tabOrder. A tab the saved order does not know (a built-in added after
+    # the owner saved it, such as Graph, Files, Terminal) slots in by its natural `order`,
+    # right after the last listed tab whose natural order is not greater than its own,
+    # instead of piling up at the end (seen on hbar 2026-09-22).
     listed = [t for t in visible if t.get("id") in rank]
     listed.sort(key=lambda t: rank[t["id"]])
-    rest = [t for t in visible if t.get("id") not in rank]
-    return listed + rest
+    result = list(listed)
+    for t in [x for x in visible if x.get("id") not in rank]:
+        nat = t.get("order", 100)
+        pos = len(result)
+        for i in range(len(result) - 1, -1, -1):
+            if result[i].get("order", 100) <= nat:
+                pos = i + 1
+                break
+        else:
+            pos = 0
+        result.insert(pos, t)
+    return result
 
 
 # ── Natural-language translator (thin: NL -> validated schema diff) ──────────
