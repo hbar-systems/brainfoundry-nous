@@ -50,3 +50,12 @@ def test_cc_flag_values(monkeypatch):
         assert _load_apps(monkeypatch, v).CC_ENABLED is False
     # Leave the module in its default (off) state for other tests.
     _load_apps(monkeypatch, None)
+
+
+def test_terminal_tab_only_with_cc(monkeypatch):
+    on = _load_apps(monkeypatch, "true")
+    assert any(x["id"] == "_terminal" and x["route"] == "/terminal" for x in on.BUILTIN_TABS)
+    assert "/terminal" in on.RESERVED_ROUTES and "/claude" in on.RESERVED_ROUTES
+    off = _load_apps(monkeypatch, "false")
+    assert not any(x["id"] == "_terminal" for x in off.BUILTIN_TABS)
+    _load_apps(monkeypatch, None)

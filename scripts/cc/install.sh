@@ -39,6 +39,8 @@ BRIDGE_USER=${BRIDGE_USER:-$(grep -oP '^User=\K.*' /etc/systemd/system/cc-bridge
 BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
 ENV_FILE="$BRIDGE_HOME/.cc-bridge/env"
 SUDO_AS_BRIDGE=""; [ "$BRIDGE_USER" != "$(id -un)" ] && SUDO_AS_BRIDGE="sudo -u $BRIDGE_USER"
+# When the watcher runs this as root, files written into the brain user's home must stay theirs.
+FIX_OWNER() { [ "$(id -un)" = root ] && chown -R "$BRAIN_USER":"$BRAIN_USER" "$HOME_DIR/.cc-bridge" 2>/dev/null || true; }
 
 echo "== brain user $BRAIN_USER, repo $BRAIN_DIR"
 [ -f "$BRAIN_DIR/VERSION" ] || { echo "not a brain repo: $BRAIN_DIR"; exit 1; }
@@ -93,7 +95,7 @@ case "${1:-}" in
 esac
 DOOR
 sed -i "s|__BRIDGE_USER__|$BRIDGE_USER|g" "$HOME_DIR/.cc-bridge/door.sh"
-chmod 755 "$HOME_DIR/.cc-bridge/door.sh"
+chmod 755 "$HOME_DIR/.cc-bridge/door.sh"; FIX_OWNER
 THEME='{"background":"#0f0e0c","foreground":"#e8e0d5","cursor":"#c9a96e","selectionBackground":"#3a3520","black":"#0f0e0c","brightBlack":"#6b5f52","white":"#e8e0d5","brightWhite":"#ffffff","yellow":"#c9a96e","brightYellow":"#e0c48a","blue":"#8fb3c9","green":"#9fbf8f","red":"#d08a7a"}'
 sudo tee /etc/systemd/system/claude-tab.service >/dev/null <<UNIT
 [Unit]
@@ -216,6 +218,64 @@ Type=oneshot
 ExecStart=/bin/systemctl restart cc-bridge.service
 UNIT
 
+# The installer reruns itself when an Update changes it (units, routes, sudoers, env keys
+# all live here), so the owner never types this command again after the first time.
+# Runs as root with BRAIN_USER and BRIDGE_USER pinned; every step is idempotent.
+sudo tee /etc/systemd/system/cc-install-watch.path >/dev/null <<UNIT
+[Unit]
+Description=Rerun scripts/cc/install.sh when an Update changes it
+
+[Path]
+PathChanged=$BRAIN_DIR/scripts/cc/install.sh
+Unit=cc-install-watch.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo tee /etc/systemd/system/cc-install-watch.service >/dev/null <<UNIT
+[Unit]
+Description=Rerun the CC installer after its file changed
+
+[Service]
+Type=oneshot
+Environment=BRAIN_USER=$BRAIN_USER
+Environment=BRIDGE_USER=$BRIDGE_USER
+Environment=HOME=$HOME_DIR
+ExecStart=/usr/bin/bash $BRAIN_DIR/scripts/cc/install.sh
+StandardOutput=append:$HOME_DIR/.cc-bridge/install.log
+StandardError=append:$HOME_DIR/.cc-bridge/install.log
+UNIT
+
+# Work clones (CC_WORK_DIR, if the owner set one up): pull each repository every five
+# minutes so the reasoner never builds on a stale copy. Fast-forward only; a clone with
+# local changes is left alone and named in the log.
+WORK_DIR_ENV=$(sudo grep -oP '^CC_WORK_DIR=\K.*' "$ENV_FILE" 2>/dev/null || true)
+if [ -n "$WORK_DIR_ENV" ] && sudo test -d "$WORK_DIR_ENV"; then
+    sudo tee /etc/systemd/system/cc-work-pull.service >/dev/null <<UNIT
+[Unit]
+Description=Fast-forward the CC work clones from their remotes
+
+[Service]
+Type=oneshot
+User=$BRIDGE_USER
+Environment=HOME=$BRIDGE_HOME
+ExecStart=/usr/bin/bash -c 'for d in $WORK_DIR_ENV/*/; do [ -d "\$d/.git" ] || continue; if [ -n "\$(git -C "\$d" status --porcelain)" ]; then echo "\$(basename "\$d"): local changes, not pulled"; continue; fi; git -C "\$d" pull -q --ff-only 2>/dev/null || echo "\$(basename "\$d"): pull failed"; done'
+UNIT
+    sudo tee /etc/systemd/system/cc-work-pull.timer >/dev/null <<UNIT
+[Unit]
+Description=Every five minutes: refresh the CC work clones
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+    sudo systemctl daemon-reload; sudo systemctl enable --now cc-work-pull.timer >/dev/null 2>&1
+    echo "work clones at $WORK_DIR_ENV refresh every 5 min (cc-work-pull.timer)"
+fi
+
 echo "== 4c/6 hands on the box (only when the bridge runs as a user without sudo)"
 # The reasoner may edit files and run commands on this box; each call the person has not
 # already allowed raises a card in the chat (PermissionRequest hook -> bridge -> card).
@@ -283,9 +343,9 @@ add_route cc /cc "$CC_PORT"
 
 echo "== 6/6 start and check"
 sudo systemctl daemon-reload
-sudo systemctl enable claude-tab cc-bridge cc-bridge-watch.path >/dev/null 2>&1
+sudo systemctl enable claude-tab cc-bridge cc-bridge-watch.path cc-install-watch.path >/dev/null 2>&1
 sudo systemctl restart claude-tab cc-bridge
-sudo systemctl restart cc-bridge-watch.path
+sudo systemctl restart cc-bridge-watch.path cc-install-watch.path
 sleep 2
 echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)"
 echo "terminal  /claude/ -> HTTP $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$TERM_PORT/claude/)"

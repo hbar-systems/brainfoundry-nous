@@ -113,6 +113,10 @@ Two postures, chosen by the owner with `/posture` in the chat. `cards`, the defa
 
 How it works, for the record: Claude Code fires its own PermissionRequest hook whenever a tool call would need permission. The hook (scripts/cc/cc-permit-hook.py) posts the call to the bridge and waits. The bridge mints a permit, shows the card inside the live answer, and answers the hook when you click. The reasoner's own tool then performs the action. Same permit gate, same hash-chained audit as the One writes. This lane is on only when the bridge runs as a user without sudo (`CC_BOX=1`, set by the installer after harden-user.sh); with a sudo user it stays off, because a reasoner with general sudo is the whole server, card or no card.
 
+## The terminal, in the console
+
+With CC on, the drawer lists Terminal: a shell on your box as its owner, framed inside the console behind the same password. The reasoner can also open it as a pane. It is the same door the sign-in uses. Nothing you do there is seen by the reasoner. After the first install, nothing about CC needs a laptop terminal: the bridge restarts itself when an Update changes it, and the installer reruns itself when an Update changes the installer (log in ~/.cc-bridge/install.log). Work clones, if set up, fast-forward every five minutes; a clone with local changes is left alone.
+
 ## Running the bridge without sudo
 
 On provisioned brains the brain user has sudo, so a reasoner running as that user is a full administrator of the box. `bash scripts/cc/harden-user.sh` moves the bridge to a plain user named cc: its own home, its own reasoner sign-in, the permits and audit moved over, the units rewritten. The terminal door stays the brain user's. Run it with `--copy-login` only on a brain you operate yourself, to copy your own reasoner sign-in to the new user; otherwise sign the new user in with your API key from the CC page or with `set-token.sh`. The installer remembers the bridge user afterwards.

@@ -210,6 +210,7 @@ PANE_ROUTES = {
     "/update": "Update", "/federation": "Federation", "/tasks": "Tasks", "/research": "Research",
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
+    "/terminal": "Terminal",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")

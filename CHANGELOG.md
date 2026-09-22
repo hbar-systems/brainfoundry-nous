@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: Terminal in the drawer (`/terminal`, frames the door at /claude/; pane route
+  too), shown only with CC on. The installer reruns itself after an Update
+  (`cc-install-watch.path`, log in ~/.cc-bridge/install.log). Work clones
+  fast-forward every five minutes (`cc-work-pull.timer`), skipping any clone with
+  local changes.
 - fix(cc): the sign-in panel signs in the user the bridge runs as. After
   harden-user.sh the door signed in the brain user while the bridge ran as cc, so
   "Login successful" left CC disconnected. A copied sign-in (`--copy-login`) is now
