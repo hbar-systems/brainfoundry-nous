@@ -303,8 +303,11 @@ VERBS
         # already reads files in its working directories freely; these only save clicks). No cat/head/
         # grep here: they would read outside those directories without a card. Writes and root still card.
         RO='Bash(ls:*),Bash(wc:*),Bash(stat:*),Bash(file:*),Bash(pwd),Bash(id:*),Bash(whoami),Bash(date:*),Bash(df:*),Bash(du:*),Bash(ps:*),Bash(uptime),Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git branch:*),Bash(git -C * status:*),Bash(git -C * log:*),Bash(git -C * diff:*),Bash(git -C * show:*),Bash(systemctl status:*),Bash(systemctl is-active:*)'
-        CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" | cut -d= -f2-)
-        if [ -n "$CUR" ] && ! printf '%s' "$CUR" | grep -q 'Bash(git status'; then
+        # No One key means no CC_TOOLS line yet (found on e2e 2026-09-22: the missing line
+        # aborted the whole installer under set -e); seed it with the unit's default.
+        CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+        [ -n "$CUR" ] || CUR="Read,Grep,Glob"
+        if ! printf '%s' "$CUR" | grep -q 'Bash(git status'; then
             sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$CUR,$RO' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
             echo "read-only shell verbs allowed without a card (ls, git status/log/diff, systemctl status, ...; file contents go through Read, which stays inside the working directories)"
         fi

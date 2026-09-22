@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(cc installer): on a brain without a One key the env file has no CC_TOOLS line and
+  step 4c aborted the whole run under set -e (found on e2e: the bridge stayed on the
+  sudo user); the list is now seeded with the unit's default. harden-user.sh no longer
+  hides an installer failure: it prints the log tail and exits 1.
 - cc: Files pane opens on the newest outputs (`GET /cc/files/recent`), html files render
   in place with their sibling assets (path-style `GET /cc/files/raw/<path>`), and any
   absolute path the reasoner writes in the chat is a link that opens the pane there.

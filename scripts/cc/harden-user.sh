@@ -57,7 +57,12 @@ sudo chown -R "$CC_USER":"$CC_USER" "$CC_HOME/.claude"
 sudo chmod 700 "$CC_HOME/.claude"; sudo chmod 600 "$CC_HOME/.claude/.credentials.json" 2>/dev/null || true
 
 echo "== 4/5 units rewritten by the installer for BRIDGE_USER=$CC_USER"
-BRIDGE_USER="$CC_USER" bash "$BRAIN_DIR/scripts/cc/install.sh" | grep -E "runs as|permitd|hands|active|reasoner CLI|NOTE" || true
+LOG=/tmp/cc-install-$(date +%s).log
+if BRIDGE_USER="$CC_USER" bash "$BRAIN_DIR/scripts/cc/install.sh" > "$LOG" 2>&1; then
+    grep -E "runs as|permitd|hands|active|reasoner CLI|NOTE" "$LOG" || true
+else
+    echo "the installer FAILED; last lines of $LOG:"; tail -n 12 "$LOG"; exit 1
+fi
 
 echo "== 5/5 check"
 sleep 2
