@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- api: `DELETE /documents/{name}?before=<iso>` trashes only the chunks created before
+  that moment, so a re-ingest of a changed document can retire its older version and
+  keep the new one (re-ingest on change; the reconciler on hbar uses it).
 - fix(graph): a brain with fewer documents than the neighbour count returned 500
   ("kth out of bounds", seen on e2e with two documents); k is capped at n-1.
 - cc: a "latest:" strip above the composer names the newest files the brain made,

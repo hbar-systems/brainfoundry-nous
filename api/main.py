@@ -4252,8 +4252,12 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
 @app.delete("/documents/{document_name:path}")
-def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_key)):
+def delete_document_by_name(document_name: str, before: Optional[str] = None, api_key: str = Depends(get_api_key)):
     """Soft-delete every chunk of a named document.
+
+    With ?before=<ISO timestamp>, only chunks created before that moment are
+    trashed: the way a newer ingest of the same document retires the older
+    version while keeping the new chunks (re-ingest on change, 2026-09-22).
 
     Sets metadata.deleted_at to the current ISO timestamp on every chunk
     of the document. Read paths (/chat/rag retrieval, /documents,
@@ -4269,15 +4273,31 @@ def delete_document_by_name(document_name: str, api_key: str = Depends(get_api_k
         conn = get_db_connection()
         cursor = conn.cursor()
         now_iso = datetime.utcnow().isoformat()
-        cursor.execute(
-            """
-            UPDATE document_embeddings
-            SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{deleted_at}', to_jsonb(%s::text))
-            WHERE document_name = %s
-              AND (metadata->>'deleted_at' IS NULL)
-            """,
-            (now_iso, document_name),
-        )
+        if before:
+            try:
+                before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="before must be an ISO timestamp")
+            cursor.execute(
+                """
+                UPDATE document_embeddings
+                SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{deleted_at}', to_jsonb(%s::text))
+                WHERE document_name = %s
+                  AND (metadata->>'deleted_at' IS NULL)
+                  AND created_at < %s
+                """,
+                (now_iso, document_name, before_dt.replace(tzinfo=None)),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE document_embeddings
+                SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{deleted_at}', to_jsonb(%s::text))
+                WHERE document_name = %s
+                  AND (metadata->>'deleted_at' IS NULL)
+                """,
+                (now_iso, document_name),
+            )
         trashed = cursor.rowcount
         conn.commit()
         cursor.close()
