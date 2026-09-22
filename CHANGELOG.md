@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(cc): "n documents wait for your approval" asks the brain live (cached 20 s)
+  instead of the reconciler's summary, which lags up to half an hour after an
+  approval.
 - cc: `CC_MCP_CONFIG`, the owner's MCP servers file; strict mode stays on, so exactly
   those servers appear and nothing else. Health and Settings list the attached packs.
   First use: the ableton-systems and numa-systems plugins on hbar (studio session).

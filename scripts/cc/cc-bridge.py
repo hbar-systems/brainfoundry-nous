@@ -531,12 +531,33 @@ def _hook_settings() -> str:
 INGEST_SUMMARY = Path(os.environ.get("CC_INGEST_SUMMARY", str(Path.home() / ".world-propose" / "summary.json")))
 
 
+_PENDING_CACHE = {"at": 0.0, "n": None}
+
+
+def _pending_live() -> int | None:
+    """Documents waiting for approval, asked of the brain itself (cached 20 s). The
+    reconciler's summary lags by up to half an hour; the page must not (2026-09-22)."""
+    if not BRAIN_API_KEY:
+        return None
+    if time.time() - _PENDING_CACHE["at"] < 20:
+        return _PENDING_CACHE["n"]
+    d = _brain_api("GET", "/memory/proposals?status=PENDING&limit=200")
+    items = d if isinstance(d, list) else ((d or {}).get("proposals") or (d or {}).get("items") or []) if d is not None else None
+    n = len(items) if items is not None else None
+    _PENDING_CACHE.update({"at": time.time(), "n": n})
+    return n
+
+
 def _ingest_summary() -> dict | None:
     try:
         d = json.loads(INGEST_SUMMARY.read_text())
-        return {"pending": int(d.get("pending") or 0), "waiting": int(d.get("waiting") or 0), "last_run": d.get("last_run")}
     except Exception:
+        d = None
+    live = _pending_live()
+    if d is None and live is None:
         return None
+    pending = live if live is not None else int((d or {}).get("pending") or 0)
+    return {"pending": pending, "waiting": int((d or {}).get("waiting") or 0), "last_run": (d or {}).get("last_run")}
 
 
 # ---- the brain's own record of CC threads ----
