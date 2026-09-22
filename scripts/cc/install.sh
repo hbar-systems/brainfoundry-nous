@@ -123,7 +123,9 @@ echo "== 4/6 unit cc-bridge (runs as $BRIDGE_USER)"
 $SUDO_AS_BRIDGE mkdir -p "$BRIDGE_HOME/.cc-bridge"
 # A small venv for the bridge: permitd (the permit gate for writes; stdlib-only, tiny).
 if [ ! -x "$BRIDGE_HOME/.cc-bridge/venv/bin/python" ]; then
-    $SUDO_AS_BRIDGE python3 -m venv "$BRIDGE_HOME/.cc-bridge/venv" 2>/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv >/dev/null; $SUDO_AS_BRIDGE python3 -m venv "$BRIDGE_HOME/.cc-bridge/venv"; }
+    # A fresh Ubuntu has python3 but not python3-venv (seen on e2e 2026-09-22); install it first, quietly.
+    python3 -c "import ensurepip" 2>/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv >/dev/null 2>&1
+    $SUDO_AS_BRIDGE python3 -m venv "$BRIDGE_HOME/.cc-bridge/venv"
 fi
 $SUDO_AS_BRIDGE "$BRIDGE_HOME/.cc-bridge/venv/bin/pip" install -q --upgrade permitd >/dev/null 2>&1 && echo "permitd $($SUDO_AS_BRIDGE "$BRIDGE_HOME/.cc-bridge/venv/bin/python" -c 'import permitd;print(permitd.__version__)' 2>/dev/null || echo installed)"
 if ! sudo test -s "$ENV_FILE"; then
@@ -361,7 +363,7 @@ sleep 2
 for u in cc-bridge-watch.path cc-install-watch.path; do
     systemctl is-active --quiet "$u" || sudo systemctl start "$u"
 done
-echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)   watchers: $(systemctl is-active cc-bridge-watch.path) $(systemctl is-active cc-install-watch.path)   work-pull: $(systemctl is-active cc-work-pull.timer 2>/dev/null || echo off)"
+echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)   watchers: $(systemctl is-active cc-bridge-watch.path) $(systemctl is-active cc-install-watch.path)   work-pull: $(systemctl is-active cc-work-pull.timer 2>/dev/null | head -1)"
 echo "terminal  /claude/ -> HTTP $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$TERM_PORT/claude/)"
 echo "bridge    /cc/health -> $(curl -s http://127.0.0.1:$CC_PORT/cc/health | cut -c1-200)"
 HOST=$(grep -oE "^console\.[a-z0-9.-]+" "$CADDYFILE" | head -1)
