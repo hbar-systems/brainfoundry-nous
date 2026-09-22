@@ -526,6 +526,19 @@ def _hook_settings() -> str:
     return json.dumps(s)
 
 
+# An external reconciler (the operator's world-propose on hbar) may keep a summary of what it
+# proposed to memory; the page shows the count waiting for approval and opens Knowledge.
+INGEST_SUMMARY = Path(os.environ.get("CC_INGEST_SUMMARY", str(Path.home() / ".world-propose" / "summary.json")))
+
+
+def _ingest_summary() -> dict | None:
+    try:
+        d = json.loads(INGEST_SUMMARY.read_text())
+        return {"pending": int(d.get("pending") or 0), "waiting": int(d.get("waiting") or 0), "last_run": d.get("last_run")}
+    except Exception:
+        return None
+
+
 # ---- the brain's own record of CC threads ----
 THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, last}]
 
@@ -1068,6 +1081,7 @@ class Handler(BaseHTTPRequestHandler):
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
+                             "ingest": _ingest_summary(),
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})

@@ -121,6 +121,10 @@ Jobs: a command that may run longer than a few minutes is started with `cc-job r
 
 Attachments: the attach button, or drop files on the box where you type. They upload to ~/in/<date>/ on your server and the message names their paths; the reasoner reads them from there. Up to 50 MB per upload.
 
+## Memory follows the world
+
+If something on the box proposes documents to memory on its own (on hbar: a reconciler that watches the read-only mirror of the owner's repositories and proposes new files every half hour), the page shows "n documents wait for your approval" and opens Knowledge, where you approve or reject each one. The reasoner never approves. What memory holds stays a decision of the owner.
+
 ## The terminal, in the console
 
 With CC on, the drawer lists Terminal: a shell on your box as its owner, framed inside the console behind the same password. The reasoner can also open it as a pane. It is the same door the sign-in uses. Nothing you do there is seen by the reasoner. After the first install, nothing about CC needs a laptop terminal: the bridge restarts itself when an Update changes it, and the installer reruns itself when an Update changes the installer (log in ~/.cc-bridge/install.log). Work clones, if set up, fast-forward every five minutes; a clone with local changes is left alone.

@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: `CC_INGEST_SUMMARY` (default ~/.world-propose/summary.json): if an external
+  reconciler writes a summary of documents it proposed to memory, health carries it
+  and the page shows "n documents wait for your approval", opening Knowledge.
 - fix(cc): cc-job keeps the command's quoting (shlex.join), so `-- bash -c '...'` and
   `-- 'a && b > f'` reach the shell intact; the reasoner is told to pass one quoted
   string. Observed 2026-09-22: the first live job died with "sleep: missing operand".
