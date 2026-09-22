@@ -81,3 +81,13 @@ def test_uploads_multipart(tmp_path):
     assert d["ok"] and d["files"][0]["name"] == "evil name_.txt" and d["files"][0]["size"] == 5
     assert pathlib.Path(d["files"][0]["path"]).read_text() == "hello"
     assert "/in/" in d["files"][0]["path"]
+
+
+def test_recent_and_html_kind(tmp_path):
+    out = tmp_path / "out"; (out / "a").mkdir(parents=True); (out / "jobs").mkdir()
+    (out / "a" / "index.html").write_text("<p>hi</p>"); (out / "a" / "x.png").write_bytes(b"\x89PNG"); (out / "jobs" / "J1.log").write_text("no")
+    f = X.Files({"out": str(out)})
+    r = f.recent("out")
+    assert [e["name"] for e in r] and "J1.log" not in [e["name"] for e in r]
+    assert next(e for e in r if e["name"] == "index.html")["kind"] == "html"
+    assert f.recent("nope") == []

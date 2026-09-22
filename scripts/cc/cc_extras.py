@@ -24,12 +24,12 @@ import time
 from pathlib import Path
 
 MAX_UPLOAD = 50 * 1024 * 1024
-TEXT_SUFFIXES = {".md", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".html", ".css", ".ini", ".cfg"}
+TEXT_SUFFIXES = {".md", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg"}
 KIND_BY_SUFFIX = {
     **{s: "audio" for s in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")},
     **{s: "video" for s in (".mp4", ".webm", ".mov", ".m4v")},
     **{s: "image" for s in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")},
-    ".pdf": "pdf",
+    ".pdf": "pdf", ".html": "html", ".htm": "html",
 }
 
 
@@ -88,6 +88,28 @@ class Files:
         parent = str(p.parent) if self.resolve(str(p.parent)) else None
         return {"path": str(p), "parent": parent, "entries": entries[:2000],
                 "roots": [{"label": k, "path": str(v)} for k, v in self.roots.items()]}
+
+    def recent(self, root_label: str = "out", n: int = 30) -> list:
+        """Newest files under one root (the reasoner's outputs by default), for the pane's
+        first view: what was just made, without hunting through folders."""
+        root = self.roots.get(root_label)
+        if root is None:
+            return []
+        found = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "jobs"]
+            for fn in filenames:
+                if fn.startswith("."):
+                    continue
+                fp = Path(dirpath) / fn
+                try:
+                    st = fp.stat()
+                except OSError:
+                    continue
+                found.append((st.st_mtime, fp, st.st_size))
+        found.sort(key=lambda x: -x[0])
+        return [{"path": str(fp), "name": fp.name, "dir": str(fp.parent), "size": sz, "mtime": int(mt), "kind": self.kind(fp)}
+                for mt, fp, sz in found[:n]]
 
     def serve(self, handler, raw: str) -> None:
         """Stream a file with the right type; honour a single byte range."""

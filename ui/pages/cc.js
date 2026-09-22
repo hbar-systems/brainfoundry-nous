@@ -70,7 +70,15 @@ function Md({ text }) {
           // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
           // inline code rendered as full-width boxes and broke sentences apart).
           pre: ({ node, ...props }) => <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 10px', borderRadius: '6px', margin: '4px 0 8px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />,
-          code: ({ node, ...props }) => <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />,
+          code: ({ node, ...props }) => {
+            // An absolute path on the box opens the Files pane at that file or folder.
+            const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
+            if (s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300) {
+              return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: s.trim().replace(/[.,:;)]+$/, '') }))} title="Open in Files"
+                style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
+            }
+            return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
+          },
           table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
           th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
           td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
@@ -377,6 +385,8 @@ export default function CC() {
 
   // A pane may hand a question to the conversation (the graph's "ask the brain about this").
   useEffect(() => {
+    const onPath = (e) => { if (e.detail) openPane({ route: '/files?path=' + encodeURIComponent(e.detail), title: 'Files' }) }
+    window.addEventListener('cc-open-path', onPath)
     const onMsg = (e) => {
       if (e.origin !== window.location.origin) return
       if (e.data && e.data.type === 'cc-ask' && typeof e.data.text === 'string') {
@@ -385,7 +395,7 @@ export default function CC() {
       }
     }
     window.addEventListener('message', onMsg)
-    return () => window.removeEventListener('message', onMsg)
+    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath) }
   }, [])
 
   async function switchThread(th) {

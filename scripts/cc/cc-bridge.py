@@ -1140,6 +1140,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, FILES.listing(self._query().get("path")))
         elif route == "/files/raw":
             FILES.serve(self, self._query().get("path", ""))
+        elif route.startswith("/files/raw/"):
+            # Path form, so a served html page finds its sibling images and scripts by relative name.
+            from urllib.parse import unquote
+            FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/files/recent":
+            self._send(200, {"recent": FILES.recent(self._query().get("root", "out"))})
         elif route == "/jobs":
             self._send(200, {"jobs": JOBS.list(), "finished": JOBS.take_unseen() if self._query().get("take") == "1" else []})
         elif route.startswith("/jobs/"):

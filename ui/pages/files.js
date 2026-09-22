@@ -10,13 +10,14 @@ const T = { ink: 'var(--text)', dim: 'var(--text-dim, #9a8f82)', faint: 'var(--t
 
 function fmtSize(n) { if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`; return `${(n / 1073741824).toFixed(2)} GB` }
 function fmtWhen(ts) { const d = new Date(ts * 1000); return d.toISOString().slice(0, 16).replace('T', ' ') }
-function raw(p) { return `/cc/files/raw?path=${encodeURIComponent(p)}` }
+function raw(p) { return '/cc/files/raw' + p.split('/').map(encodeURIComponent).join('/') }
 
 export default function Files() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [sel, setSel] = useState(null)         // selected file info {path, kind, size}
   const [text, setText] = useState(null)
+  const [recent, setRecent] = useState([])
   const embedded = typeof window !== 'undefined' && window.self !== window.top
 
   function load(path) {
@@ -34,6 +35,7 @@ export default function Files() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search).get('path')
     load(q || null)
+    fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {})
   }, [])
   useEffect(() => {
     setText(null)
@@ -55,7 +57,8 @@ export default function Files() {
       <div style={{ display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
         <div style={{ width: sel ? '42%' : '100%', minWidth: '280px', borderRight: sel ? `1px solid ${T.line}` : 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
-            <span style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold }}>Files</span>
+            <a onClick={() => { setData(d => ({ ...(d || {}), path: null, entries: [] })); fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {}) }} style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, cursor: 'pointer' }}>Files</a>
+            <a onClick={() => { setData(d => ({ ...(d || {}), path: null, entries: [] })) }} style={{ ...mono, fontSize: '12px', color: data && !data.path ? T.ink : T.dim, cursor: 'pointer', textDecoration: 'underline' }}>newest</a>
             {data && data.roots && data.roots.map(r => (
               <a key={r.path} onClick={() => load(r.path)} style={{ ...mono, fontSize: '12px', color: data.path && data.path.startsWith(r.path) ? T.ink : T.dim, cursor: 'pointer', textDecoration: 'underline' }}>{r.label}</a>
             ))}
@@ -70,7 +73,20 @@ export default function Files() {
           )}
           {error && <p style={{ padding: '16px', color: '#d08a7a', fontSize: '13px' }}>{error}</p>}
           <div style={{ overflowY: 'auto', flex: 1 }}>
-            {data && !data.path && <p style={{ padding: '16px', fontSize: '13px', color: T.dim }}>Pick a place above: out is what the reasoner made, in is what you gave it, work is your repositories, world is the read-only mirror, brain is the brain's own code.</p>}
+            {data && !data.path && (
+              <div>
+                <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.dim, padding: '12px 16px 4px' }}>newest, made by the brain</p>
+                {recent.length === 0 && <p style={{ padding: '4px 16px 12px', fontSize: '13px', color: T.dim }}>Nothing yet. out is what the reasoner made, in is what you gave it, work is your repositories, world is the read-only mirror, brain is the brain's own code.</p>}
+                {recent.map(e => (
+                  <div key={e.path} onClick={() => { setSel({ path: e.path, kind: e.kind, size: e.size, mtime: e.mtime }); load(e.dir) }}
+                    style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', borderBottom: `1px solid ${T.line}` }}>
+                    <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.kind}</span>
+                    <span style={{ fontSize: '14px', color: T.ink, flex: 1, wordBreak: 'break-all' }}>{e.name}<span style={{ ...mono, fontSize: '10px', color: T.faint, marginLeft: '8px' }}>{e.dir.split('/').slice(-2).join('/')}</span></span>
+                    <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {data && data.parent && data.path !== data.parent && (
               <div onClick={() => load(data.parent)} style={{ ...mono, fontSize: '12px', padding: '6px 16px', cursor: 'pointer', color: T.dim }}>..</div>
             )}
@@ -103,7 +119,7 @@ export default function Files() {
               {sel.kind === 'audio' && <audio controls preload="metadata" src={raw(sel.path)} style={{ width: '100%' }} />}
               {sel.kind === 'video' && <video controls preload="metadata" src={raw(sel.path)} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000' }} />}
               {sel.kind === 'image' && <img src={raw(sel.path)} alt={sel.path} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />}
-              {sel.kind === 'pdf' && <iframe src={raw(sel.path)} title={sel.path} style={{ flex: 1, minHeight: '70vh', border: 0 }} />}
+              {(sel.kind === 'pdf' || sel.kind === 'html') && <iframe src={raw(sel.path)} title={sel.path} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: sel.kind === 'html' ? '#fff' : 'transparent' }} />}
               {sel.kind === 'text' && (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large to show here; download it.' : 'reading…'}</p>
                 : <pre style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}
               {sel.kind === 'other' && <p style={{ color: T.dim, fontSize: '13px' }}>No preview for this type. Download it, or ask the brain what it is.</p>}
