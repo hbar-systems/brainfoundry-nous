@@ -617,6 +617,25 @@ def _permit_public(pm) -> dict:
 _lock = threading.Lock()
 _version: str | None = None
 MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
+# The owner's tool packs: an MCP servers file (CC_MCP_CONFIG) naming exactly the servers the
+# reasoner may see, for example the ableton-systems and numa-systems plugins. Strict mode stays
+# on, so the account's own connectors never appear; keys for those servers live in the bridge
+# env and reach them through the reasoner's environment. Added 2026-09-22 (studio session).
+MCP_CONFIG = os.environ.get("CC_MCP_CONFIG", "").strip()
+
+
+def _mcp_config() -> str:
+    """The MCP servers the reasoner may see: the owner's file when set and present, else none."""
+    if MCP_CONFIG and Path(MCP_CONFIG).exists():
+        return MCP_CONFIG
+    return str(MCP_EMPTY)
+
+
+def _mcp_servers() -> list[str]:
+    try:
+        return sorted((json.loads(Path(_mcp_config()).read_text()).get("mcpServers") or {}).keys())
+    except Exception:
+        return []
 
 # Sign-in doors (hardening item 1, ops/legal/claude-code-terms-2026-09-19.md in hbar.world).
 # Anthropic permits an owner to configure their own API key on their own machine, and to
@@ -948,7 +967,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
            # No MCP servers from the user's own Claude Code config: the account's
            # Claude.ai connectors (Gmail, Calendar, Drive) otherwise sit in the tool
            # list unauthorized and the reasoner reports them instead of using One.
-           "--mcp-config", str(MCP_EMPTY), "--strict-mcp-config"]
+           # ... except the servers the owner names in CC_MCP_CONFIG; strict keeps all else out.
+           "--mcp-config", _mcp_config(), "--strict-mcp-config"]
     if WORLD_DIR:
         cmd += ["--add-dir", WORLD_DIR]
     if WORK_DIR and BOX_ENABLED:
@@ -1082,6 +1102,7 @@ class Handler(BaseHTTPRequestHandler):
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
+                             "mcp_servers": _mcp_servers(),
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -1329,7 +1350,7 @@ def main() -> None:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
-    print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'}", flush=True)
+    print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
     httpd.serve_forever()
 
 

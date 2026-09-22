@@ -1605,6 +1605,7 @@ function CCPanel() {
       {row('memory in every turn', h.memory ? `on · ${h.memory_k} chunks` : 'off')}
       {row('workshop mirror', h.workshop || 'none')}
       {row('hands', h.hands ? `${h.hands} · ${h.writes ? 'writes need your Send' : 'read only'}` : 'none')}
+      {row('tool packs (MCP servers)', h.mcp_servers && h.mcp_servers.length ? h.mcp_servers.join(', ') : 'none')}
       {row('write gate', h.gate ? `${h.gate} · ${h.auto_count || 0} action${(h.auto_count || 0) === 1 ? '' : 's'} allowed without asking` : 'off')}
       {row('subscription sign-in in the page', h.signin_proxy ? 'enabled (self-operated brain)' : 'off · via the terminal door')}
       {perm && Array.isArray(perm.auto) && perm.auto.length > 0 && row('allowed without asking', perm.auto.map(a => `${a.platform} · ${a.method || 'POST'} · ${a.title || a.action_id}`).join(' ; '))}

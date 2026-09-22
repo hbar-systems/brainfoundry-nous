@@ -121,6 +121,10 @@ Jobs: a command that may run longer than a few minutes is started with `cc-job r
 
 Attachments: the attach button, or drop files on the box where you type. They upload to ~/in/<date>/ on your server and the message names their paths; the reasoner reads them from there. Up to 50 MB per upload.
 
+## Tool packs (MCP servers)
+
+The reasoner sees no MCP servers by default, not even your own account's connectors: the bridge starts it in strict mode with an empty server list. To attach a tool pack, for example the ableton-systems or numa-systems plugin installed for the bridge user, write an MCP servers file and name it in the bridge env as `CC_MCP_CONFIG=/home/cc/.cc-bridge/mcp.json`; restart the bridge. Only the servers in that file appear; strict mode stays on. Keys those servers need go in `~/.cc-bridge/env` (the owner types them on the box, never in a chat) and reach the servers through the reasoner's environment. Free tools you list in `CC_TOOLS` run without a card; anything else, including paid generation, raises a card every time. Settings shows which packs are attached. Added 2026-09-22.
+
 ## Memory follows the world
 
 If something on the box proposes documents to memory on its own (on hbar: a reconciler that watches the read-only mirror of the owner's repositories and proposes new files every half hour), the page shows "n documents wait for your approval" and opens Knowledge, where you approve or reject each one. The reasoner never approves. What memory holds stays a decision of the owner.

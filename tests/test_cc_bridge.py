@@ -109,3 +109,13 @@ p({"type": "result", "result": "hello", "session_id": "s1", "is_error": False, "
     assert seen[3][1]["brief"] == "read: /x/plan.md"
     assert (reply, sid, err) == ("hello", "s1", False)
     assert m.META["model"] == "claude-x" and m.META["in"] == 5 and m.META["cached"] == 100 and m.META["out"] == 7 and m.META["steps"] == 2
+
+
+def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._mcp_config().endswith("mcp-empty.json") and m._mcp_servers() == []
+    f = tmp_path / "mcp.json"; f.write_text('{"mcpServers": {"b-tools": {"command": "/x"}, "a-tools": {"command": "/y"}}}')
+    monkeypatch.setattr(m, "MCP_CONFIG", str(f))
+    assert m._mcp_config() == str(f) and m._mcp_servers() == ["a-tools", "b-tools"]
+    monkeypatch.setattr(m, "MCP_CONFIG", str(tmp_path / "missing.json"))
+    assert m._mcp_config().endswith("mcp-empty.json")
