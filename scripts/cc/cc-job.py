@@ -4,7 +4,8 @@
 Installed as ~/.local/bin/cc-job for the bridge user. Standard library only. The bridge
 passes CC_PORT, CC_BASE and CC_ASK_TOKEN in the reasoner's environment.
 
-    cc-job run [-C <dir>] [-t "<title>"] -- <command ...>   start; prints the job id
+    cc-job run [-C <dir>] [-t "<title>"] -- '<command>'   start; prints the job id
+                                    (one quoted string keeps &&, |, > and quotes intact)
     cc-job status <id>        state, exit code, last lines of the log
     cc-job tail <id> [n]      last n bytes of the log (default 4000)
     cc-job list               recent jobs
@@ -13,6 +14,7 @@ Jobs never run sudo. The person sees every job on the CC page and can ask about 
 """
 import json
 import os
+import shlex
 import sys
 import urllib.error
 import urllib.request
@@ -52,7 +54,9 @@ def main(argv: list[str]) -> int:
                 rest = rest[1:]
             if not rest:
                 print("cc-job run -- <command>"); return 2
-            d = _call("POST", "/jobs/start", {"command": " ".join(rest), "cwd": cwd, "title": title})
+            # Keep the caller's words exactly (quotes included): one argument stays one argument.
+            command = rest[0] if len(rest) == 1 else shlex.join(rest)
+            d = _call("POST", "/jobs/start", {"command": command, "cwd": cwd, "title": title})
             if d.get("error"):
                 print("refused:", d["error"]); return 1
             print(f"started {d['id']} (log {d['log']}); check with: cc-job status {d['id']}"); return 0

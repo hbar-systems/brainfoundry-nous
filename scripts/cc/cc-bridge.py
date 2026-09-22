@@ -290,7 +290,7 @@ SYSTEM += (
 if BOX_ENABLED:
     SYSTEM += (
         " Long work: a command that may run longer than a few minutes (renders, separations, installs, test suites) "
-        "is started with `cc-job run -C <dir> -t \"<title>\" -- <command>`; it runs on after your turn ends, the "
+        "is started with `cc-job run -C <dir> -t \"<title>\" -- '<command>'` (the command as ONE single-quoted string, so && | > and quotes survive); it runs on after your turn ends, the "
         "person sees it on the page, and you check it later with `cc-job status <id>`. Say the job id. Never wrap "
         "sudo in a job."
     )
