@@ -347,7 +347,12 @@ sudo systemctl enable claude-tab cc-bridge cc-bridge-watch.path cc-install-watch
 sudo systemctl restart claude-tab cc-bridge
 sudo systemctl restart cc-bridge-watch.path cc-install-watch.path
 sleep 2
-echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)"
+# A path unit restarted from inside the very script it watches came up inactive once
+# (observed 2026-09-22); a plain start afterwards is enough.
+for u in cc-bridge-watch.path cc-install-watch.path; do
+    systemctl is-active --quiet "$u" || sudo systemctl start "$u"
+done
+echo "claude-tab: $(systemctl is-active claude-tab)   cc-bridge: $(systemctl is-active cc-bridge)   watchers: $(systemctl is-active cc-bridge-watch.path) $(systemctl is-active cc-install-watch.path)   work-pull: $(systemctl is-active cc-work-pull.timer 2>/dev/null || echo off)"
 echo "terminal  /claude/ -> HTTP $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$TERM_PORT/claude/)"
 echo "bridge    /cc/health -> $(curl -s http://127.0.0.1:$CC_PORT/cc/health | cut -c1-200)"
 HOST=$(grep -oE "^console\.[a-z0-9.-]+" "$CADDYFILE" | head -1)
