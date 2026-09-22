@@ -4985,8 +4985,11 @@ def memory_graph(limit: int = 300, k: int = 3, api_key: str = Depends(get_api_ke
             S = M @ M.T                              # cosine similarities
             np.fill_diagonal(S, -1.0)
             seen = set()
+            kk = max(0, min(int(k), len(nodes) - 1))   # a brain with two documents has one neighbour (500 on e2e, 2026-09-22)
             for i in range(len(nodes)):
-                idx = np.argpartition(-S[i], k)[:k]
+                if kk == 0:
+                    break
+                idx = np.argpartition(-S[i], kk - 1)[:kk] if kk < len(nodes) else np.arange(len(nodes))
                 for j in idx:
                     j = int(j)
                     if S[i, j] <= 0:

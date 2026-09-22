@@ -58,6 +58,10 @@ function Btn({ children, onClick, disabled, primary, small, title }) {
 function Md({ text }) {
   // The reasoner answers in markdown. Render it, but keep it plain: no raw HTML,
   // links open in a new tab, code stays monospace.
+  // The last absolute folder named in the message is the base for bare filenames in it,
+  // so "index.html" next to "/home/cc/out/.../" opens as that file (2026-09-22).
+  const dirs = (text || '').match(/\/(?:home|opt|srv|var|tmp)\/[^\s`'")]+\//g) || []
+  const base = dirs.length ? dirs[dirs.length - 1].replace(/\/$/, '') : null
   return (
     <div className="cc-md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
@@ -73,8 +77,11 @@ function Md({ text }) {
           code: ({ node, ...props }) => {
             // An absolute path on the box opens the Files pane at that file or folder.
             const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
-            if (s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300) {
-              return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: s.trim().replace(/[.,:;)]+$/, '') }))} title="Open in Files"
+            const isAbs = s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300
+            const isFile = s && base && /^[\w][\w. -]{0,120}\.[A-Za-z0-9]{1,5}$/.test(s.trim())
+            if (isAbs || isFile) {
+              const target = isAbs ? s.trim().replace(/[.,:;)]+$/, '') : `${base}/${s.trim()}`
+              return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: target }))} title={`Open ${target}`}
                 style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
             }
             return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
@@ -314,6 +321,8 @@ export default function CC() {
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])            // attachments chosen for the next message
   const [jobs, setJobs] = useState([])              // recent jobs on the box (cc-job)
+  const [latest, setLatest] = useState([])          // the newest files the brain made, shown above the composer
+  const loadLatest = () => fetch('/cc/files/recent', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setLatest((d.recent || []).slice(0, 4)) }).catch(() => {})
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [showTools, setShowTools] = useState(false)
@@ -359,7 +368,7 @@ export default function CC() {
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(h => { setHealth(h); if (h && h.brain_session_id) loadHistory(h.brain_session_id) })
       .catch(() => setHealth(false))
-    loadPending(); loadFirstRun(); loadThreads()
+    loadPending(); loadFirstRun(); loadThreads(); loadLatest()
     try { const q = new URLSearchParams(window.location.search).get('ask'); if (q) setDraft(q) } catch {}
   }, [])
   const openPane = (p) => { if (!p) return; if (typeof p === 'string') p = { route: p, title: p.replace(/^\//, '').split('?')[0] || 'pane' }; if (p.route) setPane(p) }
@@ -534,6 +543,7 @@ export default function CC() {
         setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
       }
       if (data.pane) openPane(data.pane)
+      loadLatest()
       if (turns.length === 0) loadThreads()
     } catch (e) {
       setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
@@ -685,6 +695,15 @@ export default function CC() {
             ))}
             <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
           </div>
+        )}
+        {latest.length > 0 && (
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <span>latest:</span>
+            {latest.map(f => (
+              <a key={f.path} onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(f.path), title: 'Files' })} title={f.path}
+                style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</a>
+            ))}
+          </p>
         )}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}

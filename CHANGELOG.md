@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- fix(graph): a brain with fewer documents than the neighbour count returned 500
+  ("kth out of bounds", seen on e2e with two documents); k is capped at n-1.
+- cc: a "latest:" strip above the composer names the newest files the brain made,
+  each opening the Files pane; bare filenames in a reply open as files of the folder
+  the reply names.
 - fix(cc installer): on a brain without a One key the env file has no CC_TOOLS line and
   step 4c aborted the whole run under set -e (found on e2e: the bridge stayed on the
   sudo user); the list is now seeded with the unit's default. harden-user.sh no longer
