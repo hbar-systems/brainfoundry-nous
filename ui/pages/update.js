@@ -29,6 +29,45 @@ function shortSha(sha) {
   return sha.slice(0, 7)
 }
 
+function AutoUpdateSwitch() {
+  // Keep this brain updated: once a day, at the chosen hour (UTC), the same update the
+  // button runs, when the template moved. For brains nobody wants to babysit (2026-09-23).
+  const [cfg, setCfg] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => fetch('/api/bf/settings/auto-update').then(r => (r.ok ? r.json() : null)).then(setCfg).catch(() => setCfg(null))
+  useEffect(() => { load() }, [])
+  const save = async (patch) => {
+    setBusy(true)
+    try {
+      const r = await fetch('/api/bf/settings/auto-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok) setCfg(c => ({ ...(c || {}), ...d, err: null })); else setCfg(c => ({ ...(c || {}), err: d.detail || 'could not save' }))
+    } finally { setBusy(false) }
+  }
+  if (!cfg) return null
+  const on = !!cfg.enabled
+  return (
+    <div style={{ marginBottom: '18px', padding: '12px 14px', border: `1px solid ${COLORS.border}`, borderRadius: '8px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: COLORS.muted }}>
+      <button onClick={() => save({ enabled: !on })} disabled={busy || (!on && !!cfg.preflight_error)}
+        title={cfg.preflight_error || (on ? 'Turn automatic updates off' : 'Turn automatic updates on')}
+        style={{ padding: '6px 12px', borderRadius: '6px', border: `1px solid ${on ? COLORS.accent : COLORS.border}`, backgroundColor: on ? COLORS.accent : 'transparent', color: on ? '#0e0c0b' : COLORS.muted, cursor: 'pointer', fontSize: '13px' }}>
+        {on ? 'Keeping this brain updated' : 'Keep this brain updated'}
+      </button>
+      <span>
+        once a day at
+        <select value={cfg.hour} onChange={e => save({ hour: Number(e.target.value) })} disabled={busy}
+          style={{ margin: '0 6px', backgroundColor: 'transparent', color: COLORS.text, border: `1px solid ${COLORS.border}`, borderRadius: '4px', padding: '2px 4px' }}>
+          {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+        </select>
+        UTC, when the template moved. Same steps as the button, including the backup.
+      </span>
+      {cfg.last_run && <span style={{ color: COLORS.mutedDim }}>last: {cfg.last_run.slice(0, 16).replace('T', ' ')} {cfg.last_result || ''}</span>}
+      {cfg.preflight_error && !on && <span style={{ color: COLORS.mutedDim }}>{cfg.preflight_error}</span>}
+      {cfg.err && <span style={{ color: COLORS.warn ? COLORS.warn.text : '#d08a7a' }}>{cfg.err}</span>}
+    </div>
+  )
+}
+
 export default function Update() {
   const [phase, setPhase] = useState('idle')
   const [version, setVersion] = useState(null)
@@ -333,6 +372,7 @@ export default function Update() {
           </div>
         )}
 
+        <AutoUpdateSwitch />
         {/* Action button */}
         <div style={{ marginBottom: '24px' }}>
           <button

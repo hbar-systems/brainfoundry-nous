@@ -12,6 +12,8 @@ import os
 import re
 import sys
 import socket
+import subprocess
+import threading
 from typing import List, Optional, Annotated, Dict, Any, Union
 from datetime import datetime
 import uuid
@@ -729,6 +731,78 @@ def _web_search_status() -> dict:
         "budget": settings_store.get_web_search_budget(),
         "usage_this_month": _tool_budget.usage("web_search"),
     }
+
+
+class SetAutoUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    hour: Optional[int] = None
+
+
+@app.get("/settings/auto-update")
+def settings_get_auto_update(api_key: str = Depends(get_api_key)):
+    return {**settings_store.get_auto_update(), "preflight_error": _update_preflight()}
+
+
+@app.post("/settings/auto-update")
+def settings_set_auto_update(req: SetAutoUpdateRequest, api_key: str = Depends(get_api_key)):
+    if req.enabled and _update_preflight():
+        raise HTTPException(status_code=503, detail=_update_preflight())
+    try:
+        settings_store.set_auto_update(enabled=req.enabled, hour=req.hour)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, **settings_store.get_auto_update()}
+
+
+_auto_update_due = settings_store.auto_update_due
+
+
+def _commits_behind() -> int:
+    try:
+        subprocess.run(["git", "fetch", "origin", "--quiet"], cwd=BRAIN_HOST_DIR, timeout=20, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:  # the fetch ran as root; give .git back to the host user, as version-info does
+            from api.git_ownership import chown_git_to_host_owner
+            chown_git_to_host_owner()
+        except Exception:
+            pass
+        r = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/main"], cwd=BRAIN_HOST_DIR,
+                           capture_output=True, text=True, timeout=10)
+        return int(r.stdout.strip()) if r.returncode == 0 else 0
+    except Exception:
+        return 0
+
+
+def _auto_update_loop() -> None:
+    """Every ten minutes: if the daily update is due, run scripts/update_brain.sh the way the
+    Update tab does. The api container is replaced mid-run when its image changed; the
+    record of the run is written before the script starts, so the loop in the new container
+    does not run it twice."""
+    time.sleep(120)
+    while True:
+        try:
+            cfg = settings_store.get_auto_update()
+            if cfg.get("enabled") and not _update_preflight():
+                now = datetime.utcnow()
+                if _auto_update_due(cfg, now, _commits_behind()):
+                    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    settings_store.set_auto_update(last_run=stamp, last_result="started")
+                    print(f"[auto-update] {stamp} running update_brain.sh", flush=True)
+                    script = os.path.join(BRAIN_HOST_DIR, "scripts", "update_brain.sh")
+                    log_path = "/app/runtime/auto-update.log"
+                    with open(log_path, "a") as lf:
+                        lf.write(f"\n==> auto-update {stamp}\n"); lf.flush()
+                        proc = subprocess.run(["bash", script], cwd=BRAIN_HOST_DIR, stdout=lf, stderr=subprocess.STDOUT,
+                                              env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR}, timeout=1800)
+                    settings_store.set_auto_update(last_result=f"rc={proc.returncode}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[auto-update] loop error: {type(e).__name__}: {e}", flush=True)
+        time.sleep(600)
+
+
+@app.on_event("startup")
+def _start_auto_update_loop() -> None:
+    threading.Thread(target=_auto_update_loop, name="auto-update", daemon=True).start()
 
 
 @app.get("/settings/web-search")

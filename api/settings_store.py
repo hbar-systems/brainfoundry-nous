@@ -23,6 +23,7 @@ import hashlib
 import os
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -531,6 +532,44 @@ def get_onboarding_corpus_threshold() -> int:
 WEB_SEARCH_BUDGET_DEFAULT = 1000
 WEB_SEARCH_BUDGET_MIN = 0
 WEB_SEARCH_BUDGET_MAX = 100000
+
+
+def get_auto_update() -> Dict[str, Any]:
+    """Keep this brain updated: run the same update the Update tab runs, once a day at
+    `hour` (UTC), when origin/main is ahead. Off by default. Added 2026-09-23."""
+    d = _load().get("auto_update") or {}
+    return {"enabled": bool(d.get("enabled", False)), "hour": int(d.get("hour", 4)),
+            "last_run": d.get("last_run"), "last_result": d.get("last_result")}
+
+
+def set_auto_update(enabled: Optional[bool] = None, hour: Optional[int] = None,
+                    last_run: Optional[str] = None, last_result: Optional[str] = None) -> None:
+    with _LOCK:
+        data = _load()
+        d = dict(data.get("auto_update") or {})
+        if enabled is not None:
+            d["enabled"] = bool(enabled)
+        if hour is not None:
+            if not 0 <= int(hour) <= 23:
+                raise ValueError("hour must be 0 to 23")
+            d["hour"] = int(hour)
+        if last_run is not None:
+            d["last_run"] = last_run
+        if last_result is not None:
+            d["last_result"] = last_result
+        data["auto_update"] = d
+        _save(data)
+
+
+def auto_update_due(cfg: Dict[str, Any], now_utc: datetime, behind: int) -> bool:
+    """Pure rule for the daily auto-update, unit-tested: enabled, the hour has come, not yet
+    run today, and there is something to pull."""
+    if not cfg.get("enabled") or behind <= 0:
+        return False
+    if now_utc.hour < int(cfg.get("hour", 4)):
+        return False
+    last = cfg.get("last_run") or ""
+    return not last.startswith(now_utc.strftime("%Y-%m-%d"))
 
 
 def get_web_search_enabled() -> bool:

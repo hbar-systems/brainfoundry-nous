@@ -143,6 +143,12 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 docker compose up -d
 ```
 
+With the mounts present you can also let the brain update itself: the switch "Keep this
+brain updated" on the Update page runs the same script once a day at the hour you pick
+(UTC), only when origin/main moved, with the pre-update backup the script always takes.
+The last run and its result show next to the switch; the log is `/app/runtime/auto-update.log`
+inside the api container. Off by default. (Added 2026-09-23.)
+
 Until those mounts are present, `POST /admin/update` returns a structured `503`
 (`preflight_error` from `_update_preflight()`) explaining what's missing, and the
 console degrades gracefully — SSH-driven updates keep working.

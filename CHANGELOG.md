@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- update: "Keep this brain updated", a switch on the Update page. Once a day at a chosen
+  hour (UTC), when origin/main moved, the api runs scripts/update_brain.sh the way the
+  tab does (backup included), records the run before starting so the replaced container
+  does not repeat it, and shows the last result. `GET/POST /settings/auto-update`,
+  `auto_update` in the settings sidecar, log at /app/runtime/auto-update.log. Off by default.
 - fix(knowledge): embedding progress moves. Batches of 8 chunks instead of 32; a
   document under 32 chunks used to show "0/N" until it finished.
 - cc: every judgment is appended to ~/.cc-bridge/judge.jsonl (time, tool, summary, the
