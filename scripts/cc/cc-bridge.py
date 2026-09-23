@@ -588,8 +588,17 @@ def _judge(tool: str, inp: dict, summary: str) -> dict | None:
         print("judge answered in an unexpected shape", flush=True)
         return None
     ok = safe >= JUDGE_SAFE and intent >= JUDGE_INTENT and risk <= JUDGE_RISK
-    return {"safe": round(safe, 3), "intent": round(intent, 3), "risk": round(risk, 2), "ok": ok,
-            "tokens": (d.get("usage") or {}).get("input_tokens")}
+    verdict = {"safe": round(safe, 3), "intent": round(intent, 3), "risk": round(risk, 2), "ok": ok,
+               "tokens": (d.get("usage") or {}).get("input_tokens")}
+    # One line per judgment, for tuning the thresholds on real numbers: the summary is the
+    # command or file name, never file contents.
+    try:
+        with open(STATE_DIR / "judge.jsonl", "a") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": tool,
+                                "summary": summary[:200], **verdict}) + "\n")
+    except OSError:
+        pass
+    return verdict
 
 
 def _posture_current() -> str:

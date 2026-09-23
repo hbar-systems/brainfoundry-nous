@@ -48,6 +48,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: every judgment is appended to ~/.cc-bridge/judge.jsonl (time, tool, summary, the
+  three numbers, the verdict), so thresholds can be tuned on real numbers.
 - cc: Guide in the drawer and as a pane (`/guide`): docs/CC.md rendered from the brain's
   checkout (`GET /cc/guide`) and a seven-step tutorial that checks itself against the
   box (health carries `tutorial` counts: turns, permits, files in and out, jobs). A
