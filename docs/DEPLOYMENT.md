@@ -143,6 +143,13 @@ cp docker-compose.override.yml.example docker-compose.override.yml
 docker compose up -d
 ```
 
+**Reasoner spoke.** Set `OLLAMA_SPOKE_URL` (in `docker-compose.override.yml` under the api's
+environment, e.g. `http://100.x.y.z:11434`, a machine of yours on your tailnet running Ollama)
+and local inference goes there while it answers; when it does not (the laptop sleeps) the
+brain uses its own Ollama at `OLLAMA_URL` again, and comes back when the spoke does. The
+probe is one `GET /api/tags` every 30 seconds at most; `GET /health` shows `box`, `spoke`
+and `spoke_up`. The spoke must serve the model the brain is set to. (Added 2026-09-23.)
+
 With the mounts present you can also let the brain update itself: the switch "Keep this
 brain updated" on the Update page runs the same script once a day at the hour you pick
 (UTC), only when origin/main moved, with the pre-update backup the script always takes.

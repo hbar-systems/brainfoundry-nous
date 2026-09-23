@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- reasoner spoke: `OLLAMA_SPOKE_URL`, a machine of the owner's on their tailnet running
+  Ollama. Local inference goes there while it answers and falls back to the box's own
+  Ollama (`OLLAMA_URL`) when it does not, probed at most every 30 s; /health reports
+  box, spoke and spoke_up. tests/test_reasoner_spoke.py.
 - cc: in the judged posture a One write (connected-app action) is judged against the
   request before the card: "on request" and "risk" on the card; a remembered ("don't ask
   again") write the judge does not see in the request is held and asks, with the reason.

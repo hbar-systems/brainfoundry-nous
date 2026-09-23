@@ -1810,7 +1810,7 @@ async def _prewarm_ollama() -> None:
                 or os.getenv("DEFAULT_MODEL")
                 or "llama3.2:3b"
             )
-            ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
+            ollama_url = _providers.ollama_url()
             async with httpx.AsyncClient(timeout=600.0) as http:
                 tags = await http.get(f"{ollama_url}/api/tags")
                 if tags.status_code != 200:
@@ -2227,14 +2227,18 @@ def health_check():
         db_status = {"status": "error", "detail": "DATABASE_URL not configured"}
     
     # Test Ollama connection with detailed status
+    _active = _providers.ollama_url()
     ollama_status = {
         "status": "unknown",
-        "endpoint": OLLAMA_URL,
+        "endpoint": _active,
+        "box": OLLAMA_URL,
+        "spoke": _providers.OLLAMA_SPOKE_URL or None,
+        "spoke_up": _providers.spoke_up() if _providers.OLLAMA_SPOKE_URL else None,
         "models": 0,
         "error": None
     }
     try:
-        response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        response = requests.get(f"{_active}/api/tags", timeout=3)
         if response.status_code == 200:
             models = response.json().get("models", [])
             ollama_status = {
@@ -5360,7 +5364,7 @@ async def brain_command(
                 command=normalized_command,
                 payload=_payload,
                 client_id=request.client_id,
-                ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
+                ollama_url=_providers.ollama_url(),
                 model=os.getenv('DEFAULT_MODEL', ''),
             )
             if gate_proposal_id:
@@ -6063,7 +6067,7 @@ async def brain_command(
                             command=normalized_command,
                             payload=_payload,
                             client_id=request.client_id,
-                            ollama_url=os.getenv('OLLAMA_URL', 'http://ollama:11434'),
+                            ollama_url=_providers.ollama_url(),
                             model=os.getenv('OLLAMA_MODEL', 'llama3.2:3b'),
                         )
                         if gate_proposal_id:

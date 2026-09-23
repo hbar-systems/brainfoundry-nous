@@ -24,6 +24,42 @@ settings_store.hydrate_env()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 
+# The reasoner spoke (2026-09-23): a machine of the owner's on their tailnet running Ollama
+# with real compute (a laptop with a GPU, a desktop). When OLLAMA_SPOKE_URL is set, local
+# inference goes there while it answers, and back to the box's own Ollama (OLLAMA_URL) when
+# it does not: a laptop sleeps, and the local path must not break with it. The probe is one
+# GET /api/tags with a short timeout, remembered for OLLAMA_SPOKE_PROBE_SECONDS.
+OLLAMA_SPOKE_URL = os.getenv("OLLAMA_SPOKE_URL", "").strip().rstrip("/")
+OLLAMA_SPOKE_PROBE_SECONDS = float(os.getenv("OLLAMA_SPOKE_PROBE_SECONDS", "30"))
+_spoke_state = {"at": 0.0, "up": False}
+
+
+def spoke_up(now: float | None = None, probe=None) -> bool:
+    """Is the spoke answering? Cached; `probe` is injectable for tests."""
+    if not OLLAMA_SPOKE_URL:
+        return False
+    import time as _t
+    now = _t.time() if now is None else now
+    if now - _spoke_state["at"] < OLLAMA_SPOKE_PROBE_SECONDS:
+        return _spoke_state["up"]
+    if probe is None:
+        def probe():
+            import requests as _req
+            return _req.get(f"{OLLAMA_SPOKE_URL}/api/tags", timeout=2).ok
+    try:
+        up = bool(probe())
+    except Exception:
+        up = False
+    if up != _spoke_state["up"]:
+        print(f"[spoke] {OLLAMA_SPOKE_URL} {'answers, local inference goes there' if up else 'not answering, back to ' + OLLAMA_URL}", flush=True)
+    _spoke_state.update(at=now, up=up)
+    return up
+
+
+def ollama_url() -> str:
+    """Where local inference goes right now: the spoke while it answers, else the box's own."""
+    return OLLAMA_SPOKE_URL if spoke_up() else OLLAMA_URL
+
 # ── Ollama generation budget (added 2026-06-08) ─────────────────────────────
 # Ollama defaults num_ctx to 4096 and reserves nothing for output. With RAG, the
 # prompt filled the whole window and generation was starved (empty output) or
@@ -211,7 +247,7 @@ def get_available_models() -> list:
 
     try:
         import requests as _req
-        r = _req.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        r = _req.get(f"{ollama_url()}/api/tags", timeout=3)
         if r.ok:
             for m in r.json().get("models", []):
                 models.append({"name": m["name"], "provider": "ollama", "size": m.get("size")})
@@ -236,7 +272,7 @@ def _local_ollama_models() -> set:
         return _ollama_tags_cache["tags"]
     try:
         import requests as _req
-        r = _req.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        r = _req.get(f"{ollama_url()}/api/tags", timeout=3)
         if r.ok:
             tags = {m["name"] for m in r.json().get("models", []) if m.get("name")}
             _ollama_tags_cache["at"] = now
@@ -491,7 +527,7 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
                        "stream": False, "options": _ollama_options()}
             if system_msg:
                 payload["system"] = system_msg
-            resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            resp = await http.post(f"{ollama_url()}/api/chat", json=payload)
             resp.raise_for_status()
             data = resp.json()
             text = data["message"]["content"]
@@ -639,7 +675,7 @@ async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rou
         for _ in range(max_rounds):
             payload = {"model": model, "messages": conv, "tools": tools,
                        "stream": False, "options": _ollama_options(num_predict=max_tokens)}
-            resp = await http.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            resp = await http.post(f"{ollama_url()}/api/chat", json=payload)
             resp.raise_for_status()
             j = resp.json() or {}
             if on_usage:
@@ -760,7 +796,7 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
             if system_msg:
                 payload["system"] = system_msg
             _last: dict = {}
-            async with http.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
+            async with http.stream("POST", f"{ollama_url()}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if line:
