@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: Guide in the drawer and as a pane (`/guide`): docs/CC.md rendered from the brain's
+  checkout (`GET /cc/guide`) and a seven-step tutorial that checks itself against the
+  box (health carries `tutorial` counts: turns, permits, files in and out, jobs). A
+  "New here?" line on an empty conversation; the reasoner opens the guide when asked
+  how things work.
 - fix(knowledge): pending-proposal rows keep their buttons on the right; a long
   document name wraps instead of pushing the buttons under it.
 - fix(appearance): a built-in tab added after the owner saved a tab order (Graph,

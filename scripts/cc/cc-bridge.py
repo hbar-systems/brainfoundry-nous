@@ -210,7 +210,7 @@ PANE_ROUTES = {
     "/update": "Update", "/federation": "Federation", "/tasks": "Tasks", "/research": "Research",
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
-    "/terminal": "Terminal", "/files": "Files",
+    "/terminal": "Terminal", "/files": "Files", "/guide": "Guide",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -233,6 +233,8 @@ def _extract_pane(reply: str):
 
 
 SYSTEM += (
+    " When the person asks how this brain or this chat works, what it can do, or how to set something up, open "
+    "the guide beside the chat with <pane>/guide</pane> and answer briefly; the guide has the full text."
     " Surfaces: when showing a screen would genuinely help the person (their documents, an app, "
     "settings, the update view, or a map of what you remember: /graph when they ask to see their mind or "
     "memory), end your answer with one <pane>/route</pane> block using exactly one "
@@ -637,6 +639,45 @@ def _ingest_summary() -> dict | None:
         return None
     pending = live if live is not None else int((d or {}).get("pending") or 0)
     return {"pending": pending, "waiting": int((d or {}).get("waiting") or 0), "last_run": (d or {}).get("last_run")}
+
+
+# ---- the guide and the tutorial counts (2026-09-23) ----
+GUIDE_FILE = Path(CWD) / "docs" / "CC.md"
+
+
+def _guide_markdown() -> str | None:
+    try:
+        return GUIDE_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _count_lines(p: Path) -> int:
+    try:
+        with open(p, "rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def _count_files(root: Path, skip: tuple = ()) -> int:
+    n = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in skip]
+            n += sum(1 for f in filenames if not f.startswith("."))
+            if n > 999:
+                break
+    except OSError:
+        pass
+    return n
+
+
+def _tutorial_counts() -> dict:
+    """What the box has seen happen, for the self-checking tutorial. Counts only, no content."""
+    return {"turns": _count_lines(TURNS_LOG), "permits": _count_lines(STATE_DIR / "permitd-audit.jsonl"),
+            "in_files": _count_files(IN_DIR), "out_files": _count_files(OUT_DIR, skip=("jobs",)),
+            "jobs": len(JOBS.list())}
 
 
 # ---- the brain's own record of CC threads ----
@@ -1204,6 +1245,7 @@ class Handler(BaseHTTPRequestHandler):
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
+                             "tutorial": _tutorial_counts(),
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
@@ -1224,6 +1266,9 @@ class Handler(BaseHTTPRequestHandler):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/guide":
+            md = _guide_markdown()
+            self._send(200 if md else 404, {"markdown": md, "path": str(GUIDE_FILE)})
         elif route == "/files/recent":
             self._send(200, {"recent": FILES.recent(self._query().get("root", "out"))})
         elif route == "/jobs":

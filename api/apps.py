@@ -97,10 +97,11 @@ if CC_ENABLED:
     # laptop terminal for their box (2026-09-22). Not shown where CC is off.
     BUILTIN_TABS.append({"id": "_terminal", "label": "Terminal", "route": "/terminal", "order": 75, "builtin": True})
     BUILTIN_TABS.append({"id": "_files", "label": "Files", "route": "/files", "order": 32, "builtin": True})
+    BUILTIN_TABS.append({"id": "_guide", "label": "Guide", "route": "/guide", "order": 79, "builtin": True})
 
 # Routes that built-ins or the API itself occupy. Installed apps cannot use
 # any of these for their tab.route. /cc and /dashboard stay reserved either way.
-RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc", "/dashboard", "/", "/terminal", "/claude", "/files"}
+RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc", "/dashboard", "/", "/terminal", "/claude", "/files", "/guide"}
 
 
 # ---------- pydantic models ----------

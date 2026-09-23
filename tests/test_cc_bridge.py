@@ -119,3 +119,15 @@ def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
     assert m._mcp_config() == str(f) and m._mcp_servers() == ["a-tools", "b-tools"]
     monkeypatch.setattr(m, "MCP_CONFIG", str(tmp_path / "missing.json"))
     assert m._mcp_config().endswith("mcp-empty.json")
+
+
+def test_guide_and_tutorial_counts(monkeypatch, tmp_path):
+    (tmp_path / "brain" / "docs").mkdir(parents=True)
+    (tmp_path / "brain" / "docs" / "CC.md").write_text("# CC\n\nhello")
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._guide_markdown().startswith("# CC")
+    c = m._tutorial_counts()
+    assert set(c) == {"turns", "permits", "in_files", "out_files", "jobs"} and all(v == 0 for v in c.values())
+    (tmp_path / "out" / "a.txt").write_text("x"); (tmp_path / "in" / "b.txt").write_text("y")
+    c = m._tutorial_counts()
+    assert c["out_files"] == 1 and c["in_files"] == 1

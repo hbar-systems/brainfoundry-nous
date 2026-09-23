@@ -37,6 +37,7 @@ const SLASH = [
   { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks), /posture auto (the vendor classifier decides), /posture judged (TypeSafe scores each action; harmless runs, the rest ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
+  { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
@@ -476,6 +477,7 @@ export default function CC() {
       loadHealth(); return true
     }
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
+    if (cmd === 'guide') { openPane({ route: '/guide' + (arg ? '?tab=' + encodeURIComponent(arg) : ''), title: 'Guide' }); return true }
     if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
     if (cmd === 'jobs') {
       const running = jobs.filter(j => j.ended === null), done = jobs.filter(j => j.ended !== null).slice(0, 5)
@@ -483,7 +485,7 @@ export default function CC() {
       return true
     }
     if (cmd === 'help' || cmd === '') {
-      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto (how much your own box asks), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /files, /jobs, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
     }
     return false
@@ -624,6 +626,11 @@ export default function CC() {
         </div>
 
         {firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
+        {loggedIn && turns.length === 0 && (
+          <p style={{ margin: '0 0 16px 0', color: C.faint, fontSize: '13px' }}>
+            New here? <a onClick={() => openPane({ route: '/guide', title: 'Guide' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>The guide</a> explains what this brain can do, with a seven-step tutorial that checks itself. Or type /help.
+          </p>
+        )}
 
         {health === false && (
           <div style={{ padding: '12px 16px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '10px', marginBottom: '14px' }}>
