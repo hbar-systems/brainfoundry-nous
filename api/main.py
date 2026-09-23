@@ -3931,7 +3931,7 @@ def _stream_ingest_path_b(
         yield sse("error", {"detail": "no chunks produced from text"})
         return
 
-    BATCH = 32
+    BATCH = 8   # was 32: most documents have fewer chunks, so the counter never moved before "done" (2026-09-23)
     stored_chunks = 0
     t_total = time.time()
     try:
