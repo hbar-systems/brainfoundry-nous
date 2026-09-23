@@ -131,3 +131,72 @@ def test_guide_and_tutorial_counts(monkeypatch, tmp_path):
     (tmp_path / "out" / "a.txt").write_text("x"); (tmp_path / "in" / "b.txt").write_text("y")
     c = m._tutorial_counts()
     assert c["out_files"] == 1 and c["in_files"] == 1
+
+
+class _Permit:
+    def __init__(self):
+        self.permit = {"id": "p1", "ttl_seconds": 900}
+        self.error = None
+        self.reason = None
+
+
+class _FakeGate:
+    def __init__(self):
+        self.approved = []
+
+    def call(self, tool, args, permit_id=None):
+        return _Permit()
+
+    def get(self, pid):
+        return None
+
+
+def _one_bridge(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    monkeypatch.setattr(m, "GATE", _FakeGate())
+    monkeypatch.setattr(m, "ONE_ENABLED", True)
+    monkeypatch.setattr(m, "_auto_has", lambda p: True)
+    monkeypatch.setattr(m, "_run_permit", lambda pid, pm: {"result": {"ok": True}})
+    return m
+
+
+def test_remembered_one_write_runs_when_the_judge_sees_it_in_the_request(monkeypatch, tmp_path):
+    m = _one_bridge(monkeypatch, tmp_path)
+    monkeypatch.setenv("CC_POSTURE", "judged")
+    monkeypatch.setattr(m, "_judge_proposal", lambda p: {"safe": None, "intent": 0.95, "risk": 1.0, "ok": True})
+    card = m._propose({"platform": "gmail", "action_id": "send", "summary": "email to a"})
+    assert card.get("auto") is True and card.get("decided") == "approve" and "held" not in card
+    assert card["judge"]["intent"] == 0.95
+
+
+def test_remembered_one_write_is_held_when_the_judge_does_not(monkeypatch, tmp_path):
+    m = _one_bridge(monkeypatch, tmp_path)
+    monkeypatch.setenv("CC_POSTURE", "judged")
+    monkeypatch.setattr(m, "_judge_proposal", lambda p: {"safe": None, "intent": 0.2, "risk": 2.0, "ok": False})
+    card = m._propose({"platform": "gmail", "action_id": "send", "summary": "email to b"})
+    assert "auto" not in card and "decided" not in card and card["held"]
+
+
+def test_remembered_one_write_runs_unjudged_outside_judged_posture(monkeypatch, tmp_path):
+    m = _one_bridge(monkeypatch, tmp_path)
+    monkeypatch.setenv("CC_POSTURE", "cards")
+    monkeypatch.setattr(m, "_judge_proposal", lambda p: (_ for _ in ()).throw(AssertionError("must not be called")))
+    card = m._propose({"platform": "gmail", "action_id": "send", "summary": "email to c"})
+    assert card.get("auto") is True and "judge" not in card
+
+
+def test_judge_proposal_sends_fields_not_bodies(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    monkeypatch.setattr(m, "TYPESAFE_KEY", "k")
+    seen = {}
+    def fake(state, questions):
+        seen.update(state)
+        return {"answers": {"intent": {"noul": 0.8}, "risk": {"score": 1}}, "usage": {"input_tokens": 10}}
+    monkeypatch.setattr(m, "_typesafe", fake)
+    m.LAST_MESSAGE["text"] = "send the note to a"
+    m.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    v = m._judge_proposal({"platform": "gmail", "action_id": "send", "method": "POST", "summary": "to a",
+                           "data": {"to": "a@x", "body": "x" * 5000}})
+    assert v["ok"] is True and v["intent"] == 0.8 and v["safe"] is None
+    assert len(seen["proposed_write"]["fields"]["body"]) == 80
+    assert (m.STATE_DIR / "judge.jsonl").exists()

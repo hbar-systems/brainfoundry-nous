@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: in the judged posture a One write (connected-app action) is judged against the
+  request before the card: "on request" and "risk" on the card; a remembered ("don't ask
+  again") write the judge does not see in the request is held and asks, with the reason.
+  The judge never runs a write by itself. Fields of the write go to the judge, not bodies.
 - update: "Keep this brain updated", a switch on the Update page. Once a day at a chosen
   hour (UTC), when origin/main moved, the api runs scripts/update_brain.sh the way the
   tab does (backup included), records the run before starting so the replaced container

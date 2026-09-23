@@ -134,8 +134,9 @@ function ProposalCard({ p, onDecide }) {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? '…' : (box ? 'Allow' : 'Send')}</Btn>
             <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>{box ? 'Refuse' : 'Cancel'}</Btn>
-            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}{p.judge ? ` · judged: safe ${p.judge.safe.toFixed(2)}, on request ${p.judge.intent.toFixed(2)}, risk ${p.judge.risk.toFixed(1)}` : ''}</span>
+            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}{p.judge ? ` · judged:${p.judge.safe != null ? ` safe ${p.judge.safe.toFixed(2)},` : ''} on request ${p.judge.intent.toFixed(2)}, risk ${p.judge.risk.toFixed(1)}` : ''}</span>
           </div>
+          {p.held && <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '8px 0 0 0' }}>{p.held}</p>}
           {p.remember_ok !== false && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', color: C.dim, fontSize: '12px', cursor: 'pointer' }}>
             <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} disabled={p.busy} style={{ accentColor: C.gold }} />

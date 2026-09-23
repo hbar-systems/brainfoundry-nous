@@ -71,6 +71,8 @@ If you reload the page with a card still waiting, it comes back at the top of th
 
 Once you trust a kind of write, tick "don't ask again for this action" on its card before pressing Send. From then on that exact action on that platform runs without a card: the reasoner still proposes it, the bridge approves and runs it, and the audit still records every one. The footer shows how many actions run without asking; open the list and press "ask again" to take one back. Nothing runs without asking unless you ticked it. The list lives in `~/.cc-bridge/auto.json`.
 
+In the judged posture (below) a proposed write is also read against your request before the card: the card shows "on request" and "risk". The judge never sends a write by itself, a write leaves the machine; what it can do is hold one. A remembered write that the judge does not see in your request comes back as a card that asks, with a line saying why. That is the guard against an instruction inside an email or a document the reasoner read: it can make the reasoner propose, it cannot make a remembered write run. (Sent to the judge: your request, the platform, the action, the one-line summary, and the fields of the write with the first characters of each; not the whole body. 2026-09-23.)
+
 ## Where things live on the server
 
 | piece | place |
