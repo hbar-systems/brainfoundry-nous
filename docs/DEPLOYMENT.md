@@ -150,6 +150,14 @@ brain uses its own Ollama at `OLLAMA_URL` again, and comes back when the spoke d
 probe is one `GET /api/tags` every 30 seconds at most; `GET /health` shows `box`, `spoke`
 and `spoke_up`. The spoke must serve the model the brain is set to. (Added 2026-09-23.)
 
+The same spoke can carry the embeddings: when it serves `bge-large` (Ollama's copy of
+BAAI/bge-large-en-v1.5, the brain's default embedding model, 1024 dimensions, nothing
+re-indexed), every embedding for ingest and search is computed there; when it does not answer
+or does not list the model, in-process as before. `EMBED_SPOKE=0` turns that off with one
+variable; `EMBED_SPOKE_MODEL` names another model only if `EMBEDDING_MODEL_NAME` changed
+with it. `GET /admin/embed-spoke-check` embeds one sentence both ways and reports the cosine
+(expect above 0.99) and the norms; `GET /health` shows `services.embeddings.spoke`.
+
 With the mounts present you can also let the brain update itself: the switch "Keep this
 brain updated" on the Update page runs the same script once a day at the hour you pick
 (UTC), only when origin/main moved, with the pre-update backup the script always takes.

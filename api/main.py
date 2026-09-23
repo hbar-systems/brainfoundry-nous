@@ -1996,13 +1996,11 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
 
 def generate_embeddings(texts: List[str]) -> List[List[float]]:
     """Generate embeddings for text chunks"""
-    model = get_embedding_model()
-    if model is None:
-        raise HTTPException(status_code=500, detail="Embedding model not available")
-    
+    # Through the embedding module: the spoke while it serves the model, else in-process
+    # (2026-09-23). get_embedding_model() stays the in-process loader for the health check.
     try:
-        embeddings = model.encode(texts)
-        return embeddings.tolist()
+        from api.embeddings.model import encode_texts
+        return encode_texts(texts)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
 
@@ -2277,9 +2275,13 @@ def health_check():
         }
     
     # Test embedding model
-    from api.embeddings.model import is_model_loaded, model_error
+    from api.embeddings.model import is_model_loaded, model_error, spoke_status
     embedding_status = "healthy" if is_model_loaded() else "not_loaded"
     embedding_error = model_error()
+    try:
+        embedding_spoke = spoke_status()
+    except Exception:
+        embedding_spoke = None
     
     return {
         "status": "healthy",
@@ -2289,6 +2291,7 @@ def health_check():
             "ollama": ollama_status,
             "embeddings": {
                 "status": embedding_status,
+                "spoke": embedding_spoke,
                 "error": embedding_error,
            },
         },
@@ -6585,6 +6588,27 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
         "rollback_to": rollback_to,
         "error": error,
     }
+
+
+@app.get("/admin/embed-spoke-check")
+def admin_embed_spoke_check(api_key: str = Depends(get_api_key)):
+    """Measure, do not assume: embed one sentence on the spoke and in-process and report the
+    cosine between them and both norms. The spoke's bge-large is the same model quantised;
+    agreement should be above 0.99. Below that, set EMBED_SPOKE=0 (2026-09-23)."""
+    from api.embeddings import model as em
+    import math
+    text = "The brain remembers what the owner approved, and nothing the owner did not."
+    if not em.spoke_serves_model():
+        return {"ok": False, "reason": "spoke not serving the embedding model", **em.spoke_status()}
+    try:
+        a = em.spoke_encode([text])[0]
+    except Exception as e:
+        return {"ok": False, "reason": f"spoke: {type(e).__name__}: {e}", **em.spoke_status()}
+    b = em.get_model().encode([text]).tolist()[0]
+    na = math.sqrt(sum(x * x for x in a)); nb = math.sqrt(sum(x * x for x in b))
+    cos = sum(x * y for x, y in zip(a, b)) / (na * nb) if na and nb else 0.0
+    return {"ok": cos >= 0.99 and abs(na - nb) < 0.05, "cosine": round(cos, 4),
+            "norm_spoke": round(na, 4), "norm_local": round(nb, 4), "dim": len(a), **em.spoke_status()}
 
 
 @app.post("/admin/update")

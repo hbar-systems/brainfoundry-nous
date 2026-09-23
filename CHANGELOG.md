@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- embedding spoke: the reasoner spoke also carries embeddings when it serves `bge-large`
+  (same model as in-process, 1024 dimensions): ingest and search embed there while it
+  answers, in-process otherwise, per-call fallback on any error or wrong width.
+  `EMBED_SPOKE=0` to turn off. `GET /admin/embed-spoke-check` measures the agreement
+  (cosine, norms). /health shows services.embeddings.spoke. tests/test_embed_spoke.py.
 - reasoner spoke: `OLLAMA_SPOKE_URL`, a machine of the owner's on their tailnet running
   Ollama. Local inference goes there while it answers and falls back to the box's own
   Ollama (`OLLAMA_URL`) when it does not, probed at most every 30 s; /health reports
