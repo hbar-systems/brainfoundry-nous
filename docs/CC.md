@@ -131,6 +131,10 @@ The reasoner sees no MCP servers by default, not even your own account's connect
 
 If something on the box proposes documents to memory on its own (on hbar: a reconciler that watches the read-only mirror of the owner's repositories and proposes new files every half hour), the page shows "n documents wait for your approval" and opens Knowledge, where you approve or reject each one. The reasoner never approves. What memory holds stays a decision of the owner.
 
+## The brain speaks
+
+With `ELEVENLABS_API_KEY` in the bridge env (entered on the box, never in the page), the footer shows "voice off"; click it, or type `/voice on`, and every answer is read aloud as it finishes. "listen" under any answer replays it; "stop" stops it. The speech is made through the bridge, so the key stays on your server. Code is skipped ("code omitted"), links become "a link", and a long answer is read up to a cap and then says the rest is on the screen. The voice is the brain's own, a stock voice (`CC_VOICE_ID` to change it, `CC_VOICE_MODEL` for the model, `CC_VOICE_MAX_CHARS` for the cap); it is not a copy of your voice. Added 2026-09-23.
+
 ## The guide, in the console
 
 "Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required.

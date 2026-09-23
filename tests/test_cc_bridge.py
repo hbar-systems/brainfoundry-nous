@@ -200,3 +200,15 @@ def test_judge_proposal_sends_fields_not_bodies(monkeypatch, tmp_path):
     assert v["ok"] is True and v["intent"] == 0.8 and v["safe"] is None
     assert len(seen["proposed_write"]["fields"]["body"]) == 80
     assert (m.STATE_DIR / "judge.jsonl").exists()
+
+
+def test_speakable_flattens_markdown_and_caps(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    text = "Here **is** the answer:\n\n```python\nprint(1)\n```\n\n- one `x = 2` thing\n- see https://example.org/a/b\n<pane>/files</pane>"
+    s = m._speakable(text)
+    assert "**" not in s and "```" not in s and "http" not in s and "<pane>" not in s
+    assert "(code omitted)" in s and "x = 2" in s and "a link" in s
+    long = ". ".join(["A sentence that goes on"] * 400)
+    capped = m._speakable(long)
+    assert len(capped) < m.VOICE_MAX_CHARS + 80 and capped.endswith("on the screen.")
+    assert m._speakable("") == ""

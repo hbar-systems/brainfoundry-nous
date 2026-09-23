@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: the brain speaks. With ELEVENLABS_API_KEY in the bridge env, `POST /cc/speak {text}`
+  streams mp3 through the bridge (key stays on the box); the page has a "voice on/off"
+  footer switch remembered per browser, `/voice on|off`, and "listen"/"stop" under each
+  answer. Text is flattened for speech (no code, links, marks) and capped. Stock voice by
+  default (CC_VOICE_ID); the model is the low-latency one (CC_VOICE_MODEL).
 - embedding spoke: the reasoner spoke also carries embeddings when it serves `bge-large`
   (same model as in-process, 1024 dimensions): ingest and search embed there while it
   answers, in-process otherwise, per-call fallback on any error or wrong width.

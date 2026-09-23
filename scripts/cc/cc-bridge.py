@@ -682,6 +682,54 @@ def _judge_proposal(p: dict) -> dict | None:
     return verdict
 
 
+# The brain speaks (2026-09-23). When ELEVENLABS_API_KEY is in the bridge env, the page can
+# ask the bridge to read an answer aloud: POST /speak {text} streams mp3 from ElevenLabs
+# through the bridge, so the key never reaches the browser. The voice is the brain's own
+# (CC_VOICE_ID, a stock voice by default), not a clone of the owner's; the model is the
+# low-latency one. Text is flattened first: no code, no links, no markdown marks.
+ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+VOICE_ID = os.environ.get("CC_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()      # ElevenLabs stock voice "George"
+VOICE_MODEL = os.environ.get("CC_VOICE_MODEL", "eleven_flash_v2_5").strip()
+VOICE_MAX_CHARS = int(os.environ.get("CC_VOICE_MAX_CHARS", "2500"))
+_SPEAK_CODE = re.compile(r"```.*?```", re.S)
+_SPEAK_INLINE = re.compile(r"`([^`]*)`")
+_SPEAK_URL = re.compile(r"https?://\S+")
+_SPEAK_MARKS = re.compile(r"[*_#>|]+")
+_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>", re.S)
+
+
+def _speakable(text: str) -> str:
+    """The answer as speech: code blocks become one phrase, links and markdown marks go,
+    whitespace collapses, and the whole is capped so a long answer costs a bounded amount."""
+    s = _SPEAK_PANE.sub(" ", text or "")
+    s = _SPEAK_CODE.sub(" (code omitted) ", s)
+    s = _SPEAK_INLINE.sub(r"\1", s)
+    s = _SPEAK_URL.sub(" a link ", s)
+    s = re.sub(r"^\s*[-+]\s+", "", s, flags=re.M)
+    s = _SPEAK_MARKS.sub(" ", s)
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n\s*\n+", "\n", s).strip()
+    if len(s) > VOICE_MAX_CHARS:
+        cut = s[:VOICE_MAX_CHARS]
+        s = cut[: max(cut.rfind(". "), cut.rfind("\n"), VOICE_MAX_CHARS - 200) + 1].rstrip() + " That is the start of it; the rest is on the screen."
+    return s
+
+
+def _speak_stream(text: str):
+    """Yield mp3 bytes from ElevenLabs for `text`. Raises on any error."""
+    import urllib.request
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream?output_format=mp3_44100_64"
+    body = json.dumps({"text": text, "model_id": VOICE_MODEL}).encode()
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json", "Accept": "audio/mpeg"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        while True:
+            chunk = r.read(16384)
+            if not chunk:
+                break
+            yield chunk
+
+
 def _posture_current() -> str:
     v = os.environ.get("CC_POSTURE", "cards").strip().lower()
     return v if v in POSTURES else "cards"
@@ -1332,6 +1380,7 @@ class Handler(BaseHTTPRequestHandler):
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "judge": bool(TYPESAFE_KEY),
+                             "voice": bool(ELEVEN_KEY),
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
@@ -1383,6 +1432,32 @@ class Handler(BaseHTTPRequestHandler):
             _save_state({})
             print("new thread (reset by /new)", flush=True)
             self._send(200, {"ok": True})
+            return
+        if route == "/speak":
+            if not ELEVEN_KEY:
+                self._send(409, {"ok": False, "error": "voice needs ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
+                return
+            text = _speakable(str(req.get("text") or ""))
+            if not text:
+                self._send(400, {"ok": False, "error": "nothing to say"})
+                return
+            try:
+                gen = _speak_stream(text)
+                first = next(gen, b"")
+            except Exception as e:  # noqa: BLE001
+                print(f"speak failed: {type(e).__name__}", flush=True)
+                self._send(502, {"ok": False, "error": f"the voice service did not answer ({type(e).__name__})"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(first)
+                for chunk in gen:
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         if route == "/posture":
             want = str(req.get("posture", "")).strip().lower()

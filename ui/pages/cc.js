@@ -38,6 +38,7 @@ const SLASH = [
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
   { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
+  { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
@@ -327,6 +328,29 @@ export default function CC() {
   const loadLatest = () => fetch('/cc/files/recent', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setLatest((d.recent || []).slice(0, 4)) }).catch(() => {})
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
+  // The brain speaks (2026-09-23): when the bridge has a voice, answers are read aloud as
+  // they finish while this is on. Remembered per browser. One player at a time.
+  const [speak, setSpeak] = useState(false)
+  const [speaking, setSpeaking] = useState(false)
+  const audioRef = useRef(null)
+  useEffect(() => { try { setSpeak(localStorage.getItem('cc.speak') === '1') } catch {} }, [])
+  const setSpeakSaved = (v) => { setSpeak(v); try { localStorage.setItem('cc.speak', v ? '1' : '0') } catch {} }
+  const stopSpeaking = () => { const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
+  const say = async (text) => {
+    if (!text) return
+    stopSpeaking()
+    setSpeaking(true)
+    try {
+      const r = await fetch('/cc/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+      if (!r.ok) { setSpeaking(false); return }
+      const blob = await r.blob()
+      const a = new Audio(URL.createObjectURL(blob))
+      audioRef.current = a
+      a.onended = () => { if (audioRef.current === a) { audioRef.current = null; setSpeaking(false) } }
+      a.onerror = a.onended
+      await a.play()
+    } catch { setSpeaking(false) }
+  }
   const [showTools, setShowTools] = useState(false)
   const queueRef = useRef(null)                    // one message typed while a turn runs
   const sendRef = useRef(null)
@@ -478,6 +502,14 @@ export default function CC() {
       loadHealth(); return true
     }
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
+    if (cmd === 'voice') {
+      if (!(health && health.voice)) { setTurns(t => [...t, { who: 'brain', text: 'This brain has no voice yet: enter ELEVENLABS_API_KEY in the bridge env on the box and restart the bridge.' }]); return true }
+      const on = arg ? arg.trim().toLowerCase() !== 'off' : !speak
+      if (!on) stopSpeaking()
+      setSpeakSaved(on)
+      setTurns(t => [...t, { who: 'brain', text: on ? 'Voice on. Answers are read aloud as they finish; "listen" under any answer replays it, "stop" stops it.' : 'Voice off.' }])
+      return true
+    }
     if (cmd === 'guide') { openPane({ route: '/guide' + (arg ? '?tab=' + encodeURIComponent(arg) : ''), title: 'Guide' }); return true }
     if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
     if (cmd === 'jobs') {
@@ -543,6 +575,7 @@ export default function CC() {
         if (!data) data = { reply: 'The stream ended without an answer.', error: true }
         const reply = data.reply || '(no answer)'
         setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
+        if (speak && health && health.voice && !data.error) say(reply)
       } else {
         data = await r.json().catch(() => ({}))
         const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
@@ -687,6 +720,7 @@ export default function CC() {
                 {t.who === 'brain' && typeof t.ms === 'number' && (
                   <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px' }}>
                     {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && (t.meta.in || t.meta.cached) ? ` · ${kTok(t.meta.in)} in${t.meta.cached ? ` (+${kTok(t.meta.cached)} cached)` : ''} · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}
+                    {health && health.voice && t.text ? <> · <a onClick={() => (speaking ? stopSpeaking() : say(t.text))} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{speaking ? 'stop' : 'listen'}</a></> : null}
                   </div>
                 )}
               </div>
@@ -736,6 +770,7 @@ export default function CC() {
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
+          {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a></span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
