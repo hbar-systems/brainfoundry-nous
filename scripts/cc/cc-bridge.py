@@ -249,7 +249,21 @@ WORLD_DIR = os.environ.get("CC_WORLD_DIR", "").strip()
 if WORLD_DIR and not Path(WORLD_DIR).is_dir():
     print(f"CC_WORLD_DIR={WORLD_DIR} is not a directory; ignoring", flush=True)
     WORLD_DIR = ""
-if WORLD_DIR:
+# The laptop's shape (2026-09-24): when CC_WORLD_DIR and CC_WORK_DIR name the same directory, that
+# is one writable checkout of the person's world with their repositories under
+# systems/<system>/repos/<repo>, the layout they use on their own computer (shape-world.sh).
+SAME_ROOT = bool(WORLD_DIR) and os.path.realpath(WORLD_DIR) == os.path.realpath(os.environ.get("CC_WORK_DIR", "").strip() or "/nonexistent")
+if WORLD_DIR and SAME_ROOT:
+    SYSTEM += (
+        f" The person's world is checked out, writable, at {WORLD_DIR}: the same layout as on their own computer. "
+        "Its root holds their plans, notes and registry; their systems live under systems/<system>/repos/<repo> "
+        "(registry/systems.json maps each). 'Go into hbar.social' means that folder. For questions about their "
+        "current plans or a system's state, read the file or the repository's git log there and say which; "
+        "memory tells you what mattered, the world tells you what is true now. Build there: edit, run tests, "
+        "commit with clear messages, push only when the person says push; `git pull --ff-only` before editing "
+        "and stop if it fails. Never commit secrets or files under .env."
+    )
+elif WORLD_DIR:
     SYSTEM += (
         f" The person's own working repository is mirrored read-only at {WORLD_DIR} (refreshed every few "
         "minutes from their source of truth). For questions about their current plans, notes, decisions or "
@@ -264,7 +278,7 @@ WORK_DIR = os.environ.get("CC_WORK_DIR", "").strip()
 if WORK_DIR and not Path(WORK_DIR).is_dir():
     print(f"CC_WORK_DIR={WORK_DIR} is not a directory; ignoring", flush=True)
     WORK_DIR = ""
-if WORK_DIR and BOX_ENABLED:
+if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
     SYSTEM += (
         f" The person's working copies of their repositories live at {WORK_DIR}, one folder per repository, "
         "writable, with their own git identity and push access. Build there: edit, run tests, commit with clear "
@@ -281,7 +295,7 @@ import cc_extras  # noqa: E402
 OUT_DIR = Path.home() / "out"
 IN_DIR = Path.home() / "in"
 OUT_DIR.mkdir(exist_ok=True); IN_DIR.mkdir(exist_ok=True)
-FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), "work": WORK_DIR, "world": WORLD_DIR, "brain": CWD})
+FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), **({} if SAME_ROOT else {"work": WORK_DIR}), "world": WORLD_DIR, "brain": CWD})
 JOBS = cc_extras.Jobs(OUT_DIR, lambda: _env())
 UPLOADS = cc_extras.Uploads(IN_DIR)
 SYSTEM += (
@@ -1299,7 +1313,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
            "--mcp-config", _mcp_config(), "--strict-mcp-config"]
     if WORLD_DIR:
         cmd += ["--add-dir", WORLD_DIR]
-    if WORK_DIR and BOX_ENABLED:
+    if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
         cmd += ["--add-dir", WORK_DIR]
     cmd += ["--add-dir", str(OUT_DIR), "--add-dir", str(IN_DIR)]
     if _model_current():

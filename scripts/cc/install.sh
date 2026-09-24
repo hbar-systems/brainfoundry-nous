@@ -266,7 +266,7 @@ Description=Fast-forward the CC work clones from their remotes
 Type=oneshot
 User=$BRIDGE_USER
 Environment=HOME=$BRIDGE_HOME
-ExecStart=/usr/bin/bash -c 'for d in $WORK_DIR_ENV/*/; do [ -d "\$d/.git" ] || continue; if [ -n "\$(git -C "\$d" status --porcelain)" ]; then echo "\$(basename "\$d"): local changes, not pulled"; continue; fi; git -C "\$d" pull -q --ff-only 2>/dev/null || echo "\$(basename "\$d"): pull failed"; done'
+ExecStart=/usr/bin/bash -c 'find "$WORK_DIR_ENV" -maxdepth 6 -name .git -type d -prune 2>/dev/null | while read -r g; do d=\$(dirname "\$g"); if [ -n "\$(git -C "\$d" status --porcelain)" ]; then echo "\$(basename "\$d"): local changes, not pulled"; continue; fi; git -C "\$d" pull -q --ff-only 2>/dev/null || echo "\$(basename "\$d"): pull failed"; done'
 UNIT
     sudo tee /etc/systemd/system/cc-work-pull.timer >/dev/null <<UNIT
 [Unit]

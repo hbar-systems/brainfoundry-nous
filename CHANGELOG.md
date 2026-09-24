@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: the world in the laptop's shape. When CC_WORLD_DIR and CC_WORK_DIR name the same
+  writable checkout, the drawer shows one `world`, the reasoner is told the repositories
+  live under systems/<system>/repos/<repo> as on the owner's computer, and the pull timer
+  finds nested clones (find .git, depth 6).
 - update: after a healthy update the script prunes dangling images (the previous api
   image, 1.5 to 2.5 GB each) so a brain on the daily switch does not fill its disk.
 - cc: voice made natural (2026-09-24): eleven_multilingual_v2 with expressive settings by

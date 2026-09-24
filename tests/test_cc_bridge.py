@@ -223,3 +223,14 @@ def test_speak_parts_split_on_sentences_and_paragraphs(monkeypatch, tmp_path):
     assert " ".join(parts).replace("  ", " ").startswith("First sentence here.")
     assert m._speak_parts("") == []
     assert m._speak_parts("One short line") == ["One short line"]
+
+
+def test_same_root_means_one_world(monkeypatch, tmp_path):
+    root = tmp_path / "world"; root.mkdir()
+    monkeypatch.setenv("CC_WORLD_DIR", str(root)); monkeypatch.setenv("CC_WORK_DIR", str(root))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m.SAME_ROOT is True and "work" not in m.FILES.roots and "world" in m.FILES.roots
+    assert "same layout as on their own computer" in m.SYSTEM
+    monkeypatch.setenv("CC_WORK_DIR", str(tmp_path))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m.SAME_ROOT is False

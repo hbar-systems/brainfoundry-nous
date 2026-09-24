@@ -115,6 +115,10 @@ Three postures, chosen by the owner with `/posture` in the chat. `cards`, the de
 
 How it works, for the record: Claude Code fires its own PermissionRequest hook whenever a tool call would need permission. The hook (scripts/cc/cc-permit-hook.py) posts the call to the bridge and waits. The bridge mints a permit, shows the card inside the live answer, and answers the hook when you click. The reasoner's own tool then performs the action. Same permit gate, same hash-chained audit as the One writes. This lane is on only when the bridge runs as a user without sudo (`CC_BOX=1`, set by the installer after harden-user.sh); with a sudo user it stays off, because a reasoner with general sudo is the whole server, card or no card.
 
+## The world in the laptop's shape
+
+Two ways to give the reasoner the owner's repositories. The simple one: `CC_WORLD_DIR` a read-only mirror and `CC_WORK_DIR` a folder of writable clones, one per repository. The other (2026-09-24): both variables naming one writable checkout of the owner's world, with the repositories placed inside it exactly as on their own computer (`systems/<system>/repos/<repo>`, mapped by their registry). Then the drawer shows one `world`, the reasoner is told the layout is the one it already knows, "go into that system" means the same folder on both machines, and the 5-minute pull refreshes every nested clone that has no local changes. The hbar.world script that does the placing is `ops/2026-09-24_world-shape/shape-world.sh`.
+
 ## Files, jobs and attachments
 
 Files: the drawer lists Files, and the reasoner opens it as a pane when it makes something. Five places: out (what the reasoner made, under ~/out/<date>/), in (what you attached), work (your repositories), world (the read-only mirror), brain (the brain's own code). Audio and video play in the pane and seek; images, PDFs and text show; anything downloads; "ask the brain" drops the file's path into the chat.
