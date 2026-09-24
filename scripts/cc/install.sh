@@ -187,11 +187,14 @@ WRAP
         sudo rm -f "$BRAIN_DIR/.onerc" && echo "removed the old read-only .onerc from the brain directory"
     fi
     TOOLS='Read,Grep,Glob,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
+    # The value carries parentheses (Bash(git status *)), so it is written double-quoted:
+    # systemd's EnvironmentFile strips the quotes, and a script that sources the file no
+    # longer errors on them (found by the studio chat 2026-09-23).
     # Merge: the One lookups first, then whatever the owner added since (read-only verbs,
     # tool-pack entries such as mcp__...), each kept once. A rerun never drops an entry.
-    EXISTING=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+    EXISTING=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
     MERGED=$(printf '%s,%s' "$TOOLS" "$EXISTING" | tr ',' '\n' | awk 'NF && !seen[$0]++' | paste -sd, -)
-    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$MERGED' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=\"$MERGED\"' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
     echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
 else
     echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
@@ -305,10 +308,10 @@ VERBS
         RO='Bash(ls:*),Bash(wc:*),Bash(stat:*),Bash(file:*),Bash(pwd),Bash(id:*),Bash(whoami),Bash(date:*),Bash(df:*),Bash(du:*),Bash(ps:*),Bash(uptime),Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git branch:*),Bash(git -C * status:*),Bash(git -C * log:*),Bash(git -C * diff:*),Bash(git -C * show:*),Bash(systemctl status:*),Bash(systemctl is-active:*)'
         # No One key means no CC_TOOLS line yet (found on e2e 2026-09-22: the missing line
         # aborted the whole installer under set -e); seed it with the unit's default.
-        CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+        CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
         [ -n "$CUR" ] || CUR="Read,Grep,Glob"
         if ! printf '%s' "$CUR" | grep -q 'Bash(git status'; then
-            sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=$CUR,$RO' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+            sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=\"$CUR,$RO\"' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
             echo "read-only shell verbs allowed without a card (ls, git status/log/diff, systemctl status, ...; file contents go through Read, which stays inside the working directories)"
         fi
         # cc-job: commands that outlive a turn, started through the bridge (scripts/cc/cc-job.py).

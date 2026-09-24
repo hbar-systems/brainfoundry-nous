@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc install: CC_TOOLS written double-quoted in the bridge env (parentheses in the value
+  made the file unsourceable by scripts; systemd strips the quotes). Guide: the one
+  hbar-specific example phrase made general.
 - system: the technical surface. A System tab (`GET /admin/system`: disk, memory, load,
   uptime, containers, images and reclaimable space, backups, last update, memory store;
   `GET /cc/system` from the bridge: tailnet peers, connections, listening ports, failed

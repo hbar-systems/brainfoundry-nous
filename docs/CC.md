@@ -133,7 +133,7 @@ The reasoner sees no MCP servers by default, not even your own account's connect
 
 ## Memory follows the world
 
-If something on the box proposes documents to memory on its own (on hbar: a reconciler that watches the read-only mirror of the owner's repositories and proposes new files every half hour), the page shows "n documents wait for your approval" and opens Knowledge, where you approve or reject each one. The reasoner never approves. What memory holds stays a decision of the owner.
+If something on the box proposes documents to memory on its own (for example a reconciler that watches a mirror of the owner's repositories and proposes new or changed files every half hour), the page shows "n documents wait for your approval" and opens Knowledge, where you approve or reject each one. The reasoner never approves. What memory holds stays a decision of the owner.
 
 ## The brain speaks
 
