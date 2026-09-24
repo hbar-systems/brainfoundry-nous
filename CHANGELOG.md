@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- system: the technical surface. A System tab (`GET /admin/system`: disk, memory, load,
+  uptime, containers, images and reclaimable space, backups, last update, memory store;
+  `GET /cc/system` from the bridge: tailnet peers, connections, listening ports, failed
+  services, units, permits, judgments). Levels against fixed thresholds; the first crossed
+  threshold is one line in the chat footer. tests/test_system_status.py.
 - cc: the world in the laptop's shape. When CC_WORLD_DIR and CC_WORK_DIR name the same
   writable checkout, the drawer shows one `world`, the reasoner is told the repositories
   live under systems/<system>/repos/<repo> as on the owner's computer, and the pull timer

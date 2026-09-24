@@ -793,6 +793,61 @@ def _speak_stream(text: str):
             yield chunk
 
 
+def _host_system() -> dict:
+    """What a container cannot see: the tailnet and its peers, established connections,
+    listening ports, failed services, the bridge's own units, permit and judge counts. Read
+    only, no sudo (2026-09-24)."""
+    d: dict = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    def run(cmd, timeout=8):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return r.stdout if r.returncode == 0 else ""
+        except Exception:
+            return ""
+    ts = run(["tailscale", "status", "--json"])
+    if ts:
+        try:
+            j = json.loads(ts)
+            peers = [{"name": p.get("HostName"), "ip": (p.get("TailscaleIPs") or [None])[0], "os": p.get("OS"),
+                      "online": bool(p.get("Online"))} for p in (j.get("Peer") or {}).values()]
+            d["tailnet"] = {"self": (j.get("Self") or {}).get("HostName"), "ip": ((j.get("Self") or {}).get("TailscaleIPs") or [None])[0],
+                            "state": j.get("BackendState"), "peers": sorted(peers, key=lambda x: (not x["online"], x["name"] or ""))}
+        except ValueError:
+            d["tailnet"] = None
+    else:
+        d["tailnet"] = None
+    est = run(["ss", "-Htn", "state", "established"])
+    lst = run(["ss", "-Htln"])
+    ports = sorted({ln.split()[3].rsplit(":", 1)[-1] for ln in lst.splitlines() if len(ln.split()) > 3})
+    d["connections"] = {"established": len(est.splitlines()), "listening_ports": ports[:40]}
+    failed = [ln.split()[0] for ln in run(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines() if ln.strip()]
+    d["failed_units"] = failed
+    units = {}
+    for u in ("cc-bridge", "claude-tab", "cc-work-pull.timer", "world-mirror.timer", "world-propose.timer", "cc-bridge-watch.path", "cc-install-watch.path", "tailscaled"):
+        st = run(["systemctl", "is-active", u]).strip()
+        if st:
+            units[u] = st
+    d["units"] = units
+    try:
+        d["permits"] = sum(1 for _ in open(STATE_DIR / "permitd-audit.jsonl"))
+    except OSError:
+        d["permits"] = 0
+    try:
+        d["judgments"] = sum(1 for _ in open(STATE_DIR / "judge.jsonl"))
+    except OSError:
+        d["judgments"] = 0
+    d["jobs_running"] = sum(1 for j in JOBS.list() if j.get("ended") is None)
+    w = []
+    if failed:
+        w.append("failed services: " + ", ".join(failed[:4]))
+    for u in ("cc-bridge", "world-mirror.timer", "world-propose.timer"):
+        if units.get(u) and units[u] != "active":
+            w.append(f"{u} is {units[u]}")
+    d["warnings"] = w
+    return d
+
+
 def _posture_current() -> str:
     v = os.environ.get("CC_POSTURE", "cards").strip().lower()
     return v if v in POSTURES else "cards"
@@ -1468,6 +1523,8 @@ class Handler(BaseHTTPRequestHandler):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/system":
+            self._send(200, _host_system())
         elif route == "/voices":
             self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL})
         elif route == "/guide":

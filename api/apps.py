@@ -75,6 +75,7 @@ BUILTIN_TABS: list[dict[str, Any]] = [
     {"id": "_trace",        "label": "Trace",        "route": "/trace",        "order": 50, "builtin": True},
     {"id": "_settings",     "label": "Settings",     "route": "/settings",     "order": 60, "builtin": True},
     {"id": "_update",       "label": "Update",       "route": "/update",       "order": 70, "builtin": True},
+    {"id": "_system",       "label": "System",       "route": "/system",       "order": 72, "builtin": True},
     {"id": "_future",       "label": "Future",       "route": "/future",       "order": 80, "builtin": True},
 ]
 

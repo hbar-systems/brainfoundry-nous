@@ -370,6 +370,20 @@ export default function CC() {
     if (run === sayRef.current) { audioRef.current = null; setSpeaking(false) }
   }
   const [showTools, setShowTools] = useState(false)
+  // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
+  // (disk, memory, load, containers, backups) and the host's (failed services, units).
+  const [sysWarn, setSysWarn] = useState([])
+  useEffect(() => {
+    let on = true
+    const load = async () => {
+      const out = []
+      try { const r = await fetch('/api/bf/admin/system'); if (r.ok) { const d = await r.json(); out.push(...(d.warnings || [])) } } catch {}
+      try { const r = await fetch('/cc/system'); if (r.ok) { const d = await r.json(); out.push(...(d.warnings || [])) } } catch {}
+      if (on) setSysWarn(out)
+    }
+    load(); const t = setInterval(load, 300000)
+    return () => { on = false; clearInterval(t) }
+  }, [])
   const queueRef = useRef(null)                    // one message typed while a turn runs
   const sendRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
@@ -802,6 +816,7 @@ export default function CC() {
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
+          {sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
           {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}

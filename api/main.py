@@ -6590,6 +6590,14 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
     }
 
 
+@app.get("/admin/system")
+def admin_system(api_key: str = Depends(get_api_key)):
+    """The technical surface: disk, memory, load, containers, backups, last update, database,
+    each with a level (ok, warn, alert) and one line per crossed threshold (2026-09-24)."""
+    from api import system_status
+    return system_status.report(BRAIN_HOST_DIR, get_db_connection)
+
+
 @app.get("/admin/embed-spoke-check")
 def admin_embed_spoke_check(api_key: str = Depends(get_api_key)):
     """Measure, do not assume: embed one sentence on the spoke and in-process and report the
