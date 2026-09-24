@@ -133,7 +133,7 @@ If something on the box proposes documents to memory on its own (on hbar: a reco
 
 ## The brain speaks
 
-With `ELEVENLABS_API_KEY` in the bridge env (entered on the box, never in the page), the footer shows "voice off"; click it, or type `/voice on`, and every answer is read aloud as it finishes. "listen" under any answer replays it; "stop" stops it. The speech is made through the bridge, so the key stays on your server. Code is skipped ("code omitted"), links become "a link", and a long answer is read up to a cap and then says the rest is on the screen. The voice is the brain's own, a stock voice (`CC_VOICE_ID` to change it, `CC_VOICE_MODEL` for the model, `CC_VOICE_MAX_CHARS` for the cap); it is not a copy of your voice. Added 2026-09-23.
+With `ELEVENLABS_API_KEY` in the bridge env (entered on the box, never in the page), the footer shows "voice off"; click it, or type `/voice on`, and every answer is read aloud as it finishes. "listen" under any answer replays it; "stop" stops it. The speech is made through the bridge, so the key stays on your server. Code is skipped ("code omitted"), links become "a link", and a long answer is read up to a cap and then says the rest is on the screen. Speech is made a paragraph at a time, so a long answer starts within a couple of seconds. `/voice list` shows the voices on your ElevenLabs account; `/voice use <name>` chooses one (remembered; the footer shows it). The model is ElevenLabs' natural one (`CC_VOICE_MODEL=eleven_multilingual_v2`; `eleven_flash_v2_5` is faster and flatter), `CC_VOICE_MAX_CHARS` caps the length. The voice is the brain's own, a stock voice until you choose; it is not a copy of your voice. Added 2026-09-23, made natural 2026-09-24.
 
 ## The guide, in the console
 

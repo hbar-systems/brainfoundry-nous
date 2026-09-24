@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: voice made natural (2026-09-24): eleven_multilingual_v2 with expressive settings by
+  default, speech in parts (about 420 characters, on sentence ends) played in sequence with
+  the next part prefetched so it starts within seconds; `/voice list` and `/voice use
+  <name>` from the owner's ElevenLabs voices (`GET /cc/voices`, `POST /cc/voice`); the
+  footer names the voice. Operator's verdict on the first version: robotic, slow, not warm.
 - cc: the brain speaks. With ELEVENLABS_API_KEY in the bridge env, `POST /cc/speak {text}`
   streams mp3 through the bridge (key stays on the box); the page has a "voice on/off"
   footer switch remembered per browser, `/voice on|off`, and "listen"/"stop" under each

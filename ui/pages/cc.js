@@ -38,7 +38,7 @@ const SLASH = [
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
   { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
-  { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off' },
+  { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list, /voice use <name>' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
@@ -333,23 +333,41 @@ export default function CC() {
   const [speak, setSpeak] = useState(false)
   const [speaking, setSpeaking] = useState(false)
   const audioRef = useRef(null)
+  const sayRef = useRef(0)
   useEffect(() => { try { setSpeak(localStorage.getItem('cc.speak') === '1') } catch {} }, [])
   const setSpeakSaved = (v) => { setSpeak(v); try { localStorage.setItem('cc.speak', v ? '1' : '0') } catch {} }
-  const stopSpeaking = () => { const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
+  const stopSpeaking = () => { sayRef.current++; const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
   const say = async (text) => {
+    // Speech arrives a part at a time: the first part plays while the next is fetched, so a
+    // long answer starts within a couple of seconds instead of after the whole was made.
     if (!text) return
     stopSpeaking()
+    const run = ++sayRef.current
     setSpeaking(true)
-    try {
-      const r = await fetch('/cc/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-      if (!r.ok) { setSpeaking(false); return }
-      const blob = await r.blob()
-      const a = new Audio(URL.createObjectURL(blob))
+    const fetchPart = async (i) => {
+      const r = await fetch('/cc/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, part: i }) })
+      if (!r.ok) return null
+      return { n: Number(r.headers.get('X-Speak-Parts') || 1), url: URL.createObjectURL(await r.blob()) }
+    }
+    const playUrl = (url) => new Promise((resolve) => {
+      const a = new Audio(url)
       audioRef.current = a
-      a.onended = () => { if (audioRef.current === a) { audioRef.current = null; setSpeaking(false) } }
-      a.onerror = a.onended
-      await a.play()
-    } catch { setSpeaking(false) }
+      a.onended = () => resolve(true)
+      a.onerror = () => resolve(false)
+      a.play().catch(() => resolve(false))
+    })
+    try {
+      let next = fetchPart(0)
+      for (let i = 0; ; i++) {
+        const cur = await next
+        if (!cur || run !== sayRef.current) break
+        if (i + 1 < cur.n) next = fetchPart(i + 1); else next = null
+        await playUrl(cur.url)
+        URL.revokeObjectURL(cur.url)
+        if (!next || run !== sayRef.current) break
+      }
+    } catch {}
+    if (run === sayRef.current) { audioRef.current = null; setSpeaking(false) }
   }
   const [showTools, setShowTools] = useState(false)
   const queueRef = useRef(null)                    // one message typed while a turn runs
@@ -504,7 +522,21 @@ export default function CC() {
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
     if (cmd === 'voice') {
       if (!(health && health.voice)) { setTurns(t => [...t, { who: 'brain', text: 'This brain has no voice yet: enter ELEVENLABS_API_KEY in the bridge env on the box and restart the bridge.' }]); return true }
-      const on = arg ? arg.trim().toLowerCase() !== 'off' : !speak
+      const a0 = (arg || '').trim()
+      if (a0.toLowerCase() === 'list') {
+        const r = await fetch('/cc/voices'); const d = await r.json().catch(() => ({}))
+        const rows = (d.voices || []).map(v => `${v.name === d.current_name ? '> ' : '  '}${v.name}${v.labels ? ` (${v.labels})` : ''}`).join('\n')
+        setTurns(t => [...t, { who: 'brain', text: rows ? `Voices on your ElevenLabs account (current marked >), model ${d.model}:\n\n\`\`\`\n${rows}\n\`\`\`\n\n/voice use <name> to choose one.` : 'No voices listed; is the key valid?' }])
+        return true
+      }
+      if (a0.toLowerCase().startsWith('use ')) {
+        const r = await fetch('/cc/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: a0.slice(4).trim() }) })
+        const d = await r.json().catch(() => ({}))
+        setTurns(t => [...t, { who: 'brain', text: r.ok ? `Voice: ${d.voice}. From the next answer.` : (d.error || 'not set'), error: !r.ok }])
+        if (r.ok) { setSpeakSaved(true); say(`This is ${d.voice}. I will read your answers in this voice.`) }
+        loadHealth(); return true
+      }
+      const on = a0 ? a0.toLowerCase() !== 'off' : !speak
       if (!on) stopSpeaking()
       setSpeakSaved(on)
       setTurns(t => [...t, { who: 'brain', text: on ? 'Voice on. Answers are read aloud as they finish; "listen" under any answer replays it, "stop" stops it.' : 'Voice off.' }])
@@ -770,7 +802,7 @@ export default function CC() {
           <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>
           {health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
-          {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a></span> : null}
+          {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
           {health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}

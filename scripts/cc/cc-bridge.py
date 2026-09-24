@@ -689,7 +689,10 @@ def _judge_proposal(p: dict) -> dict | None:
 # low-latency one. Text is flattened first: no code, no links, no markdown marks.
 ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
 VOICE_ID = os.environ.get("CC_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()      # ElevenLabs stock voice "George"
-VOICE_MODEL = os.environ.get("CC_VOICE_MODEL", "eleven_flash_v2_5").strip()
+VOICE_MODEL = os.environ.get("CC_VOICE_MODEL", "eleven_multilingual_v2").strip()   # the natural one; flash is the fast one
+VOICE_SETTINGS = {"stability": 0.45, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": True}
+VOICE_PART_CHARS = int(os.environ.get("CC_VOICE_PART_CHARS", "420"))   # speech is made a part at a time so it starts within seconds
+_VOICES_CACHE = {"at": 0.0, "voices": []}
 VOICE_MAX_CHARS = int(os.environ.get("CC_VOICE_MAX_CHARS", "2500"))
 _SPEAK_CODE = re.compile(r"```.*?```", re.S)
 _SPEAK_INLINE = re.compile(r"`([^`]*)`")
@@ -715,11 +718,57 @@ def _speakable(text: str) -> str:
     return s
 
 
+def _speak_parts(text: str) -> list:
+    """Split flattened speech into parts of about VOICE_PART_CHARS, on paragraph and sentence
+    ends, so the first part can play while the rest is still being made."""
+    parts, cur = [], ""
+    for para in [x.strip() for x in text.split("\n") if x.strip()]:
+        for sent in re.split(r"(?<=[.!?])\s+", para):
+            if cur and len(cur) + len(sent) + 1 > VOICE_PART_CHARS:
+                parts.append(cur.strip()); cur = ""
+            cur += (" " if cur else "") + sent
+        if cur and len(cur) > VOICE_PART_CHARS // 2:
+            parts.append(cur.strip()); cur = ""
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
+
+def _voices() -> list:
+    """The voices on the owner's ElevenLabs account, cached ten minutes: name, id, labels."""
+    if not ELEVEN_KEY:
+        return []
+    if time.time() - _VOICES_CACHE["at"] < 600 and _VOICES_CACHE["voices"]:
+        return _VOICES_CACHE["voices"]
+    import urllib.request
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/voices", headers={"xi-api-key": ELEVEN_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read() or b"{}")
+    except Exception as e:  # noqa: BLE001
+        print(f"voices failed: {type(e).__name__}", flush=True)
+        return _VOICES_CACHE["voices"]
+    out = []
+    for v in d.get("voices") or []:
+        lab = v.get("labels") or {}
+        out.append({"id": v.get("voice_id"), "name": v.get("name"), "category": v.get("category"),
+                    "labels": ", ".join(str(x) for x in (lab.get("gender"), lab.get("accent"), lab.get("age"), lab.get("description") or lab.get("use_case")) if x)})
+    _VOICES_CACHE.update(at=time.time(), voices=out)
+    return out
+
+
+def _voice_name(vid: str) -> str:
+    for v in _voices():
+        if v.get("id") == vid:
+            return v.get("name") or vid
+    return vid
+
+
 def _speak_stream(text: str):
     """Yield mp3 bytes from ElevenLabs for `text`. Raises on any error."""
     import urllib.request
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream?output_format=mp3_44100_64"
-    body = json.dumps({"text": text, "model_id": VOICE_MODEL}).encode()
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream?output_format=mp3_44100_96"
+    body = json.dumps({"text": text, "model_id": VOICE_MODEL, "voice_settings": VOICE_SETTINGS}).encode()
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json", "Accept": "audio/mpeg"})
     with urllib.request.urlopen(req, timeout=60) as r:
@@ -1380,7 +1429,7 @@ class Handler(BaseHTTPRequestHandler):
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "judge": bool(TYPESAFE_KEY),
-                             "voice": bool(ELEVEN_KEY),
+                             "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
@@ -1405,6 +1454,8 @@ class Handler(BaseHTTPRequestHandler):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/voices":
+            self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL})
         elif route == "/guide":
             md = _guide_markdown()
             self._send(200 if md else 404, {"markdown": md, "path": str(GUIDE_FILE)})
@@ -1438,11 +1489,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(409, {"ok": False, "error": "voice needs ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
                 return
             text = _speakable(str(req.get("text") or ""))
-            if not text:
+            parts = _speak_parts(text)
+            if not parts:
                 self._send(400, {"ok": False, "error": "nothing to say"})
                 return
+            part = int(req.get("part") or 0)
+            if part < 0 or part >= len(parts):
+                self._send(400, {"ok": False, "error": f"part {part} of {len(parts)}"})
+                return
             try:
-                gen = _speak_stream(text)
+                gen = _speak_stream(parts[part])
                 first = next(gen, b"")
             except Exception as e:  # noqa: BLE001
                 print(f"speak failed: {type(e).__name__}", flush=True)
@@ -1451,6 +1507,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Speak-Parts", str(len(parts)))
             self.end_headers()
             try:
                 self.wfile.write(first)
@@ -1458,6 +1515,23 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            return
+        if route == "/voice":
+            # Choose the voice by name from the owner's ElevenLabs account; remembered in the env file.
+            global VOICE_ID
+            if not ELEVEN_KEY:
+                self._send(409, {"ok": False, "error": "voice needs ELEVENLABS_API_KEY in the bridge env"})
+                return
+            want = str(req.get("voice") or "").strip().lower()
+            match = [v for v in _voices() if (v.get("name") or "").lower() == want or v.get("id") == want]
+            if not match:
+                match = [v for v in _voices() if want and want in (v.get("name") or "").lower()]
+            if len(match) != 1:
+                self._send(404 if not match else 409, {"ok": False, "error": ("no voice called " + want) if not match else "several voices match: " + ", ".join(v["name"] for v in match)})
+                return
+            VOICE_ID = match[0]["id"]; _env_file_set("CC_VOICE_ID", VOICE_ID); os.environ["CC_VOICE_ID"] = VOICE_ID
+            print(f"voice set to {match[0]['name']}", flush=True)
+            self._send(200, {"ok": True, "voice": match[0]["name"], "id": VOICE_ID})
             return
         if route == "/posture":
             want = str(req.get("posture", "")).strip().lower()

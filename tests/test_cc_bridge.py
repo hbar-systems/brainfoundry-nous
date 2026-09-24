@@ -212,3 +212,14 @@ def test_speakable_flattens_markdown_and_caps(monkeypatch, tmp_path):
     capped = m._speakable(long)
     assert len(capped) < m.VOICE_MAX_CHARS + 80 and capped.endswith("on the screen.")
     assert m._speakable("") == ""
+
+
+def test_speak_parts_split_on_sentences_and_paragraphs(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    monkeypatch.setattr(m, "VOICE_PART_CHARS", 60)
+    text = "First sentence here. Second sentence follows it. Third one is here too.\nNew paragraph, short."
+    parts = m._speak_parts(text)
+    assert len(parts) >= 2 and all(len(p) <= 60 + 40 for p in parts)
+    assert " ".join(parts).replace("  ", " ").startswith("First sentence here.")
+    assert m._speak_parts("") == []
+    assert m._speak_parts("One short line") == ["One short line"]
