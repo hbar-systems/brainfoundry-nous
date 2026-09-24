@@ -48,6 +48,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- update: after a healthy update the script prunes dangling images (the previous api
+  image, 1.5 to 2.5 GB each) so a brain on the daily switch does not fill its disk.
 - cc: voice made natural (2026-09-24): eleven_multilingual_v2 with expressive settings by
   default, speech in parts (about 420 characters, on sentence ends) played in sequence with
   the next part prefetched so it starts within seconds; `/voice list` and `/voice use

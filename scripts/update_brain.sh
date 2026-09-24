@@ -298,6 +298,12 @@ if [ $HEALTHY -eq 1 ]; then
     echo ""
     echo "==> Now checked out:"
     git log --oneline -1
+    # Every update leaves the previous api image behind (1.5 to 2.5 GB); with the daily
+    # switch on that filled a 75 GB disk in weeks (hbar, 2026-09-24: 12.6 GB reclaimed by
+    # hand). Dangling images only: never a tagged image, never a container, never a volume.
+    echo ""
+    echo "==> Removing images no container uses any more..."
+    docker image prune -f 2>/dev/null | tail -1 || true
     echo ""
     echo "Backup of previous .env: .env.bak-$TS (safe to delete after a day)"
 else
