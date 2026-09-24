@@ -38,7 +38,7 @@ const SLASH = [
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
   { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
-  { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list, /voice use <name>' },
+  { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list (click a name), /voice <name>' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
@@ -369,6 +369,13 @@ export default function CC() {
     } catch {}
     if (run === sayRef.current) { audioRef.current = null; setSpeaking(false) }
   }
+  const chooseVoice = async (name) => {
+    const r = await fetch('/cc/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: name }) })
+    const d = await r.json().catch(() => ({}))
+    setTurns(t => [...t, { who: 'brain', text: r.ok ? `Voice on: ${d.voice}. Answers are read aloud from now; /voice off to stop.` : (d.error || 'not set'), error: !r.ok }])
+    if (r.ok) { setSpeakSaved(true); say(`This is ${d.voice}. I will read your answers in this voice.`) }
+    loadHealth()
+  }
   const [showTools, setShowTools] = useState(false)
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
@@ -539,18 +546,15 @@ export default function CC() {
       const a0 = (arg || '').trim()
       if (a0.toLowerCase() === 'list') {
         const r = await fetch('/cc/voices'); const d = await r.json().catch(() => ({}))
-        const rows = (d.voices || []).map(v => `${v.name === d.current_name ? '> ' : '  '}${v.name}${v.labels ? ` (${v.labels})` : ''}`).join('\n')
-        setTurns(t => [...t, { who: 'brain', text: rows ? `Voices on your ElevenLabs account (current marked >), model ${d.model}:\n\n\`\`\`\n${rows}\n\`\`\`\n\n/voice use <name> to choose one.` : 'No voices listed; is the key valid?' }])
+        if (!(d.voices || []).length) { setTurns(t => [...t, { who: 'brain', text: 'No voices listed; is the key valid?' }]); return true }
+        setTurns(t => [...t, { who: 'brain', text: `Voices on your ElevenLabs account, model ${d.model}. Click one to use it:`, voices: d.voices, currentVoice: d.current_name }])
         return true
       }
-      if (a0.toLowerCase().startsWith('use ')) {
-        const r = await fetch('/cc/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: a0.slice(4).trim() }) })
-        const d = await r.json().catch(() => ({}))
-        setTurns(t => [...t, { who: 'brain', text: r.ok ? `Voice: ${d.voice}. From the next answer.` : (d.error || 'not set'), error: !r.ok }])
-        if (r.ok) { setSpeakSaved(true); say(`This is ${d.voice}. I will read your answers in this voice.`) }
-        loadHealth(); return true
-      }
-      const on = a0 ? a0.toLowerCase() !== 'off' : !speak
+      // "/voice <name>", "/voice on <name>", "/voice use <name>": choose by name, turn on, introduce
+      const low = a0.toLowerCase()
+      const nameArg = low.startsWith('use ') ? a0.slice(4).trim() : low.startsWith('on ') ? a0.slice(3).trim() : (a0 && !['on', 'off', 'list'].includes(low) ? a0 : '')
+      if (nameArg) { await chooseVoice(nameArg); return true }
+      const on = a0 ? low !== 'off' : !speak
       if (!on) stopSpeaking()
       setSpeakSaved(on)
       setTurns(t => [...t, { who: 'brain', text: on ? 'Voice on. Answers are read aloud as they finish; "listen" under any answer replays it, "stop" stops it.' : 'Voice off.' }])
@@ -755,6 +759,13 @@ export default function CC() {
                   </div>
                 )}
                 {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
+                {t.voices && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                    {t.voices.map(v => (
+                      <a key={v.id} onClick={() => chooseVoice(v.name)} title={v.labels || ''} style={{ ...mono, fontSize: '12px', padding: '4px 10px', borderRadius: '14px', border: `1px solid ${v.name === (health && health.voice_name) ? C.gold : C.line}`, color: v.name === (health && health.voice_name) ? C.gold : C.dim, cursor: 'pointer' }}>{v.name}</a>
+                    ))}
+                  </div>
+                )}
                 {t.asks && t.asks.map(a => <ProposalCard key={a.id} p={a} onDecide={decide} />)}
                 {t.proposal && <ProposalCard p={t.proposal} onDecide={decide} />}
                 {t.who === 'brain' && t.steps && t.steps.length > 0 && (

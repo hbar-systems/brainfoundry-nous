@@ -386,9 +386,13 @@ export default function Upload() {
 
   // Step 2: approve → tell the server to persist (no file re-upload — text was
   // saved server-side on propose, keyed by proposal_id).
-  const decide = async (idx, decision) => {
-    setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: true } : x));
-    const prop = pending[idx];
+  // Keyed by proposal id, not list index, so a batch can approve one after another while the
+  // list shrinks under it (2026-09-24).
+  const decide = async (idx, decision, propArg) => {
+    const prop = propArg || pending[idx];
+    if (!prop) return;
+    const me = (x) => x.proposal_id === prop.proposal_id;
+    setPending(p => p.map(x => me(x) ? { ...x, deciding: true } : x));
     try {
       const d = await fetch("/api/proposal-decide", {
         method: "POST",
@@ -398,7 +402,7 @@ export default function Upload() {
       if (!d.ok) {
         const body = await d.text();
         pushLog(`FAIL decide ${prop.filename}: ${d.status} — ${body.slice(0, 200)}`);
-        setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: false } : x));
+        setPending(p => p.map(x => me(x) ? { ...x, deciding: false } : x));
         return;
       }
 
@@ -440,9 +444,9 @@ export default function Upload() {
               try { data = JSON.parse(dataRaw); } catch { data = dataRaw; }
               if (evName === "chunked" && data?.total != null) {
                 pushLog(`INGESTING ${prop.filename}: ${data.total} chunks queued`);
-                setPending(p => p.map((x, j) => j === idx ? { ...x, progress: { done: 0, total: data.total } } : x));
+                setPending(p => p.map(x => me(x) ? { ...x, progress: { done: 0, total: data.total } } : x));
               } else if (evName === "progress" && data?.done != null) {
-                setPending(p => p.map((x, j) => j === idx ? { ...x, progress: { done: data.done, total: data.total, batch_seconds: data.batch_seconds } } : x));
+                setPending(p => p.map(x => me(x) ? { ...x, progress: { done: data.done, total: data.total, batch_seconds: data.batch_seconds } } : x));
                 // Throttle log spam: log every 5 batches (or every batch when total <= 5).
                 const stride = data.total <= 5 ? 1 : 5;
                 if (data.done - lastLoggedDone >= stride * 32 || data.done === data.total) {
@@ -470,14 +474,29 @@ export default function Upload() {
         pushLog(`REJECTED ${prop.filename}`);
       }
 
-      setPending(p => p.filter((_, i) => i !== idx));
+      setPending(p => p.filter(x => !me(x)));
       loadStats();
       loadAllDocs();
     } catch (err) {
       pushLog(`FAIL decide ${prop.filename}: ${err.message}`);
-      setPending(p => p.map((x, i) => i === idx ? { ...x, deciding: false } : x));
+      setPending(p => p.map(x => me(x) ? { ...x, deciding: false } : x));
     }
   };
+  // Approve every pending proposal in turn (the reconciler proposes documentation in
+  // bulk; one click each was the operator's complaint 2026-09-24). Sequential: each one
+  // embeds before the next starts, and the list shows the progress.
+  const [batchRun, setBatchRun] = useState(null);
+  const approveAll = async () => {
+    const snapshot = pending.filter(x => !x.deciding);
+    if (!snapshot.length) return;
+    setBatchRun({ done: 0, total: snapshot.length });
+    for (const prop of snapshot) {
+      await decide(-1, "APPROVE", prop);
+      setBatchRun(b => (b ? { ...b, done: b.done + 1 } : b));
+    }
+    setBatchRun(null);
+  };
+
 
   const forgetDoc = async (name) => {
     if (!name) return;
@@ -677,6 +696,14 @@ export default function Upload() {
           <div style={{ fontSize: 12, color: MUTED, fontStyle: "italic", marginBottom: 14, lineHeight: 1.6 }}>
             Your NodeOS governance kernel is asking for explicit approval before writing each of these into long-term memory. Approve or reject.
           </div>
+          {pending.length > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <button onClick={approveAll} disabled={!!batchRun} style={{ ...BTN, background: APPROVE, color: "#fff", opacity: batchRun ? 0.5 : 1 }}>
+                {batchRun ? `approving ${batchRun.done} of ${batchRun.total}…` : `Approve all ${pending.length} & ingest`}
+              </button>
+              <span style={{ fontSize: 11, color: MUTED }}>one after another; each is still recorded in the audit</span>
+            </div>
+          )}
           {pending.map((p, i) => (
             <div key={p.proposal_id} style={{ padding: 14, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, background: BG }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>

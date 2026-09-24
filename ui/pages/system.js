@@ -45,8 +45,8 @@ export default function System() {
       <div style={{ maxWidth: '980px', margin: '0 auto', padding: '18px 20px 60px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
         <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, margin: '0 0 6px 0' }}>System · the box in numbers</p>
         <p style={{ fontSize: '13px', color: T.dim, margin: '0 0 16px 0' }}>
-          {api && api.level ? <span style={{ color: tone(api.level) }}>{api.level === 'ok' ? 'everything within thresholds' : `${api.level}: `}</span> : null}
-          {warnings.length ? warnings.join(' · ') : null}
+          {api && api.level ? <span style={{ color: tone(api.level) }}>{api.level === 'ok' ? 'everything within thresholds' : `${api.level}`}</span> : null}
+          {warnings.length ? <span> · {warnings.join(' · ')}</span> : null}
           {at ? <span style={{ ...mono, fontSize: '11px', color: T.faint }}> · read {at.toLocaleTimeString()} · refreshes every minute</span> : null}
         </p>
         {api && api.error ? <p style={{ color: T.alert, fontSize: '13px' }}>{api.error}</p> : null}
