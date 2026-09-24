@@ -49,6 +49,15 @@ export default function Files() {
     if (embedded) { try { window.parent.postMessage({ type: 'cc-ask', text: t }, window.location.origin) } catch {} }
     else window.location.href = `/?ask=${encodeURIComponent(t)}`
   }
+  // "file this": the desk (out, in) is not the archive; the reasoner moves the artifact into the
+  // world where it belongs and commits, on the person's word. Sent as a message, so it goes
+  // through the same cards as any other action (2026-09-24).
+  function fileThis(p) {
+    const t = `File this into the world where it belongs and commit (do not push): ${p}`
+    if (embedded) { try { window.parent.postMessage({ type: 'cc-send', text: t }, window.location.origin) } catch {} }
+    else window.location.href = `/?ask=${encodeURIComponent(t)}`
+  }
+  const onDesk = (p) => /\/(out|in)\//.test('/' + p + '/') && !/\/world\//.test('/' + p + '/')
 
   const crumbs = data && data.path ? data.path.split('/').filter(Boolean) : []
   return (
@@ -113,6 +122,7 @@ export default function Files() {
               <span style={{ ...mono, fontSize: '11px', color: T.faint }}>{fmtSize(sel.size)}</span>
               <a href={raw(sel.path)} download style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download</a>
               <a onClick={() => ask(sel.path)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>ask the brain</a>
+              {onDesk(sel.path) && <a onClick={() => fileThis(sel.path)} title="move it into the world where it belongs and commit" style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>file this</a>}
               <a onClick={() => setSel(null)} style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline', cursor: 'pointer' }}>close</a>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>

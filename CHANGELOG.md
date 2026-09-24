@@ -48,6 +48,10 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: filing. "file this" on anything under out/ or in/ in the Files pane, and `/file <path>
+  [where]` in the chat: the reasoner moves the artifact into the world where it belongs and
+  commits (never pushes); text committed at its place, binaries to the media archive with a
+  committed note. Rules in the system prompt when the world has the laptop's shape.
 - knowledge: "Approve all & ingest" over the pending proposals, one after another with a
   running count; decisions keyed by proposal id. cc: `/voice <name>` and `/voice on <name>`
   choose a voice; `/voice list` shows clickable names. system: header spacing.

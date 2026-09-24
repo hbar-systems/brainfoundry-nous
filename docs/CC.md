@@ -119,6 +119,10 @@ How it works, for the record: Claude Code fires its own PermissionRequest hook w
 
 Two ways to give the reasoner the owner's repositories. The simple one: `CC_WORLD_DIR` a read-only mirror and `CC_WORK_DIR` a folder of writable clones, one per repository. The other (2026-09-24): both variables naming one writable checkout of the owner's world, with the repositories placed inside it exactly as on their own computer (`systems/<system>/repos/<repo>`, mapped by their registry). Then the drawer shows one `world`, the reasoner is told the layout is the one it already knows, "go into that system" means the same folder on both machines, and the 5-minute pull refreshes every nested clone that has no local changes. The hbar.world script that does the placing is `ops/2026-09-24_world-shape/shape-world.sh`.
 
+## Filing: the desk and the archive
+
+`out` (what the reasoner made) and `in` (what you gave it) are the desk. The world is the archive. On anything under them the Files pane offers "file this", and the chat has `/file <path> [where]`: the reasoner moves the artifact into the world where it belongs and commits there, never pushes, and says in one line where it went. Text is committed at its place (a system's ops/, a dated note under ops/, a discussion); binaries are never committed: they go to the media archive (or the owning system's archive/) with a short committed note beside the system that names them. When the place is not clear it asks with two options. Added 2026-09-24; needs the world in the laptop's shape.
+
 ## Files, jobs and attachments
 
 Files: the drawer lists Files, and the reasoner opens it as a pane when it makes something. Five places: out (what the reasoner made, under ~/out/<date>/), in (what you attached), work (your repositories), world (the read-only mirror), brain (the brain's own code). Audio and video play in the pane and seek; images, PDFs and text show; anything downloads; "ask the brain" drops the file's path into the chat.

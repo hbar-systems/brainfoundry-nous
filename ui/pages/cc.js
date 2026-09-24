@@ -38,6 +38,7 @@ const SLASH = [
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
   { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
+  { c: '/file', d: '/file <path> [where]: the reasoner moves an artifact from out/ or in/ into the world where it belongs and commits (no push)' },
   { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list (click a name), /voice <name>' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
@@ -467,6 +468,9 @@ export default function CC() {
         setDraft(e.data.text)
         if (boxRef.current) boxRef.current.focus()
       }
+      if (e.data && e.data.type === 'cc-send' && typeof e.data.text === 'string' && sendRef.current) {
+        sendRef.current(e.data.text)
+      }
     }
     window.addEventListener('message', onMsg)
     return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath) }
@@ -541,6 +545,12 @@ export default function CC() {
       loadHealth(); return true
     }
     if (cmd === 'pane' && arg) { openPane(arg.startsWith('/') ? arg : '/' + arg); return true }
+    if (cmd === 'file') {
+      if (!arg) { setTurns(t => [...t, { who: 'brain', text: 'Say which file: /file <path> [where it should go]. The Files pane has a "file this" link on anything under out or in.' }]); return true }
+      const [p0, ...rest] = arg.trim().split(/\s+/)
+      send(`File this into the world where it belongs and commit (do not push): ${p0}${rest.length ? ` (put it under ${rest.join(' ')})` : ''}`)
+      return true
+    }
     if (cmd === 'voice') {
       if (!(health && health.voice)) { setTurns(t => [...t, { who: 'brain', text: 'This brain has no voice yet: enter ELEVENLABS_API_KEY in the bridge env on the box and restart the bridge.' }]); return true }
       const a0 = (arg || '').trim()

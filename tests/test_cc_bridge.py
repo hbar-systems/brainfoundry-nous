@@ -230,7 +230,7 @@ def test_same_root_means_one_world(monkeypatch, tmp_path):
     monkeypatch.setenv("CC_WORLD_DIR", str(root)); monkeypatch.setenv("CC_WORK_DIR", str(root))
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m.SAME_ROOT is True and "work" not in m.FILES.roots and "world" in m.FILES.roots
-    assert "same layout as on their own computer" in m.SYSTEM
+    assert "same layout as on their own computer" in m.SYSTEM and "Filing:" in m.SYSTEM
     monkeypatch.setenv("CC_WORK_DIR", str(tmp_path))
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m.SAME_ROOT is False

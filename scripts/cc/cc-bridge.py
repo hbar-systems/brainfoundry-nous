@@ -303,6 +303,19 @@ SYSTEM += (
     f"with a clear name, and you end the answer with <pane>/files?path=<that folder or file></pane> so they see and hear it "
     f"beside the chat. Files the person attaches arrive under {IN_DIR}/<date>/ and are named in the message; read them from there."
 )
+if WORLD_DIR and SAME_ROOT:
+    # Filing (2026-09-24, asked for by the operator: "all material gets organised within hbar.world").
+    # out/ and in/ are the desk; the world is the archive. The reasoner files on the person's word.
+    SYSTEM += (
+        f" Filing: {OUT_DIR} and {IN_DIR} are the desk, not the archive. When the person says 'file this' (or /file), move the "
+        f"artifact into the world at {WORLD_DIR} where it belongs and commit there, never push. Where things belong: a text "
+        "artifact (notes, plans, JSON, markdown) is committed at the right place: a note about a system under "
+        "systems/<system>/ops/, a general note under ops/ with the date in its name, a discussion under discussions/. A "
+        "binary artifact (audio, video, images, models) is never committed: move it to systems/hbar.media/archive/<date>_<name>/ "
+        "(or the owning system's archive/) and commit a short markdown note beside the owning system's ops/ that names the "
+        "file, its path, what made it and the person's verdict if given. Commit message: one line, what and why. "
+        "Then say in one line where it went. If the right place is not clear, ask with two options, do not guess."
+    )
 if BOX_ENABLED:
     SYSTEM += (
         " Long work: a command that may run longer than a few minutes (renders, separations, installs, test suites) "
