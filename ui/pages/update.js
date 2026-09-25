@@ -81,6 +81,14 @@ export default function Update() {
   const logBoxRef = useRef(null)
   const abortRef = useRef(null)
 
+  // While the api is being recreated on a new image (checkout moved, running commit not yet),
+  // keep asking every few seconds so the page catches up by itself (2026-09-25).
+  useEffect(() => {
+    if (!(version?.running && version?.checkout && version.running !== version.checkout)) return
+    const t = setInterval(() => { refreshVersion() }, 5000)
+    return () => clearInterval(t)
+  }, [version?.running, version?.checkout])
+
   // Version banner — call /admin/version-info on mount and after success.
   const refreshVersion = async () => {
     setVersionLoading(true)
@@ -398,6 +406,11 @@ export default function Update() {
               : upToDate ? 'Pull latest (already up to date)'
               : 'Pull latest from public template'}
           </button>
+          {version?.running && version?.checkout && version.running !== version.checkout && phase === 'idle' && (
+            <span style={{ color: COLORS.warn.text, fontSize: '13px', marginLeft: '14px', fontFamily: 'system-ui, sans-serif' }}>
+              api restarting on the new image: checkout {version.checkout.slice(0, 7)}, running {version.running.slice(0, 7)}. This page checks every few seconds.
+            </span>
+          )}
           {!upToDate && version?.behind_by > 0 && phase === 'idle' && (
             <span style={{ color: COLORS.muted, fontSize: '13px', marginLeft: '14px', fontFamily: 'system-ui, sans-serif' }}>
               {version.behind_by} new {version.behind_by === 1 ? 'commit' : 'commits'} on origin/main.

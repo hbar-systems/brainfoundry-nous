@@ -482,19 +482,35 @@ export default function Upload() {
       setPending(p => p.map(x => me(x) ? { ...x, deciding: false } : x));
     }
   };
-  // Approve every pending proposal in turn (the reconciler proposes documentation in
-  // bulk; one click each was the operator's complaint 2026-09-24). Sequential: each one
-  // embeds before the next starts, and the list shows the progress.
+  // Approve every pending proposal, on the server (2026-09-25): the api decides and ingests
+  // one after another in its own thread; this page only polls, so it can be left.
   const [batchRun, setBatchRun] = useState(null);
+  const pollBatch = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/documents/approve-all/status`, { cache: "no-store" });
+      if (!r.ok) return;
+      const s = await r.json();
+      if (s.running) { setBatchRun(s); return true; }
+      setBatchRun(s.total ? { ...s, finishedNow: true } : null);
+      setPending([]);
+      return false;
+    } catch { return false; }
+  };
+  useEffect(() => {
+    let alive = true;
+    (async () => { const running = await pollBatch(); if (!running || !alive) return; })();
+    const t = setInterval(async () => { if (!alive) return; const running = await pollBatch(); if (!running) clearInterval(t); }, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   const approveAll = async () => {
-    const snapshot = pending.filter(x => !x.deciding);
-    if (!snapshot.length) return;
-    setBatchRun({ done: 0, total: snapshot.length });
-    for (const prop of snapshot) {
-      await decide(-1, "APPROVE", prop);
-      setBatchRun(b => (b ? { ...b, done: b.done + 1 } : b));
-    }
-    setBatchRun(null);
+    try {
+      const r = await fetch(`${API_BASE}/documents/approve-all`, { method: "POST" });
+      const s = await r.json().catch(() => ({}));
+      if (!r.ok) { pushLog(`FAIL approve all: ${r.status} ${s.detail || ""}`); return; }
+      setBatchRun(s);
+      pushLog(`APPROVE ALL: ${s.total} documents, running on the server; you can leave this page.`);
+      const t = setInterval(async () => { const running = await pollBatch(); if (!running) clearInterval(t); }, 3000);
+    } catch (e) { pushLog(`FAIL approve all: ${e}`); }
   };
 
 
@@ -689,6 +705,11 @@ export default function Upload() {
         )}
       </section>
 
+      {batchRun && !batchRun.running && batchRun.finishedNow && (
+        <section style={{ padding: 14, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 16, fontSize: 13, color: TEXT }}>
+          Approve all finished: {batchRun.done - (batchRun.failed || []).length} of {batchRun.total} ingested{(batchRun.failed || []).length ? `, ${batchRun.failed.length} failed: ${batchRun.failed.map(f => `${f.name} (${f.error})`).join("; ")}` : ""}.
+        </section>
+      )}
       {/* Pending proposals — the governance moment */}
       {pending.length > 0 && (
         <section style={{ padding: 20, border: `1px solid ${ACCENT}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
@@ -698,10 +719,10 @@ export default function Upload() {
           </div>
           {pending.length > 1 && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-              <button onClick={approveAll} disabled={!!batchRun} style={{ ...BTN, background: APPROVE, color: "#fff", opacity: batchRun ? 0.5 : 1 }}>
-                {batchRun ? `approving ${batchRun.done} of ${batchRun.total}…` : `Approve all ${pending.length} & ingest`}
+              <button onClick={approveAll} disabled={!!(batchRun && batchRun.running)} style={{ ...BTN, background: APPROVE, color: "#fff", opacity: batchRun && batchRun.running ? 0.5 : 1 }}>
+                {batchRun && batchRun.running ? `approving ${batchRun.done} of ${batchRun.total} on the server…` : `Approve all ${pending.length} & ingest`}
               </button>
-              <span style={{ fontSize: 11, color: MUTED }}>one after another; each is still recorded in the audit</span>
+              <span style={{ fontSize: 11, color: MUTED }}>{batchRun && batchRun.running ? `now: ${batchRun.current || "…"} · you can leave this page` : "runs on the server, one after another; each is still recorded in the audit"}</span>
             </div>
           )}
           {pending.map((p, i) => (

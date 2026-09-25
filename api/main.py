@@ -6594,6 +6594,69 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
     }
 
 
+# ── Approve all pending, server side (2026-09-25) ──────────────────────────
+# The Knowledge tab's batch used to run in the browser, one document after another; leaving
+# the page stopped it. Now the api runs the batch in a thread: decide APPROVE in NodeOS, then
+# the same Path B ingest the tab uses, for each pending document proposal; the page polls the
+# status and can be left. One batch at a time; the audit records each decision as before.
+_APPROVE_ALL: Dict[str, Any] = {"running": False, "total": 0, "done": 0, "failed": [], "current": None,
+                                "started": None, "finished": None}
+_APPROVE_ALL_LOCK = threading.Lock()
+
+
+def _pending_document_proposals() -> List[Dict[str, Any]]:
+    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": 1000}, timeout=15)
+    r.raise_for_status()
+    items = r.json().get("proposals") or []
+    return [p for p in items if p.get("memory_type") == "document_embedding" and p.get("proposal_id")]
+
+
+def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
+    for p in items:
+        pid = p["proposal_id"]
+        name = (p.get("source_refs") or {}).get("filename") or pid
+        _APPROVE_ALL["current"] = name
+        try:
+            d = _nodeos_decide_memory(pid, "APPROVE", "operator (approve all)")
+            if not d or str(d.get("status", "APPROVED")).upper() not in ("APPROVED", "OK"):
+                raise RuntimeError(f"decide returned {d}")
+            saved = _load_proposal_text(pid)
+            if not saved:
+                raise RuntimeError("no persisted text (re-propose it)")
+            layer = (p.get("source_refs") or {}).get("layer") or None
+            for ev in _stream_ingest_path_b(text=saved["text"], filename=saved["filename"], content_type=saved.get("content_type", ""),
+                                            size=saved.get("size", len(saved["text"])), proposal_id=pid, layer=layer,
+                                            injection_risk=(saved.get("injection_scan") or {}).get("risk")):
+                if isinstance(ev, str) and ev.startswith("event: error"):
+                    raise RuntimeError(ev.split("data:", 1)[-1].strip()[:200])
+        except Exception as e:  # noqa: BLE001
+            _APPROVE_ALL["failed"].append({"name": name, "error": f"{type(e).__name__}: {e}"[:200]})
+            print(f"[approve-all] {name}: {type(e).__name__}: {e}", flush=True)
+        _APPROVE_ALL["done"] += 1
+    _APPROVE_ALL.update(running=False, current=None, finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+
+
+@app.post("/documents/approve-all")
+def documents_approve_all(api_key: str = Depends(get_api_key)):
+    with _APPROVE_ALL_LOCK:
+        if _APPROVE_ALL["running"]:
+            return {**_APPROVE_ALL, "already_running": True}
+        try:
+            items = _pending_document_proposals()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"could not list pending proposals: {type(e).__name__}")
+        _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
+                            started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), finished=None if items else "nothing pending")
+        if items:
+            threading.Thread(target=_approve_all_worker, args=(items,), name="approve-all", daemon=True).start()
+    return dict(_APPROVE_ALL)
+
+
+@app.get("/documents/approve-all/status")
+def documents_approve_all_status(api_key: str = Depends(get_api_key)):
+    return dict(_APPROVE_ALL)
+
+
 @app.get("/admin/system")
 def admin_system(api_key: str = Depends(get_api_key)):
     """The technical surface: disk, memory, load, containers, backups, last update, database,
