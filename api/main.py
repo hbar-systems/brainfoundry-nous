@@ -2241,39 +2241,43 @@ def health_check():
             models = response.json().get("models", [])
             ollama_status = {
                 "status": "healthy",
-                "endpoint": OLLAMA_URL,
+                "endpoint": _active,
                 "models": len(models),
                 "error": None
             }
         else:
             ollama_status = {
                 "status": "error",
-                "endpoint": OLLAMA_URL,
+                "endpoint": _active,
                 "models": 0,
                 "error": f"HTTP {response.status_code}"
             }
     except requests.exceptions.Timeout:
         ollama_status = {
             "status": "timeout",
-            "endpoint": OLLAMA_URL,
+            "endpoint": _active,
             "models": 0,
             "error": "Connection timeout (3s)"
         }
     except requests.exceptions.ConnectionError:
         ollama_status = {
             "status": "unreachable",
-            "endpoint": OLLAMA_URL,
+            "endpoint": _active,
             "models": 0,
             "error": "Connection refused"
         }
     except Exception as e:
         ollama_status = {
             "status": "error",
-            "endpoint": OLLAMA_URL,
+            "endpoint": _active,
             "models": 0,
             "error": str(e)
         }
     
+    # Each branch above rebuilds the dict; the spoke's state must survive that (2026-09-25).
+    ollama_status.update({"box": OLLAMA_URL, "spoke": _providers.OLLAMA_SPOKE_URL or None,
+                          "spoke_up": _providers.spoke_up() if _providers.OLLAMA_SPOKE_URL else None})
+
     # Test embedding model
     from api.embeddings.model import is_model_loaded, model_error, spoke_status
     embedding_status = "healthy" if is_model_loaded() else "not_loaded"
