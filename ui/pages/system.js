@@ -24,6 +24,7 @@ export default function System() {
   const [host, setHost] = useState(null)
   const [health, setHealth] = useState(null)
   const [at, setAt] = useState(null)
+  const [pruning, setPruning] = useState(null)
   const load = async () => {
     try { const r = await fetch('/api/bf/admin/system', { cache: 'no-store' }); setApi(r.ok ? await r.json() : { error: `api ${r.status}` }) } catch { setApi({ error: 'api not answering' }) }
     try { const r = await fetch('/cc/system', { cache: 'no-store' }); setHost(r.ok ? await r.json() : null) } catch { setHost(null) }
@@ -63,7 +64,8 @@ export default function System() {
         <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Containers and images</h2>
         <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
           {(dk.containers || []).map(c => <div key={c.name}><span style={{ color: c.state === 'running' ? T.ok : T.alert }}>{c.state}</span> {c.name} <span style={{ color: T.faint }}>{c.status} · {c.image}</span></div>)}
-          {dk.images ? <div style={{ marginTop: '6px' }}>{dk.images.count} images, {dk.images.size}{typeof dk.reclaimable_gb === 'number' ? ` · ${dk.reclaimable_gb} GB reclaimable` : ''}</div> : null}
+          {dk.images ? <div style={{ marginTop: '6px' }}>{dk.images.count} images, {dk.images.size}{typeof dk.reclaimable_gb === 'number' ? ` · ${dk.reclaimable_gb} GB reclaimable` : ''}
+            {dk.reclaimable_gb >= 1 ? <> · <a onClick={async () => { setPruning('working'); try { const r = await fetch('/api/bf/admin/prune-images', { method: 'POST' }); const d = await r.json().catch(() => ({})); setPruning(d.result || (r.ok ? 'done' : 'failed')) } catch { setPruning('failed') } load() }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>reclaim now</a>{pruning ? ` (${pruning})` : ''}</> : null}</div> : null}
           <div>running commit {up.running_commit}{up.previous_commit ? ` · previous ${up.previous_commit}` : ''}{up.built_at ? ` · built ${up.built_at}` : ''}{up.helper_log_at ? ` · last update ${up.helper_log_at.slice(0, 16).replace('T', ' ')}` : ''}</div>
         </div>
 
@@ -85,7 +87,7 @@ export default function System() {
             </div>
           </>
         ) : null}
-        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB. Nothing on this page changes anything.</p>
+        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB. The only action here is "reclaim now": it removes images no container uses, the same step the update runs.</p>
       </div>
     </>
   )

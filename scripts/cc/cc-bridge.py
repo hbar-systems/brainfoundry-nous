@@ -722,7 +722,8 @@ def _judge_proposal(p: dict) -> dict | None:
 ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
 VOICE_ID = os.environ.get("CC_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()      # ElevenLabs stock voice "George"
 VOICE_MODEL = os.environ.get("CC_VOICE_MODEL", "eleven_multilingual_v2").strip()   # the natural one; flash is the fast one
-VOICE_SETTINGS = {"stability": 0.45, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": True}
+VOICE_SPEED = float(os.environ.get("CC_VOICE_SPEED", "1.1"))   # 0.7 slow to 1.2 fast; the operator found 1.0 too slow (2026-09-26)
+VOICE_SETTINGS = {"stability": 0.45, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": True, "speed": VOICE_SPEED}
 VOICE_PART_CHARS = int(os.environ.get("CC_VOICE_PART_CHARS", "420"))   # speech is made a part at a time so it starts within seconds
 _VOICES_CACHE = {"at": 0.0, "voices": []}
 VOICE_MAX_CHARS = int(os.environ.get("CC_VOICE_MAX_CHARS", "2500"))

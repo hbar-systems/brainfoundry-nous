@@ -335,9 +335,62 @@ export default function CC() {
   const [speaking, setSpeaking] = useState(false)
   const audioRef = useRef(null)
   const sayRef = useRef(0)
+  const speechQ = useRef({ run: 0, items: [], playing: false })
+  const spokenRef = useRef(0)
   useEffect(() => { try { setSpeak(localStorage.getItem('cc.speak') === '1') } catch {} }, [])
   const setSpeakSaved = (v) => { setSpeak(v); try { localStorage.setItem('cc.speak', v ? '1' : '0') } catch {} }
-  const stopSpeaking = () => { sayRef.current++; const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
+  const stopSpeaking = () => { sayRef.current++; if (speechQ.current) { speechQ.current.run++; speechQ.current.items = []; speechQ.current.playing = false } const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
+  // Streamed speech (2026-09-26): while the answer is still arriving, each finished paragraph
+  // (or a long enough run of sentences) is sent for speech at once and played in order, so
+  // the brain starts talking a second or two after it starts writing, not after it finishes.
+  const playUrl2 = (url) => new Promise((resolve) => {
+    const a = new Audio(url)
+    audioRef.current = a
+    a.onended = () => resolve(true)
+    a.onerror = () => resolve(false)
+    a.play().catch(() => resolve(false))
+  })
+  const drainSpeech = async (run) => {
+    const q = speechQ.current
+    q.playing = true; setSpeaking(true)
+    while (q.items.length && q.run === run) {
+      const it = q.items.shift()
+      const url = await it.p
+      if (!url || q.run !== run) continue
+      await playUrl2(url)
+      URL.revokeObjectURL(url)
+    }
+    q.playing = false
+    if (q.run === run) { audioRef.current = null; setSpeaking(false) }
+  }
+  const enqueueSpeech = (fragment) => {
+    const f = (fragment || '').trim()
+    if (!f) return
+    const q = speechQ.current
+    const p = fetch('/cc/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: f, part: 0 }) })
+      .then(async r => (r.ok ? URL.createObjectURL(await r.blob()) : null)).catch(() => null)
+    q.items.push({ p })
+    if (!q.playing) drainSpeech(q.run)
+  }
+  // Given the text so far, speak what is complete beyond what was already spoken.
+  const speakProgress = (full, final) => {
+    let from = spokenRef.current
+    if (from >= full.length) return
+    const rest = full.slice(from)
+    let cut = -1
+    if (final) cut = rest.length
+    else {
+      const para = rest.lastIndexOf('\n\n')
+      if (para > 40) cut = para
+      else if (rest.length > 320) { const m = rest.slice(0, 320).lastIndexOf('. '); if (m > 60) cut = m + 1 }
+    }
+    if (cut <= 0) return
+    // never cut inside a code block or a pane tag
+    const piece = rest.slice(0, cut)
+    if ((piece.split('```').length - 1) % 2 === 1 || (piece.includes('<pane>') && !piece.includes('</pane>'))) return
+    spokenRef.current = from + cut
+    enqueueSpeech(piece)
+  }
   const say = async (text) => {
     // Speech arrives a part at a time: the first part plays while the next is fetched, so a
     // long answer starts within a couple of seconds instead of after the whole was made.
@@ -625,8 +678,8 @@ export default function CC() {
             const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const dl = (chunk.match(/^data: (.*)$/m) || [])[1]
             if (!ev || !dl) continue
             let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
-            if (ev === 'start') upd(x => ({ ...x, model: pl.model }))
-            else if (ev === 'text') upd(x => ({ ...x, text: x.text + (pl.t || '') }))
+            if (ev === 'start') { spokenRef.current = 0; stopSpeaking(); upd(x => ({ ...x, model: pl.model })) }
+            else if (ev === 'text') upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } })
             else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
             else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
             else if (ev === 'done') data = pl
@@ -635,7 +688,8 @@ export default function CC() {
         if (!data) data = { reply: 'The stream ended without an answer.', error: true }
         const reply = data.reply || '(no answer)'
         setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
-        if (speak && health && health.voice && !data.error) say(reply)
+        if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
+        spokenRef.current = 0
       } else {
         data = await r.json().catch(() => ({}))
         const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)

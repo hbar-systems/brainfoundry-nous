@@ -6657,6 +6657,18 @@ def documents_approve_all_status(api_key: str = Depends(get_api_key)):
     return dict(_APPROVE_ALL)
 
 
+@app.post("/admin/prune-images")
+def admin_prune_images(api_key: str = Depends(get_api_key)):
+    """Remove images no container uses (the previous api images). Dangling only, never a
+    tagged image, container or volume; the same command the update script runs (2026-09-26)."""
+    try:
+        r = subprocess.run(["docker", "image", "prune", "-f"], capture_output=True, text=True, timeout=120)
+        last = (r.stdout.strip().splitlines() or [""])[-1]
+        return {"ok": r.returncode == 0, "result": last or r.stderr.strip()[:200]}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
 @app.get("/admin/system")
 def admin_system(api_key: str = Depends(get_api_key)):
     """The technical surface: disk, memory, load, containers, backups, last update, database,
