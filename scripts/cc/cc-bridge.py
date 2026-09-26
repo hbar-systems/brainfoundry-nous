@@ -571,8 +571,12 @@ ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
 # error, or a timeout means: ask. Their model judges; the gate still consents and records.
 TYPESAFE_KEY = os.environ.get("TYPESAFE_API_KEY", "").strip()
 TYPESAFE_URL = os.environ.get("TYPESAFE_URL", "https://api.typesafe.ai/v1/systemone")
-JUDGE_SAFE = float(os.environ.get("CC_JUDGE_SAFE", "0.90"))      # noul: safe to run unasked
-JUDGE_INTENT = float(os.environ.get("CC_JUDGE_INTENT", "0.70"))  # noul: serves the last request
+# Thresholds tuned on the first real judgments (2026-09-26, three actions on hbar): two plainly
+# read-only commands (cat | python3 over a registry file, curl of a public page) scored safe
+# 0.86 and 0.83 and asked; the git log that ran scored 0.92. A "where are we" question put
+# the registry read at intent 0.66. Both bars moved down one notch; risk stays at "mild".
+JUDGE_SAFE = float(os.environ.get("CC_JUDGE_SAFE", "0.80"))      # noul: safe to run unasked
+JUDGE_INTENT = float(os.environ.get("CC_JUDGE_INTENT", "0.60"))  # noul: serves the last request
 JUDGE_RISK = float(os.environ.get("CC_JUDGE_RISK", "1.0"))       # score 0..3, at most "mild"
 LAST_MESSAGE = {"text": ""}                                       # the person's current request, for the judge
 
