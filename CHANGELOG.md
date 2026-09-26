@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc voice: speaks while the answer streams (each finished paragraph goes to speech at once,
+  played in order), speed 1.1 by default (CC_VOICE_SPEED). system: "reclaim now" removes
+  images no container uses (`POST /admin/prune-images`).
 - cc judged: thresholds 0.80 safe, 0.60 on request (were 0.90, 0.70) after the first three
   real judgments: read-only commands were asking.
 - update: the helper prunes dangling images 20 s after recreating the api (the in-script
