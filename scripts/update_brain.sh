@@ -269,7 +269,7 @@ else
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
         "$API_IMAGE" \
-        bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'"
+        bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'; sleep 20; docker image prune -f >> '$HELPER_LOG' 2>&1"
     echo "    api is restarting on the new image. If you ran this from the brain's"
     echo "    Update tab, the live log stops here — that is expected; the tab polls"
     echo "    until the running commit matches."
@@ -303,6 +303,8 @@ if [ $HEALTHY -eq 1 ]; then
     # hand). Dangling images only: never a tagged image, never a container, never a volume.
     echo ""
     echo "==> Removing images no container uses any more..."
+    # When the api was recreated by the helper, the old image is still in use at this point;
+    # the helper prunes again 20 s after it finishes (seen 2026-09-26: 11 GB left behind).
     docker image prune -f 2>/dev/null | tail -1 || true
     echo ""
     echo "Backup of previous .env: .env.bak-$TS (safe to delete after a day)"

@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- update: the helper prunes dangling images 20 s after recreating the api (the in-script
+  prune ran while the old image was still in use). cc filing: binaries go to the media ship
+  by rsync when systems/hbar.media/SPOKE.md exists in the world.
 - knowledge: Approve all runs on the server (`POST /documents/approve-all`, status at
   `/documents/approve-all/status`): the api decides and ingests one after another in its
   own thread; the page polls and can be left. update: the tab says when the api is still

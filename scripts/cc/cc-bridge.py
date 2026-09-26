@@ -311,9 +311,10 @@ if WORLD_DIR and SAME_ROOT:
         f"artifact into the world at {WORLD_DIR} where it belongs and commit there, never push. Where things belong: a text "
         "artifact (notes, plans, JSON, markdown) is committed at the right place: a note about a system under "
         "systems/<system>/ops/, a general note under ops/ with the date in its name, a discussion under discussions/. A "
-        "binary artifact (audio, video, images, models) is never committed: move it to systems/hbar.media/archive/<date>_<name>/ "
-        "(or the owning system's archive/) and commit a short markdown note beside the owning system's ops/ that names the "
-        "file, its path, what made it and the person's verdict if given. Commit message: one line, what and why. "
+        "binary artifact (audio, video, images, models) is never committed: if systems/hbar.media/SPOKE.md exists in the world, "
+        "read it and rsync the file to the media ship as it says (archive/<date>_<name>/ there); otherwise move it to "
+        "systems/hbar.media/archive/<date>_<name>/ locally. Then commit a short markdown note beside the owning system's ops/ "
+        "that names the file, where it went, what made it and the person's verdict if given. Commit message: one line, what and why. "
         "Then say in one line where it went. If the right place is not clear, ask with two options, do not guess."
     )
 if BOX_ENABLED:
