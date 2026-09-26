@@ -152,9 +152,7 @@ export default function Upload() {
   // are not in this component's local state — without this fetch the operator
   // would never see them and the MCP write-side chat would block forever
   // waiting for an approval that has no visible button.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  const loadPending = async () => {
       try {
         const r = await fetch(`${API_BASE}/memory/proposals?status=PENDING&limit=100`, { cache: "no-store" });
         if (!r.ok) return;
@@ -168,7 +166,7 @@ export default function Upload() {
             layer: p.source_refs?.layer || "",
             deciding: false,
           }));
-        if (cancelled || docs.length === 0) return;
+        if (docs.length === 0) return;
         setPending(prev => {
           const seen = new Set(prev.map(x => x.proposal_id));
           const fresh = docs.filter(d => !seen.has(d.proposal_id));
@@ -177,9 +175,8 @@ export default function Upload() {
       } catch {
         // Silent — pending panel just stays empty if the proxy can't reach NodeOS.
       }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  };
+  useEffect(() => { loadPending(); }, []);
 
   // Filter hidden files (.git, .env, .DS_Store, etc.) and obvious binaries we
   // don't want indexing into a memory layer. Buyers folder-uploading hbar.world
@@ -485,14 +482,18 @@ export default function Upload() {
   // Approve every pending proposal, on the server (2026-09-25): the api decides and ingests
   // one after another in its own thread; this page only polls, so it can be left.
   const [batchRun, setBatchRun] = useState(null);
+  // Only a batch seen running in this page session may clear the list when it ends: the
+  // status endpoint keeps reporting the last finished batch, and on 2026-09-26 that wiped ten
+  // real pending documents from the page on every load ("10 wait" in the footer, none shown).
+  const sawRunningRef = useRef(false);
   const pollBatch = async () => {
     try {
       const r = await fetch(`${API_BASE}/documents/approve-all/status`, { cache: "no-store" });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const s = await r.json();
-      if (s.running) { setBatchRun(s); return true; }
-      setBatchRun(s.total ? { ...s, finishedNow: true } : null);
-      setPending([]);
+      if (s.running) { sawRunningRef.current = true; setBatchRun(s); return true; }
+      if (sawRunningRef.current) { sawRunningRef.current = false; setBatchRun({ ...s, finishedNow: true }); setPending([]); loadPending(); }
+      else setBatchRun(null);
       return false;
     } catch { return false; }
   };

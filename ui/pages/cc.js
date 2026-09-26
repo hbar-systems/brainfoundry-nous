@@ -919,7 +919,7 @@ export default function CC() {
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
         {showTools && health && health.tools && (
-          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0', lineHeight: 1.6, wordBreak: 'break-word' }}>{health.tools.split(',').join('  ')}</p>
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0', lineHeight: 1.6, wordBreak: 'break-word', maxHeight: '84px', overflowY: 'auto' }}>{health.tools.split(',').join('  ')}</p>
         )}
         {showAuto && auto.length > 0 && (
           <ul style={{ ...mono, listStyle: 'none', padding: '8px 0 0 0', margin: 0, color: C.dim, fontSize: '11px' }}>

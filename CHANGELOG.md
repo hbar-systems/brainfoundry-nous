@@ -48,6 +48,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- knowledge: the pending list is no longer wiped on load by the record of a finished batch
+  (ten real proposals were hidden). cc: the tool list in the footer is a small scroll box.
 - cc layout: the conversation is its own scroll area; the composer and footer stay at the
   bottom of the screen; a new answer is shown from its top and the view does not chase a
   streaming answer downwards.
