@@ -571,9 +571,27 @@ export default function CC() {
     }
   }
 
+  // Scrolling (2026-09-26, the operator's complaint: "I have to scroll up"). The conversation is
+  // its own scroll area under a fixed composer. A message of yours scrolls to the end; the brain's
+  // answer scrolls so that its top is in view and stays there while it streams; you read down.
+  const convRef = useRef(null)
+  const lastCountRef = useRef(0)
   useEffect(() => {
-    if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [turns, busy])
+    const el = convRef.current
+    if (!el) return
+    const n = turns.length
+    if (n === lastCountRef.current) return
+    lastCountRef.current = n
+    const last = turns[n - 1]
+    if (!last) return
+    if (last.who === 'brain') {
+      const nodes = el.querySelectorAll('[data-turn]')
+      const node = nodes[nodes.length - 1]
+      if (node) el.scrollTo({ top: node.offsetTop - el.offsetTop - 8, behavior: 'smooth' })
+    } else if (endRef.current) {
+      endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
+  }, [turns])
 
   const loggedIn = !!(health && health.auth && health.auth.loggedIn)
 
@@ -745,14 +763,14 @@ export default function CC() {
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
       <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : '860px', margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
-                    fontFamily: 'var(--font-display, serif)', display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 60px)' }}>
+                    fontFamily: 'var(--font-display, serif)', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div>
             <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 4px 0' }}>
               cc · reasoning from inside the brain
             </p>
-            <h1 style={{ fontSize: '26px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
+            <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {threads.length > 0 && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
@@ -791,7 +809,7 @@ export default function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 2px' }}>
+        <div ref={convRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px' }}>
           {pending.map(p => (
             <div key={p.id} style={{ display: 'flex', justifyContent: 'flex-start', margin: '8px 0' }}>
               <div style={{ maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: '14px', lineHeight: 1.6 }}>
@@ -808,7 +826,7 @@ export default function CC() {
             </p>
           )}
           {turns.map((t, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: '8px 0' }}>
+            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: '8px 0' }}>
               <div style={{
                 maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
