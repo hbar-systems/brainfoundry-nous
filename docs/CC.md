@@ -163,6 +163,10 @@ With CC on, the drawer lists Terminal: a shell on your box as its owner, framed 
 
 On provisioned brains the brain user has sudo, so a reasoner running as that user is a full administrator of the box. `bash scripts/cc/harden-user.sh` moves the bridge to a plain user named cc: its own home, its own reasoner sign-in, the permits and audit moved over, the units rewritten. The terminal door stays the brain user's. Run it with `--copy-login` only on a brain you operate yourself, to copy your own reasoner sign-in to the new user; otherwise sign the new user in with your API key from the CC page or with `set-token.sh`. The installer remembers the bridge user afterwards.
 
+## Two users: the bridge and the hands
+
+Until 2026-09-27 the bridge and the reasoner ran as one user, so the reasoner could read the gate's signing secret and call the bridge's own decision routes on localhost. Now the box can be split: the bridge keeps its state, keys and tokens in its own home, closed to the hands; the reasoner and its jobs run as a second user (`hands`) through sudo, with a sanitized environment that carries only what the permission hook and cc-job need; and every page route of the bridge requires an operator token that the console's proxy (Caddy) adds to requests that passed the owner's login, from a root-only environment file the hands cannot read. `scripts/cc/split-hands.sh` does the migration once (user, moves, modes, sudoers, tokens, Caddy, units) and `split-hands.sh verify` runs the four checks: the hands cannot read the bridge's state nor the brain's .env, the bridge reads the hands' world, a decision without the token is refused. `CC_HANDS_USER` empty keeps the single-user mode for boxes not yet migrated. What the hands still hold by necessity: their own reasoner login, the packs' keys (the packs run as the hands), the GitHub token for pushes, and the ask token (which only lets them ask).
+
 ## Security shape
 
 - The bridge and the terminal bind to localhost. The only way in is the console password over HTTPS.

@@ -83,9 +83,9 @@ case "${1:-}" in
     # The sign-in must land with the user the bridge runs as. After harden-user.sh that is
     # not the door's user; signing in here as the door's user left the bridge disconnected
     # (observed 2026-09-21). __BRIDGE_USER__ is filled in by the installer.
-    if [ "__BRIDGE_USER__" != "$(id -un)" ]; then
-        sudo -n -u "__BRIDGE_USER__" -H env PATH="/home/__BRIDGE_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM" claude auth login --claudeai \
-            || printf '\n  Could not switch to the bridge user from here. In a terminal on the box run:\n  sudo -u __BRIDGE_USER__ -H claude auth login --claudeai\n'
+    if [ "__LOGIN_USER__" != "$(id -un)" ]; then
+        sudo -n -u "__LOGIN_USER__" -H env PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM" claude auth login --claudeai \
+            || printf '\n  Could not switch to the reasoner user from here. In a terminal on the box run:\n  sudo -u __LOGIN_USER__ -H claude auth login --claudeai\n'
     else
         claude auth login --claudeai
     fi
@@ -95,7 +95,8 @@ case "${1:-}" in
     exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;
 esac
 DOOR
-sed -i "s|__BRIDGE_USER__|$BRIDGE_USER|g" "$HOME_DIR/.cc-bridge/door.sh"
+LOGIN_USER=$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$ENV_FILE" 2>/dev/null || true); LOGIN_USER=${LOGIN_USER:-$BRIDGE_USER}
+sed -i "s|__LOGIN_USER__|$LOGIN_USER|g; s|__BRIDGE_USER__|$BRIDGE_USER|g" "$HOME_DIR/.cc-bridge/door.sh"
 chmod 755 "$HOME_DIR/.cc-bridge/door.sh"; FIX_OWNER
 THEME='{"background":"#0f0e0c","foreground":"#e8e0d5","cursor":"#c9a96e","selectionBackground":"#3a3520","black":"#0f0e0c","brightBlack":"#6b5f52","white":"#e8e0d5","brightWhite":"#ffffff","yellow":"#c9a96e","brightYellow":"#e0c48a","blue":"#8fb3c9","green":"#9fbf8f","red":"#d08a7a"}'
 sudo tee /etc/systemd/system/claude-tab.service >/dev/null <<UNIT
@@ -345,7 +346,10 @@ if idx < 0:
     sys.exit("could not find the console ui reverse_proxy line; add the route by hand (docs/CC.md)")
 ls = text.rfind("\n", 0, idx) + 1
 indent = re.match(r"[ \t]*", text[ls:idx]).group(0)
-block = f"{indent}@{name} path {base} {base}/*\n{indent}handle @{name} {{\n{indent}    reverse_proxy localhost:{port}\n{indent}}}\n"
+# The operator token (2026-09-27): Caddy adds it to every request that passed the owner's login,
+# from its own environment (/etc/caddy/cc.env, root only, written by split-hands.sh); a process
+# on the box cannot forge it. With no token set the header is empty and the bridge does not check.
+block = f"{indent}@{name} path {base} {base}/*\n{indent}handle @{name} {{\n{indent}    reverse_proxy localhost:{port} {{\n{indent}        header_up X-CC-Operator {{$CC_OPERATOR_TOKEN}}\n{indent}    }}\n{indent}}}\n"
 open(path, "w").write(text[:ls] + block + text[ls:])
 print(f"inserted {base} route")
 PY

@@ -55,7 +55,20 @@ BIND = os.environ.get("CC_BIND", "127.0.0.1")
 PORT = int(os.environ.get("CC_PORT", "7682"))
 BASE = os.environ.get("CC_BASE", "/cc").rstrip("/")
 CWD = os.environ.get("CC_CWD", str(Path.home() / "brain"))
-REASONER = os.environ.get("CC_BIN", str(Path.home() / ".local" / "bin" / "claude"))
+# Two users (2026-09-27, closing the gap the operator asked about: the bridge and the reasoner
+# shared a user, so the reasoner could read the gate's secret and call the bridge's own
+# decision routes). When CC_HANDS_USER is set, the reasoner and its jobs run as that user
+# through sudo, with a sanitized environment (no keys, only what the hook and cc-job need),
+# from that user's home; the bridge keeps its state, keys and tokens in its own home, closed
+# to the hands. Empty CC_HANDS_USER means the old single-user mode (everything as the bridge
+# user), kept for boxes not yet migrated (scripts/cc/split-hands.sh does the migration).
+HANDS_USER = os.environ.get("CC_HANDS_USER", "").strip()
+HANDS_HOME = Path(os.environ.get("CC_HANDS_HOME", "").strip() or (f"/home/{HANDS_USER}" if HANDS_USER else str(Path.home())))
+REASONER = os.environ.get("CC_BIN", str(HANDS_HOME / ".local" / "bin" / "claude"))
+# The operator token: the console's proxy adds it to every request that came through the
+# owner's login (X-CC-Operator); the bridge refuses page routes without it when it is set.
+# A process on the box itself (the hands) has no way to obtain it.
+OPERATOR_TOKEN = os.environ.get("CC_OPERATOR_TOKEN", "").strip()
 STATE_DIR = Path.home() / ".cc-bridge"
 STATE = STATE_DIR / "state.json"
 TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "900" if os.environ.get("CC_BOX", "").strip() == "1" else "300"))
@@ -305,11 +318,15 @@ if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
-OUT_DIR = Path.home() / "out"
-IN_DIR = Path.home() / "in"
-OUT_DIR.mkdir(exist_ok=True); IN_DIR.mkdir(exist_ok=True)
+OUT_DIR = HANDS_HOME / "out"
+IN_DIR = HANDS_HOME / "in"
+for _d in (OUT_DIR, IN_DIR):
+    try:
+        _d.mkdir(exist_ok=True)
+    except OSError:
+        pass   # the hands' home is not ours to create in; split-hands.sh makes these
 FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), **({} if SAME_ROOT else {"work": WORK_DIR}), "world": WORLD_DIR, "brain": CWD})
-JOBS = cc_extras.Jobs(OUT_DIR, lambda: _env())
+JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv))
 UPLOADS = cc_extras.Uploads(IN_DIR)
 SYSTEM += (
     f" Files: anything you produce for the person (audio, images, video, documents, data) goes under {OUT_DIR}/<date>/ "
@@ -1172,6 +1189,33 @@ def _env() -> dict:
     return env
 
 
+HANDS_ENV_KEYS = ("CC_ASK_TOKEN", "CC_PORT", "CC_BASE", "CC_BIND", "CC_MCP_CONFIG", "CC_CWD", "CC_WORLD_DIR", "CC_WORK_DIR",
+                  "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "LANG", "LC_ALL")
+
+
+def _hands_env() -> dict:
+    """The environment the reasoner (and its jobs) run with: only what the hook and cc-job need,
+    never the bridge's keys. Pure; tested. In single-user mode it is the full env as before."""
+    if not HANDS_USER:
+        return _env()
+    env = {k: os.environ[k] for k in HANDS_ENV_KEYS if os.environ.get(k)}
+    env["HOME"] = str(HANDS_HOME)
+    env["USER"] = HANDS_USER
+    env["PATH"] = f"{HANDS_HOME / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+    env["TERM"] = "dumb"
+    return env
+
+
+def _as_hands(cmd: list) -> list:
+    """Wrap a command so it runs as the hands user (sudo, no password, sudoers written by
+    split-hands.sh). The environment is passed explicitly through env(1) so sudo's own
+    scrubbing does not matter and nothing of the bridge's leaks."""
+    if not HANDS_USER:
+        return cmd
+    env = _hands_env()
+    return ["sudo", "-n", "-u", HANDS_USER, "-H", "/usr/bin/env", "-i", *[f"{k}={v}" for k, v in env.items()], *cmd]
+
+
 # ---------------------------------------------------------------- state ----
 def _load_state() -> dict:
     try:
@@ -1393,7 +1437,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
     Returns (result_event, stderr_tail, returncode)."""
     cmd = cmd + ["--verbose", "--include-partial-messages"]
     cmd[cmd.index("json")] = "stream-json"
-    proc = subprocess.Popen(cmd, cwd=RUN_CWD, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     last = [time.time()]
     stop = threading.Event()
 
@@ -1497,7 +1541,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             return f"The reasoner could not answer this turn: {err}", session_id, True
     else:
         try:
-            proc = subprocess.run(cmd, cwd=RUN_CWD, env=_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
+            proc = subprocess.run(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
         out = proc.stdout.strip()
@@ -1577,8 +1621,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def _operator_ok(self) -> bool:
+        """Page routes need the operator token when one is set (the console's proxy adds it).
+        The hook's and cc-job's routes use the ask token instead and are checked there."""
+        if not OPERATOR_TOKEN:
+            return True
+        return _hmac.compare_digest(self.headers.get("X-CC-Operator", ""), OPERATOR_TOKEN)
+
     def do_GET(self) -> None:  # noqa: N802
         route = self._route()
+        if route not in ("/health",) and not route.startswith("/jobs") and not self._operator_ok():
+            self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
+        if route.startswith("/jobs") and not self._operator_ok() and not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+            self._send(403, {"error": "not the operator, not the reasoner"})
+            return
         if route == "/health":
             _st = _load_state()
             self._send(200, {"ok": True, "session": bool(_st.get("session_id")),
@@ -1592,6 +1649,7 @@ class Handler(BaseHTTPRequestHandler):
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "judge": bool(TYPESAFE_KEY),
                              "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
+                             "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
@@ -1635,6 +1693,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route = self._route()
+        if route not in ("/ask", "/jobs/start") and not self._operator_ok():
+            self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
         if route == "/upload":
             d = UPLOADS.save_multipart(self)
             self._send(200 if d.get("ok") else 400, d)

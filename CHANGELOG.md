@@ -53,6 +53,13 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   deletes the rows whose text disappeared; the done event reports chunks_reused and
   chunks_retired. api/chunk_diff.py, tests/test_chunk_diff.py. A document that changes
   daily now costs its changed paragraphs, not the whole file.
+- cc: two users. CC_HANDS_USER runs the reasoner and its jobs as a separate user through
+  sudo with a sanitized environment (no bridge keys); CC_OPERATOR_TOKEN, added by Caddy to
+  requests that passed the owner's login, is required on every page route (the hook and
+  cc-job keep the ask token); health reports hands_user and operator_token.
+  scripts/cc/split-hands.sh migrates a box once and verifies. Single-user mode unchanged
+  when unset. Closes the gap: the hands could read the gate's secret and approve their
+  own cards.
 - cc: talking to the brain (2026-09-27). A "talk" button beside "attach" and `/talk`: browser
   speech recognition (Chrome, Safari on iOS) fills the composer live, a 1.5 s pause after the
   final result or a second press ends it. Hands-free (footer link, `/talk free on|off`,

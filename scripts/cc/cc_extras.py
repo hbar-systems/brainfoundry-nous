@@ -160,11 +160,12 @@ class Files:
 class Jobs:
     """Commands that outlive a turn. One registry file; one log per job."""
 
-    def __init__(self, out_dir: Path, env_fn):
+    def __init__(self, out_dir: Path, env_fn, wrap=None):
         self.dir = out_dir / "jobs"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg = self.dir / "jobs.json"
         self.env_fn = env_fn
+        self.wrap = wrap or (lambda argv: argv)   # runs the job as another user when the bridge says so
         self.lock = threading.Lock()
         self.unseen: set[str] = set()
 
@@ -194,7 +195,7 @@ class Jobs:
             lf.write(f"# {jid} {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} in {wd or os.getcwd()}\n# {command}\n".encode())
             lf.flush()
             try:
-                proc = subprocess.Popen(["bash", "-lc", command], cwd=str(wd) if wd else None, env=self.env_fn(),
+                proc = subprocess.Popen(self.wrap(["bash", "-lc", command]), cwd=str(wd) if wd else None, env=self.env_fn(),
                                         stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
             except Exception as e:  # noqa: BLE001
                 lf.close()

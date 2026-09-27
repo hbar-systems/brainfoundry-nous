@@ -261,3 +261,23 @@ def test_multipart_first_file_rejects_non_multipart_and_fileless(monkeypatch, tm
     body, ctype = m._multipart_encode({"only": "a field"}, "file", "", b"", "audio/webm")
     body = body.split(b'Content-Disposition: form-data; name="file"')[0] + b"--" + ctype.split("boundary=")[1].encode() + b"--\r\n"
     assert m._multipart_first_file(ctype, body) is None
+
+
+def test_hands_env_carries_no_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret-a"); monkeypatch.setenv("TYPESAFE_API_KEY", "secret-b")
+    monkeypatch.setenv("CC_ASK_TOKEN", "ask-1"); monkeypatch.setenv("CC_MCP_CONFIG", "/x/mcp.json")
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    env = m._hands_env()
+    assert "ELEVENLABS_API_KEY" not in env and "TYPESAFE_API_KEY" not in env and "BRAIN_API_KEY" not in env
+    assert env["CC_ASK_TOKEN"] == "ask-1" and env["CC_MCP_CONFIG"] == "/x/mcp.json" and env["HOME"] == str(tmp_path / "hands")
+    cmd = m._as_hands(["claude", "-p", "hi"])
+    assert cmd[:5] == ["sudo", "-n", "-u", "hands", "-H"] and cmd[5:7] == ["/usr/bin/env", "-i"] and cmd[-3:] == ["claude", "-p", "hi"]
+    assert not any(v.startswith("ELEVENLABS") for v in cmd)
+    assert str(m.OUT_DIR).startswith(str(tmp_path / "hands"))
+
+
+def test_single_user_mode_unchanged(monkeypatch, tmp_path):
+    monkeypatch.delenv("CC_HANDS_USER", raising=False); monkeypatch.delenv("CC_HANDS_HOME", raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m.HANDS_USER == "" and m._as_hands(["x"]) == ["x"] and m.OPERATOR_TOKEN == ""
