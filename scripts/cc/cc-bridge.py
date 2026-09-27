@@ -1850,7 +1850,7 @@ def main() -> None:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
-    print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
+    print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
     httpd.serve_forever()
 
 
