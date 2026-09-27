@@ -6635,6 +6635,7 @@ def admin_version_info(api_key: str = Depends(get_api_key)):
 _APPROVE_ALL: Dict[str, Any] = {"running": False, "total": 0, "done": 0, "failed": [], "current": None,
                                 "started": None, "finished": None}
 _APPROVE_ALL_LOCK = threading.Lock()
+_APPROVE_QUEUE: List[Dict[str, Any]] = []   # proposals handed in while a batch runs
 
 
 def _pending_document_proposals() -> List[Dict[str, Any]]:
@@ -6666,7 +6667,15 @@ def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
             _APPROVE_ALL["failed"].append({"name": name, "error": f"{type(e).__name__}: {e}"[:200]})
             print(f"[approve-all] {name}: {type(e).__name__}: {e}", flush=True)
         _APPROVE_ALL["done"] += 1
+        if not items_left(items, p):
+            with _APPROVE_ALL_LOCK:
+                if _APPROVE_QUEUE:
+                    items.extend(_APPROVE_QUEUE); _APPROVE_QUEUE.clear()
     _APPROVE_ALL.update(running=False, current=None, finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+
+
+def items_left(items: List[Dict[str, Any]], current: Dict[str, Any]) -> bool:
+    return items.index(current) < len(items) - 1
 
 
 class ApproveAllRequest(BaseModel):
@@ -6678,8 +6687,6 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
     """Approve and ingest pending document proposals on the server: all of them, or the ids
     given (used by the world reconciler's self-approval rule, 2026-09-27)."""
     with _APPROVE_ALL_LOCK:
-        if _APPROVE_ALL["running"]:
-            return {**_APPROVE_ALL, "already_running": True}
         try:
             items = _pending_document_proposals()
         except Exception as e:  # noqa: BLE001
@@ -6687,6 +6694,13 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
         if req and req.proposal_ids:
             want = set(req.proposal_ids)
             items = [p for p in items if p["proposal_id"] in want]
+        if _APPROVE_ALL["running"]:
+            # A batch is already running: queue these for it (the reconciler's second batch
+            # of 392 was dropped here on 2026-09-27); the worker drains the queue when done.
+            seen = {p["proposal_id"] for p in _APPROVE_QUEUE}
+            _APPROVE_QUEUE.extend(p for p in items if p["proposal_id"] not in seen)
+            _APPROVE_ALL["total"] += len(items)
+            return {**_APPROVE_ALL, "queued": len(items)}
         _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
                             started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), finished=None if items else "nothing pending")
         if items:
