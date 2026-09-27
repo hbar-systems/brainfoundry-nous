@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: voice speed 1.2 by default; the reasoner is told to read in one combined command per
+  question and to give the one-line answer from memory first (state questions took 30 to 60 s
+  of serial reads).
 - cc footer: one line by default (voice, warnings, approvals, files); thread, tools, memory,
   hands, posture and the account behind "details". api: `POST /documents/approve-all` takes
   an optional list of proposal ids, for the reconciler's self-approval rule.

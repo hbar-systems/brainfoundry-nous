@@ -258,7 +258,10 @@ if WORLD_DIR and SAME_ROOT:
         f" The person's world is checked out, writable, at {WORLD_DIR}: the same layout as on their own computer. "
         "Its root holds their plans, notes and registry; their systems live under systems/<system>/repos/<repo> "
         "(registry/systems.json maps each). 'Go into hbar.social' means that folder. For questions about their "
-        "current plans or a system's state, read the file or the repository's git log there and say which; "
+        "current plans or a system's state, read the file or the repository's git log there and say which. Read in ONE "
+        "combined command per question (git log and the two or three files together), not one command per file: every "
+        "separate command is a round trip the person waits through. Give the one-line answer from memory first when you "
+        "have one, then the verified version; "
         "memory tells you what mattered, the world tells you what is true now. Build there: edit, run tests, "
         "commit with clear messages, push only when the person says push; `git pull --ff-only` before editing "
         "and stop if it fails. Never commit secrets or files under .env."
@@ -722,7 +725,7 @@ def _judge_proposal(p: dict) -> dict | None:
 ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
 VOICE_ID = os.environ.get("CC_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()      # ElevenLabs stock voice "George"
 VOICE_MODEL = os.environ.get("CC_VOICE_MODEL", "eleven_multilingual_v2").strip()   # the natural one; flash is the fast one
-VOICE_SPEED = float(os.environ.get("CC_VOICE_SPEED", "1.1"))   # 0.7 slow to 1.2 fast; the operator found 1.0 too slow (2026-09-26)
+VOICE_SPEED = float(os.environ.get("CC_VOICE_SPEED", "1.2"))   # 0.7 slow to 1.2 fast; 1.0 and 1.1 were both too slow for the operator (2026-09-27)
 VOICE_SETTINGS = {"stability": 0.45, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": True, "speed": VOICE_SPEED}
 VOICE_PART_CHARS = int(os.environ.get("CC_VOICE_PART_CHARS", "420"))   # speech is made a part at a time so it starts within seconds
 _VOICES_CACHE = {"at": 0.0, "voices": []}
