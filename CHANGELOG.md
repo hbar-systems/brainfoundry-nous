@@ -53,6 +53,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   deletes the rows whose text disappeared; the done event reports chunks_reused and
   chunks_retired. api/chunk_diff.py, tests/test_chunk_diff.py. A document that changes
   daily now costs its changed paragraphs, not the whole file.
+- cc: a waiting card shows in the footer within 20 s ("a card waits for you", health
+  carries cards_waiting and turn_running) and the browser notifies once per card.
 - cc: two users. CC_HANDS_USER runs the reasoner and its jobs as a separate user through
   sudo with a sanitized environment (no bridge keys); CC_OPERATOR_TOKEN, added by Caddy to
   requests that passed the owner's login, is required on every page route (the hook and

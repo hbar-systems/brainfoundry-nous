@@ -463,6 +463,25 @@ export default function CC() {
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
 
+  // A card that waited unanswered for 15 minutes on 2026-09-27 because the owner had left the
+  // page: the footer now says so within 20 s and the browser shows a notification once per card.
+  const cardsSeenRef = useRef(0)
+  useEffect(() => {
+    const t = setInterval(() => { loadHealth() }, 20000)
+    return () => clearInterval(t)
+  }, [])
+  useEffect(() => {
+    const n = (health && health.cards_waiting) || 0
+    if (n > cardsSeenRef.current) {
+      try {
+        if (typeof Notification !== 'undefined') {
+          if (Notification.permission === 'granted') new Notification('Your brain needs a yes', { body: n === 1 ? 'A card waits for you.' : `${n} cards wait for you.` })
+          else if (Notification.permission !== 'denied') Notification.requestPermission()
+        }
+      } catch {}
+    }
+    cardsSeenRef.current = n
+  }, [health && health.cards_waiting])
   const loadHealth = () =>
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
@@ -1102,6 +1121,7 @@ export default function CC() {
           {loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
+          {health && health.cards_waiting > 0 ? <span><a onClick={() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}

@@ -1650,6 +1650,7 @@ class Handler(BaseHTTPRequestHandler):
                              "judge": bool(TYPESAFE_KEY),
                              "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
+                             "cards_waiting": LIVE["waiting"], "turn_running": bool(LIVE["emit"]),
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
