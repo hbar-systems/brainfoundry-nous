@@ -1456,6 +1456,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
     LIVE["emit"] = on_event
     LIVE["allowed"] = set()
     result = None
+    seen_text = False
     try:
         for line in proc.stdout:
             last[0] = time.time()
@@ -1472,7 +1473,12 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
             elif kind == "stream_event":
                 e = ev.get("event") or {}
                 d = e.get("delta") or {}
-                if e.get("type") == "content_block_delta" and d.get("type") == "text_delta":
+                if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "text" and seen_text:
+                    # A new piece of prose after a tool call: the page glued "...test.Now the
+                    # reducer..." together (2026-09-28); each piece starts on its own line.
+                    on_event("text", {"t": "\n\n"})
+                if e.get("type") == "content_block_delta" and d.get("type") == "text_delta" and d.get("text"):
+                    seen_text = True
                     on_event("text", {"t": d.get("text", "")})
             elif kind == "assistant":
                 for blk in ((ev.get("message") or {}).get("content") or []):
