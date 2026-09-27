@@ -4018,15 +4018,41 @@ def _stream_ingest_path_b(
 
     BATCH = 8   # was 32: most documents have fewer chunks, so the counter never moved before "done" (2026-09-23)
     stored_chunks = 0
+    reused_chunks = 0
+    stale_rows = 0
     t_total = time.time()
     try:
+        from api.chunk_diff import chunk_hash, plan_update
         conn = get_db_connection()
         cursor = conn.cursor()
-        for batch_start in range(0, len(chunks), BATCH):
-            batch_chunks = chunks[batch_start:batch_start + BATCH]
+        # Chunk-level update (2026-09-27): rows of this name whose text is unchanged are kept
+        # (fresh created_at, so a later "retire older chunks" leaves them), only new text is
+        # embedded, rows whose text disappeared are deleted at the end.
+        cursor.execute("SELECT id, content FROM document_embeddings WHERE document_name = %s", (filename,))
+        existing: dict = {}
+        for rid, content in cursor.fetchall():
+            existing.setdefault(chunk_hash(content or ""), []).append(rid)
+        to_embed, reused, stale = plan_update(chunks, existing)
+        now_iso = datetime.utcnow().isoformat()
+        for idx, rid in reused:
+            cursor.execute(
+                """
+                UPDATE document_embeddings
+                SET created_at = CURRENT_TIMESTAMP,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                WHERE id = %s
+                """,
+                (json.dumps({"chunk_index": idx, "ingested_at": now_iso, "proposal_id": proposal_id, "layer": layer, "reused": True}), rid),
+            )
+        reused_chunks = len(reused)
+        conn.commit()
+        if reused_chunks:
+            yield sse("progress", {"done": reused_chunks, "total": len(chunks), "batch_seconds": 0.0, "reused": reused_chunks})
+        for batch_start in range(0, len(to_embed), BATCH):
+            batch = to_embed[batch_start:batch_start + BATCH]
             t_batch = time.time()
-            batch_embeddings = generate_embeddings(batch_chunks)
-            for chunk, embedding in zip(batch_chunks, batch_embeddings):
+            batch_embeddings = generate_embeddings([c for _, c in batch])
+            for (idx, chunk), embedding in zip(batch, batch_embeddings):
                 embedding_str = "[" + ",".join(map(str, embedding)) + "]"
                 cursor.execute(
                     """
@@ -4040,9 +4066,9 @@ def _stream_ingest_path_b(
                         json.dumps({
                             "file_size": size,
                             "content_type": content_type,
-                            "upload_timestamp": datetime.utcnow().isoformat(),
-                            "ingested_at": datetime.utcnow().isoformat(),
-                            "chunk_index": stored_chunks,
+                            "upload_timestamp": now_iso,
+                            "ingested_at": now_iso,
+                            "chunk_index": idx,
                             "proposal_id": proposal_id,
                             "layer": layer,
                             **provenance,
@@ -4052,12 +4078,17 @@ def _stream_ingest_path_b(
                 stored_chunks += 1
             conn.commit()
             batch_seconds = round(time.time() - t_batch, 2)
-            print(f"[upload] proposal={proposal_id} progress {stored_chunks}/{len(chunks)} batch_seconds={batch_seconds}s", flush=True)
+            print(f"[upload] proposal={proposal_id} progress {reused_chunks + stored_chunks}/{len(chunks)} batch_seconds={batch_seconds}s", flush=True)
             yield sse("progress", {
-                "done": stored_chunks,
+                "done": reused_chunks + stored_chunks,
                 "total": len(chunks),
                 "batch_seconds": batch_seconds,
+                "reused": reused_chunks,
             })
+        if stale:
+            cursor.execute("DELETE FROM document_embeddings WHERE document_name = %s AND id = ANY(%s)", (filename, stale))
+            stale_rows = cursor.rowcount
+            conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
@@ -4080,7 +4111,7 @@ def _stream_ingest_path_b(
     _delete_proposal_text(proposal_id)
 
     total_seconds = round(time.time() - t_total, 2)
-    print(f"[upload] proposal={proposal_id} DONE total_seconds={total_seconds}s stored={stored_chunks}", flush=True)
+    print(f"[upload] proposal={proposal_id} DONE total_seconds={total_seconds}s stored={stored_chunks} reused={reused_chunks} retired={stale_rows}", flush=True)
     yield sse("done", {
         "filename": filename,
         "size": size,
@@ -4088,6 +4119,8 @@ def _stream_ingest_path_b(
         "text_length": len(text),
         "chunks_created": len(chunks),
         "embeddings_stored": stored_chunks,
+        "chunks_reused": reused_chunks,
+        "chunks_retired": stale_rows,
         "proposal_id": proposal_id,
         "layer": layer,
         "total_seconds": total_seconds,

@@ -158,6 +158,11 @@ variable; `EMBED_SPOKE_MODEL` names another model only if `EMBEDDING_MODEL_NAME`
 with it. `GET /admin/embed-spoke-check` embeds one sentence both ways and reports the cosine
 (expect above 0.99) and the norms; `GET /health` shows `services.embeddings.spoke`.
 
+**Chunk-level memory updates (2026-09-27).** Re-ingesting a document name the brain already
+holds keeps the chunks whose text did not change (their `created_at` is refreshed so a later
+"retire chunks before" leaves them), embeds only the new chunks, and deletes the chunks that
+disappeared. Nothing to configure; the done event carries `chunks_reused` and `chunks_retired`.
+
 With the mounts present you can also let the brain update itself: the switch "Keep this
 brain updated" on the Update page runs the same script once a day at the hour you pick
 (UTC), only when origin/main moved, with the pre-update backup the script always takes.

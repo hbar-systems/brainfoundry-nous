@@ -48,6 +48,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- memory: chunk-level updates. Ingesting a name memory already holds keeps the rows whose
+  text is unchanged (fresh created_at, metadata reused=true), embeds only the new chunks,
+  deletes the rows whose text disappeared; the done event reports chunks_reused and
+  chunks_retired. api/chunk_diff.py, tests/test_chunk_diff.py. A document that changes
+  daily now costs its changed paragraphs, not the whole file.
 - cc: one mind on two screens. With the world in the laptop's shape the reasoner runs with the
   world as its working directory (its CLAUDE.md, skills, hooks) and is told about the shared
   memory directory mind/claude (index MEMORY.md); the brain runtime stays attached.
