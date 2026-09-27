@@ -40,19 +40,20 @@ const SLASH = [
   { c: '/guide', d: 'open the guide and the tutorial beside the chat' },
   { c: '/file', d: '/file <path> [where]: the reasoner moves an artifact from out/ or in/ into the world where it belongs and commits (no push)' },
   { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list (click a name), /voice <name>' },
+  { c: '/talk', d: 'speak instead of typing: /talk listens (a pause or a second /talk ends it); /talk free on|off is hands-free, what you say sends by itself and listening restarts after the answer' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
 
-function Btn({ children, onClick, disabled, primary, small, title }) {
+function Btn({ children, onClick, disabled, primary, small, title, accent }) {
   const off = !!disabled
   return (
     <button onClick={onClick} disabled={off} title={title}
       style={{
         padding: small ? '6px 12px' : '10px 16px', borderRadius: '10px', cursor: off ? 'default' : 'pointer',
-        border: primary ? 'none' : `1px solid ${C.line}`,
+        border: primary ? 'none' : `1px solid ${accent ? C.gold : C.line}`,
         backgroundColor: primary ? (off ? C.card : C.gold) : 'transparent',
-        color: primary ? (off ? C.dim : C.onAccent) : C.dim,
+        color: primary ? (off ? C.dim : C.onAccent) : (accent ? C.gold : C.dim),
         fontWeight: primary ? 600 : 400, fontSize: small ? '12px' : '14px', fontFamily: small ? mono.fontFamily : 'inherit',
       }}>{children}</button>
   )
@@ -598,6 +599,166 @@ export default function CC() {
 
   const loggedIn = !!(health && health.auth && health.auth.loggedIn)
 
+  // Talking to the brain (2026-09-27): the owner speaks and the composer fills as the words
+  // come. Chrome and Safari on iOS recognise speech in the browser and nothing leaves the
+  // phone; a browser without that (Firefox) records a clip and the bridge transcribes it
+  // (POST /cc/transcribe). Hands-free: a final result sends by itself and, once the answer has
+  // finished speaking, listening restarts, so a conversation needs no touch. Listening never
+  // starts while the brain is speaking; it would hear itself.
+  const [srOk, setSrOk] = useState(false)       // the browser has SpeechRecognition
+  const [recOk, setRecOk] = useState(false)     // the browser can record a clip (MediaRecorder)
+  const [listening, setListening] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const [talkNote, setTalkNote] = useState('')
+  const [handsfree, setHandsfree] = useState(false)
+  const recRef = useRef(null)                   // the SpeechRecognition run while listening
+  const mediaRef = useRef(null)                 // the MediaRecorder run while recording
+  const pauseRef = useRef(null)                 // the 1.5 s pause timer after a final result
+  const talkRef = useRef({ base: '', finals: '', cancel: false, err: '' })
+  const armedRef = useRef(false)                // hands-free: listen again once the answer is done
+  const listeningRef = useRef(false)
+  const handsfreeRef = useRef(false); handsfreeRef.current = handsfree
+  const speakingRef = useRef(false); speakingRef.current = speaking
+  useEffect(() => {
+    try { setSrOk(!!(window.SpeechRecognition || window.webkitSpeechRecognition)) } catch {}
+    try { setRecOk(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) } catch {}
+    try { setHandsfree(localStorage.getItem('cc.handsfree') === '1') } catch {}
+  }, [])
+  const canTalk = srOk || (recOk && !!(health && health.voice))
+  const whyNoTalk = srOk ? '' : !recOk ? 'this browser cannot listen: no speech recognition and no microphone recording'
+    : !(health && health.voice) ? 'this browser has no speech recognition; with ELEVENLABS_API_KEY in the bridge env the brain would transcribe a recording' : ''
+  const setHandsfreeSaved = (v) => {
+    setHandsfree(v); handsfreeRef.current = v
+    try { localStorage.setItem('cc.handsfree', v ? '1' : '0') } catch {}
+    if (v) armedRef.current = true
+    else { armedRef.current = false; if (listeningRef.current) stopListening(true) }
+  }
+  const clearPause = () => { if (pauseRef.current) { clearTimeout(pauseRef.current); pauseRef.current = null } }
+  // A run ended with `text`: it stays in the composer, or hands-free sends it at once.
+  const finishTalk = (text) => {
+    const st = talkRef.current
+    if (st.cancel) { st.cancel = false; return }
+    const t = (text || '').trim()
+    setDraft(t)
+    if (!handsfreeRef.current) return
+    const bad = st.err === 'not-allowed' || st.err === 'service-not-allowed' || st.err === 'audio-capture'
+    if (t) { setDraft(''); armedRef.current = true; sendRef.current && sendRef.current(t) }
+    else if (!bad) armedRef.current = true   // silence: keep waiting for the owner
+  }
+  const stopRecording = () => { const m = mediaRef.current; if (!m) return; try { m.recorder.stop() } catch {} }
+  const stopListening = (cancel) => {
+    talkRef.current.cancel = !!cancel
+    clearPause()
+    if (recRef.current) { try { cancel ? recRef.current.abort() : recRef.current.stop() } catch {} return }
+    if (mediaRef.current) stopRecording()
+  }
+  const startRecording = async (base) => {
+    // No recogniser in this browser: record until a pause (or 60 s), then the bridge transcribes.
+    if (!recOk || !(health && health.voice)) { setTalkNote(whyNoTalk || 'this browser cannot listen'); return }
+    if (speakingRef.current) stopSpeaking()
+    let stream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) } catch { setTalkNote('the microphone is not allowed for this page'); return }
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => { try { return MediaRecorder.isTypeSupported(t) } catch { return false } })
+    let recorder
+    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream) } catch { stream.getTracks().forEach(t => t.stop()); setTalkNote('could not start recording'); return }
+    const chunks = []
+    const st = talkRef.current; st.base = base || ''; st.cancel = false; st.err = ''
+    const m = { recorder, stream, ctx: null, timer: null, cap: null, heard: false, quiet: 0 }
+    try {
+      // a pause of about 1.5 s after speech ends the clip, as the recogniser does
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      const an = ctx.createAnalyser(); an.fftSize = 1024; ctx.createMediaStreamSource(stream).connect(an)
+      const buf = new Uint8Array(an.fftSize)
+      m.ctx = ctx
+      m.timer = setInterval(() => {
+        an.getByteTimeDomainData(buf)
+        let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v }
+        if (Math.sqrt(sum / buf.length) > 0.02) { m.heard = true; m.quiet = 0 }
+        else if (m.heard) { m.quiet += 200; if (m.quiet >= 1500) stopRecording() }
+      }, 200)
+    } catch {}
+    m.cap = setTimeout(stopRecording, 60000)
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data) }
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop())
+      if (m.timer) clearInterval(m.timer)
+      if (m.cap) clearTimeout(m.cap)
+      if (m.ctx) { try { m.ctx.close() } catch {} }
+      mediaRef.current = null; listeningRef.current = false; setListening(false)
+      if (st.cancel || !chunks.length) { st.cancel = false; return }
+      const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' })
+      if (blob.size > 10 * 1024 * 1024) { setTalkNote('the clip is too long (over 10 MB)'); return }
+      const ext = /mp4/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm'
+      const fd = new FormData(); fd.append('file', blob, 'clip.' + ext)
+      setTranscribing(true); setTalkNote('')
+      try {
+        const r = await fetch('/cc/transcribe', { method: 'POST', body: fd })
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok || !d.ok) { setTalkNote(d.error || `the bridge answered ${r.status}`); return }
+        if (!d.text) setTalkNote('heard nothing')
+        finishTalk([st.base, d.text || ''].filter(Boolean).join(' '))
+      } catch { setTalkNote('the bridge did not answer') }
+      finally { setTranscribing(false) }
+    }
+    mediaRef.current = m; listeningRef.current = true; setListening(true); setTalkNote('')
+    try { recorder.start(250) } catch { mediaRef.current = null; listeningRef.current = false; setListening(false); setTalkNote('could not start recording') }
+  }
+  const startListening = (base) => {
+    if (listeningRef.current || transcribing) return
+    const SR = (typeof window !== 'undefined') && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) { startRecording(base); return }
+    if (speakingRef.current) stopSpeaking()
+    const rec = new SR()
+    rec.continuous = true; rec.interimResults = true
+    try { rec.lang = navigator.language || 'en-US' } catch {}
+    const st = talkRef.current; st.base = (base || '').trim(); st.finals = ''; st.cancel = false; st.err = ''
+    rec.onresult = (e) => {
+      let finals = '', interim = ''
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i]; const t = (r[0] && r[0].transcript) || ''
+        if (r.isFinal) finals += t + ' '; else interim += t
+      }
+      st.finals = finals.trim()
+      setDraft([st.base, st.finals, interim.trim()].filter(Boolean).join(' '))
+      clearPause()
+      // a pause of about 1.5 s after a final result ends the run
+      if (st.finals && !interim.trim()) pauseRef.current = setTimeout(() => { pauseRef.current = null; try { rec.stop() } catch {} }, 1500)
+    }
+    rec.onerror = (e) => {
+      const k = (e && e.error) || ''
+      st.err = k
+      if (k === 'not-allowed' || k === 'service-not-allowed') setTalkNote('the microphone is not allowed for this page')
+      else if (k === 'audio-capture') setTalkNote('no microphone found')
+      else if (k === 'no-speech') setTalkNote('heard nothing')
+      else if (k === 'network') setTalkNote('the browser\'s speech service did not answer')
+      else if (k && k !== 'aborted') setTalkNote('listening failed: ' + k)
+    }
+    rec.onend = () => {
+      clearPause(); recRef.current = null; listeningRef.current = false; setListening(false)
+      finishTalk([st.base, st.finals].filter(Boolean).join(' '))
+    }
+    recRef.current = rec; listeningRef.current = true; setListening(true); setTalkNote('')
+    try { rec.start() } catch { recRef.current = null; listeningRef.current = false; setListening(false); setTalkNote('could not start listening') }
+  }
+  const toggleTalk = (base) => {
+    if (listening) { stopListening(false); return }
+    if (transcribing) return
+    if (!canTalk) { setTalkNote(whyNoTalk || 'this browser cannot listen'); return }
+    startListening(base)
+  }
+  // Hands-free: once armed, listen again as soon as nothing is being said or thought.
+  useEffect(() => {
+    if (!handsfree || !armedRef.current || !loggedIn) return
+    if (speaking || busy || listening || transcribing) return
+    const t = setTimeout(() => {
+      if (!handsfreeRef.current || !armedRef.current || listeningRef.current || speakingRef.current) return
+      armedRef.current = false
+      startListening('')
+    }, 400)
+    return () => clearTimeout(t)
+  }, [handsfree, speaking, busy, listening, transcribing, loggedIn])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { clearPause(); const r = recRef.current; if (r) { try { r.abort() } catch {} } const m = mediaRef.current; if (m) { try { m.recorder.stop() } catch {} } }, [])
+
   // Typed with a slash: a few things the page handles itself, like the CLI's own commands.
   // Anything else starting with a slash goes to the reasoner (its custom commands still work).
   async function slash(text) {
@@ -644,6 +805,18 @@ export default function CC() {
       setTurns(t => [...t, { who: 'brain', text: on ? 'Voice on. Answers are read aloud as they finish; "listen" under any answer replays it, "stop" stops it.' : 'Voice off.' }])
       return true
     }
+    if (cmd === 'talk') {
+      const a0 = (arg || '').trim().toLowerCase()
+      if (a0.startsWith('free') || a0.startsWith('hands')) {
+        if (!canTalk) { setTurns(t => [...t, { who: 'brain', text: whyNoTalk || 'This browser cannot listen.' }]); return true }
+        const w = a0.split(/\s+/)[1]; const on = w ? w !== 'off' : !handsfree
+        setHandsfreeSaved(on)
+        setTurns(t => [...t, { who: 'brain', text: on ? 'Hands-free on. What you say sends by itself; when the answer has finished I listen again. /talk free off to stop.' : 'Hands-free off.' }])
+        return true
+      }
+      if (!canTalk) { setTurns(t => [...t, { who: 'brain', text: whyNoTalk || 'This browser cannot listen.' }]); return true }
+      toggleTalk(''); return true
+    }
     if (cmd === 'guide') { openPane({ route: '/guide' + (arg ? '?tab=' + encodeURIComponent(arg) : ''), title: 'Guide' }); return true }
     if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
     if (cmd === 'jobs') {
@@ -652,7 +825,7 @@ export default function CC() {
       return true
     }
     if (cmd === 'help' || cmd === '') {
-      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /files, /jobs, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /files, /jobs, /talk (speak instead of typing; /talk free on for hands-free), /voice on|off|list, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
     }
     return false
@@ -892,17 +1065,29 @@ export default function CC() {
             ))}
           </p>
         )}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
+        {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
-            placeholder={!loggedIn ? 'connect a reasoner first' : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
-            style={{ flex: 1, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
-                     border: `1px solid ${C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
+            style={{ flex: '1 1 240px', minWidth: 0, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
+                     border: `1px solid ${listening ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
           <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
-          <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">attach</Btn>
-          <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
+          <div style={{ display: 'flex', gap: '8px', flex: '0 0 auto', marginLeft: 'auto' }}>
+            <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">attach</Btn>
+            <Btn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} accent={listening}
+              title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}>
+              {listening ? 'stop' : transcribing ? 'hearing' : 'talk'}
+            </Btn>
+            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
+          </div>
         </div>
+        {(listening || transcribing || talkNote) && (
+          <p style={{ ...mono, color: listening ? C.gold : C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>
+            {listening ? (srOk ? 'listening' : 'recording') + (handsfree ? ' (hands-free)' : '') : transcribing ? 'the bridge is transcribing the clip' : talkNote}
+          </p>
+        )}
         {files.length > 0 && (
           <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px' }}>{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
@@ -914,6 +1099,7 @@ export default function CC() {
           {showDetails && health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
           {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
+          {loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}

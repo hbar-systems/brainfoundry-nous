@@ -235,3 +235,29 @@ def test_same_root_means_one_world(monkeypatch, tmp_path):
     monkeypatch.setenv("CC_WORK_DIR", str(tmp_path))
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m.SAME_ROOT is False
+
+
+def test_multipart_encode_is_reproducible_and_parses_back(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    clip = b"\x1aE\xdf\xa3webm-bytes\r\n--not-a-boundary\r\n\x00\xff"
+    body, ctype = m._multipart_encode({"model_id": "scribe_v1"}, "file", 'clip "x".webm', clip, "audio/webm", boundary="ccfixed")
+    assert ctype == "multipart/form-data; boundary=ccfixed"
+    assert body.startswith(b"--ccfixed\r\nContent-Disposition: form-data; name=\"model_id\"\r\n\r\nscribe_v1\r\n")
+    assert b'name="file"; filename="clip _x_.webm"\r\nContent-Type: audio/webm\r\n\r\n' in body
+    assert body.endswith(b"\r\n--ccfixed--\r\n")
+    # what the bridge sends out, the bridge can read back: the same parser the /transcribe route uses
+    fn, data = m._multipart_first_file(ctype, body)
+    assert fn == "clip _x_.webm" and data == clip
+    # a random boundary each time when none is given, still the same shape
+    b1, c1 = m._multipart_encode({}, "file", "a.webm", b"x", "audio/webm")
+    b2, c2 = m._multipart_encode({}, "file", "a.webm", b"x", "audio/webm")
+    assert c1 != c2 and b1.count(b"Content-Disposition") == 1
+
+
+def test_multipart_first_file_rejects_non_multipart_and_fileless(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._multipart_first_file("application/json", b'{"a":1}') is None
+    assert m._multipart_first_file("", b"") is None
+    body, ctype = m._multipart_encode({"only": "a field"}, "file", "", b"", "audio/webm")
+    body = body.split(b'Content-Disposition: form-data; name="file"')[0] + b"--" + ctype.split("boundary=")[1].encode() + b"--\r\n"
+    assert m._multipart_first_file(ctype, body) is None

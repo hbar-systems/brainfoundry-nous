@@ -825,6 +825,65 @@ def _speak_stream(text: str):
             yield chunk
 
 
+# Talking to the brain (2026-09-27). Browsers with SpeechRecognition (Chrome, Safari on iOS)
+# turn speech into text on their own and the bridge never hears it. The others (Firefox)
+# record a clip with MediaRecorder and post it here: POST /transcribe, multipart with one
+# audio file of at most TRANSCRIBE_MAX bytes. The bridge forwards the clip to ElevenLabs
+# speech-to-text with the same key the voice uses, so the key stays on the box, and answers
+# {"text": ...}. The clip is not written to disk.
+TRANSCRIBE_MAX = int(os.environ.get("CC_TRANSCRIBE_MAX", str(10 * 1024 * 1024)))
+STT_MODEL = os.environ.get("CC_STT_MODEL", "scribe_v1").strip()
+
+
+def _multipart_encode(fields: dict, file_field: str, filename: str, data: bytes, mime: str,
+                      boundary: str | None = None) -> tuple:
+    """A multipart/form-data body with text fields and one file, and its Content-Type header
+    value. Pure: the boundary can be given so the bytes are reproducible."""
+    boundary = boundary or ("cc" + os.urandom(12).hex())
+    b = boundary.encode()
+    safe = re.sub(r'[\r\n"]+', "_", filename or "file") or "file"
+    out = bytearray()
+    for k, v in (fields or {}).items():
+        out += b"--" + b + b"\r\n"
+        out += b'Content-Disposition: form-data; name="' + str(k).encode() + b'"\r\n\r\n'
+        out += str(v).encode() + b"\r\n"
+    out += b"--" + b + b"\r\n"
+    out += (b'Content-Disposition: form-data; name="' + file_field.encode() + b'"; filename="' + safe.encode() + b'"\r\n')
+    out += b"Content-Type: " + (mime or "application/octet-stream").encode() + b"\r\n\r\n"
+    out += data + b"\r\n"
+    out += b"--" + b + b"--\r\n"
+    return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+
+def _multipart_first_file(ctype: str, raw: bytes):
+    """The first file part of a multipart/form-data body as (filename, bytes), or None when
+    the body is not multipart or carries no file. Pure."""
+    import email.parser
+    import email.policy
+    if not (ctype or "").startswith("multipart/form-data"):
+        return None
+    msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+        b"Content-Type: " + ctype.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + (raw or b""))
+    if not msg.is_multipart():
+        return None
+    for part in msg.iter_parts():
+        fn = part.get_filename()
+        if fn:
+            return fn, (part.get_payload(decode=True) or b"")
+    return None
+
+
+def _transcribe(data: bytes, filename: str, mime: str) -> str:
+    """The clip's words from ElevenLabs speech-to-text. Raises on any error."""
+    import urllib.request
+    body, ctype = _multipart_encode({"model_id": STT_MODEL}, "file", filename, data, mime)
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST",
+                                 headers={"xi-api-key": ELEVEN_KEY, "Content-Type": ctype, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        d = json.loads(r.read() or b"{}")
+    return str(d.get("text") or "").strip()
+
+
 def _host_system() -> dict:
     """What a container cannot see: the tailnet and its peers, established connections,
     listening ports, failed services, the bridge's own units, permit and judge counts. Read
@@ -1579,6 +1638,29 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/upload":
             d = UPLOADS.save_multipart(self)
             self._send(200 if d.get("ok") else 400, d)
+            return
+        if route == "/transcribe":
+            # A recorded clip from a browser without speech recognition (2026-09-27).
+            n = int(self.headers.get("Content-Length") or 0)
+            if not ELEVEN_KEY:
+                self._send(409, {"ok": False, "error": "transcription needs ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
+                return
+            if n <= 0 or n > TRANSCRIBE_MAX:
+                self._send(413 if n > TRANSCRIBE_MAX else 400, {"ok": False, "error": f"the clip must be between 1 byte and {TRANSCRIBE_MAX // (1024 * 1024)} MB"})
+                return
+            got = _multipart_first_file(self.headers.get("Content-Type", ""), self.rfile.read(n))
+            if not got or not got[1]:
+                self._send(400, {"ok": False, "error": "no audio in the upload"})
+                return
+            fn, data = got
+            mime = {"ogg": "audio/ogg", "m4a": "audio/mp4", "mp4": "audio/mp4", "wav": "audio/wav", "mp3": "audio/mpeg"}.get(fn.rsplit(".", 1)[-1].lower(), "audio/webm")
+            try:
+                text = _transcribe(data, fn, mime)
+            except Exception as e:  # noqa: BLE001
+                print(f"transcribe failed: {type(e).__name__}", flush=True)
+                self._send(502, {"ok": False, "error": f"the speech service did not answer ({type(e).__name__})"})
+                return
+            self._send(200, {"ok": True, "text": text})
             return
         req = self._json()
         if req is None:

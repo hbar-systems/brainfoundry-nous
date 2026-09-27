@@ -53,6 +53,15 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   deletes the rows whose text disappeared; the done event reports chunks_reused and
   chunks_retired. api/chunk_diff.py, tests/test_chunk_diff.py. A document that changes
   daily now costs its changed paragraphs, not the whole file.
+- cc: talking to the brain (2026-09-27). A "talk" button beside "attach" and `/talk`: browser
+  speech recognition (Chrome, Safari on iOS) fills the composer live, a 1.5 s pause after the
+  final result or a second press ends it. Hands-free (footer link, `/talk free on|off`,
+  remembered as cc.handsfree): a final result sends by itself and listening restarts once the
+  answer has finished speaking; never while the brain speaks. Browsers without recognition
+  (Firefox) record a clip with MediaRecorder and `POST /cc/transcribe` (multipart, max 10 MB,
+  409 without ELEVENLABS_API_KEY) sends it to ElevenLabs speech-to-text (scribe_v1) and answers
+  `{"text"}`; urllib only. The composer wraps at phone width. docs/CC.md "Talking to the brain";
+  tests for the multipart encoder and parser.
 - cc: one mind on two screens. With the world in the laptop's shape the reasoner runs with the
   world as its working directory (its CLAUDE.md, skills, hooks) and is told about the shared
   memory directory mind/claude (index MEMORY.md); the brain runtime stays attached.
