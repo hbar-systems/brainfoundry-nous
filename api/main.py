@@ -6636,8 +6636,14 @@ def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
     _APPROVE_ALL.update(running=False, current=None, finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
 
+class ApproveAllRequest(BaseModel):
+    proposal_ids: Optional[List[str]] = None   # a subset; None means every pending document
+
+
 @app.post("/documents/approve-all")
-def documents_approve_all(api_key: str = Depends(get_api_key)):
+def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str = Depends(get_api_key)):
+    """Approve and ingest pending document proposals on the server: all of them, or the ids
+    given (used by the world reconciler's self-approval rule, 2026-09-27)."""
     with _APPROVE_ALL_LOCK:
         if _APPROVE_ALL["running"]:
             return {**_APPROVE_ALL, "already_running": True}
@@ -6645,6 +6651,9 @@ def documents_approve_all(api_key: str = Depends(get_api_key)):
             items = _pending_document_proposals()
         except Exception as e:  # noqa: BLE001
             raise HTTPException(502, f"could not list pending proposals: {type(e).__name__}")
+        if req and req.proposal_ids:
+            want = set(req.proposal_ids)
+            items = [p for p in items if p["proposal_id"] in want]
         _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
                             started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), finished=None if items else "nothing pending")
         if items:
