@@ -48,6 +48,9 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
   it has no general execute. install.sh sets this up when ONE_SECRET is present,
   manages `CC_TOOLS`, and removes the old one-line `.onerc`. The bridge passes
   allowed tools as separate arguments, since entries now contain spaces.
+- cc: one mind on two screens. With the world in the laptop's shape the reasoner runs with the
+  world as its working directory (its CLAUDE.md, skills, hooks) and is told about the shared
+  memory directory mind/claude (index MEMORY.md); the brain runtime stays attached.
 - cc: voice speed 1.2 by default; the reasoner is told to read in one combined command per
   question and to give the one-line answer from memory first (state questions took 30 to 60 s
   of serial reads).

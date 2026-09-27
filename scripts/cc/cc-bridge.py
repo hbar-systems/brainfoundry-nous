@@ -253,9 +253,19 @@ if WORLD_DIR and not Path(WORLD_DIR).is_dir():
 # is one writable checkout of the person's world with their repositories under
 # systems/<system>/repos/<repo>, the layout they use on their own computer (shape-world.sh).
 SAME_ROOT = bool(WORLD_DIR) and os.path.realpath(WORLD_DIR) == os.path.realpath(os.environ.get("CC_WORK_DIR", "").strip() or "/nonexistent")
+# One mind on two screens (2026-09-27): when the world has the laptop's shape, the reasoner
+# runs WITH THE WORLD AS ITS WORKING DIRECTORY, exactly as the operator's laptop terminal
+# does, so the world's CLAUDE.md, skills, hooks and the shared memory directory
+# (mind/claude, symlinked into ~/.claude/projects/<world>/memory by shape-world.sh) load
+# on every turn. The brain runtime stays attached as an extra directory. Until then the
+# reasoner knows the files but not the rules; the operator felt exactly that.
+RUN_CWD = WORLD_DIR if SAME_ROOT else CWD
 if WORLD_DIR and SAME_ROOT:
     SYSTEM += (
-        f" The person's world is checked out, writable, at {WORLD_DIR}: the same layout as on their own computer. "
+        f" The person's world is checked out, writable, at {WORLD_DIR}: the same layout as on their own computer; it is "
+        "your working directory, so its CLAUDE.md is your governance. The shared memory of the person's other Claude "
+        "sessions lives at mind/claude/ (MEMORY.md is the index): read the index at the start of a thread and the "
+        "files it points to when a question touches them; write new memories there the same way, one file per fact. "
         "Its root holds their plans, notes and registry; their systems live under systems/<system>/repos/<repo> "
         "(registry/systems.json maps each). 'Go into hbar.social' means that folder. For questions about their "
         "current plans or a system's state, read the file or the repository's git log there and say which. Read in ONE "
@@ -1324,7 +1334,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
     Returns (result_event, stderr_tail, returncode)."""
     cmd = cmd + ["--verbose", "--include-partial-messages"]
     cmd[cmd.index("json")] = "stream-json"
-    proc = subprocess.Popen(cmd, cwd=CWD, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, cwd=RUN_CWD, env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     last = [time.time()]
     stop = threading.Event()
 
@@ -1388,8 +1398,10 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
            # list unauthorized and the reasoner reports them instead of using One.
            # ... except the servers the owner names in CC_MCP_CONFIG; strict keeps all else out.
            "--mcp-config", _mcp_config(), "--strict-mcp-config"]
-    if WORLD_DIR:
+    if WORLD_DIR and not SAME_ROOT:
         cmd += ["--add-dir", WORLD_DIR]
+    if SAME_ROOT:
+        cmd += ["--add-dir", CWD]          # the brain runtime, attached; the world is the working directory
     if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
         cmd += ["--add-dir", WORK_DIR]
     cmd += ["--add-dir", str(OUT_DIR), "--add-dir", str(IN_DIR)]
@@ -1426,7 +1438,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             return f"The reasoner could not answer this turn: {err}", session_id, True
     else:
         try:
-            proc = subprocess.run(cmd, cwd=CWD, env=_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
+            proc = subprocess.run(cmd, cwd=RUN_CWD, env=_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
         out = proc.stdout.strip()
