@@ -18,6 +18,12 @@ export default function Files() {
   const [sel, setSel] = useState(null)         // selected file info {path, kind, size}
   const [text, setText] = useState(null)
   const [recent, setRecent] = useState([])
+  // Edit and save (2026-09-28): a text file inside the world, out or in becomes a textarea; Save posts
+  // it to the bridge, which refuses secrets, .git and the brain repo. A stale copy is a conflict.
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveNote, setSaveNote] = useState(null)   // {ok, text}
   const embedded = typeof window !== 'undefined' && window.self !== window.top
 
   function load(path) {
@@ -37,12 +43,41 @@ export default function Files() {
     load(q || null)
     fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {})
   }, [])
+  function readText() {
+    fetch(raw(sel.path), { cache: 'no-store' }).then(r => r.text()).then(setText).catch(() => setText('(could not read)'))
+  }
   useEffect(() => {
-    setText(null)
-    if (sel && sel.kind === 'text' && sel.size < 400000) {
-      fetch(raw(sel.path), { cache: 'no-store' }).then(r => r.text()).then(setText).catch(() => setText('(could not read)'))
-    }
+    setText(null); setEditing(false); setSaveNote(null)
+    if (sel && sel.kind === 'text' && sel.size < 400000) readText()
   }, [sel && sel.path])
+  const editable = (p) => /\/(world|out|in)\//.test('/' + p + '/')
+  const dirty = editing && draft !== text
+  function startEdit() { setDraft(text || ''); setEditing(true); setSaveNote(null) }
+  function cancelEdit() { setEditing(false); setDraft(''); setSaveNote(null) }
+  async function save() {
+    if (!sel || saving) return
+    setSaving(true); setSaveNote(null)
+    try {
+      const r = await fetch('/cc/files/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: sel.path, text: draft, mtime: sel.mtime }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.ok) {
+        setText(draft); setSel(s => ({ ...s, size: d.size, mtime: d.mtime })); setEditing(false)
+        setSaveNote({ ok: true, text: `saved ${new Date().toLocaleTimeString()}` })
+        load(sel.path.slice(0, sel.path.lastIndexOf('/')) || '/')
+      } else {
+        setSaveNote({ ok: false, text: d.error || `could not save (${r.status})`, conflict: !!d.conflict, mtime: d.mtime })
+      }
+    } catch { setSaveNote({ ok: false, text: 'the bridge did not answer' }) }
+    setSaving(false)
+  }
+  function reloadAfterConflict() {
+    // take the newer copy from disk, keep the draft in the box so nothing typed is lost
+    fetch(`/cc/files?path=${encodeURIComponent(sel.path)}`, { cache: 'no-store' }).then(r => r.json()).then(d => {
+      if (d.file) setSel(s => ({ ...s, size: d.size, mtime: d.mtime }))
+      readText(); setSaveNote({ ok: true, text: 'reloaded; the file below is the newer copy, your draft is unchanged' })
+    }).catch(() => {})
+  }
+  function onKey(e) { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); if (editing) save() } }
 
   function ask(p) {
     const t = `About the file ${p}: `
@@ -122,6 +157,10 @@ export default function Files() {
               <span style={{ ...mono, fontSize: '11px', color: T.faint }}>{fmtSize(sel.size)}</span>
               <a href={raw(sel.path)} download style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download</a>
               <a onClick={() => ask(sel.path)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>ask the brain</a>
+              {sel.kind === 'text' && text !== null && editable(sel.path) && !editing && <a onClick={startEdit} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>edit</a>}
+              {editing && <a onClick={save} style={{ ...mono, fontSize: '12px', color: dirty ? T.gold : T.dim, textDecoration: 'underline', cursor: 'pointer', fontWeight: dirty ? 600 : 400 }}>{saving ? 'saving…' : dirty ? 'save' : 'saved'}</a>}
+              {editing && <a onClick={cancelEdit} style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline', cursor: 'pointer' }}>{dirty ? 'discard' : 'done'}</a>}
+              {saveNote && <span style={{ ...mono, fontSize: '11px', color: saveNote.ok ? T.dim : '#d49a9a' }}>{saveNote.text}{saveNote.conflict ? <> · <a onClick={reloadAfterConflict} style={{ color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>reload</a></> : null}</span>}
               {onDesk(sel.path) && <a onClick={() => fileThis(sel.path)} title="move it into the world where it belongs and commit" style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>file this</a>}
               <a onClick={() => setSel(null)} style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline', cursor: 'pointer' }}>close</a>
             </div>
@@ -131,7 +170,9 @@ export default function Files() {
               {sel.kind === 'image' && <img src={raw(sel.path)} alt={sel.path} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />}
               {(sel.kind === 'pdf' || sel.kind === 'html') && <iframe src={raw(sel.path)} title={sel.path} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: sel.kind === 'html' ? '#fff' : 'transparent' }} />}
               {sel.kind === 'text' && (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large to show here; download it.' : 'reading…'}</p>
-                : <pre style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}
+                : editing ? <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} spellCheck={false} autoFocus
+                    style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, flex: 1, minHeight: '60vh', width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: '10px', color: T.ink, backgroundColor: T.card, border: `1px solid ${dirty ? T.gold : T.line}`, borderRadius: '8px', outline: 'none' }} />
+                : <pre onDoubleClick={() => { if (editable(sel.path)) startEdit() }} style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}
               {sel.kind === 'other' && <p style={{ color: T.dim, fontSize: '13px' }}>No preview for this type. Download it, or ask the brain what it is.</p>}
               <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: 0, wordBreak: 'break-all' }}>{sel.path}</p>
             </div>

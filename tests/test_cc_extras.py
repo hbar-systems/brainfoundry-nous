@@ -91,3 +91,26 @@ def test_recent_and_html_kind(tmp_path):
     assert [e["name"] for e in r] and "J1.log" not in [e["name"] for e in r]
     assert next(e for e in r if e["name"] == "index.html")["kind"] == "html"
     assert f.recent("nope") == []
+
+
+def test_files_write_roots_secrets_and_conflict(tmp_path):
+    # 2026-09-28: the person saves a text file from the Files pane; only inside world/out/in, never
+    # secrets or .git, never the brain repo; a stale mtime is a conflict, not a silent overwrite.
+    world = tmp_path / "world"; world.mkdir(); brain = tmp_path / "brain"; brain.mkdir()
+    (world / "note.md").write_text("one"); (world / ".env").write_text("K=1"); (world / ".git").mkdir(); (world / ".git" / "config").write_text("x")
+    (world / "song.wav").write_bytes(b"RIFF"); (brain / "main.py").write_text("print(1)")
+    f = X.Files({"world": str(world), "brain": str(brain)})
+    d = f.write(str(world / "note.md"), "two")
+    assert d["ok"] and (world / "note.md").read_text() == "two" and d["mtime"] > 0
+    assert f.write(str(world / "new" / "x.md"), "no")["error"].startswith("the folder")
+    assert f.write(str(world / "fresh.md"), "made")["ok"] and (world / "fresh.md").read_text() == "made"
+    assert "secrets" in f.write(str(world / ".env"), "K=2")["error"] and (world / ".env").read_text() == "K=1"
+    assert "secrets" in f.write(str(world / ".git" / "config"), "y")["error"]
+    assert "text" in f.write(str(world / "song.wav"), "y")["error"]
+    assert "world, out or in" in f.write(str(brain / "main.py"), "y")["error"] and (brain / "main.py").read_text() == "print(1)"
+    assert f.write(str(tmp_path / "outside.md"), "y")["error"].startswith("not a path")
+    stale = f.write(str(world / "note.md"), "three", expect_mtime=1)
+    assert stale.get("conflict") and (world / "note.md").read_text() == "two"
+    now = int((world / "note.md").stat().st_mtime)
+    assert f.write(str(world / "note.md"), "three", expect_mtime=now)["ok"] and (world / "note.md").read_text() == "three"
+    assert not [x for x in world.iterdir() if x.name.startswith(".note.md.saving")]

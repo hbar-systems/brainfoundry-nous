@@ -89,6 +89,57 @@ class Files:
         return {"path": str(p), "parent": parent, "entries": entries[:2000],
                 "roots": [{"label": k, "path": str(v)} for k, v in self.roots.items()]}
 
+    # Files the person may rewrite from the console (2026-09-28): text inside the world, out or in,
+    # never the brain repo, never .env or anything under .git, never a secret. A silent save: the
+    # person's own edit of the person's own file needs no permit. Written atomically; group-writable
+    # so the hands (a different user after the split) can rewrite what the bridge wrote.
+    WRITE_ROOTS = ("world", "out", "in", "work")
+    NEVER_NAMES = (".env", ".env.local", ".env.example", "git-credentials", ".netrc")
+    WRITE_MAX = 4_000_000
+
+    def writable(self, raw: str) -> tuple[Path | None, str]:
+        p = self.resolve(raw)
+        if p is None:
+            return None, "not a path the reasoner can reach"
+        if not any(p == r or r in p.parents for k, r in self.roots.items() if k in self.WRITE_ROOTS):
+            return None, "only files in the world, out or in can be edited here"
+        parts = p.parts
+        if ".git" in parts or any(n in self.NEVER_NAMES or n.endswith(".secret") or n.endswith(".pem") or n.endswith(".key") for n in parts):
+            return None, "not editable here: secrets and git internals stay closed"
+        if p.exists() and not p.is_file():
+            return None, "that is a folder"
+        if self.kind(p) != "text":
+            return None, "only text files are edited here"
+        return p, ""
+
+    def write(self, raw: str, text: str, expect_mtime: int | None = None) -> dict:
+        p, why = self.writable(raw)
+        if p is None:
+            return {"ok": False, "error": why}
+        if len(text.encode("utf-8")) > self.WRITE_MAX:
+            return {"ok": False, "error": "too large to save from here"}
+        if expect_mtime is not None and p.exists() and int(p.stat().st_mtime) != int(expect_mtime):
+            return {"ok": False, "error": "changed on disk since you opened it; reload, then edit again", "conflict": True,
+                    "mtime": int(p.stat().st_mtime)}
+        if not p.parent.is_dir():
+            return {"ok": False, "error": "the folder does not exist"}
+        tmp = p.parent / f".{p.name}.saving-{os.getpid()}"
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            try:
+                os.chmod(tmp, 0o664)
+            except OSError:
+                pass
+            os.replace(tmp, p)
+        except OSError as e:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return {"ok": False, "error": f"could not save: {e.strerror or e}"}
+        st = p.stat()
+        return {"ok": True, "path": str(p), "size": st.st_size, "mtime": int(st.st_mtime)}
+
     def recent(self, root_label: str = "out", n: int = 30) -> list:
         """Newest files under one root (the reasoner's outputs by default), for the pane's
         first view: what was just made, without hunting through folders."""

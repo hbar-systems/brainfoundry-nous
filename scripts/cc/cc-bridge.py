@@ -1616,9 +1616,9 @@ class Handler(BaseHTTPRequestHandler):
         p = p[len(BASE):] if p.startswith(BASE) else p
         return p.rstrip("/") or "/"
 
-    def _json(self) -> dict | None:
+    def _json(self, limit: int = MAX_BODY) -> dict | None:
         n = int(self.headers.get("Content-Length") or 0)
-        if n < 0 or n > MAX_BODY:
+        if n < 0 or n > limit:
             return None
         if n == 0:
             return {}
@@ -1702,6 +1702,17 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         if route not in ("/ask", "/jobs/start") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
+        if route == "/files/write":
+            # The person edits a text file in the Files pane and saves (2026-09-28). No permit: their
+            # own file, inside the roots the pane already shows; secrets and git internals refused.
+            body = self._json(limit=cc_extras.Files.WRITE_MAX + 4096) or {}
+            if not body:
+                self._send(413, {"ok": False, "error": "nothing to save, or too large to save from here"})
+                return
+            d = FILES.write(str(body.get("path") or ""), str(body.get("text") if body.get("text") is not None else ""),
+                            body.get("mtime") if isinstance(body.get("mtime"), int) else None)
+            self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
             return
         if route == "/upload":
             d = UPLOADS.save_multipart(self)

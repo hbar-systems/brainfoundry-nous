@@ -435,6 +435,12 @@ export default function CC() {
   // The footer is one line by default (2026-09-27: "I don't want to see all these things");
   // thread, tools, memory, hands, posture and the account sit behind "details".
   const [showDetails, setShowDetails] = useState(false)
+  // The width of the conversation (2026-09-28): the column was capped at 860px whatever the screen.
+  // Three widths, chosen from the footer, kept in this browser; the default stays 860.
+  const WIDTHS = ['860px', '1180px', 'none']
+  const [width, setWidth] = useState('860px')
+  useEffect(() => { try { const w = localStorage.getItem('cc.width'); if (w && WIDTHS.includes(w)) setWidth(w) } catch {} }, [])
+  const cycleWidth = () => { const w = WIDTHS[(WIDTHS.indexOf(width) + 1) % WIDTHS.length]; setWidth(w); try { localStorage.setItem('cc.width', w) } catch {} }
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
   const [sysWarn, setSysWarn] = useState([])
@@ -957,7 +963,7 @@ export default function CC() {
     <>
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
-      <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : '860px', margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+      <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily: 'var(--font-display, serif)', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
@@ -1126,6 +1132,7 @@ export default function CC() {
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           <span><a onClick={() => setShowDetails(s => !s)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showDetails ? 'less' : 'details'}</a></span>
+          {!pane ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
         {showTools && health && health.tools && (
