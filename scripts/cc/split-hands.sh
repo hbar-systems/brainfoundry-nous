@@ -73,7 +73,8 @@ do)
     fi
     echo "== 3/7 the reasoner CLI for $HANDS_USER"
     if ! sudo test -x "$HANDS_HOME/.local/bin/claude"; then
-        sudo -u "$HANDS_USER" -H bash -c 'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh && echo "installer sha256: $(sha256sum /tmp/claude-install.sh | cut -c1-16)" && bash /tmp/claude-install.sh >/dev/null && rm -f /tmp/claude-install.sh'
+        # into the hands' own home: /tmp/claude-install.sh may exist from another user's install (e2e, 2026-09-28)
+        sudo -u "$HANDS_USER" -H bash -c 'cd ~ && curl -fsSL https://claude.ai/install.sh -o ./claude-install.sh && echo "installer sha256: $(sha256sum ./claude-install.sh | cut -c1-16)" && bash ./claude-install.sh >/dev/null && rm -f ./claude-install.sh'
     fi
     sudo -u "$HANDS_USER" -H "$HANDS_HOME/.local/bin/claude" --version 2>/dev/null | head -1 || echo "  (claude for $HANDS_USER not verified; run: sudo -u $HANDS_USER -H claude --version)"
     echo "== 4/7 sudoers: the bridge may run commands as the hands, nothing else"
