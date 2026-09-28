@@ -325,6 +325,14 @@ export default function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])            // attachments chosen for the next message
+  // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
+  // right margin anchored to that message (below it on a narrow screen), typed at leisure, kept
+  // per thread in this browser, and sent with the next message as a structured block: which
+  // message, the exact span, the remark. Replaces retyping quotes into the composer.
+  const [notes, setNotes] = useState([])            // { id, turn, quote, text }
+  const [pick, setPick] = useState(null)            // a selection waiting for its "remark" button: { turn, quote, x, y }
+  const [room, setRoom] = useState(false)           // is there a margin to the right of the column?
+  const notesKeyRef = useRef('cc.notes.new')
   const [jobs, setJobs] = useState([])              // recent jobs on the box (cc-job)
   const [latest, setLatest] = useState([])          // the newest files the brain made, shown above the composer
   const loadLatest = () => fetch('/cc/files/recent', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setLatest((d.recent || []).slice(0, 4)) }).catch(() => {})
@@ -477,6 +485,59 @@ export default function CC() {
   const curRef = useRef(null)
   const runningRef = useRef({})
   const showThread = (key) => { curRef.current = key; setCur(key); setBusy(!!runningRef.current[key]) }
+  // notes follow the thread shown
+  useEffect(() => {
+    notesKeyRef.current = `cc.notes.${cur && !String(cur).startsWith('new:') ? cur : 'new'}`
+    try { const raw = localStorage.getItem(notesKeyRef.current); setNotes(raw ? JSON.parse(raw) : []) } catch { setNotes([]) }
+  }, [cur])
+  useEffect(() => { try { if (notes.length) localStorage.setItem(notesKeyRef.current, JSON.stringify(notes)); else localStorage.removeItem(notesKeyRef.current) } catch {} }, [notes])
+  useEffect(() => {
+    const measure = () => { try { const w = convRef.current ? convRef.current.getBoundingClientRect().right : 0; setRoom(window.innerWidth - w >= 300) } catch { setRoom(false) } }
+    measure(); window.addEventListener('resize', measure); const t = setInterval(measure, 2000)
+    return () => { window.removeEventListener('resize', measure); clearInterval(t) }
+  }, [])
+  function onPick() {
+    // a mouse-up inside the conversation: a non-empty selection inside one of the brain's messages offers a remark
+    try {
+      const sel = window.getSelection(); const q = sel ? sel.toString().replace(/\s+/g, ' ').trim() : ''
+      if (!q || !sel.rangeCount) { setPick(null); return }
+      let node = sel.anchorNode; if (node && node.nodeType === 3) node = node.parentElement
+      const host = node && node.closest ? node.closest('[data-turn]') : null
+      if (!host || !convRef.current) { setPick(null); return }
+      const i = parseInt(host.getAttribute('data-turn'), 10)
+      if (!(turns[i] && turns[i].who === 'brain')) { setPick(null); return }
+      const r = sel.getRangeAt(0).getBoundingClientRect(); const c = convRef.current.getBoundingClientRect()
+      setPick({ turn: i, quote: q.slice(0, 400), x: Math.max(8, r.left - c.left), y: r.bottom - c.top + convRef.current.scrollTop + 6 })
+    } catch { setPick(null) }
+  }
+  function addNote() {
+    if (!pick) return
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setNotes(n => [...n, { id, turn: pick.turn, quote: pick.quote, text: '' }])
+    setPick(null); try { window.getSelection().removeAllRanges() } catch {}
+    setTimeout(() => { const el = document.getElementById(`note-${id}`); if (el) el.focus() }, 30)
+  }
+  const setNote = (id, text) => setNotes(n => n.map(x => (x.id === id ? { ...x, text } : x)))
+  const dropNote = (id) => setNotes(n => n.filter(x => x.id !== id))
+  // the block the reasoner receives: which message, the exact span, the remark
+  function notesBlock() {
+    const live = notes.filter(n => n.text.trim())
+    if (!live.length) return ''
+    const lines = live.map((n, k) => {
+      const t = turns[n.turn]; const head = t ? (t.text || '').replace(/\s+/g, ' ').trim().slice(0, 60) : ''
+      return `${k + 1}. your message #${n.turn + 1}${head ? ` ("${head}${head.length >= 60 ? '…' : ''}")` : ''}, the span I marked: "${n.quote}"\n   my remark: ${n.text.trim()}`
+    })
+    return `[remarks in the margin, each on a span I selected in one of your earlier messages]\n${lines.join('\n')}`
+  }
+  const noteCard = (n) => (
+      <div key={n.id} style={{ width: room ? '250px' : '100%', border: `1px solid ${C.gold}55`, borderLeft: `3px solid ${C.gold}`, borderRadius: '8px', backgroundColor: C.card, padding: '8px 10px', boxSizing: 'border-box' }}>
+        <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: C.dim, fontStyle: 'italic', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>“{n.quote}”</p>
+        <textarea id={`note-${n.id}`} value={n.text} onChange={e => setNote(n.id, e.target.value)} rows={2} placeholder="your remark on this span"
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); boxRef.current && boxRef.current.focus() } }}
+          style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontSize: '13px', lineHeight: 1.5, color: C.ink, backgroundColor: 'transparent', border: `1px solid ${C.line}`, borderRadius: '6px', padding: '6px 8px', outline: 'none', fontFamily: 'inherit' }} />
+        <a onClick={() => dropNote(n.id)} style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>remove</a>
+      </div>
+  )
   const markRunning = (key, on) => { if (on) runningRef.current[key] = true; else delete runningRef.current[key]; if (curRef.current === key) setBusy(!!on) }
 
   // A card that waited unanswered for 15 minutes on 2026-09-27 because the owner had left the
@@ -931,8 +992,10 @@ export default function CC() {
 
   async function send(forced) {
     let text = (typeof forced === 'string' ? forced : draft).trim()
-    if (!text && files.length === 0) return
+    const block = typeof forced === 'string' ? '' : notesBlock()
+    if (!text && files.length === 0 && !block) return
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
     if (typeof forced !== 'string' && files.length > 0) {
       // Attachments go to the box first (in/<date>/), then the message names them.
       const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
@@ -1071,7 +1134,11 @@ export default function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
-        <div ref={convRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px' }}>
+        <div ref={convRef} onMouseUp={onPick} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative' }}>
+          {pick && (
+            <a onMouseDown={e => { e.preventDefault(); addNote() }} title="a note in the margin on the selected span; it goes with your next message"
+               style={{ ...mono, position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#141210', backgroundColor: C.gold, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>remark</a>
+          )}
           {pending.map(p => (
             <div key={p.id} style={{ display: 'flex', justifyContent: 'flex-start', margin: '8px 0' }}>
               <div style={{ maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: '14px', lineHeight: 1.6 }}>
@@ -1088,7 +1155,13 @@ export default function CC() {
             </p>
           )}
           {turns.map((t, i) => (
-            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: '8px 0' }}>
+            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: room ? 'nowrap' : 'wrap', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: '8px 0', position: 'relative' }}>
+              {notes.some(n => n.turn === i) && (
+                <div style={room ? { position: 'absolute', left: 'calc(100% + 14px)', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px' }
+                                  : { order: 2, width: '100%', display: 'flex', flexDirection: 'column', gap: '8px', margin: '6px 0 0 0' }}>
+                  {notes.filter(n => n.turn === i).map(noteCard)}
+                </div>
+              )}
               <div style={{
                 maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
@@ -1141,6 +1214,9 @@ export default function CC() {
             ))}
             <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
           </div>
+        )}
+        {notes.filter(n => n.text.trim()).length > 0 && (
+          <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
         {latest.length > 0 && (
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
