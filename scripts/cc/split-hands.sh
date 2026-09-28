@@ -27,7 +27,7 @@ verify() {
     echo "== verify"
     echo "hands cannot read the bridge's state: $(sudo -u "$HANDS_USER" ls "$BRIDGE_HOME/.cc-bridge" >/dev/null 2>&1 && echo FAIL || echo ok)"
     echo "hands cannot read the brain's env:    $(sudo -u "$HANDS_USER" cat "$BRAIN_DIR/.env" >/dev/null 2>&1 && echo FAIL || echo ok)"
-    echo "bridge reaches the hands' world:      $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/world" >/dev/null 2>&1 && echo ok || echo FAIL)"
+    if sudo test -d "$HANDS_HOME/world"; then echo "bridge reaches the hands' world:      $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/world" >/dev/null 2>&1 && echo ok || echo FAIL)"; else echo "bridge reaches the hands' out:        $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/out" >/dev/null 2>&1 && echo ok || echo FAIL)"; fi
     echo "decision route without the token:     $(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:7682/cc/new) (403 expected)"
     echo "health:                               $(curl -s http://127.0.0.1:7682/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("hands_user", d.get("hands_user"), "operator_token", d.get("operator_token"))')"
 }
@@ -47,6 +47,7 @@ do)
         fi
     done
     sudo mkdir -p "$HANDS_HOME/in" "$HANDS_HOME/out" "$HANDS_HOME/.cc-bridge"
+    HAS_WORLD=0; sudo test -d "$HANDS_HOME/world" && HAS_WORLD=1   # a box without the world (e2e) skips the world steps
     if sudo test -f "$BRIDGE_HOME/.cc-bridge/mcp.json" && ! sudo test -f "$HANDS_HOME/.cc-bridge/mcp.json"; then
         sudo cp "$BRIDGE_HOME/.cc-bridge/mcp.json" "$HANDS_HOME/.cc-bridge/mcp.json"     # the packs' file: the hands run the packs
         sudo sed -i "s#$BRIDGE_HOME/#$HANDS_HOME/#g" "$HANDS_HOME/.cc-bridge/mcp.json"
@@ -54,9 +55,13 @@ do)
     sudo chown -R "$HANDS_USER:$HANDS_USER" "$HANDS_HOME"
     # the bridge writes uploads into in/, reads out/ and the world, and the reconciler (as the
     # bridge user) commits into the world: group read everywhere, group write where needed
-    sudo chmod -R g+rX "$HANDS_HOME/world" "$HANDS_HOME/out" "$HANDS_HOME/in"
-    sudo chmod -R g+w "$HANDS_HOME/in" "$HANDS_HOME/world"
-    sudo find "$HANDS_HOME/world" "$HANDS_HOME/in" -type d -exec chmod g+s {} +
+    sudo chmod -R g+rX "$HANDS_HOME/out" "$HANDS_HOME/in"
+    sudo chmod -R g+w "$HANDS_HOME/in"
+    sudo find "$HANDS_HOME/in" -type d -exec chmod g+s {} +
+    if [ "$HAS_WORLD" = 1 ]; then
+        sudo chmod -R g+rX "$HANDS_HOME/world"; sudo chmod -R g+w "$HANDS_HOME/world"
+        sudo find "$HANDS_HOME/world" -type d -exec chmod g+s {} +
+    fi
     sudo -u "$BRIDGE_USER" git config --global --add safe.directory '*' 2>/dev/null || true
     sudo -u "$HANDS_USER" git config --global --add safe.directory '*' 2>/dev/null || true
     # the hands' git identity and token for pushes (the bridge user had them)
@@ -94,15 +99,17 @@ PY
     sudo systemctl daemon-reload; sudo systemctl restart caddy
     echo "== 6/7 the bridge env"
     setenv CC_HANDS_USER "$HANDS_USER"; setenv CC_HANDS_HOME "$HANDS_HOME"
-    setenv CC_WORLD_DIR "$HANDS_HOME/world"; setenv CC_WORK_DIR "$HANDS_HOME/world"
+    if [ "$HAS_WORLD" = 1 ]; then setenv CC_WORLD_DIR "$HANDS_HOME/world"; setenv CC_WORK_DIR "$HANDS_HOME/world"; fi
     setenv CC_MCP_CONFIG "$HANDS_HOME/.cc-bridge/mcp.json"; setenv CC_BIN "$HANDS_HOME/.local/bin/claude"
     # units that named the old paths: the pull timer, the reconciler, the memory link
     for u in /etc/systemd/system/cc-work-pull.service /etc/systemd/system/world-propose.service; do
         [ -f "$u" ] && sudo sed -i "s#$BRIDGE_HOME/world#$HANDS_HOME/world#g" "$u"
     done
-    sudo -u "$HANDS_USER" -H mkdir -p "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world"
-    sudo rm -rf "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world/memory"
-    sudo -u "$HANDS_USER" -H ln -s "$HANDS_HOME/world/mind/claude" "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world/memory"
+    if [ "$HAS_WORLD" = 1 ] && sudo test -d "$HANDS_HOME/world/mind/claude"; then
+        sudo -u "$HANDS_USER" -H mkdir -p "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world"
+        sudo rm -rf "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world/memory"
+        sudo -u "$HANDS_USER" -H ln -s "$HANDS_HOME/world/mind/claude" "$HANDS_HOME/.claude/projects/-home-$HANDS_USER-world/memory"
+    fi
     sudo systemctl daemon-reload
     echo "== 7/7 restart and check"
     bash "$BRAIN_DIR/scripts/cc/install.sh" >/dev/null 2>&1 || true      # rewrites the door for the hands user
