@@ -488,7 +488,107 @@ def _run_permit(pid: str, pm) -> dict:
 # posts the call here and waits; the page shows a card inside the live answer; the click
 # answers the hook; the reasoner's own tool then runs the action. Same permit, same audit.
 ASKS: dict = {}                         # permit id -> {"event", "decision", "message"}
-LIVE = {"emit": None, "waiting": 0, "allowed": set()}   # the current streamed turn's event sink; what it allowed
+MAX_RUNS = int(os.environ.get("CC_MAX_RUNS", "3"))   # conversations answering at once
+
+
+class Run:
+    """One turn in flight (2026-09-28: several conversations at once). Holds the event sink
+    for its own cards, what it allowed, and a buffer of every event so a page that arrives
+    later (another tab, the phone, a switch back to this thread) replays it and follows."""
+
+    def __init__(self, thread: str | None, message: str, title: str | None = None):
+        self.id = __import__("secrets").token_hex(6)
+        self.thread = thread              # the brain session id, None until the first turn records it
+        self.claude_sid: str | None = None
+        self.message = message
+        self.title = title
+        self.started = time.time()
+        self.waiting = 0                  # cards waiting for the person in this turn
+        self.allowed: set = set()
+        self.events: list = [("begin", {"run": self.id, "thread": thread, "message": message, "title": title,
+                                        "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.started))})]
+        self.sinks: list = []             # callables(kind, payload): the asking page and any /live reader
+        self.done = False
+        self.payload: dict | None = None
+        self.lock = threading.Lock()
+
+    def emit(self, kind: str, payload: dict) -> None:
+        with self.lock:
+            if kind != "ping":
+                self.events.append((kind, payload))
+            if kind == "done":
+                self.done = True
+                self.payload = payload
+            sinks = list(self.sinks)
+        for f in sinks:
+            try:
+                f(kind, payload)
+            except Exception:
+                pass
+
+    def attach(self, sink) -> bool:
+        """Replay what happened so far into sink, then keep it posted. False when already done
+        (the replay still happens, so a late reader gets the whole turn)."""
+        with self.lock:
+            past = list(self.events)
+            live = not self.done
+            if live:
+                self.sinks.append(sink)
+        for k, pl in past:
+            try:
+                sink(k, pl)
+            except Exception:
+                pass
+        return live
+
+    def detach(self, sink) -> None:
+        with self.lock:
+            if sink in self.sinks:
+                self.sinks.remove(sink)
+
+    def public(self) -> dict:
+        return {"run": self.id, "thread": self.thread, "title": self.title, "message": self.message[:120],
+                "started": self.events[0][1]["started"], "waiting": self.waiting, "done": self.done,
+                "seconds": int(time.time() - self.started)}
+
+
+RUNS: dict[str, Run] = {}                 # run id -> Run; finished ones kept a while for late readers
+RUNS_LOCK = threading.Lock()
+
+
+def _runs_active() -> list:
+    return [r for r in RUNS.values() if not r.done]
+
+
+def _run_for_thread(thread: str | None) -> Run | None:
+    return next((r for r in _runs_active() if thread and r.thread == thread), None)
+
+
+def _run_for_sid(sid: str | None) -> Run | None:
+    return next((r for r in _runs_active() if sid and r.claude_sid == sid), None)
+
+
+def _run_watching(sid: str | None) -> Run | None:
+    """The run a hook call belongs to: by the reasoner's session id, else the only one running."""
+    r = _run_for_sid(sid)
+    if r is None:
+        act = _runs_active()
+        r = act[0] if len(act) == 1 else None
+    return r
+
+
+def _runs_prune() -> None:
+    with RUNS_LOCK:
+        done = [r for r in RUNS.values() if r.done]
+        for r in sorted(done, key=lambda x: x.started)[:-20]:
+            RUNS.pop(r.id, None)
+        for r in done:
+            if time.time() - r.started > 6 * 3600:
+                RUNS.pop(r.id, None)
+
+
+def _cards_waiting() -> int:
+    return sum(r.waiting for r in _runs_active())
 BOX_NO_REMEMBER = ("rm", "dd", "mkfs", "shutdown", "reboot", "chmod", "chown", "curl", "wget", "ssh", "scp",
                    "kill", "pkill", "userdel", "passwd", "sudo", "mv", "truncate", "shred")
 
@@ -514,7 +614,7 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
     return tool, f"use {tool}", False
 
 
-def _box_ask(tool: str, inp: dict) -> dict:
+def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
     """Called by the hook. Blocks until the person decides, or the permit expires."""
     if not BOX_ENABLED or GATE is None:
         return {"behavior": "deny", "message": "actions on the box are not enabled on this brain"}
@@ -530,15 +630,16 @@ def _box_ask(tool: str, inp: dict) -> dict:
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
-    same_turn = (tool, summary) in LIVE["allowed"]
+    run = _run_watching(session_id)
+    same_turn = run is not None and (tool, summary) in run.allowed
     if (remember_ok and _auto_has(args)) or same_turn:
         # Already allowed: by the owner's standing choice, or the identical call earlier in this
         # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
         outcome = _run_permit(pid, GATE.get(pid))
         card.update({"auto": True, "decided": "approve", "outcome": outcome,
                      "why": "same call, allowed a moment ago" if same_turn else "you allowed this action earlier"})
-        if LIVE["emit"]:
-            LIVE["emit"]("ask", card)
+        if run is not None:
+            run.emit("ask", card)
         return {"behavior": "allow"}
     if _posture_current() == "judged" and not action_id.startswith("sudo"):
         verdict = _judge(tool, inp, summary)
@@ -548,23 +649,23 @@ def _box_ask(tool: str, inp: dict) -> dict:
                 outcome = _run_permit(pid, GATE.get(pid))
                 card.update({"auto": True, "decided": "approve", "outcome": outcome,
                              "why": f"judged safe {verdict['safe']:.2f}, on request {verdict['intent']:.2f}, risk {verdict['risk']:.1f}"})
-                if LIVE["emit"]:
-                    LIVE["emit"]("ask", card)
+                if run is not None:
+                    run.emit("ask", card)
                 return {"behavior": "allow"}
-    if LIVE["emit"] is None:
+    if run is None:
         GATE.deny(pid)
         return {"behavior": "deny", "message": "nobody is watching the page to allow this; ask the person to send the request again from the page"}
     ev = threading.Event()
     ASKS[pid] = {"event": ev, "decision": None, "message": None}
-    LIVE["waiting"] += 1
+    run.waiting += 1
     try:
-        LIVE["emit"]("ask", card)
+        run.emit("ask", card)
         ev.wait(PERMIT_TTL)
     finally:
-        LIVE["waiting"] -= 1
+        run.waiting -= 1
         a = ASKS.pop(pid, {})
     if a.get("decision") == "allow":
-        LIVE["allowed"].add((tool, summary))
+        run.allowed.add((tool, summary))
         return {"behavior": "allow"}
     if a.get("decision") is None:
         try:
@@ -1432,9 +1533,11 @@ def _tool_brief(name: str, inp: dict) -> str:
     return name
 
 
-def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
+def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict | None, str, int]:
     """Run the reasoner with stream-json output, forwarding events as they arrive.
-    Returns (result_event, stderr_tail, returncode)."""
+    Returns (result_event, stderr_tail, returncode). The run (when given) learns the
+    reasoner's session id from the init event, so the permission hook finds its cards."""
+    run = run or Run(None, "")
     cmd = cmd + ["--verbose", "--include-partial-messages"]
     cmd[cmd.index("json")] = "stream-json"
     proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1445,7 +1548,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
         # Kill a silent reasoner after TIMEOUT_S, but not while a card waits for the person;
         # while waiting, keep the stream alive with a comment every 15 seconds.
         while not stop.wait(5):
-            if LIVE["waiting"] > 0:
+            if run.waiting > 0:
                 last[0] = time.time()
                 if int(time.time()) % 15 < 5:
                     on_event("ping", {})
@@ -1453,8 +1556,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
                 proc.kill()
                 return
     threading.Thread(target=_watch, daemon=True).start()
-    LIVE["emit"] = on_event
-    LIVE["allowed"] = set()
+    run.allowed = set()
     result = None
     seen_text = False
     try:
@@ -1469,6 +1571,7 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
                 continue
             kind = ev.get("type")
             if kind == "system" and ev.get("subtype") == "init":
+                run.claude_sid = ev.get("session_id") or run.claude_sid
                 on_event("start", {"model": ev.get("model"), "session_id": ev.get("session_id")})
             elif kind == "stream_event":
                 e = ev.get("event") or {}
@@ -1488,13 +1591,12 @@ def _stream_turn(cmd: list[str], on_event) -> tuple[dict | None, str, int]:
                 result = ev
     finally:
         stop.set()
-        LIVE["emit"] = None
     proc.wait()
     err = (proc.stderr.read() or "").strip()[-600:]
     return result, err, proc.returncode
 
 
-def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_event=None) -> tuple[str, str | None, bool]:
+def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_event=None, run: Run | None = None) -> tuple[str, str | None, bool]:
     """A turn. With on_event, the reasoner streams (start / text / tool events) and the
     same reply comes back at the end; META holds the last turn's usage for the page."""
     prompt, used = _compose(message)
@@ -1529,7 +1631,9 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             if kind == "text" and payload.get("t"):
                 emitted["any"] = True
             on_event(kind, payload)
-        data, stderr, rc = _stream_turn(cmd, _fwd)
+        if run is not None:
+            run.claude_sid = session_id
+        data, stderr, rc = _stream_turn(cmd, _fwd, run=run)
         if data is None and rc == -9:
             return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
         out = json.dumps(data) if data else ""
@@ -1538,10 +1642,10 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             err = err_msg or (stderr or out or "no output").strip()[-600:]
             low = err.lower()
             if session_id and ("session" in low or "resume" in low) and not err_msg and not emitted["any"]:
-                return _run_turn(message, None, on_event=on_event)
+                return _run_turn(message, None, on_event=on_event, run=run)
             if "refresh oauth token" in low and not _retry and not emitted["any"]:
                 time.sleep(4)
-                return _run_turn(message, session_id, _retry=True, on_event=on_event)
+                return _run_turn(message, session_id, _retry=True, on_event=on_event, run=run)
             if "log in" in low or "login" in low or "not authenticated" in low or "sign in again" in low:
                 return "The reasoner's sign-in needs renewing. Use disconnect and connect again below.", session_id, True
             return f"The reasoner could not answer this turn: {err}", session_id, True
@@ -1656,7 +1760,8 @@ class Handler(BaseHTTPRequestHandler):
                              "judge": bool(TYPESAFE_KEY),
                              "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
-                             "cards_waiting": LIVE["waiting"], "turn_running": bool(LIVE["emit"]),
+                             "cards_waiting": _cards_waiting(), "turn_running": bool(_runs_active()),
+                             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
                              "mcp_servers": _mcp_servers(),
@@ -1669,7 +1774,47 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/threads":
             items = list(reversed(_threads_load()))[:30]
             st = _load_state()
-            self._send(200, {"threads": items, "current": st.get("brain_session_id")})
+            running = {r.thread: r.public() for r in _runs_active() if r.thread}
+            for th in items:
+                r = running.get(th.get("brain"))
+                th["running"] = bool(r)
+                th["run"] = (r or {}).get("run")
+                th["waiting"] = (r or {}).get("waiting", 0)
+            self._send(200, {"threads": items, "current": st.get("brain_session_id"),
+                             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS})
+        elif route == "/live":
+            # Watch a turn in flight (2026-09-28): the page that asked, another tab, the phone, or
+            # a switch back to a thread that is still answering. Replays everything so far, then
+            # follows to "done". By thread (brain id) or by run id.
+            q = self._query()
+            r = None
+            if q.get("run"):
+                r = RUNS.get(q["run"])
+            elif q.get("thread"):
+                r = _run_for_thread(q["thread"]) or next((x for x in sorted(RUNS.values(), key=lambda x: -x.started) if x.thread == q["thread"]), None)
+            if r is None:
+                self._send(404, {"error": "no such turn"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            finished = threading.Event()
+
+            def sink(kind, payload):
+                try:
+                    self.wfile.write(f"event: {kind}\ndata: {json.dumps(payload)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    finished.set()
+                if kind == "done":
+                    finished.set()
+            live = r.attach(sink)
+            if live:
+                while not finished.wait(15):
+                    sink("ping", {})
+                r.detach(sink)
         elif route == "/permits":
             items = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
             self._send(200, {"pending": items, "writes": GATE is not None, "auto": _auto_load() if GATE else []})
@@ -1876,7 +2021,7 @@ class Handler(BaseHTTPRequestHandler):
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"behavior": "deny", "message": "not the hook"})
                 return
-            self._send(200, _box_ask(str(req.get("tool_name", "")), req.get("tool_input") or {}))
+            self._send(200, _box_ask(str(req.get("tool_name", "")), req.get("tool_input") or {}, session_id=str(req.get("session_id") or "") or None))
             return
         if route in ("/permits/approve", "/permits/deny"):
             if GATE is None:
@@ -1932,27 +2077,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "empty_message"})
             return
         LAST_MESSAGE["text"] = message
-        if not _lock.acquire(blocking=False):
-            self._send(409, {"error": "busy", "reply": "One turn is still running. Wait for it."})
-            return
-        t0 = time.time()
-        stream = req.get("stream") is True
-        on_event = None
-        if stream:
-            # Server-sent events: the page reads text as it forms, sees each tool call, and
-            # gets the same final payload as the plain answer in a closing "done" event.
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Accel-Buffering", "no")
-            self.end_headers()
-            def on_event(kind, payload):
-                try:
-                    self.wfile.write(f"event: {kind}\ndata: {json.dumps(payload)}\n\n".encode())
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-        try:
+        # Which conversation (2026-09-28: several at once). The page names the thread it shows
+        # (a brain session id); "new" starts another; no thread means the box's current one.
+        want = str(req.get("thread") or "").strip()
+        explicit = None
+        state = {}
+        if req.get("new") is True:
+            print("new thread (flag on the chat request)", flush=True)
+        elif want:
+            explicit = next((x for x in _threads_load() if x.get("brain") == want), None)
+            if explicit is None:
+                self._send(404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."})
+                return
+            state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
+                     "prompt_hash": PROMPT_HASH}
+        else:
             state = _load_state()
             # A thread started under older instructions carries their conclusions ("I can't
             # do that") into every later turn. When the instructions changed since the
@@ -1961,29 +2100,69 @@ class Handler(BaseHTTPRequestHandler):
             if state.get("session_id") and state.get("prompt_hash") != PROMPT_HASH:
                 print("instructions changed since this thread began; starting a new thread", flush=True)
                 state = {}
-            # The page also says so inside the chat request itself: a separate /new call can be
-            # lost (observed 2026-09-17: the button cleared the screen, the old thread went on).
-            if req.get("new") is True and state.get("session_id"):
-                print("new thread (flag on the chat request)", flush=True)
-                state = {}
-            reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=on_event)
+        with RUNS_LOCK:
+            key = state.get("brain_session_id")
+            if key and _run_for_thread(key):
+                self._send(409, {"error": "busy", "reply": "This conversation is still answering. Wait for it, or start another."})
+                return
+            active = _runs_active()
+            if len(active) >= MAX_RUNS:
+                self._send(409, {"error": "busy", "reply": f"{len(active)} conversations are answering already; wait for one to finish."})
+                return
+            run = Run(key, message, title=state.get("title"))
+            RUNS[run.id] = run
+        t0 = time.time()
+        stream = req.get("stream") is True
+        on_event = run.emit
+        if stream:
+            # Server-sent events: the page reads text as it forms, sees each tool call, and
+            # gets the same final payload as the plain answer in a closing "done" event.
+            # The run keeps every event too, so a page that arrives later follows along.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            def sink(kind, payload):
+                try:
+                    self.wfile.write(f"event: {kind}\ndata: {json.dumps(payload)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+            run.attach(sink)
+        try:
+            reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=on_event, run=run)
             if sid:
                 state["session_id"] = sid
                 state["prompt_hash"] = PROMPT_HASH
-                _save_state(state)
-        finally:
-            _lock.release()
-        reply, proposal = _extract_proposal(reply)
-        reply, pane = _extract_pane(reply)
-        card = _propose(proposal) if proposal else None
-        try:
-            st = _load_state()
-            if st.get("session_id") == sid or not st.get("session_id"):
-                st["session_id"] = sid
-                st = _record_turn(st, message, reply, card)
-                _save_state(st)
+                if explicit is None:
+                    _save_state(state)
+            reply, proposal = _extract_proposal(reply)
+            reply, pane = _extract_pane(reply)
+            card = _propose(proposal) if proposal else None
+            try:
+                if explicit is None:
+                    st = _load_state()
+                    if st.get("session_id") == sid or not st.get("session_id"):
+                        st["session_id"] = sid
+                        st = _record_turn(st, message, reply, card)
+                        _save_state(st)
+                    state = st
+                else:
+                    state = _record_turn(state, message, reply, card)
+                    cur = _load_state()
+                    if cur.get("brain_session_id") == state.get("brain_session_id"):
+                        cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
+                        _save_state(cur)
+                run.thread = state.get("brain_session_id") or run.thread
+                run.title = state.get("title") or run.title
+            except Exception as e:
+                print(f"record turn failed: {type(e).__name__}", flush=True)
         except Exception as e:
-            print(f"record turn failed: {type(e).__name__}", flush=True)
+            run.emit("done", {"reply": f"The bridge failed this turn: {type(e).__name__}", "error": True, "session_id": None, "ms": 0,
+                              "proposal": None, "pane": None, "meta": {}, "thread": run.thread, "title": run.title, "run": run.id})
+            _runs_prune()
+            raise
         ms = int((time.time() - t0) * 1000)
         print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')}", flush=True)
         _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
@@ -1991,10 +2170,11 @@ class Handler(BaseHTTPRequestHandler):
                      "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                      "proposal": (card or {}).get("id"),
                      "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS})
-        payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META)}
-        if stream:
-            on_event("done", payload)
-        else:
+        payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
+                   "thread": run.thread, "title": run.title, "run": run.id}
+        run.emit("done", payload)
+        _runs_prune()
+        if not stream:
             self._send(200, payload)
 
     def log_message(self, fmt: str, *args) -> None:  # quiet: no paths, no bodies

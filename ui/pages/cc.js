@@ -468,12 +468,22 @@ export default function CC() {
   const endRef = useRef(null)
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
+  // Several conversations at once (2026-09-28). `cur` is the thread this page shows (a brain
+  // session id, or a temporary key while a new thread's first turn runs). A stream updates the
+  // page only while its thread is the one shown; switching away detaches it, switching back
+  // attaches through /cc/live, which replays the whole turn so far. `running` is what this
+  // browser knows to be answering, by thread key.
+  const [cur, setCur] = useState(null)
+  const curRef = useRef(null)
+  const runningRef = useRef({})
+  const showThread = (key) => { curRef.current = key; setCur(key); setBusy(!!runningRef.current[key]) }
+  const markRunning = (key, on) => { if (on) runningRef.current[key] = true; else delete runningRef.current[key]; if (curRef.current === key) setBusy(!!on) }
 
   // A card that waited unanswered for 15 minutes on 2026-09-27 because the owner had left the
   // page: the footer now says so within 20 s and the browser shows a notification once per card.
   const cardsSeenRef = useRef(0)
   useEffect(() => {
-    const t = setInterval(() => { loadHealth() }, 20000)
+    const t = setInterval(() => { loadHealth(); loadThreads() }, 20000)
     return () => clearInterval(t)
   }, [])
   useEffect(() => {
@@ -514,7 +524,14 @@ export default function CC() {
   useEffect(() => {
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then(h => { setHealth(h); if (h && h.brain_session_id) loadHistory(h.brain_session_id) })
+      .then(h => {
+        setHealth(h)
+        if (h && h.brain_session_id) {
+          showThread(h.brain_session_id); loadHistory(h.brain_session_id)
+          // the box's current thread may be answering already (another tab, the phone): follow it
+          if ((h.runs || []).some(r => r.thread === h.brain_session_id)) attach(h.brain_session_id)
+        }
+      })
       .catch(() => setHealth(false))
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
     try { const q = new URLSearchParams(window.location.search).get('ask'); if (q) setDraft(q) } catch {}
@@ -559,12 +576,66 @@ export default function CC() {
   }, [])
 
   async function switchThread(th) {
-    if (busy) return
+    // Allowed while another thread answers: that stream keeps running on the box and detaches
+    // from this page; this thread's own turn, if one is in flight, is followed through /cc/live.
+    if (th.brain === curRef.current) { setShowThreads(false); return }
+    setTurns([]); setPane(null); showThread(th.brain); loadHistory(th.brain)
     try {
-      const r = await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
-      if (r.ok) { setTurns([]); setPane(null); loadHistory(th.brain); loadHealth() }
+      await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
     } catch {}
+    if (th.running || runningRef.current[th.brain]) attach(th.brain)
+    loadHealth()
     setShowThreads(false)
+  }
+
+  // Read one server-sent stream (a turn just sent, or one followed through /cc/live) into the
+  // live bubble, while `key` is the thread shown. Returns the "done" payload, or null.
+  async function consume(r, key, withBegin) {
+    const mine = () => curRef.current === key
+    const upd = f => { if (!mine()) return; setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = f(c[i]); return c }) }
+    if (!withBegin && mine()) setTurns(t => [...t, { who: 'brain', text: '', live: true, steps: [] }])
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''; let data = null
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2)
+        const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const dl = (chunk.match(/^data: (.*)$/m) || [])[1]
+        if (!ev || !dl) continue
+        let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
+        if (ev === 'begin') { if (withBegin && mine()) setTurns(t => [...t.filter(x => !x.live), { who: 'me', text: pl.message || '' }, { who: 'brain', text: '', live: true, steps: [] }]) }
+        else if (ev === 'start') { if (mine()) { spokenRef.current = 0; stopSpeaking() } upd(x => ({ ...x, model: pl.model })) }
+        else if (ev === 'text') upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } })
+        else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
+        else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
+        else if (ev === 'done') data = pl
+      }
+    }
+    if (!data) data = { reply: 'The stream ended without an answer.', error: true }
+    const reply = data.reply || '(no answer)'
+    if (mine()) {
+      setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
+      if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
+      spokenRef.current = 0
+      if (data.pane) openPane(data.pane)
+    }
+    return data
+  }
+
+  // Follow a turn already in flight for `thread`: the bridge replays what happened, then streams.
+  async function attach(thread) {
+    if (runningRef.current[thread] === 'attached') return
+    runningRef.current[thread] = 'attached'; if (curRef.current === thread) setBusy(true)
+    try {
+      const r = await fetch(`/cc/live?thread=${encodeURIComponent(thread)}`, { cache: 'no-store' })
+      if (r.ok && r.body) await consume(r, thread, true)
+      else if (r.status === 404 && curRef.current === thread) loadHistory(thread)
+    } catch {}
+    markRunning(thread, false)
+    loadThreads(); loadLatest()
+    if (curRef.current === thread && queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
   }
 
   // The write gate: a proposal card's Send approves the permit and executes that one
@@ -876,59 +947,47 @@ export default function CC() {
     if (busy) { queueRef.current = text; if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true }]); return }
     if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
-    setBusy(true)
+    // The thread this turn belongs to: the one shown, or a fresh one under a temporary key until
+    // the bridge names it in "done".
+    const isNew = freshRef.current || !curRef.current
+    const key = isNew ? `new:${Date.now()}` : curRef.current
+    if (isNew) showThread(key)
+    markRunning(key, true)
     try {
-      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, new: freshRef.current, stream: true }) })
+      const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ message: text, new: isNew, thread: isNew ? null : key, stream: true }) })
       freshRef.current = false
       let data = null
       if (r.ok && (r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
         // The bridge streams: text as it forms, one line per tool call, then "done" with
         // the same payload a plain answer carries. The live bubble is the last turn.
-        setTurns(t => [...t, { who: 'brain', text: '', live: true, steps: [] }])
-        const upd = f => setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = f(c[i]); return c })
-        const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
-        for (;;) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buf += dec.decode(value, { stream: true })
-          let idx
-          while ((idx = buf.indexOf('\n\n')) >= 0) {
-            const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2)
-            const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const dl = (chunk.match(/^data: (.*)$/m) || [])[1]
-            if (!ev || !dl) continue
-            let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
-            if (ev === 'start') { spokenRef.current = 0; stopSpeaking(); upd(x => ({ ...x, model: pl.model })) }
-            else if (ev === 'text') upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } })
-            else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
-            else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
-            else if (ev === 'done') data = pl
-          }
-        }
-        if (!data) data = { reply: 'The stream ended without an answer.', error: true }
-        const reply = data.reply || '(no answer)'
-        setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
-        if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
-        spokenRef.current = 0
+        data = await consume(r, key, false)
       } else {
         data = await r.json().catch(() => ({}))
         const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
-        setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
+        if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
+        if (data.pane && curRef.current === key) openPane(data.pane)
       }
-      if (data.pane) openPane(data.pane)
+      if (isNew && data && data.thread) {
+        // the new thread has its name now; the page shown under the temporary key follows it
+        delete runningRef.current[key]
+        if (curRef.current === key) showThread(data.thread)
+      }
       loadLatest()
-      if (turns.length === 0) loadThreads()
+      loadThreads()
     } catch (e) {
-      setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
+      if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
     } finally {
-      setBusy(false)
-      if (queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
+      markRunning(key, false)
+      if (curRef.current === key && queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
       if (boxRef.current) boxRef.current.focus()
     }
   }
 
   async function fresh() {
-    if (busy) return
+    // Allowed while a thread answers: it goes on by itself; this page turns to a blank one.
     freshRef.current = true
+    showThread(null)
     try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
     setTurns([])
     setPane(null)
@@ -975,15 +1034,15 @@ export default function CC() {
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {threads.length > 0 && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
-            <Btn small onClick={fresh} disabled={busy} title="Start a new conversation">new thread</Btn>
+            <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
                 {threads.map(th => (
                   <a key={th.brain} onClick={() => switchThread(th)}
                      style={{ display: 'block', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', textDecoration: 'none',
-                              color: health && health.brain_session_id === th.brain ? C.ink : C.dim, fontSize: '13px', lineHeight: 1.4 }}>
-                    {th.title || 'untitled'}
+                              color: cur === th.brain ? C.ink : C.dim, fontSize: '13px', lineHeight: 1.4 }}>
+                    {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
                     <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{(th.last || th.started || '').slice(0, 10)}</span>
                   </a>
                 ))}
@@ -1093,7 +1152,7 @@ export default function CC() {
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
-            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; your next message sends when this turn ends' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; your next message here sends when this turn ends. New thread opens another conversation now.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             style={{ flex: '1 1 240px', minWidth: 0, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
@@ -1127,6 +1186,7 @@ export default function CC() {
           {loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
+          {health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
           {health && health.cards_waiting > 0 ? <span><a onClick={() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}

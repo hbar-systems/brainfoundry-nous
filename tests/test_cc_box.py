@@ -57,7 +57,7 @@ def test_box_gate_registered_without_one(monkeypatch, tmp_path):
 
 def test_box_ask_denied_when_nobody_watches(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
-    m.LIVE["emit"] = None
+    m.RUNS.clear()
     d = m._box_ask("Bash", {"command": "touch /tmp/a"})
     assert d["behavior"] == "deny" and "watching" in d["message"]
 
@@ -65,7 +65,8 @@ def test_box_ask_denied_when_nobody_watches(monkeypatch, tmp_path):
 def test_box_ask_allowed_by_click_and_remembered(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     cards = []
-    m.LIVE["emit"] = lambda kind, payload: cards.append((kind, payload))
+    m.RUNS.clear(); run = m.Run(None, "git please"); run.claude_sid = "s-1"; m.RUNS[run.id] = run
+    run.attach(lambda kind, payload: cards.append((kind, payload)) if kind != "begin" else None)
     out = {}
 
     def ask():
@@ -96,7 +97,8 @@ def test_box_ask_allowed_by_click_and_remembered(monkeypatch, tmp_path):
 def test_box_ask_refused(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     cards = []
-    m.LIVE["emit"] = lambda kind, payload: cards.append(payload)
+    m.RUNS.clear(); run = m.Run(None, "x"); m.RUNS[run.id] = run
+    run.attach(lambda kind, payload: cards.append(payload) if kind != "begin" else None)
     out = {}
     th = threading.Thread(target=lambda: out.setdefault("d", m._box_ask("Write", {"file_path": "/home/cc/notes/x.txt"})))
     th.start()
@@ -155,7 +157,8 @@ def test_judged_posture_runs_or_asks(monkeypatch, tmp_path):
     monkeypatch.setattr(urllib.request, "urlopen", fake_open)
     m.LAST_MESSAGE["text"] = "run the tests"
     cards = []
-    m.LIVE["emit"] = lambda k, p: cards.append(p)
+    m.RUNS.clear(); run = m.Run(None, "x"); m.RUNS[run.id] = run
+    run.attach(lambda k, p: cards.append(p) if k != "begin" else None)
     d = m._box_ask("Bash", {"command": "pytest -q"})
     assert d == {"behavior": "allow"} and cards[-1]["auto"] is True and "judged safe 0.97" in cards[-1]["why"]
     assert seen["auth"] == "Bearer t" and seen["body"]["state"]["person_request"] == "run the tests"
@@ -185,3 +188,32 @@ def test_judged_posture_runs_or_asks(monkeypatch, tmp_path):
     def broken(req, timeout=0): raise OSError("down")
     monkeypatch.setattr(urllib.request, "urlopen", broken)
     assert m._judge("Bash", {"command": "ls"}, "run on the box: ls") is None
+
+
+def test_box_ask_finds_its_run_by_session_id(monkeypatch, tmp_path):
+    """Two conversations at once (2026-09-28): the hook names the reasoner's session, so the
+    card lands in that turn's page and not in the other one's."""
+    m = _load(monkeypatch, tmp_path)
+    m.RUNS.clear()
+    a, b = m.Run("brain-a", "one"), m.Run("brain-b", "two")
+    a.claude_sid, b.claude_sid = "sid-a", "sid-b"
+    m.RUNS[a.id] = a; m.RUNS[b.id] = b
+    got = {"a": [], "b": []}
+    a.attach(lambda k, p: got["a"].append(k)); b.attach(lambda k, p: got["b"].append(k))
+    assert m._run_watching("sid-b") is b and m._run_watching("nope") is None
+    out = {}
+    th = threading.Thread(target=lambda: out.update(d=m._box_ask("Bash", {"command": "git status"}, session_id="sid-b")))
+    th.start()
+    for _ in range(50):
+        if "ask" in got["b"]:
+            break
+        time.sleep(0.05)
+    assert "ask" in got["b"] and "ask" not in got["a"] and b.waiting == 1 and m._cards_waiting() == 1
+    pid = next(p for p in m.ASKS)
+    m._box_settle(pid, "deny", "no")
+    th.join(3)
+    assert out["d"]["behavior"] == "deny" and b.waiting == 0
+    # a late reader replays everything, and a finished run says so
+    b.emit("done", {"reply": "x"})
+    seen = []
+    assert b.attach(lambda k, p: seen.append(k)) is False and seen[0] == "begin" and seen[-1] == "done"

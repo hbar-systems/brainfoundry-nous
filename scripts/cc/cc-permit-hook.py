@@ -20,7 +20,9 @@ def main() -> None:
     port = os.environ.get("CC_PORT", "7682")
     base = os.environ.get("CC_BASE", "/cc").rstrip("/")
     url = f"http://127.0.0.1:{port}{base}/ask"
-    body = json.dumps({"tool_name": req.get("tool_name"), "tool_input": req.get("tool_input") or {}}).encode()
+    # session_id names the turn this call belongs to (several conversations at once, 2026-09-28)
+    body = json.dumps({"tool_name": req.get("tool_name"), "tool_input": req.get("tool_input") or {},
+                       "session_id": req.get("session_id")}).encode()
     decision = {"behavior": "deny", "message": "the bridge did not answer"}
     try:
         r = urllib.request.Request(url, data=body, method="POST",
