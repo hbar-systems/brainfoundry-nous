@@ -35,6 +35,13 @@ verify() {
 case "${1:-do}" in
 verify) verify ;;
 do)
+    # Step 7 restarts the web terminal's own service; a run started inside that terminal dies
+    # there with the bridge never restarted (e2e, three times on 2026-09-28). SSH from a laptop.
+    if [ -n "${TMUX:-}" ] || pstree -s $$ 2>/dev/null | grep -q ttyd; then
+        echo "run this over SSH from your laptop, not in the console's Terminal pane: step 7 restarts that pane."
+        echo "  ssh -t hbar@<this box> bash $0"
+        exit 1
+    fi
     sudo test -f "$ENV_FILE" || { echo "no bridge env at $ENV_FILE"; exit 1; }
     echo "== 1/7 the hands user"
     id "$HANDS_USER" >/dev/null 2>&1 || sudo adduser --disabled-password --gecos "the reasoner's hands" "$HANDS_USER" >/dev/null

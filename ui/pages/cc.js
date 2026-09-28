@@ -592,7 +592,9 @@ export default function CC() {
   // live bubble, while `key` is the thread shown. Returns the "done" payload, or null.
   async function consume(r, key, withBegin) {
     const mine = () => curRef.current === key
-    const upd = f => { if (!mine()) return; setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = f(c[i]); return c }) }
+    // the live bubble is the LAST LIVE turn, not the last turn: a message queued behind it sits below it (a reply was lost to that on 2026-09-28)
+    const liveIdx = c => { for (let i = c.length - 1; i >= 0; i--) if (c[i].live) return i; return -1 }
+    const upd = f => { if (!mine()) return; setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = f(c[i]); return c }) }
     if (!withBegin && mine()) setTurns(t => [...t, { who: 'brain', text: '', live: true, steps: [] }])
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''; let data = null
     for (;;) {
@@ -616,7 +618,7 @@ export default function CC() {
     if (!data) data = { reply: 'The stream ended without an answer.', error: true }
     const reply = data.reply || '(no answer)'
     if (mine()) {
-      setTurns(t => { const c = t.slice(); const i = c.length - 1; if (i >= 0 && c[i].live) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
+      setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
       if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
       spokenRef.current = 0
       if (data.pane) openPane(data.pane)
