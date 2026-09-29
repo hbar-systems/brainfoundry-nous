@@ -1307,13 +1307,14 @@ def _hands_env() -> dict:
     return env
 
 
-def _as_hands(cmd: list) -> list:
+def _as_hands(cmd: list, env: dict | None = None) -> list:
     """Wrap a command so it runs as the hands user (sudo, no password, sudoers written by
     split-hands.sh). The environment is passed explicitly through env(1) so sudo's own
-    scrubbing does not matter and nothing of the bridge's leaks."""
+    scrubbing does not matter and nothing of the bridge's leaks. `env` overrides the
+    hands' default environment (the sign-in flow adds BROWSER)."""
     if not HANDS_USER:
         return cmd
-    env = _hands_env()
+    env = env if env is not None else _hands_env()
     return ["sudo", "-n", "-u", HANDS_USER, "-H", "/usr/bin/env", "-i", *[f"{k}={v}" for k, v in env.items()], *cmd]
 
 
@@ -1356,8 +1357,8 @@ def _auth_status(fresh: bool = False) -> dict:
         _auth_cache = (time.time(), st)
         return st
     try:
-        out = subprocess.run([REASONER, "auth", "status", "--json"], capture_output=True, text=True,
-                             timeout=20, env=_env())
+        out = subprocess.run(_as_hands([REASONER, "auth", "status", "--json"]), capture_output=True, text=True,
+                             timeout=20, env=_hands_env())
         data = json.loads(out.stdout or "{}")
         st = {"loggedIn": bool(data.get("loggedIn")), "email": data.get("email"),
               "method": data.get("authMethod")}
@@ -1391,14 +1392,15 @@ class Login:
             flag = "--console" if method == "console" else "--claudeai"
             pid, fd = pty.fork()
             if pid == 0:  # child
-                env = _env()
+                env = _hands_env()
                 env["BROWSER"] = "/bin/true"   # never try to open a browser on the box
                 env.pop("DISPLAY", None)
                 try:
-                    os.chdir(CWD)
+                    os.chdir(CWD if not HANDS_USER else str(HANDS_HOME))
                 except Exception:
                     pass
-                os.execvpe(REASONER, [REASONER, "auth", "login", flag], env)
+                argv = _as_hands([REASONER, "auth", "login", flag], env)   # the hands sign in, not the bridge
+                os.execvpe(argv[0], argv, env)
             self.pid, self.fd, self.started, self.phase = pid, fd, time.time(), "starting"
             threading.Thread(target=self._pump, daemon=True).start()
 
@@ -2064,7 +2066,7 @@ class Handler(BaseHTTPRequestHandler):
             if os.environ.get("ANTHROPIC_API_KEY"):
                 os.environ.pop("ANTHROPIC_API_KEY", None)
                 _env_file_unset("ANTHROPIC_API_KEY")
-            subprocess.run([REASONER, "auth", "logout"], capture_output=True, timeout=30, env=_env())
+            subprocess.run(_as_hands([REASONER, "auth", "logout"]), capture_output=True, timeout=30, env=_hands_env())
             _auth_status(fresh=True)
             LOGIN.reset()
             self._send(200, {"ok": True})

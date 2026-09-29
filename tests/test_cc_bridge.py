@@ -281,3 +281,14 @@ def test_single_user_mode_unchanged(monkeypatch, tmp_path):
     monkeypatch.delenv("CC_HANDS_USER", raising=False); monkeypatch.delenv("CC_HANDS_HOME", raising=False)
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m.HANDS_USER == "" and m._as_hands(["x"]) == ["x"] and m.OPERATOR_TOKEN == ""
+
+
+def test_as_hands_takes_an_env_override(monkeypatch, tmp_path):
+    """The sign-in flow runs as the hands with BROWSER added; status and logout run as the hands too
+    (after the split on hbar, 2026-09-29, the page said signed out while the hands were signed in)."""
+    monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    env = m._hands_env(); env["BROWSER"] = "/bin/true"
+    argv = m._as_hands(["claude", "auth", "login", "--claudeai"], env)
+    assert argv[:4] == ["sudo", "-n", "-u", "hands"] and "BROWSER=/bin/true" in argv and argv[-4:] == ["claude", "auth", "login", "--claudeai"]
+    assert "BROWSER=/bin/true" not in m._as_hands(["claude", "auth", "status"])
