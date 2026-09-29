@@ -323,3 +323,15 @@ p({"type": "result", "result": "ok", "session_id": "s7", "is_error": False, "num
     status, payload = m._turn("more", thread="brain-z", new=False)
     assert status == 409 and "still answering" in payload["reply"]
     busy.emit("done", {})
+
+
+def test_hook_runs_with_system_python_when_split(monkeypatch, tmp_path):
+    """After the split the hook must not use the bridge's venv (closed to the hands); hbar 2026-09-29."""
+    monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
+    monkeypatch.setenv("CC_BOX", "1")
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m.HOOK_PYTHON == "/usr/bin/python3"
+    assert json.loads(m._hook_settings())["hooks"]["PermissionRequest"][0]["hooks"][0]["command"].startswith("/usr/bin/python3 ")
+    monkeypatch.delenv("CC_HANDS_USER"); monkeypatch.delenv("CC_HANDS_HOME")
+    m2 = _load(monkeypatch, tmp_path, with_key=False)
+    assert m2.HOOK_PYTHON == sys.executable

@@ -1062,11 +1062,18 @@ def _posture_current() -> str:
     return v if v in POSTURES else "cards"
 
 
+# The hook runs as the hands. The bridge's own Python lives in the bridge's home, closed to the
+# hands after the split, so every card was refused before it reached the bridge (hbar 2026-09-29:
+# "requires approval" instantly, in every posture). The hook is standard library only; the
+# system Python runs it. CC_HOOK_PYTHON overrides.
+HOOK_PYTHON = os.environ.get("CC_HOOK_PYTHON", "").strip() or ("/usr/bin/python3" if HANDS_USER else sys.executable)
+
+
 def _hook_settings() -> str:
     """Claude Code settings JSON for this turn: the permission hook, with a timeout that
     outlives the permit; in the auto posture also the ask rules that keep sudo on a card."""
     s = {"hooks": {"PermissionRequest": [{"hooks": [
-        {"type": "command", "command": f"{sys.executable} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}}
+        {"type": "command", "command": f"{HOOK_PYTHON} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}}
     if _posture_current() == "auto":
         s["permissions"] = {"ask": ASK_ALWAYS}
     return json.dumps(s)
@@ -1782,7 +1789,7 @@ def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: s
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "model": META.get("model")})
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
-               "thread": run.thread, "title": run.title, "run": run.id}
+               "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES)}
     run.emit("done", payload)
     _runs_prune()
     return 200, payload

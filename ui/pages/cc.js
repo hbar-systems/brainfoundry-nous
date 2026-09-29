@@ -59,6 +59,17 @@ function Btn({ children, onClick, disabled, primary, small, title, accent }) {
   )
 }
 
+// The text inside a rendered code block, for its copy button (react-markdown hands the hast node over).
+function hastText(node) {
+  if (!node) return ''
+  if (node.type === 'text') return node.value || ''
+  return (node.children || []).map(hastText).join('')
+}
+function copyText(text) { try { navigator.clipboard.writeText(text || '') } catch {} }
+function CopyLink({ text, label, style }) {
+  const [done, setDone] = useState(false)
+  return <a onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
+}
 function Md({ text }) {
   // The reasoner answers in markdown. Render it, but keep it plain: no raw HTML,
   // links open in a new tab, code stays monospace.
@@ -77,7 +88,13 @@ function Md({ text }) {
           // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
           // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
           // inline code rendered as full-width boxes and broke sentences apart).
-          pre: ({ node, ...props }) => <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 10px', borderRadius: '6px', margin: '4px 0 8px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />,
+          // every code block carries its own copy button (2026-09-29: "we need things to have a copyable button")
+          pre: ({ node, ...props }) => (
+            <div style={{ position: 'relative', margin: '4px 0 8px 0' }}>
+              <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
+              <CopyLink text={hastText(node)} style={{ position: 'absolute', top: '6px', right: '8px' }} />
+            </div>
+          ),
           code: ({ node, ...props }) => {
             // An absolute path on the box opens the Files pane at that file or folder.
             const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
@@ -696,7 +713,7 @@ export default function CC() {
     if (!data) data = { reply: 'The stream ended without an answer.', error: true }
     const reply = data.reply || '(no answer)'
     if (mine()) {
-      setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }; return c })
+      setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null, sources: data.sources || [] }; return c })
       if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
       spokenRef.current = 0
       if (data.pane) openPane(data.pane)
@@ -1146,6 +1163,11 @@ export default function CC() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {threads.length > 0 && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
+            {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={() => {
+              const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
+              copyText(md)
+              try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' })); a.download = `cc-thread-${new Date().toISOString().slice(0, 10)}.md`; a.click() } catch {}
+            }}>export</Btn>}
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
@@ -1245,7 +1267,7 @@ export default function CC() {
                 )}
                 {t.who === 'brain' && typeof t.ms === 'number' && (
                   <div style={{ ...mono, color: C.faint, fontSize: '11px', marginTop: '6px' }}>
-                    {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && (t.meta.in || t.meta.cached) ? ` · ${kTok(t.meta.in)} in${t.meta.cached ? ` (+${kTok(t.meta.cached)} cached)` : ''} · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}
+                    {(t.ms / 1000).toFixed(1)} s{t.meta && t.meta.model ? ` · ${shortModel(t.meta.model)}` : ''}{t.meta && (t.meta.in || t.meta.cached) ? ` · ${kTok(t.meta.in)} in${t.meta.cached ? ` (+${kTok(t.meta.cached)} cached)` : ''} · ${kTok(t.meta.out)} out` : ''}{t.meta && t.meta.steps > 1 ? ` · ${t.meta.steps} steps` : ''}{t.sources && t.sources.length ? <span title={t.sources.join('\n')}> · <a onClick={() => openPane({ route: '/graph', title: 'Memory' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{t.sources.length} memor{t.sources.length === 1 ? 'y' : 'ies'} used</a></span> : null} · <CopyLink text={t.text} label="copy" style={{ fontSize: 'inherit', letterSpacing: 'normal', textTransform: 'none' }} />
                     {health && health.voice && t.text ? <> · <a onClick={() => (speaking ? stopSpeaking() : say(t.text))} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{speaking ? 'stop' : 'listen'}</a></> : null}
                   </div>
                 )}

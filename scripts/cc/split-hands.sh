@@ -29,6 +29,7 @@ verify() {
     echo "hands cannot read the brain's env:    $(sudo -u "$HANDS_USER" cat "$BRAIN_DIR/.env" >/dev/null 2>&1 && echo FAIL || echo ok)"
     if sudo test -d "$HANDS_HOME/world"; then echo "bridge reaches the hands' world:      $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/world" >/dev/null 2>&1 && echo ok || echo FAIL)"; else echo "bridge reaches the hands' out:        $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/out" >/dev/null 2>&1 && echo ok || echo FAIL)"; fi
     echo "decision route without the token:     $(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:7682/cc/new) (403 expected)"
+    echo "hands can run the permission hook:    $(sudo -u "$HANDS_USER" -H /usr/bin/python3 -c 'import urllib.request' >/dev/null 2>&1 && echo ok || echo FAIL)"
     echo "health:                               $(curl -s http://127.0.0.1:7682/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("hands_user", d.get("hands_user"), "operator_token", d.get("operator_token"))')"
 }
 
