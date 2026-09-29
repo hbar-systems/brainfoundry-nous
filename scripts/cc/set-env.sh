@@ -13,6 +13,14 @@ ENV_FILE=$(eval echo "~$BRIDGE_USER")/.cc-bridge/env
 sudo test -f "$ENV_FILE" || { echo "no bridge env at $ENV_FILE"; exit 1; }
 read -rsp "$KEY: " VALUE; echo
 [ -n "$VALUE" ] || { echo "nothing given"; exit 1; }
+if [ "$KEY" = "CC_TELEGRAM_TOKEN" ]; then
+    # a bot token is <8-10 digits>:<35 letters, digits, _ or ->; anything else Telegram answers with Not Found
+    if ! printf '%s' "$VALUE" | grep -Eq '^[0-9]{8,10}:[A-Za-z0-9_-]{35}$'; then
+        tail=${VALUE#*:}
+        echo "that is not the shape of a bot token: ${#VALUE} characters, ${#tail} after the colon (35 expected). Copy only the token line from @BotFather (API Token), or revoke and take the fresh one."
+        unset VALUE; exit 1
+    fi
+fi
 printf '%s' "$VALUE" | sudo env KEY="$KEY" ENV_FILE="$ENV_FILE" BRIDGE_USER="$BRIDGE_USER" sh -c '
   v=$(cat); grep -v "^$KEY=" "$ENV_FILE" > "$ENV_FILE.tmp" || true
   printf "%s=%s\n" "$KEY" "$v" >> "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
