@@ -786,6 +786,35 @@ export default function CC() {
   const [listening, setListening] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [talkNote, setTalkNote] = useState('')
+  // The microphone meter (2026-09-29): Safari on the Mac hands words over only at the end, and a
+  // recorded clip shows nothing until it is transcribed, so a level bar and a timer show that the
+  // page is hearing you while you speak. Its own capture, closed when listening ends.
+  const [mic, setMic] = useState({ level: 0, since: 0, tick: 0 })
+  const meterRef = useRef(null)
+  const startMeter = async () => {
+    if (meterRef.current) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an)
+      const buf = new Uint8Array(an.fftSize); const since = Date.now()
+      const timer = setInterval(() => {
+        an.getByteTimeDomainData(buf)
+        let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v }
+        setMic({ level: Math.min(1, Math.sqrt(sum / buf.length) * 6), since, tick: Date.now() })
+      }, 120)
+      meterRef.current = { stream, ctx, timer }
+    } catch { meterRef.current = null }
+  }
+  const stopMeter = () => {
+    const m = meterRef.current; meterRef.current = null
+    if (!m) return
+    try { clearInterval(m.timer) } catch {}
+    try { m.stream.getTracks().forEach(t => t.stop()) } catch {}
+    try { m.ctx.close() } catch {}
+    setMic({ level: 0, since: 0, tick: 0 })
+  }
+  useEffect(() => { if (listening) startMeter(); else stopMeter(); return () => {} }, [listening])   // eslint-disable-line react-hooks/exhaustive-deps
   const [handsfree, setHandsfree] = useState(false)
   const recRef = useRef(null)                   // the SpeechRecognition run while listening
   const mediaRef = useRef(null)                 // the MediaRecorder run while recording
@@ -1277,7 +1306,17 @@ export default function CC() {
         </div>
         {(listening || transcribing || talkNote) && (
           <p style={{ ...mono, color: listening ? C.gold : C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>
-            {listening ? (srOk ? 'listening' : 'recording') + (handsfree ? ' (hands-free)' : '') : transcribing ? 'the bridge is transcribing the clip' : talkNote}
+            {listening ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <span>{(srOk ? 'listening' : 'recording') + (handsfree ? ' (hands-free)' : '')}</span>
+                <span style={{ display: 'inline-flex', gap: '2px', alignItems: 'flex-end', height: '12px' }}>
+                  {[0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.92].map((th, i) => <span key={i} style={{ width: '4px', height: `${4 + i * 1.2}px`, borderRadius: '1px', backgroundColor: mic.level >= th ? C.gold : C.line, transition: 'background-color 80ms' }} />)}
+                </span>
+                <span style={{ color: mic.level > 0.08 ? C.gold : C.faint }}>{mic.level > 0.08 ? 'hearing you' : 'quiet'}</span>
+                {mic.since ? <span style={{ color: C.faint }}>{Math.floor((mic.tick - mic.since) / 1000)} s</span> : null}
+                {!srOk ? <span style={{ color: C.faint }}>· the words appear when you stop</span> : null}
+              </span>
+            ) : transcribing ? 'the bridge is transcribing the clip' : talkNote}
           </p>
         )}
         {files.length > 0 && (
