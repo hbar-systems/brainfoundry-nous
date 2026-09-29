@@ -622,8 +622,9 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         d = str(Path(fp).parent) if fp else ""
         verb = "write" if tool == "Write" else "edit"
         return f"{verb} {d}", f"{verb} the file {fp}", bool(d)
-    # any other tool (WebFetch, WebSearch, Agent, a pack tool) is remembered by its name
-    return tool, f"use {tool}", True
+    # any other tool (Agent, a pack tool) is remembered by its name; WebFetch and WebSearch never:
+    # a standing allow there is an outbound channel the gate cannot see into (his call, 2026-09-30)
+    return tool, f"use {tool}", tool not in ("WebFetch", "WebSearch")
 
 
 def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
