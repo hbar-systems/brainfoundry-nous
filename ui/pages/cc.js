@@ -346,6 +346,7 @@ export default function CC() {
   const sayRef = useRef(0)
   const speechQ = useRef({ run: 0, items: [], playing: false })
   const spokenRef = useRef(0)
+  const cueRef = useRef(null)   // the "thinking" cue: spoken when voice is on and no words have come after a few seconds (2026-09-29)
   useEffect(() => { try { setSpeak(localStorage.getItem('cc.speak') === '1') } catch {} }, [])
   const setSpeakSaved = (v) => { setSpeak(v); try { localStorage.setItem('cc.speak', v ? '1' : '0') } catch {} }
   const stopSpeaking = () => { sayRef.current++; if (speechQ.current) { speechQ.current.run++; speechQ.current.items = []; speechQ.current.playing = false } const a = audioRef.current; if (a) { try { a.pause() } catch {} audioRef.current = null } setSpeaking(false) }
@@ -669,8 +670,15 @@ export default function CC() {
         if (!ev || !dl) continue
         let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
         if (ev === 'begin') { if (withBegin && mine()) setTurns(t => [...t.filter(x => !x.live), { who: 'me', text: pl.message || '' }, { who: 'brain', text: '', live: true, steps: [] }]) }
-        else if (ev === 'start') { if (mine()) { spokenRef.current = 0; stopSpeaking() } upd(x => ({ ...x, model: pl.model })) }
-        else if (ev === 'text') upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } })
+        else if (ev === 'start') {
+          if (mine()) {
+            spokenRef.current = 0; stopSpeaking()
+            clearTimeout(cueRef.current)
+            if (speak && health && health.voice) cueRef.current = setTimeout(() => { if (mine() && spokenRef.current === 0) enqueueSpeech('Thinking.') }, 3000)
+          }
+          upd(x => ({ ...x, model: pl.model }))
+        }
+        else if (ev === 'text') { clearTimeout(cueRef.current); upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } }) }
         else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
         else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
         else if (ev === 'done') data = pl
