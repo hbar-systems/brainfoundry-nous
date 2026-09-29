@@ -40,10 +40,11 @@ def test_box_key_and_remember_rules(monkeypatch, tmp_path):
     aid, _, ok = m._box_key("Bash", {"command": "sudo systemctl restart cc-bridge"})
     assert aid == "sudo systemctl" and ok is False          # sudo is never remembered
     assert m._box_key("Bash", {"command": "rm -rf /tmp/x"})[2] is False
-    assert m._box_key("Bash", {"command": "echo hi | bash"})[2] is False
+    aid_p, _, ok_p = m._box_key("Bash", {"command": "echo hi | bash"})
+    assert aid_p.startswith("exact:") and ok_p is True      # a compound command is remembered exactly, never by its first word (2026-09-29)
     aid, summary, ok = m._box_key("Edit", {"file_path": "/home/cc/notes/a.md"})
     assert aid == "edit /home/cc/notes" and "a.md" in summary and ok is True
-    assert m._box_key("WebFetch", {"url": "x"})[2] is False
+    assert m._box_key("WebFetch", {"url": "x"})[2] is True       # any tool by its name (2026-09-29)
 
 
 def test_box_gate_registered_without_one(monkeypatch, tmp_path):
