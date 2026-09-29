@@ -1944,8 +1944,18 @@ def _tg_loop() -> None:
                 except Exception as e:
                     print(f"telegram update failed: {type(e).__name__}: {e}", flush=True)
         except Exception as e:
-            print(f"telegram poll failed: {type(e).__name__}", flush=True)
-            time.sleep(10)
+            why = type(e).__name__
+            code = getattr(e, "code", None)
+            if code == 404:
+                why = "404: the bot token is malformed or unknown; paste it again with set-env.sh CC_TELEGRAM_TOKEN"
+            elif code == 401:
+                why = "401: the bot token was revoked; take the current one from @BotFather"
+            elif code == 409:
+                why = "409: a webhook is still set for this bot; disconnecting it from the api's Integrations page frees it"
+            elif code:
+                why = f"{code}"
+            print(f"telegram poll failed: {why}", flush=True)
+            time.sleep(30 if code in (401, 404) else 10)
 
 
 class Handler(BaseHTTPRequestHandler):
