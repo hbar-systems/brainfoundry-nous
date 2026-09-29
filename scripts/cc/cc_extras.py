@@ -333,6 +333,142 @@ class Uploads:
             return {"error": "no file in the upload"}
         return {"ok": True, "files": saved}
 
+    def save_bytes(self, name: str, data: bytes) -> str:
+        """One file from elsewhere (Telegram, 2026-09-29) into today's folder; returns its path."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        dest_dir = self.dir / day
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / self._safe_name(name)
+        i = 1
+        while dest.exists():
+            dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
+        dest.write_bytes(data)
+        try:
+            os.chmod(dest, 0o664)
+        except OSError:
+            pass
+        return str(dest)
+
 
 def shell_quote(cmd: list[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
+
+
+class Telegram:
+    """The bridge's own bot (2026-09-29): long polling, owner pinning, attachments, cards with
+    buttons. Pure parts here, testable with a fake `api`; the bridge wires the turns."""
+
+    LIMIT = 3900
+
+    def __init__(self, token: str, state_file: Path, owner: str = "", api=None):
+        self.token = token
+        self.state_file = Path(state_file)
+        self.forced_owner = str(owner or "").strip()
+        self.api = api or self._http
+        self._st: dict | None = None
+
+    # -- http --
+    def _http(self, method: str, _timeout: int, **params) -> dict:
+        import urllib.request
+        req = urllib.request.Request(f"https://api.telegram.org/bot{self.token}/{method}",
+                                     data=json.dumps(params).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=_timeout) as r:
+            return json.loads(r.read() or b"{}")
+
+    def call(self, method: str, **params) -> dict:
+        return self.api(method, 30, **params)
+
+    def poll(self) -> list:
+        """One long poll; advances the offset so an update is handled once."""
+        st = self.state()
+        r = self.api("getUpdates", 40, offset=st.get("offset", 0), timeout=30, allowed_updates=["message", "callback_query"])
+        items = r.get("result") or []
+        if items:
+            self.save(offset=max(u.get("update_id", 0) for u in items) + 1)
+        return items
+
+    def download(self, file_id: str, name: str = "") -> tuple[bytes, str]:
+        import urllib.request
+        info = self.call("getFile", file_id=file_id)
+        path = ((info.get("result") or {}).get("file_path") or "")
+        if not path:
+            raise RuntimeError("no file path")
+        with urllib.request.urlopen(f"https://api.telegram.org/file/bot{self.token}/{path}", timeout=120) as r:
+            data = r.read()
+        return data, (name or Path(path).name)
+
+    # -- state --
+    def state(self) -> dict:
+        if self._st is None:
+            try:
+                self._st = json.loads(self.state_file.read_text())
+            except Exception:
+                self._st = {}
+        return self._st
+
+    def save(self, **patch) -> None:
+        st = self.state(); st.update(patch)
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(json.dumps(st))
+
+    def owner(self):
+        if self.forced_owner:
+            try:
+                return int(self.forced_owner)
+            except ValueError:
+                return self.forced_owner
+        return self.state().get("owner")
+
+    def owner_ok(self, chat_id) -> bool:
+        o = self.owner()
+        return o is not None and str(o) == str(chat_id)
+
+    def pin(self, chat_id) -> None:
+        self.save(owner=chat_id)
+
+    # -- pure helpers --
+    @staticmethod
+    def chunks(text: str, n: int = LIMIT) -> list:
+        text = text or ""
+        out = []
+        while len(text) > n:
+            cut = text.rfind("\n", 0, n)
+            if cut < n // 2:
+                cut = text.rfind(" ", 0, n)
+            if cut < n // 2:
+                cut = n
+            out.append(text[:cut]); text = text[cut:].lstrip("\n")
+        out.append(text)
+        return out
+
+    @staticmethod
+    def card_markup(pid: str) -> dict:
+        return {"inline_keyboard": [[{"text": "Allow", "callback_data": f"allow:{pid}"},
+                                     {"text": "Refuse", "callback_data": f"deny:{pid}"}]]}
+
+    @staticmethod
+    def parse_update(u: dict) -> dict | None:
+        """What matters in an update: a message (text, voice, photo, document) or a button press."""
+        cq = u.get("callback_query")
+        if cq:
+            msg = cq.get("message") or {}
+            return {"kind": "callback", "chat_id": (msg.get("chat") or {}).get("id"), "message_id": msg.get("message_id"),
+                    "callback_id": cq.get("id"), "data": cq.get("data") or ""}
+        m = u.get("message") or u.get("edited_message")
+        if not m:
+            return None
+        ev = {"kind": "message", "chat_id": (m.get("chat") or {}).get("id"), "message_id": m.get("message_id"),
+              "text": (m.get("text") or m.get("caption") or "").strip(), "file_id": None, "file_name": None, "mime": None, "is_voice": False}
+        if m.get("voice"):
+            v = m["voice"]; ev.update(file_id=v.get("file_id"), file_name="voice.ogg", mime=v.get("mime_type") or "audio/ogg", is_voice=True)
+        elif m.get("audio"):
+            a = m["audio"]; ev.update(file_id=a.get("file_id"), file_name=a.get("file_name") or "audio.mp3", mime=a.get("mime_type"), is_voice=False)
+        elif m.get("photo"):
+            best = max(m["photo"], key=lambda p: p.get("file_size") or 0)
+            ev.update(file_id=best.get("file_id"), file_name=f"photo-{m.get('message_id')}.jpg", mime="image/jpeg")
+        elif m.get("document"):
+            d = m["document"]; ev.update(file_id=d.get("file_id"), file_name=d.get("file_name") or "file", mime=d.get("mime_type"))
+        elif m.get("video"):
+            d = m["video"]; ev.update(file_id=d.get("file_id"), file_name=d.get("file_name") or f"video-{m.get('message_id')}.mp4", mime=d.get("mime_type"))
+        return ev

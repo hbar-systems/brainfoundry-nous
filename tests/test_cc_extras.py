@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+from pathlib import Path
 import pathlib
 import sys
 import time
@@ -114,3 +115,43 @@ def test_files_write_roots_secrets_and_conflict(tmp_path):
     now = int((world / "note.md").stat().st_mtime)
     assert f.write(str(world / "note.md"), "three", expect_mtime=now)["ok"] and (world / "note.md").read_text() == "three"
     assert not [x for x in world.iterdir() if x.name.startswith(".note.md.saving")]
+
+
+def test_telegram_helper_pure_parts(tmp_path):
+    """2026-09-29: chunks under the limit on line breaks, card buttons, update parsing, owner
+    pinning, the poll offset, all against a fake api."""
+    calls = []
+    def fake(method, _timeout, **params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"ok": True, "result": [{"update_id": 7, "message": {"message_id": 1, "chat": {"id": 42}, "text": "hi"}},
+                                           {"update_id": 8, "callback_query": {"id": "cq1", "data": "allow:p1", "message": {"message_id": 2, "chat": {"id": 42}}}}]}
+        return {"ok": True, "result": {}}
+    tg = X.Telegram("tok", tmp_path / "tg.json", api=fake)
+    assert tg.owner() is None and not tg.owner_ok(42)
+    tg.pin(42)
+    assert tg.owner_ok(42) and not tg.owner_ok(43) and json.loads((tmp_path / "tg.json").read_text())["owner"] == 42
+    ups = tg.poll()
+    assert len(ups) == 2 and tg.state()["offset"] == 9 and calls[0][1]["offset"] == 0
+    a, b = X.Telegram.parse_update(ups[0]), X.Telegram.parse_update(ups[1])
+    assert a["kind"] == "message" and a["text"] == "hi" and a["chat_id"] == 42 and a["file_id"] is None
+    assert b["kind"] == "callback" and b["data"] == "allow:p1" and b["callback_id"] == "cq1" and b["message_id"] == 2
+    v = X.Telegram.parse_update({"message": {"chat": {"id": 42}, "voice": {"file_id": "f1", "mime_type": "audio/ogg"}}})
+    assert v["is_voice"] and v["file_id"] == "f1" and v["file_name"] == "voice.ogg"
+    ph = X.Telegram.parse_update({"message": {"message_id": 9, "chat": {"id": 42}, "caption": "look", "photo": [{"file_id": "s", "file_size": 10}, {"file_id": "L", "file_size": 99}]}})
+    assert ph["file_id"] == "L" and ph["text"] == "look" and ph["file_name"].endswith(".jpg")
+    assert X.Telegram.parse_update({"my_chat_member": {}}) is None
+    text = "\n".join("line %d %s" % (i, "x" * 80) for i in range(120))
+    parts = X.Telegram.chunks(text, 1000)
+    assert all(len(p) <= 1000 for p in parts) and "".join(p + "\n" for p in parts).replace("\n\n", "\n").strip() == text
+    assert X.Telegram.chunks("") == [""]
+    km = X.Telegram.card_markup("p9")
+    assert km["inline_keyboard"][0][0]["callback_data"] == "allow:p9" and km["inline_keyboard"][0][1]["callback_data"] == "deny:p9"
+    forced = X.Telegram("tok", tmp_path / "tg2.json", owner="77", api=fake)
+    assert forced.owner() == 77 and forced.owner_ok(77) and not forced.owner_ok(42)
+
+
+def test_uploads_save_bytes(tmp_path):
+    u = X.Uploads(tmp_path / "in")
+    p1 = u.save_bytes("a b.txt", b"one"); p2 = u.save_bytes("a b.txt", b"two")
+    assert Path(p1).read_bytes() == b"one" and Path(p2).name == "a b-1.txt" and Path(p1).parent.name.count("-") == 2

@@ -292,3 +292,34 @@ def test_as_hands_takes_an_env_override(monkeypatch, tmp_path):
     argv = m._as_hands(["claude", "auth", "login", "--claudeai"], env)
     assert argv[:4] == ["sudo", "-n", "-u", "hands"] and "BROWSER=/bin/true" in argv and argv[-4:] == ["claude", "auth", "login", "--claudeai"]
     assert "BROWSER=/bin/true" not in m._as_hands(["claude", "auth", "status"])
+
+
+def test_turn_shared_by_page_and_telegram(monkeypatch, tmp_path):
+    """_turn (2026-09-29) is the one path a turn takes: it registers a Run, lets the caller attach a
+    sink before the reasoner starts, streams, records, and returns the page's payload with the run
+    finished; a second turn on a busy thread is refused with 409."""
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json, sys, time
+def p(o): print(json.dumps(o), flush=True)
+p({"type": "system", "subtype": "init", "model": "claude-x", "session_id": "s7"})
+p({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}})
+p({"type": "result", "result": "ok", "session_id": "s7", "is_error": False, "num_turns": 1, "usage": {"input_tokens": 1, "output_tokens": 1}, "modelUsage": {}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    seen = []
+    status, payload = m._turn("hello", thread=None, new=True, on_run=lambda run: run.attach(lambda k, p: seen.append(k)), source="test")
+    assert status == 200 and payload["reply"] == "ok" and payload["session_id"] == "s7" and payload["run"]
+    assert seen[0] == "begin" and "start" in seen and "text" in seen and seen[-1] == "done"
+    assert all(r.done for r in m.RUNS.values())
+    status, payload = m._turn("again", thread="no-such-brain-id", new=False)
+    assert status == 404 and "not on this box" in payload["reply"]
+    # a busy thread refuses a second turn
+    busy = m.Run("brain-z", "x"); m.RUNS[busy.id] = busy
+    m._threads_save([{"claude": "s7", "brain": "brain-z", "title": "t"}])
+    status, payload = m._turn("more", thread="brain-z", new=False)
+    assert status == 409 and "still answering" in payload["reply"]
+    busy.emit("done", {})

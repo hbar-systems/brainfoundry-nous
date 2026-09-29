@@ -1700,6 +1700,233 @@ META: dict = {}   # the last turn's model and token counts, shown on the page
 
 
 # ----------------------------------------------------------------- http ----
+def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page") -> tuple[int, dict]:
+    """One turn, for the page and for Telegram (2026-09-29). Picks the conversation (an explicit
+    thread, a new one, or the box's current one), registers the Run, runs the reasoner, records
+    the turn in the brain, emits "done" to every sink, and returns (status, payload). on_run(run)
+    is called once the Run exists so a caller can attach its sink before the reasoner starts."""
+    LAST_MESSAGE["text"] = message
+    explicit = None
+    state: dict = {}
+    if new:
+        print(f"new thread ({source})", flush=True)
+    elif thread:
+        explicit = next((x for x in _threads_load() if x.get("brain") == thread), None)
+        if explicit is None:
+            return 404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."}
+        state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
+                 "prompt_hash": PROMPT_HASH}
+    else:
+        state = _load_state()
+        # A thread started under older instructions carries their conclusions ("I can't
+        # do that") into every later turn. When the instructions changed since the
+        # thread began, start a fresh one (observed 2026-09-17: two gate tests failed
+        # only because they resumed a pre-gate conversation).
+        if state.get("session_id") and state.get("prompt_hash") != PROMPT_HASH:
+            print("instructions changed since this thread began; starting a new thread", flush=True)
+            state = {}
+    with RUNS_LOCK:
+        key = state.get("brain_session_id")
+        if key and _run_for_thread(key):
+            return 409, {"error": "busy", "reply": "This conversation is still answering. Wait for it, or start another."}
+        active = _runs_active()
+        if len(active) >= MAX_RUNS:
+            return 409, {"error": "busy", "reply": f"{len(active)} conversations are answering already; wait for one to finish."}
+        run = Run(key, message, title=state.get("title"))
+        RUNS[run.id] = run
+    if on_run:
+        on_run(run)
+    t0 = time.time()
+    try:
+        reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=run.emit, run=run)
+        if sid:
+            state["session_id"] = sid
+            state["prompt_hash"] = PROMPT_HASH
+            if explicit is None:
+                _save_state(state)
+        reply, proposal = _extract_proposal(reply)
+        reply, pane = _extract_pane(reply)
+        card = _propose(proposal) if proposal else None
+        try:
+            if explicit is None:
+                st = _load_state()
+                if st.get("session_id") == sid or not st.get("session_id"):
+                    st["session_id"] = sid
+                    st = _record_turn(st, message, reply, card)
+                    _save_state(st)
+                state = st
+            else:
+                state = _record_turn(state, message, reply, card)
+                cur = _load_state()
+                if cur.get("brain_session_id") == state.get("brain_session_id"):
+                    cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
+                    _save_state(cur)
+            run.thread = state.get("brain_session_id") or run.thread
+            run.title = state.get("title") or run.title
+        except Exception as e:
+            print(f"record turn failed: {type(e).__name__}", flush=True)
+    except Exception as e:
+        payload = {"reply": f"The bridge failed this turn: {type(e).__name__}", "error": True, "session_id": None, "ms": 0,
+                   "proposal": None, "pane": None, "meta": {}, "thread": run.thread, "title": run.title, "run": run.id}
+        run.emit("done", payload)
+        _runs_prune()
+        print(f"turn failed: {type(e).__name__}: {e}", flush=True)
+        return 500, payload
+    ms = int((time.time() - t0) * 1000)
+    print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')} via={source}", flush=True)
+    _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
+                 "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
+                 "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
+                 "proposal": (card or {}).get("id"),
+                 "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source})
+    payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
+               "thread": run.thread, "title": run.title, "run": run.id}
+    run.emit("done", payload)
+    _runs_prune()
+    return 200, payload
+
+
+def _decide_permit(pid: str, action: str) -> dict:
+    """Allow or refuse a card from anywhere (the page does the same inline; Telegram uses this)."""
+    pm = GATE.get(pid) if (GATE is not None and pid) else None
+    if pm is None:
+        return {"ok": False, "error": "no such permit"}
+    if action != "allow":
+        GATE.deny(pid)
+        _box_settle(pid, "deny", "the person refused this action")
+        return {"ok": True, "status": "denied"}
+    try:
+        outcome = _run_permit(pid, pm)
+    except Exception as e:
+        return {"ok": False, "error": f"could not approve: {type(e).__name__}"}
+    if (pm.args or {}).get("platform") == "box":
+        _box_settle(pid, "allow" if outcome.get("ok") else "deny")
+        outcome["status"] = "allowed" if outcome.get("ok") else "failed"
+    return outcome
+
+
+# ---- Telegram: the phone talks to the hands lane (2026-09-29) ----
+# A second bot, the bridge's own (CC_TELEGRAM_TOKEN in the bridge env), long-polled from here:
+# no webhook, no public route, nothing in the api. The first chat that writes becomes the
+# owner (or CC_TELEGRAM_OWNER pins one); everyone else is told the brain is private. A message
+# is a turn on the "Telegram" thread (/new starts another); voice notes are transcribed; photos
+# and files land in the hands' in/ like the page's attachments; cards arrive with Allow and
+# Refuse buttons; the reply comes back in pieces under Telegram's length limit.
+TG_TOKEN = os.environ.get("CC_TELEGRAM_TOKEN", "").strip()
+TG_OWNER = os.environ.get("CC_TELEGRAM_OWNER", "").strip()
+TG = cc_extras.Telegram(TG_TOKEN, STATE_DIR / "telegram.json", owner=TG_OWNER) if TG_TOKEN else None
+
+
+def _tg_send(chat_id, text: str, **extra) -> dict | None:
+    out = None
+    for piece in cc_extras.Telegram.chunks(text or "(no answer)"):
+        out = TG.call("sendMessage", chat_id=chat_id, text=piece, **extra)
+        extra = {}   # buttons only on the first piece
+    return out
+
+
+def _tg_turn(chat_id, text: str) -> None:
+    st = TG.state()
+    thread = st.get("thread")
+    if thread and not any(x.get("brain") == thread for x in _threads_load()):
+        thread = None
+    steps: list = []
+    def sink(kind, payload):
+        if kind == "tool":
+            steps.append(payload.get("brief") or payload.get("name") or "")
+        elif kind == "ask":
+            if payload.get("auto"):
+                TG.call("sendMessage", chat_id=chat_id, text=f"did without asking: {payload.get('summary', '')}\n({payload.get('why', '')})")
+            else:
+                TG.call("sendMessage", chat_id=chat_id, text=f"May I? {payload.get('summary', '')}",
+                        reply_markup=cc_extras.Telegram.card_markup(payload.get("id", "")))
+    TG.call("sendChatAction", chat_id=chat_id, action="typing")
+    status, payload = _turn(text, thread=thread, new=thread is None, on_run=lambda run: run.attach(sink), source="telegram")
+    if status != 200:
+        _tg_send(chat_id, payload.get("reply") or payload.get("error") or "the bridge refused this turn")
+        return
+    TG.save(thread=payload.get("thread"))
+    reply = payload.get("reply") or "(no answer)"
+    if steps:
+        reply = reply + "\n\n" + "\n".join(f"· {x}" for x in steps[-12:])
+    card = payload.get("proposal")
+    if card and not card.get("auto") and card.get("id"):
+        _tg_send(chat_id, reply)
+        TG.call("sendMessage", chat_id=chat_id, text=f"Proposed: {card.get('summary', '')}", reply_markup=cc_extras.Telegram.card_markup(card["id"]))
+    else:
+        _tg_send(chat_id, reply)
+
+
+def _tg_handle(update: dict) -> None:
+    ev = cc_extras.Telegram.parse_update(update)
+    if not ev:
+        return
+    chat_id = ev["chat_id"]
+    if ev["kind"] == "callback":
+        if not TG.owner_ok(chat_id):
+            TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="This brain is private.")
+            return
+        action, _, pid = (ev["data"] or "").partition(":")
+        out = _decide_permit(pid, "allow" if action == "allow" else "deny")
+        word = "allowed" if out.get("ok") and out.get("status") != "denied" else ("refused" if out.get("status") == "denied" else f"failed: {out.get('error', '')}")
+        TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text=word)
+        try:
+            TG.call("editMessageReplyMarkup", chat_id=chat_id, message_id=ev["message_id"], reply_markup={"inline_keyboard": []})
+            TG.call("sendMessage", chat_id=chat_id, text=word)
+        except Exception:
+            pass
+        return
+    if not TG.owner_ok(chat_id):
+        if TG.owner() is None:
+            TG.pin(chat_id)
+            TG.call("sendMessage", chat_id=chat_id, text="This is your brain's hands. This chat is now the owner's. Write, or send a voice note; /new starts another conversation; /status says what is running.")
+        else:
+            TG.call("sendMessage", chat_id=chat_id, text="This brain is private.")
+            return
+    text = (ev.get("text") or "").strip()
+    if ev.get("file_id"):
+        try:
+            data, name = TG.download(ev["file_id"], ev.get("file_name") or "")
+            if ev.get("is_voice"):
+                if not ELEVEN_KEY:
+                    TG.call("sendMessage", chat_id=chat_id, text="voice notes need ELEVENLABS_API_KEY in the bridge env"); return
+                text = (text + " " if text else "") + _transcribe(data, name or "voice.ogg", ev.get("mime") or "audio/ogg").strip()
+                TG.call("sendMessage", chat_id=chat_id, text=f"heard: {text}")
+            else:
+                saved = UPLOADS.save_bytes(name or f"telegram-{int(time.time())}", data)
+                text = (text or "Look at the attached file.") + f"\n\nAttached on the box: {saved}"
+        except Exception as e:
+            TG.call("sendMessage", chat_id=chat_id, text=f"could not take the attachment ({type(e).__name__})"); return
+    if not text:
+        return
+    if text == "/new":
+        TG.save(thread=None); TG.call("sendMessage", chat_id=chat_id, text="new conversation"); return
+    if text == "/status":
+        act = _runs_active()
+        TG.call("sendMessage", chat_id=chat_id, text=f"{len(act)} answering; cards waiting {_cards_waiting()}; thread {(TG.state().get('thread') or 'none')[:8]}; hands {HANDS_USER or 'one user'}")
+        return
+    if text.startswith("/start"):
+        TG.call("sendMessage", chat_id=chat_id, text="Here. Write, or send a voice note."); return
+    th = TG.state().get("thread")
+    if th and _run_for_thread(th):
+        TG.call("sendMessage", chat_id=chat_id, text="still answering the last one; wait, or /new for another conversation"); return
+    threading.Thread(target=_tg_turn, args=(chat_id, text), daemon=True).start()
+
+
+def _tg_loop() -> None:
+    print(f"telegram lane on (owner {'pinned' if TG.owner() else 'the first chat that writes'})", flush=True)
+    while True:
+        try:
+            for u in TG.poll():
+                try:
+                    _tg_handle(u)
+                except Exception as e:
+                    print(f"telegram update failed: {type(e).__name__}: {e}", flush=True)
+        except Exception as e:
+            print(f"telegram poll failed: {type(e).__name__}", flush=True)
+            time.sleep(10)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "cc-bridge/0.2"
 
@@ -1762,6 +1989,7 @@ class Handler(BaseHTTPRequestHandler):
                              "judge": bool(TYPESAFE_KEY),
                              "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
+                             "telegram": (TG.owner() is not None) if TG is not None else None,
                              "cards_waiting": _cards_waiting(), "turn_running": bool(_runs_active()),
                              "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
@@ -2078,45 +2306,10 @@ class Handler(BaseHTTPRequestHandler):
         if not message:
             self._send(400, {"error": "empty_message"})
             return
-        LAST_MESSAGE["text"] = message
-        # Which conversation (2026-09-28: several at once). The page names the thread it shows
-        # (a brain session id); "new" starts another; no thread means the box's current one.
-        want = str(req.get("thread") or "").strip()
-        explicit = None
-        state = {}
-        if req.get("new") is True:
-            print("new thread (flag on the chat request)", flush=True)
-        elif want:
-            explicit = next((x for x in _threads_load() if x.get("brain") == want), None)
-            if explicit is None:
-                self._send(404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."})
-                return
-            state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
-                     "prompt_hash": PROMPT_HASH}
-        else:
-            state = _load_state()
-            # A thread started under older instructions carries their conclusions ("I can't
-            # do that") into every later turn. When the instructions changed since the
-            # thread began, start a fresh one (observed 2026-09-17: two gate tests failed
-            # only because they resumed a pre-gate conversation).
-            if state.get("session_id") and state.get("prompt_hash") != PROMPT_HASH:
-                print("instructions changed since this thread began; starting a new thread", flush=True)
-                state = {}
-        with RUNS_LOCK:
-            key = state.get("brain_session_id")
-            if key and _run_for_thread(key):
-                self._send(409, {"error": "busy", "reply": "This conversation is still answering. Wait for it, or start another."})
-                return
-            active = _runs_active()
-            if len(active) >= MAX_RUNS:
-                self._send(409, {"error": "busy", "reply": f"{len(active)} conversations are answering already; wait for one to finish."})
-                return
-            run = Run(key, message, title=state.get("title"))
-            RUNS[run.id] = run
-        t0 = time.time()
         stream = req.get("stream") is True
-        on_event = run.emit
-        if stream:
+        def on_run(run):
+            if not stream:
+                return
             # Server-sent events: the page reads text as it forms, sees each tool call, and
             # gets the same final payload as the plain answer in a closing "done" event.
             # The run keeps every event too, so a page that arrives later follows along.
@@ -2132,52 +2325,9 @@ class Handler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
             run.attach(sink)
-        try:
-            reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=on_event, run=run)
-            if sid:
-                state["session_id"] = sid
-                state["prompt_hash"] = PROMPT_HASH
-                if explicit is None:
-                    _save_state(state)
-            reply, proposal = _extract_proposal(reply)
-            reply, pane = _extract_pane(reply)
-            card = _propose(proposal) if proposal else None
-            try:
-                if explicit is None:
-                    st = _load_state()
-                    if st.get("session_id") == sid or not st.get("session_id"):
-                        st["session_id"] = sid
-                        st = _record_turn(st, message, reply, card)
-                        _save_state(st)
-                    state = st
-                else:
-                    state = _record_turn(state, message, reply, card)
-                    cur = _load_state()
-                    if cur.get("brain_session_id") == state.get("brain_session_id"):
-                        cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
-                        _save_state(cur)
-                run.thread = state.get("brain_session_id") or run.thread
-                run.title = state.get("title") or run.title
-            except Exception as e:
-                print(f"record turn failed: {type(e).__name__}", flush=True)
-        except Exception as e:
-            run.emit("done", {"reply": f"The bridge failed this turn: {type(e).__name__}", "error": True, "session_id": None, "ms": 0,
-                              "proposal": None, "pane": None, "meta": {}, "thread": run.thread, "title": run.title, "run": run.id})
-            _runs_prune()
-            raise
-        ms = int((time.time() - t0) * 1000)
-        print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')}", flush=True)
-        _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
-                     "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
-                     "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
-                     "proposal": (card or {}).get("id"),
-                     "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS})
-        payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
-                   "thread": run.thread, "title": run.title, "run": run.id}
-        run.emit("done", payload)
-        _runs_prune()
-        if not stream:
-            self._send(200, payload)
+        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run)
+        if status != 200 or not stream:
+            self._send(status, payload)
 
     def log_message(self, fmt: str, *args) -> None:  # quiet: no paths, no bodies
         return
@@ -2192,6 +2342,8 @@ def main() -> None:
     if BRAIN_API_KEY:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
+    if TG is not None:
+        threading.Thread(target=_tg_loop, daemon=True).start()
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
     httpd.serve_forever()
