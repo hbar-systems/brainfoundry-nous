@@ -331,7 +331,8 @@ def test_hook_runs_with_system_python_when_split(monkeypatch, tmp_path):
     monkeypatch.setenv("CC_BOX", "1")
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m.HOOK_PYTHON == "/usr/bin/python3"
-    assert json.loads(m._hook_settings())["hooks"]["PermissionRequest"][0]["hooks"][0]["command"].startswith("/usr/bin/python3 ")
+    import json as _json
+    assert _json.loads(m._hook_settings())["hooks"]["PermissionRequest"][0]["hooks"][0]["command"].startswith("/usr/bin/python3 ")
     monkeypatch.delenv("CC_HANDS_USER"); monkeypatch.delenv("CC_HANDS_HOME")
     m2 = _load(monkeypatch, tmp_path, with_key=False)
     assert m2.HOOK_PYTHON == sys.executable
