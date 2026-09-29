@@ -509,6 +509,7 @@ export default function CC() {
   const [cur, setCur] = useState(null)
   const curRef = useRef(null)
   const runningRef = useRef({})
+  const runIdRef = useRef({})     // thread key -> run id from the stream's 'begin', to re-follow a broken stream
   const showThread = (key) => { curRef.current = key; setCur(key); setBusy(!!runningRef.current[key]) }
   // notes follow the thread shown
   useEffect(() => {
@@ -695,7 +696,14 @@ export default function CC() {
         const ev = (chunk.match(/^event: (.*)$/m) || [])[1]; const dl = (chunk.match(/^data: (.*)$/m) || [])[1]
         if (!ev || !dl) continue
         let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
-        if (ev === 'begin') { if (withBegin && mine()) setTurns(t => [...t.filter(x => !x.live), { who: 'me', text: pl.message || '' }, { who: 'brain', text: '', live: true, steps: [] }]) }
+        if (ev === 'begin') {
+          if (pl.run) runIdRef.current[key] = pl.run
+          if (withBegin && mine()) setTurns(t => {
+            const rest = t.filter(x => !x.live)
+            const lastMe = rest.length && rest[rest.length - 1].who === 'me' && rest[rest.length - 1].text === (pl.message || '')
+            return [...rest, ...(lastMe ? [] : [{ who: 'me', text: pl.message || '' }]), { who: 'brain', text: '', live: true, steps: [] }]
+          })
+        }
         else if (ev === 'start') {
           if (mine()) {
             spokenRef.current = 0; stopSpeaking()
@@ -709,6 +717,14 @@ export default function CC() {
         else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
         else if (ev === 'done') data = pl
       }
+    }
+    if (!data && !withBegin) {
+      // the stream broke before "done" (a proxy closed it during a long silent tool run): the turn
+      // goes on in the bridge; follow it through /cc/live, which replays and finishes it
+      try {
+        const r2 = await fetch(`/cc/live?${key.startsWith('new:') ? 'run=' + encodeURIComponent(runIdRef.current[key] || '') : 'thread=' + encodeURIComponent(key)}`, { cache: 'no-store' })
+        if (r2.ok && r2.body) return await consume(r2, key, true)
+      } catch {}
     }
     if (!data) data = { reply: 'The stream ended without an answer.', error: true }
     const reply = data.reply || '(no answer)'

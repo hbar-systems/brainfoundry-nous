@@ -1570,7 +1570,10 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict
             elif time.time() - last[0] > (TOOL_TIMEOUT_S if in_tool[0] else TIMEOUT_S):
                 proc.kill()
                 return
-            elif in_tool[0] and int(time.time()) % 15 < 5:
+            elif time.time() - last[0] > 12:
+                # a byte every few seconds keeps the proxies from closing the stream during a long
+                # silent tool run (the page showed "the stream ended without an answer" at 2026-09-29
+                # while the bridge finished the turn and recorded the reply unseen)
                 on_event("ping", {})
     threading.Thread(target=_watch, daemon=True).start()
     run.allowed = set()
