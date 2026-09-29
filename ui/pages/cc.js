@@ -338,6 +338,13 @@ export default function CC() {
   const loadLatest = () => fetch('/cc/files/recent', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setLatest((d.recent || []).slice(0, 4)) }).catch(() => {})
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
+  // The state line (2026-09-29): "is it working right now?" answered above the composer and in the
+  // tab title: a dot, how long the thread shown has been answering, its step count and last step.
+  const [busySince, setBusySince] = useState(null)
+  const [tick, setTick] = useState(0)
+  useEffect(() => { if (!busy) { setBusySince(null); return } setBusySince(Date.now()); const t = setInterval(() => setTick(x => x + 1), 1000); return () => clearInterval(t) }, [busy])
+  useEffect(() => { try { document.title = (busy ? '● ' : '') + 'CC · BrainFoundry' } catch {} }, [busy])
+  const fmtElapsed = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s` }
   // The brain speaks (2026-09-23): when the bridge has a voice, answers are read aloud as
   // they finish while this is on. Remembered per browser. One player at a time.
   const [speak, setSpeak] = useState(false)
@@ -1225,6 +1232,19 @@ export default function CC() {
             <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
           </div>
         )}
+        {(() => {
+          const live = [...turns].reverse().find(x => x.live)
+          const last = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
+          return (
+            <p style={{ ...mono, fontSize: '11px', margin: '12px 0 0 0', color: busy ? C.gold : C.faint, display: 'flex', gap: '10px', alignItems: 'baseline' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: busy ? C.gold : C.line, animation: busy ? 'ccpulse 1.2s ease-in-out infinite' : 'none' }} />
+              {busy
+                ? <span>answering{busySince ? ` for ${fmtElapsed(Date.now() - busySince + tick * 0)}` : ''}{live && live.steps && live.steps.length ? ` · ${live.steps.length} step${live.steps.length === 1 ? '' : 's'} · last: ${String(live.steps[live.steps.length - 1]).slice(0, 90)}` : live && live.text ? ' · writing' : ' · thinking'}</span>
+                : <span>idle{last ? ` · last answer ${(last.ms / 1000).toFixed(1)} s${last.meta && last.meta.steps > 1 ? `, ${last.meta.steps} steps` : ''}` : ''}</span>}
+              <style>{`@keyframes ccpulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
+            </p>
+          )
+        })()}
         {notes.filter(n => n.text.trim()).length > 0 && (
           <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
