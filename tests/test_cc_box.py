@@ -217,3 +217,19 @@ def test_box_ask_finds_its_run_by_session_id(monkeypatch, tmp_path):
     b.emit("done", {"reply": "x"})
     seen = []
     assert b.attach(lambda k, p: seen.append(k)) is False and seen[0] == "begin" and seen[-1] == "done"
+
+
+def test_box_key_every_card_can_be_remembered(monkeypatch, tmp_path):
+    """2026-09-29: a plain command by its first word, a compound command exactly, any other tool by
+    its name; dangerous words never."""
+    m = _load(monkeypatch, tmp_path)
+    a, s, ok = m._box_key("Bash", {"command": "python3 - <<'PY'\\nprint(1)\\nPY"})
+    assert a == "python3" and ok
+    a2, _, ok2 = m._box_key("Bash", {"command": "git add x && git commit -m y"})
+    assert a2.startswith("exact:") and ok2
+    a3, _, ok3 = m._box_key("Bash", {"command": "git add x && git commit -m y"})
+    assert a3 == a2
+    _, _, ok4 = m._box_key("Bash", {"command": "rm -rf /tmp/x && echo done"})
+    assert not ok4
+    assert m._box_key("WebFetch", {"url": "https://x"}) == ("WebFetch", "use WebFetch", True)
+    assert m._box_key("Edit", {"file_path": "/home/hands/world/a/b.md"})[2]

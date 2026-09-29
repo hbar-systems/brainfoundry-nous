@@ -160,7 +160,7 @@ function ProposalCard({ p, onDecide }) {
           {p.remember_ok !== false && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', color: C.dim, fontSize: '12px', cursor: 'pointer' }}>
             <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} disabled={p.busy} style={{ accentColor: C.gold }} />
-            {box ? `don't ask again for "${p.action_id}"; still recorded in the audit, you can undo it below` : `don't ask again for this action (${p.platform}, ${p.method || 'POST'}); still recorded in the audit, you can undo it below`}
+            {box ? (String(p.action_id || '').startsWith('exact:') ? `don't ask again for exactly this command; still recorded in the audit, you can undo it below` : `don't ask again for "${p.action_id}"; still recorded in the audit, you can undo it below`) : `don't ask again for this action (${p.platform}, ${p.method || 'POST'}); still recorded in the audit, you can undo it below`}
           </label>
           )}
         </>

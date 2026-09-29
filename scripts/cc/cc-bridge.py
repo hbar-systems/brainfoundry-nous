@@ -608,14 +608,22 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         if head == "sudo" and len(words) > 1:
             head = "sudo " + words[1]
         plain = "|" not in cmd and ";" not in cmd and "&&" not in cmd and ">" not in cmd and "`" not in cmd and "$(" not in cmd
-        remember_ok = bool(head) and not any(w in BOX_NO_REMEMBER for w in head.split()) and plain
-        return head or "command", "run on the box: " + cmd[:300], remember_ok
+        dangerous = any(w in BOX_NO_REMEMBER for w in head.split())
+        if plain:
+            return head or "command", "run on the box: " + cmd[:300], bool(head) and not dangerous
+        # A compound command (pipes, &&, redirects) is remembered as exactly this command, never by
+        # its first word (2026-09-29: every card gets the checkbox; a "python3" rule must not cover
+        # "python3 ... && rm -rf"). Dangerous words still get no checkbox.
+        import hashlib as _h
+        exact = "exact:" + _h.sha256(cmd.encode()).hexdigest()[:16]
+        return exact, "run on the box: " + cmd[:300], bool(head) and not dangerous
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
         d = str(Path(fp).parent) if fp else ""
         verb = "write" if tool == "Write" else "edit"
         return f"{verb} {d}", f"{verb} the file {fp}", bool(d)
-    return tool, f"use {tool}", False
+    # any other tool (WebFetch, WebSearch, Agent, a pack tool) is remembered by its name
+    return tool, f"use {tool}", True
 
 
 def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
