@@ -1814,6 +1814,10 @@ def _decide_permit(pid: str, action: str) -> dict:
 # Refuse buttons; the reply comes back in pieces under Telegram's length limit.
 TG_TOKEN = os.environ.get("CC_TELEGRAM_TOKEN", "").strip()
 TG_OWNER = os.environ.get("CC_TELEGRAM_OWNER", "").strip()
+# Allow and Refuse buttons on Telegram: on by default. CC_TELEGRAM_APPROVE=0 keeps the yes in the
+# console only, so a stolen Telegram session can ask but never approve (the request and the yes
+# then travel different channels).
+TG_APPROVE = os.environ.get("CC_TELEGRAM_APPROVE", "1").strip() != "0"
 TG = cc_extras.Telegram(TG_TOKEN, STATE_DIR / "telegram.json", owner=TG_OWNER) if TG_TOKEN else None
 
 
@@ -1837,9 +1841,11 @@ def _tg_turn(chat_id, text: str) -> None:
         elif kind == "ask":
             if payload.get("auto"):
                 TG.call("sendMessage", chat_id=chat_id, text=f"did without asking: {payload.get('summary', '')}\n({payload.get('why', '')})")
-            else:
+            elif TG_APPROVE:
                 TG.call("sendMessage", chat_id=chat_id, text=f"May I? {payload.get('summary', '')}",
                         reply_markup=cc_extras.Telegram.card_markup(payload.get("id", "")))
+            else:
+                TG.call("sendMessage", chat_id=chat_id, text=f"A card waits for your yes in the console: {payload.get('summary', '')}")
     TG.call("sendChatAction", chat_id=chat_id, action="typing")
     status, payload = _turn(text, thread=thread, new=thread is None, on_run=lambda run: run.attach(sink), source="telegram")
     if status != 200:
@@ -1852,7 +1858,10 @@ def _tg_turn(chat_id, text: str) -> None:
     card = payload.get("proposal")
     if card and not card.get("auto") and card.get("id"):
         _tg_send(chat_id, reply)
-        TG.call("sendMessage", chat_id=chat_id, text=f"Proposed: {card.get('summary', '')}", reply_markup=cc_extras.Telegram.card_markup(card["id"]))
+        if TG_APPROVE:
+            TG.call("sendMessage", chat_id=chat_id, text=f"Proposed: {card.get('summary', '')}", reply_markup=cc_extras.Telegram.card_markup(card["id"]))
+        else:
+            TG.call("sendMessage", chat_id=chat_id, text=f"Proposed, waiting for your yes in the console: {card.get('summary', '')}")
     else:
         _tg_send(chat_id, reply)
 
@@ -1867,6 +1876,9 @@ def _tg_handle(update: dict) -> None:
             TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="This brain is private.")
             return
         action, _, pid = (ev["data"] or "").partition(":")
+        if not TG_APPROVE and action == "allow":
+            TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="approvals are console-only on this brain")
+            return
         out = _decide_permit(pid, "allow" if action == "allow" else "deny")
         word = "allowed" if out.get("ok") and out.get("status") != "denied" else ("refused" if out.get("status") == "denied" else f"failed: {out.get('error', '')}")
         TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text=word)
