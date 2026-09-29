@@ -545,7 +545,8 @@ export default function CC() {
   // page: the footer now says so within 20 s and the browser shows a notification once per card.
   const cardsSeenRef = useRef(0)
   useEffect(() => {
-    const t = setInterval(() => { loadHealth(); loadThreads() }, 20000)
+    loadUsage()
+    const t = setInterval(() => { loadHealth(); loadThreads(); loadUsage() }, 20000)
     return () => clearInterval(t)
   }, [])
   useEffect(() => {
@@ -560,6 +561,7 @@ export default function CC() {
     }
     cardsSeenRef.current = n
   }, [health && health.cards_waiting])
+  const loadUsage = () => fetch('/cc/usage', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setUsage(d) }).catch(() => {})
   const loadHealth = () =>
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
@@ -1270,6 +1272,7 @@ export default function CC() {
           {sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
           {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
           {loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
+          {showDetails && usage && usage.today ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>today {usage.today.turns} turn{usage.today.turns === 1 ? '' : 's'} · {kTok(usage.today.in)} in · {kTok(usage.today.out)} out{usage.today.cost !== null && usage.today.cost !== undefined ? ` · $${usage.today.cost.toFixed(2)}` : ''}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}

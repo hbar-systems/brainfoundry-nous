@@ -155,3 +155,25 @@ def test_uploads_save_bytes(tmp_path):
     u = X.Uploads(tmp_path / "in")
     p1 = u.save_bytes("a b.txt", b"one"); p2 = u.save_bytes("a b.txt", b"two")
     assert Path(p1).read_bytes() == b"one" and Path(p2).name == "a b-1.txt" and Path(p1).parent.name.count("-") == 2
+
+
+def test_usage_summary_buckets(tmp_path):
+    """2026-09-29: totals per period, top threads this month, per door; cost stays None on a subscription."""
+    import time as _t
+    now = _t.mktime(_t.strptime("2026-09-29 12:00:00", "%Y-%m-%d %H:%M:%S")) - _t.timezone
+    lines = [
+        json.dumps({"ts": "2026-09-29T10:00:00Z", "tok_in": 100, "tok_cached": 1000, "tok_out": 50, "ms": 2000, "brain_session": "aaaa1111", "via": "page"}),
+        json.dumps({"ts": "2026-09-29T11:00:00Z", "tok_in": 200, "tok_cached": 0, "tok_out": 20, "ms": 1000, "brain_session": "bbbb2222", "via": "telegram", "error": True}),
+        json.dumps({"ts": "2026-09-25T09:00:00Z", "tok_in": 10, "tok_out": 5, "brain_session": "aaaa1111"}),
+        json.dumps({"ts": "2026-08-01T09:00:00Z", "tok_in": 7, "tok_out": 3, "brain_session": "old"}),
+        "not json",
+    ]
+    u = X.usage_summary(lines, now=now, titles={"aaaa1111": "coach"})
+    assert u["today"]["turns"] == 2 and u["today"]["in"] == 300 and u["today"]["out"] == 70 and u["today"]["cached"] == 1000 and u["today"]["errors"] == 1
+    assert u["week"]["turns"] == 3 and u["month"]["turns"] == 3 and u["all"]["turns"] == 4
+    assert u["threads"][0]["thread"] == "bbbb2222" or u["threads"][0]["thread"] == "aaaa1111"
+    assert {t["thread"] for t in u["threads"]} == {"aaaa1111", "bbbb2222"} and next(t for t in u["threads"] if t["thread"] == "aaaa1111")["title"] == "coach"
+    assert u["via"]["telegram"]["turns"] == 1 and u["via"]["page"]["turns"] == 2
+    assert u["all"]["cost"] is None and "subscription" in u["cost_note"]
+    u2 = X.usage_summary([json.dumps({"ts": "2026-09-29T10:00:00Z", "cost": 0.25}), json.dumps({"ts": "2026-09-29T10:01:00Z", "cost": 0.5})], now=now)
+    assert abs(u2["today"]["cost"] - 0.75) < 1e-9 and "USD" in u2["cost_note"]

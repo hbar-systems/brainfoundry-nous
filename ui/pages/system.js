@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 // (GET /cc/system) when CC is on. Every tile carries its level; the reasons are listed.
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" }
 const T = { ink: 'var(--text)', dim: 'var(--text-dim, #9a8f82)', faint: 'var(--text-faint, #6b5f52)', line: 'var(--line, #2a2621)', card: 'var(--card, #16140f)', gold: 'var(--accent, #c9a96e)', ok: '#7fc99c', warn: '#d4b86a', alert: '#d49a9a' }
+const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n || 0}`)
 const tone = (l) => (l === 'alert' ? T.alert : l === 'warn' ? T.warn : l === 'ok' ? T.ok : T.faint)
 
 function Tile({ label, level, value, sub }) {
@@ -23,12 +24,14 @@ export default function System() {
   const [api, setApi] = useState(null)
   const [host, setHost] = useState(null)
   const [health, setHealth] = useState(null)
+  const [usage, setUsage] = useState(null)
   const [at, setAt] = useState(null)
   const [pruning, setPruning] = useState(null)
   const load = async () => {
     try { const r = await fetch('/api/bf/admin/system', { cache: 'no-store' }); setApi(r.ok ? await r.json() : { error: `api ${r.status}` }) } catch { setApi({ error: 'api not answering' }) }
     try { const r = await fetch('/cc/system', { cache: 'no-store' }); setHost(r.ok ? await r.json() : null) } catch { setHost(null) }
     try { const r = await fetch('/api/bf/health', { cache: 'no-store' }); setHealth(r.ok ? await r.json() : null) } catch { setHealth(null) }
+    try { const r = await fetch('/cc/usage', { cache: 'no-store' }); setUsage(r.ok ? await r.json() : null) } catch { setUsage(null) }
     setAt(new Date())
   }
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t) }, [])
@@ -84,6 +87,21 @@ export default function System() {
               <div>failed services: {host.failed_units && host.failed_units.length ? <span style={{ color: T.alert }}>{host.failed_units.join(', ')}</span> : 'none'}</div>
               <div>units: {Object.entries(host.units || {}).map(([k, v]) => <span key={k} style={{ color: v === 'active' ? T.ink : T.warn }}>{k} {v}; </span>)}</div>
               <div>permits recorded {host.permits} · judgments {host.judgments} · jobs running {host.jobs_running}</div>
+            </div>
+          </>
+        ) : null}
+        {usage ? (
+          <>
+            <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Cost and usage of the reasoner</h2>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+              {[['today', usage.today], ['7 days', usage.week], ['this month', usage.month], ['all time', usage.all]].map(([k, v]) => (
+                <Tile key={k} label={k} value={`${v.turns} turn${v.turns === 1 ? '' : 's'}`} sub={`${fmtTok(v.in)} in (+${fmtTok(v.cached)} cached) · ${fmtTok(v.out)} out${v.cost !== null && v.cost !== undefined ? ` · $${v.cost.toFixed(2)}` : ''}${v.errors ? ` · ${v.errors} failed` : ''}`} />
+              ))}
+            </div>
+            <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
+              {(usage.threads || []).length ? <div>this month by conversation: {usage.threads.map(t => <span key={t.thread}>{(t.title || t.thread || '?').slice(0, 40)} {fmtTok(t.in + t.out)}; </span>)}</div> : null}
+              {Object.keys(usage.via || {}).length ? <div>by door: {Object.entries(usage.via).map(([k, v]) => `${k} ${v.turns} turns, ${fmtTok(v.in + v.out)}`).join(' · ')}</div> : null}
+              <div>{usage.cost_note}. "in" is newly read this turn; "cached" is the thread and instructions re-read from the cache.</div>
             </div>
           </>
         ) : null}

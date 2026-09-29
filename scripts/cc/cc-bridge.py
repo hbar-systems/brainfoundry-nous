@@ -1778,7 +1778,9 @@ def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: s
                  "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
                  "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                  "proposal": (card or {}).get("id"),
-                 "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source})
+                 "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source,
+                 "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
+                 "model": META.get("model")})
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
                "thread": run.thread, "title": run.title, "run": run.id}
     run.emit("done", payload)
@@ -2070,6 +2072,17 @@ class Handler(BaseHTTPRequestHandler):
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
         elif route == "/system":
             self._send(200, _host_system())
+        elif route == "/usage":
+            # Cost and usage (2026-09-29): totals from the turn audit, never content.
+            try:
+                lines = TURNS_LOG.read_text().splitlines() if TURNS_LOG.exists() else []
+            except OSError:
+                lines = []
+            titles = {}
+            for th in _threads_load():
+                if th.get("brain"):
+                    titles[str(th["brain"])[:8]] = th.get("title")
+            self._send(200, cc_extras.usage_summary(lines, titles=titles))
         elif route == "/voices":
             self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL})
         elif route == "/guide":

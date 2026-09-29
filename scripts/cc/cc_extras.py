@@ -472,3 +472,51 @@ class Telegram:
         elif m.get("video"):
             d = m["video"]; ev.update(file_id=d.get("file_id"), file_name=d.get("file_name") or f"video-{m.get('message_id')}.mp4", mime=d.get("mime_type"))
         return ev
+
+
+def usage_summary(lines, now: float | None = None, titles: dict | None = None) -> dict:
+    """Cost and usage (2026-09-29) from the turn audit: one dict per turn with ts, tok_in, tok_cached,
+    tok_out, cost, thread, via, ms. Totals for today, the last 7 days, this month and all time;
+    the top threads this month; page against telegram. Cost is a sum where the CLI reported one
+    (an API key); on a subscription it stays None and the tokens are the measure."""
+    import datetime as _dt
+    now = now or time.time()
+    today = time.strftime("%Y-%m-%d", time.gmtime(now))
+    month = today[:7]
+    week_from = time.strftime("%Y-%m-%d", time.gmtime(now - 7 * 86400))
+    def blank():
+        return {"turns": 0, "in": 0, "cached": 0, "out": 0, "cost": None, "ms": 0, "errors": 0}
+    def add(b, e):
+        b["turns"] += 1
+        b["in"] += int(e.get("tok_in") or 0); b["cached"] += int(e.get("tok_cached") or 0); b["out"] += int(e.get("tok_out") or 0)
+        b["ms"] += int(e.get("ms") or 0); b["errors"] += 1 if e.get("error") else 0
+        c = e.get("cost")
+        if isinstance(c, (int, float)):
+            b["cost"] = (b["cost"] or 0.0) + float(c)
+    out = {"today": blank(), "week": blank(), "month": blank(), "all": blank(), "threads": {}, "via": {}, "days": {}}
+    for raw in lines:
+        try:
+            e = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            continue
+        day = str(e.get("ts") or "")[:10]
+        if not day:
+            continue
+        add(out["all"], e)
+        if day == today:
+            add(out["today"], e)
+        if day >= week_from:
+            add(out["week"], e)
+        if day[:7] == month:
+            add(out["month"], e)
+            th = e.get("brain_session") or e.get("thread") or "?"
+            out["threads"].setdefault(th, blank()); add(out["threads"][th], e)
+            v = e.get("via") or "page"
+            out["via"].setdefault(v, blank()); add(out["via"][v], e)
+            out["days"].setdefault(day, blank()); add(out["days"][day], e)
+    top = sorted(out["threads"].items(), key=lambda kv: -(kv[1]["in"] + kv[1]["out"]))[:6]
+    out["threads"] = [{"thread": k, "title": (titles or {}).get(k), **v} for k, v in top]
+    out["days"] = [{"day": k, **v} for k, v in sorted(out["days"].items())][-31:]
+    out["cost_note"] = ("USD as the reasoner reported it" if out["all"]["cost"] is not None
+                        else "no cost figures: a subscription sign-in reports none; tokens are the measure")
+    return out
