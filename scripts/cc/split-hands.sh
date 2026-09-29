@@ -59,7 +59,16 @@ do)
         sudo cp "$BRIDGE_HOME/.cc-bridge/mcp.json" "$HANDS_HOME/.cc-bridge/mcp.json"     # the packs' file: the hands run the packs
         sudo sed -i "s#$BRIDGE_HOME/#$HANDS_HOME/#g" "$HANDS_HOME/.cc-bridge/mcp.json"
     fi
+    # the reasoner's settings and sign-in state live in ~/.claude.json, beside .claude, not inside it
+    # (hbar 2026-09-29: without it the hands started signed out and the CLI complained)
+    if sudo test -f "$BRIDGE_HOME/.claude.json" && ! sudo test -f "$HANDS_HOME/.claude.json"; then
+        sudo sh -c "sed 's#$BRIDGE_HOME/#$HANDS_HOME/#g' '$BRIDGE_HOME/.claude.json' > '$HANDS_HOME/.claude.json'"
+        sudo chmod 600 "$HANDS_HOME/.claude.json"; echo "  copied .claude.json"
+    fi
     sudo chown -R "$HANDS_USER:$HANDS_USER" "$HANDS_HOME"
+    # the brain's secrets: the Update helper leaves .env root-owned and world-readable (hbar 2026-09-29)
+    sudo test -f "$BRAIN_DIR/.env" && sudo chmod 600 "$BRAIN_DIR/.env"
+    sudo test -d "$BRAIN_DIR/.brain-backups" && sudo chmod 700 "$BRAIN_DIR/.brain-backups" || true
     # the bridge writes uploads into in/, reads out/ and the world, and the reconciler (as the
     # bridge user) commits into the world: group read everywhere, group write where needed
     sudo chmod -R g+rX "$HANDS_HOME/out" "$HANDS_HOME/in"
