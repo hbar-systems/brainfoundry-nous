@@ -515,7 +515,7 @@ export default function CC() {
       const i = parseInt(host.getAttribute('data-turn'), 10)
       if (!(turns[i] && turns[i].who === 'brain')) { setPick(null); return }
       const r = sel.getRangeAt(0).getBoundingClientRect(); const c = convRef.current.getBoundingClientRect()
-      setPick({ turn: i, quote: q.slice(0, 400), x: Math.max(8, r.left - c.left), y: r.bottom - c.top + convRef.current.scrollTop + 6 })
+      setPick({ turn: i, quote: q.slice(0, 400), x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
     } catch { setPick(null) }
   }
   function addNote() {
@@ -1182,8 +1182,14 @@ export default function CC() {
 
         <div ref={convRef} onMouseUp={onPick} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative' }}>
           {pick && (
-            <a onMouseDown={e => { e.preventDefault(); addNote() }} title="a note in the margin on the selected span; it goes with your next message"
-               style={{ ...mono, position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#141210', backgroundColor: C.gold, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>remark</a>
+            <span style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
+              {[['remark', 'a note in the margin on the selected span; it goes with your next message', () => addNote()],
+                ['copy', 'copy the selected words', () => { try { navigator.clipboard.writeText(pick.quote) } catch {} setPick(null) }],
+                ['ask', 'put the selected words into the composer to ask about them', () => { setDraft(d => (d ? d + '\n' : '') + `About this: "${pick.quote}" `); setPick(null); if (boxRef.current) boxRef.current.focus() }]].map(([label, title, fn]) => (
+                <a key={label} onMouseDown={e => { e.preventDefault(); fn() }} title={title}
+                   style={{ ...mono, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: label === 'remark' ? '#141210' : C.ink, backgroundColor: label === 'remark' ? C.gold : C.card, border: `1px solid ${C.gold}`, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>{label}</a>
+              ))}
+            </span>
           )}
           {pending.map(p => (
             <div key={p.id} style={{ display: 'flex', justifyContent: 'flex-start', margin: '8px 0' }}>
