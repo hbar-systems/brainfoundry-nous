@@ -1928,6 +1928,23 @@ def _tg_handle(update: dict) -> None:
         return
     if text.startswith("/start"):
         TG.call("sendMessage", chat_id=chat_id, text="Here. Write, or send a voice note."); return
+    if text.startswith("/model"):
+        # the same switch as the page's /model: a name sets it, none shows it, "default" clears it
+        m = text[len("/model"):].strip()
+        if not m:
+            TG.call("sendMessage", chat_id=chat_id, text=f"model: {_model_current() or 'default'} (send /model sonnet, /model opus, or /model default)"); return
+        if m == "default":
+            _env_file_unset("CC_MODEL"); os.environ.pop("CC_MODEL", None)
+        elif len(m) > 80 or any(c in m for c in " \n\t\"'"):
+            TG.call("sendMessage", chat_id=chat_id, text="not a model name"); return
+        else:
+            _env_file_set("CC_MODEL", m); os.environ["CC_MODEL"] = m
+        TG.call("sendMessage", chat_id=chat_id, text=f"model: {_model_current() or 'default'}"); return
+    if text.startswith("/posture"):
+        want = text[len("/posture"):].strip().lower()
+        if want in ("cards", "auto", "judged"):
+            _env_file_set("CC_POSTURE", want); os.environ["CC_POSTURE"] = want
+        TG.call("sendMessage", chat_id=chat_id, text=f"posture: {_posture_current()}" + ("" if want in ("cards", "auto", "judged", "") else " (cards, auto or judged)")); return
     th = TG.state().get("thread")
     if th and _run_for_thread(th):
         TG.call("sendMessage", chat_id=chat_id, text="still answering the last one; wait, or /new for another conversation"); return
