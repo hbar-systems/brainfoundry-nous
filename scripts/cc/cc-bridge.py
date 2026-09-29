@@ -72,6 +72,10 @@ OPERATOR_TOKEN = os.environ.get("CC_OPERATOR_TOKEN", "").strip()
 STATE_DIR = Path.home() / ".cc-bridge"
 STATE = STATE_DIR / "state.json"
 TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "900" if os.environ.get("CC_BOX", "").strip() == "1" else "300"))
+# While a tool runs (a long test run, a build) the reasoner is silent on purpose; the watchdog then
+# waits up to CC_TOOL_TIMEOUT (default 30 min; the tools have their own limits) instead of TIMEOUT_S.
+# Turns on hbar died at 304 s and 305 s on 2026-09-29 because a five-minute pytest was "silence".
+TOOL_TIMEOUT_S = int(os.environ.get("CC_TOOL_TIMEOUT", "1800"))
 MAX_BODY = 64 * 1024
 ALLOWED_TOOLS = os.environ.get("CC_TOOLS", "Read,Grep,Glob,Agent")   # Agent: subagents inside a turn; their tool calls still pass the hook
 # The reasoner's model, chosen by the owner from the page (/model sonnet, /model opus, or a full
@@ -1551,19 +1555,23 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict
     cmd[cmd.index("json")] = "stream-json"
     proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     last = [time.time()]
+    in_tool = [False]   # a tool call was issued and no event has followed yet: the reasoner is working, not stuck
     stop = threading.Event()
 
     def _watch():
-        # Kill a silent reasoner after TIMEOUT_S, but not while a card waits for the person;
-        # while waiting, keep the stream alive with a comment every 15 seconds.
+        # Kill a silent reasoner after TIMEOUT_S, but not while a card waits for the person, and
+        # not while a tool runs (then up to TOOL_TIMEOUT_S); while waiting, keep the stream alive
+        # with a comment every 15 seconds.
         while not stop.wait(5):
             if run.waiting > 0:
                 last[0] = time.time()
                 if int(time.time()) % 15 < 5:
                     on_event("ping", {})
-            elif time.time() - last[0] > TIMEOUT_S:
+            elif time.time() - last[0] > (TOOL_TIMEOUT_S if in_tool[0] else TIMEOUT_S):
                 proc.kill()
                 return
+            elif in_tool[0] and int(time.time()) % 15 < 5:
+                on_event("ping", {})
     threading.Thread(target=_watch, daemon=True).start()
     run.allowed = set()
     result = None
@@ -1579,6 +1587,7 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict
             except json.JSONDecodeError:
                 continue
             kind = ev.get("type")
+            in_tool[0] = False
             if kind == "system" and ev.get("subtype") == "init":
                 run.claude_sid = ev.get("session_id") or run.claude_sid
                 on_event("start", {"model": ev.get("model"), "session_id": ev.get("session_id")})
@@ -1595,6 +1604,7 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict
             elif kind == "assistant":
                 for blk in ((ev.get("message") or {}).get("content") or []):
                     if blk.get("type") == "tool_use":
+                        in_tool[0] = True
                         on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input"))})
             elif kind == "result":
                 result = ev
@@ -1644,7 +1654,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             run.claude_sid = session_id
         data, stderr, rc = _stream_turn(cmd, _fwd, run=run)
         if data is None and rc == -9:
-            return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
+            return f"The reasoner went silent for over {TIMEOUT_S // 60} minutes outside a tool call, or a tool ran past {TOOL_TIMEOUT_S // 60} minutes, and was stopped. The work it committed so far stands; ask it to continue.", session_id, True
         out = json.dumps(data) if data else ""
         err_msg = str(data.get("result") or data.get("error") or "")[:600] if data and data.get("is_error") else None
         if rc != 0 or not out or err_msg:
