@@ -73,7 +73,7 @@ STATE_DIR = Path.home() / ".cc-bridge"
 STATE = STATE_DIR / "state.json"
 TIMEOUT_S = int(os.environ.get("CC_TIMEOUT", "900" if os.environ.get("CC_BOX", "").strip() == "1" else "300"))
 MAX_BODY = 64 * 1024
-ALLOWED_TOOLS = os.environ.get("CC_TOOLS", "Read,Grep,Glob")
+ALLOWED_TOOLS = os.environ.get("CC_TOOLS", "Read,Grep,Glob,Agent")   # Agent: subagents inside a turn; their tool calls still pass the hook
 # The reasoner's model, chosen by the owner from the page (/model sonnet, /model opus, or a full
 # model id). Empty means the CLI's own default. Kept in the env file as CC_MODEL.
 def _model_current() -> str:

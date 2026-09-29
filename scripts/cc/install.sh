@@ -187,7 +187,9 @@ WRAP
     if [ -f "$BRAIN_DIR/.onerc" ] && [ "$(tr -d '[:space:]' < "$BRAIN_DIR/.onerc")" = "ONE_PERMISSIONS=read" ]; then
         sudo rm -f "$BRAIN_DIR/.onerc" && echo "removed the old read-only .onerc from the brain directory"
     fi
-    TOOLS='Read,Grep,Glob,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
+    # Agent: the reasoner may fan out subagents inside one turn (2026-09-29); each subagent's own
+    # edits and commands still pass the permission hook, so pre-approving the fan-out opens nothing.
+    TOOLS='Read,Grep,Glob,Agent,Bash(one --agent list:*),Bash(one --agent actions search:*),Bash(one --agent actions knowledge:*),Bash(one --agent platforms:*),Bash(one-read:*)'
     # The value carries parentheses (Bash(git status *)), so it is written double-quoted:
     # systemd's EnvironmentFile strips the quotes, and a script that sources the file no
     # longer errors on them (found by the studio chat 2026-09-23).
