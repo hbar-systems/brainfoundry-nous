@@ -313,16 +313,29 @@ function TelegramCard() {
 
   const load = () => api('/integrations/telegram/status').then(setStatus).catch(e => setErr(e.message))
   useEffect(() => { load() }, [])
-  // The bridge's own Telegram lane (2026-09-30): since 2026-09-29 GET /cc/health reports it as
-  // telegram: null (no token), false (on, waiting for the first message), true (on, owner pinned).
-  // Fail-soft: when the bridge does not answer, the card behaves as before.
-  const [lane, setLane] = useState(null)
-  useEffect(() => {
-    fetch('/cc/health', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d && typeof d.telegram === 'boolean') setLane(d.telegram) })
-      .catch(() => {})
-  }, [])
+  // The bridge's own Telegram lane (2026-09-30): on a brain with the CC bridge, the card IS that
+  // lane: token typed here, stored by the bridge, polling starts at once, disconnect here. The
+  // older read-only lane below shows only where no bridge answers.
+  const [lane, setLane] = useState(undefined)   // undefined: not asked yet; null: no bridge; object: the bridge's status
+  const [laneTok, setLaneTok] = useState('')
+  const [laneErr, setLaneErr] = useState(null)
+  const [laneBusy, setLaneBusy] = useState(false)
+  const loadLane = () => fetch('/cc/telegram/status', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setLane(d && typeof d.on === 'boolean' ? d : null)).catch(() => setLane(null))
+  useEffect(() => { loadLane(); const t = setInterval(loadLane, 15000); return () => clearInterval(t) }, [])
+  const laneConnect = async () => {
+    setLaneBusy(true); setLaneErr(null)
+    try {
+      const r = await fetch('/cc/telegram/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: laneTok.trim() }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.ok) { setLaneTok(''); await loadLane() } else setLaneErr(d.error || `could not connect (${r.status})`)
+    } catch (e) { setLaneErr('the bridge did not answer') }
+    setLaneBusy(false)
+  }
+  const laneDisconnect = async () => {
+    setLaneBusy(true); setLaneErr(null)
+    try { await fetch('/cc/telegram/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await loadLane() } catch {}
+    setLaneBusy(false)
+  }
 
   const connect = async () => {
     setBusy(true); setErr(null)
@@ -351,26 +364,43 @@ function TelegramCard() {
           <div>
             <div style={{ fontSize: 15, color: '#f0e8da', fontWeight: 600 }}>Telegram <span style={{ fontSize: 11, color: '#6b5f52', fontWeight: 400 }}>· chat your brain from your phone</span></div>
             <div style={{ fontSize: 12.5, color: connected ? '#1f9d55' : '#9a8c7a', marginTop: 2 }}>
-              {connected ? `Connected · @${status.username} — open it and say hi` : 'Not connected'}
+              {connected ? `Connected · @${status.username} (the older read-only lane)` : lane && lane.on ? `Connected through the bridge${lane.username ? ` · @${lane.username}` : ''}` : lane ? 'Not connected' : 'Not connected'}
             </div>
           </div>
         </div>
         {connected && <button onClick={disconnect} disabled={busy} style={btnGhost}>Disconnect</button>}
       </div>
 
-      {lane !== null && (
-        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814', fontSize: 12.5, lineHeight: 1.6 }}>
-          <div style={{ color: '#1f9d55' }}>
-            The bridge's Telegram lane is on: your bot talks to the reasoner ({lane ? 'owner pinned' : 'waiting for the first message'}).
+      {lane && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
+          <div style={{ fontSize: 12.5, lineHeight: 1.6, color: lane.on ? '#1f9d55' : '#9a8c7a' }}>
+            {lane.on
+              ? `The bridge's lane is on${lane.username ? ` as @${lane.username}` : ''}: your bot talks to the reasoner, with cards${lane.approve_on_telegram ? ' and their Allow and Refuse buttons' : ' answered in the console'}. ${lane.owner_pinned ? 'The owner is pinned.' : 'Waiting for your first message, which pins you as the owner.'}`
+              : 'The bridge can talk to a Telegram bot of yours: messages, voice notes, photos, and the cards that need your yes.'}
+            {lane.error ? <span style={{ color: '#c0605a' }}> Last problem: {lane.error}</span> : null}
           </div>
-          <div style={{ color: '#6b5f52', fontSize: 12, marginTop: 4 }}>
-            This older lane below answers read-only from memory; leave it unconnected unless you want both.
-            The bridge's token is set on the box with <code style={{ color: '#9a8c7a' }}>scripts/cc/set-env.sh CC_TELEGRAM_TOKEN</code>.
-          </div>
+          {lane.on ? (
+            <div style={{ marginTop: 10 }}><button onClick={laneDisconnect} disabled={laneBusy} style={btnGhost}>Disconnect the lane</button></div>
+          ) : (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Paste your bot token from @BotFather</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 520 }}>
+                <input value={laneTok} onChange={e => setLaneTok(e.target.value)} placeholder="123456789:ABCdef… (from @BotFather)" type="password" style={inp} />
+                <div>
+                  <button onClick={laneConnect} disabled={laneBusy || !laneTok.trim()}
+                    style={{ background: laneTok.trim() ? '#c9a96e' : '#221c16', color: laneTok.trim() ? '#1a1510' : '#6b5f52', border: 'none', padding: '8px 16px', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: laneTok.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                    {laneBusy ? 'Connecting…' : 'Connect the lane'}
+                  </button>
+                </div>
+                <div style={{ fontSize: 12, color: '#6b5f52', lineHeight: 1.6 }}>In Telegram: @BotFather, /newbot, name it, copy the token. The first chat that writes to the bot becomes its owner; everyone else is told the brain is private. The token stays on your box.</div>
+                {laneErr && <div style={{ color: '#c0605a', fontSize: 12.5 }}>{laneErr}</div>}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {!connected && (
+      {!connected && lane === null && (
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
           <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
             Paste your bot token from @BotFather

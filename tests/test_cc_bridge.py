@@ -361,3 +361,16 @@ def test_threads_view_sorts_pinned_first_and_hides_archived(monkeypatch, tmp_pat
     assert [t["brain"] for t in v3["threads"]] == ["b-new", "b-old"]
     assert m._threads_update("b-new", archived=True)["archived"] is True
     assert m._threads_view()["archived_count"] == 2
+
+
+def test_telegram_token_shape_and_disconnect(monkeypatch, tmp_path):
+    """2026-09-30: the page connects the lane with a token; a wrong shape is refused before Telegram
+    is asked; disconnect forgets the token and the pinned owner."""
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._tg_token_ok("1234567890:" + "A" * 35) and not m._tg_token_ok("1234567890:" + "A" * 40) and not m._tg_token_ok("A" * 35)
+    out = m._tg_set("1234567890:" + "A" * 40)
+    assert out["ok"] is False and "shape" in out["error"]
+    (m.STATE_DIR).mkdir(parents=True, exist_ok=True); (m.STATE_DIR / "telegram.json").write_text('{"owner": 1}')
+    out = m._tg_set(None)
+    assert out == {"ok": True, "on": False} and not (m.STATE_DIR / "telegram.json").exists() and m.TG is None
+    assert m._tg_status()["on"] is False

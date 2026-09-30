@@ -1902,6 +1902,57 @@ TG_OWNER = os.environ.get("CC_TELEGRAM_OWNER", "").strip()
 # then travel different channels).
 TG_APPROVE = os.environ.get("CC_TELEGRAM_APPROVE", "1").strip() != "0"
 TG = cc_extras.Telegram(TG_TOKEN, STATE_DIR / "telegram.json", owner=TG_OWNER) if TG_TOKEN else None
+TG_INFO: dict = {"username": None, "error": None}
+TG_LOOP = {"thread": None}
+TG_TOKEN_RE = re.compile(r"^[0-9]{8,10}:[A-Za-z0-9_-]{35}$")
+
+
+def _tg_token_ok(token: str) -> bool:
+    return bool(TG_TOKEN_RE.match(token or ""))
+
+
+def _tg_set(token: str | None) -> dict:
+    """Connect the lane to a bot token typed into the page, or disconnect it (2026-09-30). The
+    token is stored the way the reasoner's key is (the env file, mode 600), Telegram is asked
+    who the bot is, and polling starts if it is not running. Disconnect forgets the token and
+    the pinned owner, so a new bot pins a new owner."""
+    global TG
+    if not token:
+        _env_file_unset("CC_TELEGRAM_TOKEN"); os.environ.pop("CC_TELEGRAM_TOKEN", None)
+        TG = None
+        TG_INFO.update(username=None, error=None)
+        try:
+            (STATE_DIR / "telegram.json").unlink()
+        except OSError:
+            pass
+        print("telegram lane disconnected by the owner", flush=True)
+        return {"ok": True, "on": False}
+    if not _tg_token_ok(token):
+        return {"ok": False, "error": "that is not the shape of a bot token (digits, a colon, 35 characters); copy it from @BotFather"}
+    cand = cc_extras.Telegram(token, STATE_DIR / "telegram.json", owner=TG_OWNER)
+    try:
+        me = cand.call("getMe")
+    except Exception as e:
+        code = getattr(e, "code", None)
+        return {"ok": False, "error": "Telegram does not know this token" if code in (401, 404) else f"Telegram did not answer ({type(e).__name__})"}
+    if not me.get("ok"):
+        return {"ok": False, "error": "Telegram rejected the token"}
+    try:
+        cand.call("deleteWebhook")   # an older webhook lane would block polling
+    except Exception:
+        pass
+    _env_file_set("CC_TELEGRAM_TOKEN", token); os.environ["CC_TELEGRAM_TOKEN"] = token
+    TG = cand
+    TG_INFO.update(username=(me.get("result") or {}).get("username"), error=None)
+    if not (TG_LOOP["thread"] and TG_LOOP["thread"].is_alive()):
+        TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
+    print(f"telegram lane connected by the owner (@{TG_INFO['username']})", flush=True)
+    return {"ok": True, "on": True, "username": TG_INFO["username"], "owner_pinned": TG.owner() is not None}
+
+
+def _tg_status() -> dict:
+    return {"on": TG is not None, "owner_pinned": (TG.owner() is not None) if TG else False,
+            "username": TG_INFO.get("username"), "approve_on_telegram": TG_APPROVE, "error": TG_INFO.get("error")}
 
 
 def _tg_send(chat_id, text: str, **extra) -> dict | None:
@@ -2026,10 +2077,14 @@ def _tg_handle(update: dict) -> None:
 
 
 def _tg_loop() -> None:
-    print(f"telegram lane on (owner {'pinned' if TG.owner() else 'the first chat that writes'})", flush=True)
+    print(f"telegram lane on (owner {'pinned' if TG and TG.owner() else 'the first chat that writes'})", flush=True)
     while True:
+        tg = TG
+        if tg is None:
+            time.sleep(5)
+            continue
         try:
-            for u in TG.poll():
+            for u in tg.poll():
                 try:
                     _tg_handle(u)
                 except Exception as e:
@@ -2045,6 +2100,7 @@ def _tg_loop() -> None:
                 why = "409: a webhook is still set for this bot; disconnecting it from the api's Integrations page frees it"
             elif code:
                 why = f"{code}"
+            TG_INFO["error"] = why
             print(f"telegram poll failed: {why}", flush=True)
             time.sleep(30 if code in (401, 404) else 10)
 
@@ -2171,6 +2227,8 @@ class Handler(BaseHTTPRequestHandler):
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
         elif route == "/system":
             self._send(200, _host_system())
+        elif route == "/telegram/status":
+            self._send(200, _tg_status())
         elif route == "/usage":
             # Cost and usage (2026-09-29): totals from the turn audit, never content.
             try:
@@ -2349,6 +2407,12 @@ class Handler(BaseHTTPRequestHandler):
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
+        if route == "/telegram/token":
+            self._send(200 if (out := _tg_set(str(req.get("token", "")).strip())).get("ok") else 400, out)
+            return
+        if route == "/telegram/disconnect":
+            self._send(200, _tg_set(None))
+            return
         if route == "/login/apikey":
             key = str(req.get("key", "")).strip()
             if not key.startswith("sk-ant-") or len(key) < 30:
@@ -2478,7 +2542,7 @@ def main() -> None:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
     if TG is not None:
-        threading.Thread(target=_tg_loop, daemon=True).start()
+        TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
     httpd.serve_forever()
