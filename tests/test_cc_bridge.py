@@ -336,3 +336,28 @@ def test_hook_runs_with_system_python_when_split(monkeypatch, tmp_path):
     monkeypatch.delenv("CC_HANDS_USER"); monkeypatch.delenv("CC_HANDS_HOME")
     m2 = _load(monkeypatch, tmp_path, with_key=False)
     assert m2.HOOK_PYTHON == sys.executable
+
+
+def test_threads_view_sorts_pinned_first_and_hides_archived(monkeypatch, tmp_path):
+    # 2026-09-30: the dropdown's shape. Pinned on top, then last activity descending; archived
+    # ones only on request, counted either way; rename caps at 80 and stays in the file.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m._threads_save([
+        {"claude": "c1", "brain": "b-old", "title": "older", "started": "2026-09-20T10:00:00Z", "last": "2026-09-20T10:00:00Z", "pinned": True},
+        {"claude": "c2", "brain": "b-new", "title": "newer", "started": "2026-09-29T10:00:00Z", "last": "2026-09-29T10:00:00Z"},
+        {"claude": "c3", "brain": "b-arch", "title": "gone", "started": "2026-09-30T10:00:00Z", "last": "2026-09-30T10:00:00Z", "archived": True},
+    ])
+    v = m._threads_view(archived=False)
+    assert [t["brain"] for t in v["threads"]] == ["b-old", "b-new"]
+    assert v["archived_count"] == 1
+    assert v["threads"][0]["pinned"] is True and v["threads"][1]["pinned"] is False
+    assert all(k in v["threads"][0] for k in ("running", "waiting", "archived"))
+    v2 = m._threads_view(archived=True)
+    assert [t["brain"] for t in v2["threads"]] == ["b-old", "b-arch", "b-new"]
+    th = m._threads_update("b-new", title=" x " * 60, pinned=True)
+    assert th["pinned"] is True and len(th["title"]) == 80
+    assert m._threads_update("nope", title="t") is None
+    v3 = m._threads_view()
+    assert [t["brain"] for t in v3["threads"]] == ["b-new", "b-old"]
+    assert m._threads_update("b-new", archived=True)["archived"] is True
+    assert m._threads_view()["archived_count"] == 2

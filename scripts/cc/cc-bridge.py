@@ -1166,7 +1166,7 @@ def _tutorial_counts() -> dict:
 
 
 # ---- the brain's own record of CC threads ----
-THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, last}]
+THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, last, pinned?, archived?}]
 
 
 def _threads_load() -> list:
@@ -1179,6 +1179,58 @@ def _threads_load() -> list:
 def _threads_save(items: list) -> None:
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     THREADS_FILE.write_text(json.dumps(items[-200:], indent=1))
+
+
+def _threads_view(archived: bool = False) -> dict:
+    """The list the threads dropdown shows (2026-09-30). Pinned first, then by last activity,
+    newest on top; archived ones only when asked for, with a count of them either way. The
+    running and waiting marks come from the runs in flight."""
+    items = [dict(x) for x in _threads_load()]
+    n_arch = sum(1 for x in items if x.get("archived"))
+    if not archived:
+        items = [x for x in items if not x.get("archived")]
+    items = _threads_order(items)[:60]
+    st = _load_state()
+    running = {r.thread: r.public() for r in _runs_active() if r.thread}
+    for th in items:
+        r = running.get(th.get("brain"))
+        th["running"] = bool(r)
+        th["run"] = (r or {}).get("run")
+        th["waiting"] = (r or {}).get("waiting", 0)
+        th["pinned"] = bool(th.get("pinned"))
+        th["archived"] = bool(th.get("archived"))
+    return {"threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
+            "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS}
+
+
+def _threads_order(items: list) -> list:
+    """Pinned first, then last activity descending (sort is stable, so the two passes compose)."""
+    by_last = sorted(items, key=lambda x: x.get("last") or x.get("started") or "", reverse=True)
+    return sorted(by_last, key=lambda x: not x.get("pinned"))
+
+
+def _threads_update(brain: str, title=None, pinned=None, archived=None) -> dict | None:
+    """Rename, pin or archive one thread (2026-09-30). Title up to 80 characters; the brain's own
+    chat session gets the new title too, best effort. Returns the entry, or None when unknown."""
+    threads = _threads_load()
+    th = next((x for x in threads if x.get("brain") == brain), None)
+    if not th:
+        return None
+    if title is not None:
+        t = " ".join(str(title).split())[:80]
+        if t:
+            th["title"] = t
+            _brain_api("PUT", f"/sessions/{brain}/title", {"title": t})
+    if pinned is not None:
+        th["pinned"] = bool(pinned)
+    if archived is not None:
+        th["archived"] = bool(archived)
+    _threads_save(threads)
+    st = _load_state()
+    if st.get("brain_session_id") == brain and title is not None and th.get("title"):
+        st["title"] = th["title"]
+        _save_state(st)
+    return dict(th)
 
 
 def _brain_api(method: str, path: str, body: dict | None = None):
@@ -2072,16 +2124,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         elif route == "/threads":
-            items = list(reversed(_threads_load()))[:30]
-            st = _load_state()
-            running = {r.thread: r.public() for r in _runs_active() if r.thread}
-            for th in items:
-                r = running.get(th.get("brain"))
-                th["running"] = bool(r)
-                th["run"] = (r or {}).get("run")
-                th["waiting"] = (r or {}).get("waiting", 0)
-            self._send(200, {"threads": items, "current": st.get("brain_session_id"),
-                             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS})
+            self._send(200, _threads_view(archived=self._query().get("archived") == "1"))
         elif route == "/live":
             # Watch a turn in flight (2026-09-28): the page that asked, another tab, the phone, or
             # a switch back to a thread that is still answering. Replays everything so far, then
@@ -2281,6 +2324,17 @@ class Handler(BaseHTTPRequestHandler):
                 _env_file_unset("CC_MODEL"); os.environ.pop("CC_MODEL", None)
             print(f"model set to {m or 'default'}", flush=True)
             self._send(200, {"ok": True, "model": m or None})
+            return
+        if route == "/threads/update":
+            want = str(req.get("brain", "")).strip()
+            if "title" in req and not isinstance(req.get("title"), str):
+                self._send(400, {"ok": False, "error": "title must be a string"})
+                return
+            th = _threads_update(want, title=req.get("title"), pinned=req.get("pinned"), archived=req.get("archived"))
+            if not th:
+                self._send(404, {"ok": False, "error": "no such thread"})
+                return
+            self._send(200, {"ok": True, "thread": th})
             return
         if route == "/threads/switch":
             want = str(req.get("brain", "")).strip()
