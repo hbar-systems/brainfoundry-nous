@@ -956,6 +956,120 @@ def _speak_stream(text: str):
             yield chunk
 
 
+# The voice spoke (2026-09-30). A second way to speak and to hear, at no cost per character:
+# two OpenAI-compatible servers the operator runs on a machine of the tailnet, Kokoro for
+# speech (CC_TTS_URL, for example http://100.84.44.71:8880/v1/audio/speech) and
+# faster-whisper for transcription (CC_STT_URL, for example
+# http://100.84.44.71:8000/v1/audio/transcriptions). CC_VOICE_BACKEND picks: "spoke",
+# "eleven", or "auto" (the default), which takes the spoke while its URL answers a HEAD
+# within two seconds (remembered thirty seconds, like spoke_up in api/providers.py) and
+# ElevenLabs otherwise, when its key is set. Speaking and hearing are decided apart, so a
+# box with only CC_TTS_URL speaks through the spoke and still hears through ElevenLabs.
+# Neither key nor URL reaches the browser; the page sees only /cc/health's voice_backend.
+TTS_URL = os.environ.get("CC_TTS_URL", "").strip()
+TTS_MODEL = os.environ.get("CC_TTS_MODEL", "kokoro").strip()
+TTS_VOICE = os.environ.get("CC_TTS_VOICE", "af_heart").strip()
+TTS_FORMAT = os.environ.get("CC_TTS_FORMAT", "mp3").strip().lower() or "mp3"
+STT_URL = os.environ.get("CC_STT_URL", "").strip()
+VOICE_BACKEND = os.environ.get("CC_VOICE_BACKEND", "auto").strip().lower() or "auto"
+VOICE_SPOKE_PROBE_SECONDS = float(os.environ.get("CC_VOICE_SPOKE_PROBE_SECONDS", "30"))
+_VOICE_SPOKE: dict = {}   # url -> {"at": when probed, "up": whether it answered}
+_TTS_MIME = {"mp3": "audio/mpeg", "wav": "audio/wav", "opus": "audio/ogg", "flac": "audio/flac", "aac": "audio/aac", "pcm": "audio/L16"}
+# The stock Kokoro voices /voices offers while the spoke speaks. Others the server knows are
+# taken by name when they have the same shape (two letters, underscore, a name).
+KOKORO_VOICES = ["af_heart", "af_bella", "af_nicole", "am_adam", "am_michael", "bf_emma", "bm_george", "bm_lewis"]
+_KOKORO_LABELS = {"af": "female, American", "am": "male, American", "bf": "female, British", "bm": "male, British"}
+_KOKORO_SHAPE = re.compile(r"^[a-z]{2}_[a-z0-9_]{1,40}$")
+
+
+def _spoke_answers(url: str, now: float | None = None, probe=None) -> bool:
+    """Does the voice spoke at `url` answer? A HEAD within two seconds; any HTTP status counts
+    (the route may not take HEAD), a refused or silent connection does not. Remembered for
+    VOICE_SPOKE_PROBE_SECONDS per url; `probe` is injectable for tests."""
+    if not url:
+        return False
+    now = time.time() if now is None else now
+    st = _VOICE_SPOKE.get(url)
+    if st and now - st["at"] < VOICE_SPOKE_PROBE_SECONDS:
+        return st["up"]
+    if probe is None:
+        def probe():
+            import urllib.error
+            import urllib.request
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=2):
+                    return True
+            except urllib.error.HTTPError:
+                return True
+    try:
+        up = bool(probe())
+    except Exception:  # noqa: BLE001
+        up = False
+    if st is None or up != st["up"]:
+        print(f"[voice spoke] {url} {'answers' if up else 'not answering'}", flush=True)
+    _VOICE_SPOKE[url] = {"at": now, "up": up}
+    return up
+
+
+def _voice_backend(kind: str = "tts"):
+    """Which backend speaks ("tts") or hears ("stt") right now: "spoke", "eleven" or None."""
+    url = TTS_URL if kind == "tts" else STT_URL
+    if VOICE_BACKEND == "spoke":
+        return "spoke" if url else None
+    if VOICE_BACKEND == "eleven":
+        return "eleven" if ELEVEN_KEY else None
+    if url and _spoke_answers(url):
+        return "spoke"
+    return "eleven" if ELEVEN_KEY else None
+
+
+def _voice_current_name():
+    """The voice's name for the footer: the Kokoro voice while the spoke speaks, the
+    ElevenLabs voice while that does, None when nothing speaks."""
+    b = _voice_backend("tts")
+    return TTS_VOICE if b == "spoke" else (_voice_name(VOICE_ID) if b == "eleven" else None)
+
+
+def _spoke_voices() -> list:
+    """The fixed Kokoro list in the shape /voices gives for ElevenLabs, so the page draws it the same."""
+    return [{"id": v, "name": v, "category": "kokoro", "labels": _KOKORO_LABELS.get(v[:2], "")} for v in KOKORO_VOICES]
+
+
+def _tts_mime(backend) -> str:
+    """The Content-Type /speak streams: mp3 from ElevenLabs, CC_TTS_FORMAT from the spoke."""
+    return _TTS_MIME.get(TTS_FORMAT, "application/octet-stream") if backend == "spoke" else "audio/mpeg"
+
+
+def _speak_stream_spoke(text: str):
+    """Yield audio bytes from the voice spoke for `text`: POST {model, input, voice,
+    response_format} to CC_TTS_URL, the OpenAI speech shape. Raises on any error."""
+    import urllib.request
+    body = json.dumps({"model": TTS_MODEL, "input": text, "voice": TTS_VOICE, "response_format": TTS_FORMAT}).encode()
+    req = urllib.request.Request(TTS_URL, data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "Accept": _tts_mime("spoke")})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        while True:
+            chunk = r.read(16384)
+            if not chunk:
+                break
+            yield chunk
+
+
+def _tts_stream(text: str, backend=None):
+    """Audio for `text` as chunks from `backend`, or from whichever speaks now. Raises when none does."""
+    b = backend or _voice_backend("tts")
+    if b == "spoke":
+        return _speak_stream_spoke(text)
+    if b == "eleven":
+        return _speak_stream(text)
+    raise RuntimeError("no voice backend")
+
+
+def _tts_bytes(text: str) -> bytes:
+    """The whole clip for `text` from the backend that speaks now."""
+    return b"".join(_tts_stream(text))
+
+
 # Talking to the brain (2026-09-27). Browsers with SpeechRecognition (Chrome, Safari on iOS)
 # turn speech into text on their own and the bridge never hears it. The others (Firefox)
 # record a clip with MediaRecorder and post it here: POST /transcribe, multipart with one
@@ -963,7 +1077,10 @@ def _speak_stream(text: str):
 # speech-to-text with the same key the voice uses, so the key stays on the box, and answers
 # {"text": ...}. The clip is not written to disk.
 TRANSCRIBE_MAX = int(os.environ.get("CC_TRANSCRIBE_MAX", str(10 * 1024 * 1024)))
-STT_MODEL = os.environ.get("CC_STT_MODEL", "scribe_v1").strip()
+# Since 2026-09-30 CC_STT_MODEL names the spoke's model (it was never documented for
+# ElevenLabs, which has one scribe model); the ElevenLabs one is CC_ELEVEN_STT_MODEL.
+STT_MODEL = os.environ.get("CC_STT_MODEL", "Systran/faster-whisper-small").strip()
+ELEVEN_STT_MODEL = os.environ.get("CC_ELEVEN_STT_MODEL", "scribe_v1").strip()
 
 
 def _multipart_encode(fields: dict, file_field: str, filename: str, data: bytes, mime: str,
@@ -1005,11 +1122,21 @@ def _multipart_first_file(ctype: str, raw: bytes):
 
 
 def _transcribe(data: bytes, filename: str, mime: str) -> str:
-    """The clip's words from ElevenLabs speech-to-text. Raises on any error."""
+    """The clip's words from whichever backend hears now: the spoke (multipart `file` and
+    `model` to CC_STT_URL, the OpenAI transcription shape, JSON with `text`) or ElevenLabs
+    speech-to-text. Raises on any error, and when nothing hears."""
     import urllib.request
-    body, ctype = _multipart_encode({"model_id": STT_MODEL}, "file", filename, data, mime)
-    req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST",
-                                 headers={"xi-api-key": ELEVEN_KEY, "Content-Type": ctype, "Accept": "application/json"})
+    b = _voice_backend("stt")
+    if b == "spoke":
+        body, ctype = _multipart_encode({"model": STT_MODEL}, "file", filename, data, mime)
+        req = urllib.request.Request(STT_URL, data=body, method="POST",
+                                     headers={"Content-Type": ctype, "Accept": "application/json"})
+    elif b == "eleven":
+        body, ctype = _multipart_encode({"model_id": ELEVEN_STT_MODEL}, "file", filename, data, mime)
+        req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST",
+                                     headers={"xi-api-key": ELEVEN_KEY, "Content-Type": ctype, "Accept": "application/json"})
+    else:
+        raise RuntimeError("no transcription backend")
     with urllib.request.urlopen(req, timeout=90) as r:
         d = json.loads(r.read() or b"{}")
     return str(d.get("text") or "").strip()
@@ -2034,8 +2161,8 @@ def _tg_handle(update: dict) -> None:
         try:
             data, name = TG.download(ev["file_id"], ev.get("file_name") or "")
             if ev.get("is_voice"):
-                if not ELEVEN_KEY:
-                    TG.call("sendMessage", chat_id=chat_id, text="voice notes need ELEVENLABS_API_KEY in the bridge env"); return
+                if _voice_backend("stt") is None:
+                    TG.call("sendMessage", chat_id=chat_id, text="voice notes need CC_STT_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env"); return
                 text = (text + " " if text else "") + _transcribe(data, name or "voice.ogg", ev.get("mime") or "audio/ogg").strip()
                 TG.call("sendMessage", chat_id=chat_id, text=f"heard: {text}")
             else:
@@ -2165,7 +2292,8 @@ class Handler(BaseHTTPRequestHandler):
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
                              "judge": bool(TYPESAFE_KEY),
-                             "voice": bool(ELEVEN_KEY), "voice_name": _voice_name(VOICE_ID) if ELEVEN_KEY else None,
+                             "voice": _voice_backend("tts") is not None, "voice_backend": _voice_backend("tts"),
+                             "voice_name": _voice_current_name(), "transcribe_backend": _voice_backend("stt"),
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
                              "telegram": (TG.owner() is not None) if TG is not None else None,
                              "cards_waiting": _cards_waiting(), "turn_running": bool(_runs_active()),
@@ -2241,7 +2369,10 @@ class Handler(BaseHTTPRequestHandler):
                     titles[str(th["brain"])[:8]] = th.get("title")
             self._send(200, cc_extras.usage_summary(lines, titles=titles))
         elif route == "/voices":
-            self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL})
+            if _voice_backend("tts") == "spoke":
+                self._send(200, {"voices": _spoke_voices(), "current": TTS_VOICE, "current_name": TTS_VOICE, "model": TTS_MODEL, "backend": "spoke"})
+            else:
+                self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL, "backend": "eleven" if ELEVEN_KEY else None})
         elif route == "/guide":
             md = _guide_markdown()
             self._send(200 if md else 404, {"markdown": md, "path": str(GUIDE_FILE)})
@@ -2278,8 +2409,8 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/transcribe":
             # A recorded clip from a browser without speech recognition (2026-09-27).
             n = int(self.headers.get("Content-Length") or 0)
-            if not ELEVEN_KEY:
-                self._send(409, {"ok": False, "error": "transcription needs ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
+            if _voice_backend("stt") is None:
+                self._send(409, {"ok": False, "error": "transcription needs CC_STT_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
                 return
             if n <= 0 or n > TRANSCRIBE_MAX:
                 self._send(413 if n > TRANSCRIBE_MAX else 400, {"ok": False, "error": f"the clip must be between 1 byte and {TRANSCRIBE_MAX // (1024 * 1024)} MB"})
@@ -2308,8 +2439,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
             return
         if route == "/speak":
-            if not ELEVEN_KEY:
-                self._send(409, {"ok": False, "error": "voice needs ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
+            backend = _voice_backend("tts")
+            if backend is None:
+                self._send(409, {"ok": False, "error": "voice needs CC_TTS_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
                 return
             text = _speakable(str(req.get("text") or ""))
             parts = _speak_parts(text)
@@ -2321,14 +2453,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": f"part {part} of {len(parts)}"})
                 return
             try:
-                gen = _speak_stream(parts[part])
+                gen = _tts_stream(parts[part], backend)
                 first = next(gen, b"")
             except Exception as e:  # noqa: BLE001
-                print(f"speak failed: {type(e).__name__}", flush=True)
+                print(f"speak failed ({backend}): {type(e).__name__}", flush=True)
                 self._send(502, {"ok": False, "error": f"the voice service did not answer ({type(e).__name__})"})
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Type", _tts_mime(backend))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Speak-Parts", str(len(parts)))
             self.end_headers()
@@ -2340,12 +2472,27 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
         if route == "/voice":
-            # Choose the voice by name from the owner's ElevenLabs account; remembered in the env file.
-            global VOICE_ID
-            if not ELEVEN_KEY:
-                self._send(409, {"ok": False, "error": "voice needs ELEVENLABS_API_KEY in the bridge env"})
+            # Choose the voice by name: a Kokoro voice while the spoke speaks (CC_TTS_VOICE),
+            # else one from the owner's ElevenLabs account (CC_VOICE_ID); remembered in the env file.
+            global VOICE_ID, TTS_VOICE
+            backend = _voice_backend("tts")
+            if backend is None:
+                self._send(409, {"ok": False, "error": "voice needs CC_TTS_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env"})
                 return
             want = str(req.get("voice") or "").strip().lower()
+            if backend == "spoke":
+                match = [v for v in KOKORO_VOICES if v == want] or [v for v in KOKORO_VOICES if want and want in v]
+                if len(match) > 1:
+                    self._send(409, {"ok": False, "error": "several voices match: " + ", ".join(match)})
+                    return
+                if not match and not _KOKORO_SHAPE.match(want):
+                    self._send(404, {"ok": False, "error": "no voice called " + want + "; the stock ones are " + ", ".join(KOKORO_VOICES)})
+                    return
+                TTS_VOICE = match[0] if match else want
+                _env_file_set("CC_TTS_VOICE", TTS_VOICE); os.environ["CC_TTS_VOICE"] = TTS_VOICE
+                print(f"voice set to {TTS_VOICE} (spoke)", flush=True)
+                self._send(200, {"ok": True, "voice": TTS_VOICE, "id": TTS_VOICE})
+                return
             match = [v for v in _voices() if (v.get("name") or "").lower() == want or v.get("id") == want]
             if not match:
                 match = [v for v in _voices() if want and want in (v.get("name") or "").lower()]

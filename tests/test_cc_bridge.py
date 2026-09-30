@@ -374,3 +374,82 @@ def test_telegram_token_shape_and_disconnect(monkeypatch, tmp_path):
     out = m._tg_set(None)
     assert out == {"ok": True, "on": False} and not (m.STATE_DIR / "telegram.json").exists() and m.TG is None
     assert m._tg_status()["on"] is False
+
+
+class _FakeResponse:
+    """What urllib.request.urlopen hands back, enough for `with ... as r: r.read(n)`."""
+
+    def __init__(self, data: bytes):
+        self._data, self._at = data, 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            out, self._at = self._data[self._at:], len(self._data)
+            return out
+        out = self._data[self._at:self._at + n]
+        self._at += len(out)
+        return out
+
+
+def test_tts_bytes_uses_the_spoke_when_its_url_is_set(monkeypatch, tmp_path):
+    # The voice spoke (2026-09-30): CC_TTS_URL set, no ElevenLabs key. The one fake urlopen
+    # serves the HEAD probe and the POST; the POST body must carry the OpenAI speech shape.
+    import urllib.request
+    monkeypatch.setenv("CC_TTS_URL", "http://100.84.44.71:8880/v1/audio/speech")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("CC_VOICE_BACKEND", raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    seen = []
+
+    def fake_urlopen(req, timeout=None):
+        seen.append((req.get_method(), req.full_url, req.data, timeout))
+        return _FakeResponse(b"ID3fake-mp3-bytes" if req.get_method() == "POST" else b"")
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert m._voice_backend() == "spoke"
+    assert m._tts_bytes("hello") == b"ID3fake-mp3-bytes"
+    posts = [x for x in seen if x[0] == "POST"]
+    assert len(posts) == 1 and posts[0][1] == "http://100.84.44.71:8880/v1/audio/speech"
+    import json
+    body = json.loads(posts[0][2])
+    assert body == {"model": "kokoro", "input": "hello", "voice": "af_heart", "response_format": "mp3"}
+    assert seen[0][0] == "HEAD" and seen[0][3] == 2
+    assert m._tts_mime("spoke") == "audio/mpeg"
+    assert m._voice_current_name() == "af_heart"
+
+
+def test_voice_backend_is_null_without_url_or_key(monkeypatch, tmp_path):
+    for k in ("CC_TTS_URL", "CC_STT_URL", "ELEVENLABS_API_KEY", "CC_VOICE_BACKEND"):
+        monkeypatch.delenv(k, raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._voice_backend() is None
+    assert m._voice_backend("stt") is None
+    assert m._voice_current_name() is None
+    import pytest
+    with pytest.raises(RuntimeError):
+        m._tts_bytes("hello")
+
+
+def test_voice_backend_falls_back_to_eleven_when_the_spoke_is_silent(monkeypatch, tmp_path):
+    monkeypatch.setenv("CC_TTS_URL", "http://100.84.44.71:8880/v1/audio/speech")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret-a")
+    monkeypatch.delenv("CC_VOICE_BACKEND", raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    import time as _time
+    import types
+    clock = [1000.0]
+    fake = types.SimpleNamespace(**{k: getattr(_time, k) for k in dir(_time) if not k.startswith("_")})
+    fake.time = lambda: clock[0]
+    monkeypatch.setattr(m, "time", fake)
+    assert m._spoke_answers(m.TTS_URL, probe=lambda: (_ for _ in ()).throw(OSError("refused"))) is False
+    assert m._voice_backend() == "eleven"          # the answer is remembered thirty seconds
+    clock[0] = 1010.0
+    assert m._spoke_answers(m.TTS_URL, probe=lambda: True) is False
+    clock[0] = 1031.0
+    assert m._spoke_answers(m.TTS_URL, probe=lambda: True) is True
+    assert m._voice_backend() == "spoke"
