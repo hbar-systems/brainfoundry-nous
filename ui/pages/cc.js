@@ -474,6 +474,23 @@ export default function CC() {
   const [width, setWidth] = useState('860px')
   useEffect(() => { try { const w = localStorage.getItem('cc.width'); if (w && WIDTHS.includes(w)) setWidth(w) } catch {} }, [])
   const cycleWidth = () => { const w = WIDTHS[(WIDTHS.indexOf(width) + 1) % WIDTHS.length]; setWidth(w); try { localStorage.setItem('cc.width', w) } catch {} }
+  // The font of the conversation (2026-09-30): the Chat tab's six fonts, offered under "details";
+  // each row of the picker is drawn in its own font, so the choice is seen before it is made.
+  // Kept in this browser under cc.font; the default stays the theme's display font.
+  const FONTS = [
+    { value: 'system', label: 'System sans', family: 'system-ui, -apple-system, sans-serif' },
+    { value: 'inter', label: 'Inter', family: '"Inter", system-ui, sans-serif' },
+    { value: 'lora', label: 'Lora', family: 'Lora, Georgia, serif' },
+    { value: 'crimson', label: 'Crimson Pro', family: '"Crimson Pro", Georgia, serif' },
+    { value: 'dm-mono', label: 'DM Mono', family: '"DM Mono", ui-monospace, monospace' },
+    { value: 'jetbrains', label: 'JetBrains Mono', family: '"JetBrains Mono", ui-monospace, monospace' },
+  ]
+  const [font, setFont] = useState('')
+  const [showFonts, setShowFonts] = useState(false)
+  useEffect(() => { try { const f = localStorage.getItem('cc.font'); if (f && FONTS.some(x => x.value === f)) setFont(f) } catch {} }, [])
+  const setFontSaved = (v) => { setFont(v); setShowFonts(false); try { if (v) localStorage.setItem('cc.font', v); else localStorage.removeItem('cc.font') } catch {} }
+  const fontPick = FONTS.find(x => x.value === font)
+  const fontFamily = fontPick ? fontPick.family : 'var(--font-display, serif)'
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
   const [sysWarn, setSysWarn] = useState([])
@@ -1167,7 +1184,7 @@ export default function CC() {
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
       <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
-                    fontFamily: 'var(--font-display, serif)', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
+                    fontFamily, display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div>
@@ -1384,11 +1401,18 @@ export default function CC() {
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           <span><a onClick={() => setShowDetails(s => !s)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showDetails ? 'less' : 'details'}</a></span>
+          {showDetails ? <span><a onClick={() => setShowFonts(s => !s)} title="the font of the conversation" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>font{fontPick ? `: ${fontPick.label}` : ''}</a></span> : null}
           {!pane ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
         {showTools && health && health.tools && (
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0', lineHeight: 1.6, wordBreak: 'break-word', maxHeight: '84px', overflowY: 'auto' }}>{health.tools.split(',').join('  ')}</p>
+        )}
+        {showDetails && showFonts && (
+          <p style={{ color: C.faint, fontSize: '12px', margin: '6px 0 0 0', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <a onClick={() => setFontSaved('')} style={{ color: !fontPick ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font-display, serif)' }}>default</a>
+            {FONTS.map(f => <a key={f.value} onClick={() => setFontSaved(f.value)} style={{ color: font === f.value ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline', fontFamily: f.family }}>{f.label}</a>)}
+          </p>
         )}
         {showAuto && auto.length > 0 && (
           <ul style={{ ...mono, listStyle: 'none', padding: '8px 0 0 0', margin: 0, color: C.dim, fontSize: '11px' }}>
