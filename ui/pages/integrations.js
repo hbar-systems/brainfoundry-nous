@@ -313,6 +313,16 @@ function TelegramCard() {
 
   const load = () => api('/integrations/telegram/status').then(setStatus).catch(e => setErr(e.message))
   useEffect(() => { load() }, [])
+  // The bridge's own Telegram lane (2026-09-30): since 2026-09-29 GET /cc/health reports it as
+  // telegram: null (no token), false (on, waiting for the first message), true (on, owner pinned).
+  // Fail-soft: when the bridge does not answer, the card behaves as before.
+  const [lane, setLane] = useState(null)
+  useEffect(() => {
+    fetch('/cc/health', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && typeof d.telegram === 'boolean') setLane(d.telegram) })
+      .catch(() => {})
+  }, [])
 
   const connect = async () => {
     setBusy(true); setErr(null)
@@ -347,6 +357,18 @@ function TelegramCard() {
         </div>
         {connected && <button onClick={disconnect} disabled={busy} style={btnGhost}>Disconnect</button>}
       </div>
+
+      {lane !== null && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814', fontSize: 12.5, lineHeight: 1.6 }}>
+          <div style={{ color: '#1f9d55' }}>
+            The bridge's Telegram lane is on: your bot talks to the reasoner ({lane ? 'owner pinned' : 'waiting for the first message'}).
+          </div>
+          <div style={{ color: '#6b5f52', fontSize: 12, marginTop: 4 }}>
+            This older lane below answers read-only from memory; leave it unconnected unless you want both.
+            The bridge's token is set on the box with <code style={{ color: '#9a8c7a' }}>scripts/cc/set-env.sh CC_TELEGRAM_TOKEN</code>.
+          </div>
+        </div>
+      )}
 
       {!connected && (
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #1c1814' }}>
