@@ -498,6 +498,14 @@ export default function CC() {
   const [firstRun, setFirstRun] = useState(null) // first-use steps from the api, until complete
   const [threads, setThreads] = useState([])       // CC threads the brain remembers
   const [showThreads, setShowThreads] = useState(false)
+  // The shape of threads (2026-09-30): pinned on top, then day groups; rename, pin, archive on
+  // each row; archived ones hidden until "show". `renaming` is the brain id whose title is an
+  // input right now ('header' for the line under the page title).
+  const [archivedCount, setArchivedCount] = useState(0)
+  const [showArchived, setShowArchived] = useState(false)
+  const showArchivedRef = useRef(false)
+  const [renaming, setRenaming] = useState(null)
+  const [renameVal, setRenameVal] = useState('')
   const endRef = useRef(null)
   const boxRef = useRef(null)
   const freshRef = useRef(false)   // the next message must start a new thread, whatever happened to /cc/new
@@ -609,7 +617,38 @@ export default function CC() {
       .catch(() => {})
   }
   const loadThreads = () =>
-    fetch('/cc/threads', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setThreads(d.threads || []) }).catch(() => {})
+    fetch('/cc/threads' + (showArchivedRef.current ? '?archived=1' : ''), { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d) { setThreads(d.threads || []); setArchivedCount(d.archived_count || 0) } }).catch(() => {})
+  const toggleArchived = () => { showArchivedRef.current = !showArchivedRef.current; setShowArchived(showArchivedRef.current); loadThreads() }
+  // rename, pin, unpin, archive, unarchive: one call, then the list is read again (2026-09-30)
+  async function updateThread(brain, patch) {
+    try {
+      await fetch('/cc/threads/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain, ...patch }) })
+    } catch {}
+    loadThreads()
+  }
+  const startRename = (key, current) => { setRenaming(key); setRenameVal(current || '') }
+  const finishRename = (brain) => { const t = renameVal.trim(); setRenaming(null); if (t) updateThread(brain, { title: t }) }
+  const curThread = threads.find(t => t.brain === cur) || null
+  // day groups for the dropdown: pinned first, then today, yesterday, then the date
+  const dayLabel = (ts) => {
+    if (!ts) return 'earlier'
+    const d = new Date(ts); if (isNaN(d)) return 'earlier'
+    const k = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`
+    const now = new Date(); const y = new Date(now); y.setDate(now.getDate() - 1)
+    const key = k(d)
+    return key === k(now) ? 'today' : key === k(y) ? 'yesterday' : key
+  }
+  const clock = (ts) => { try { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
+  const threadGroups = (() => {
+    const groups = []; const at = {}
+    for (const th of threads) {
+      const label = th.pinned ? 'pinned' : dayLabel(th.last || th.started)
+      if (!(label in at)) { at[label] = groups.length; groups.push({ label, items: [] }) }
+      groups[at[label]].items.push(th)
+    }
+    return groups
+  })()
   useEffect(() => {
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
@@ -1175,9 +1214,20 @@ export default function CC() {
               cc · reasoning from inside the brain
             </p>
             <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
+            {curThread && (
+              <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '4px 0 0 0', display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                {renaming === 'header'
+                  ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
+                           onKeyDown={e => { if (e.key === 'Enter') finishRename(curThread.brain); else if (e.key === 'Escape') setRenaming(null) }}
+                           onBlur={() => setRenaming(null)}
+                           style={{ ...mono, fontSize: '11px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', minWidth: '240px' }} />
+                  : <span style={{ color: C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60vw' }}>{curThread.title || 'untitled'}</span>}
+                {renaming !== 'header' && <a onClick={() => startRename('header', curThread.title)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', fontSize: '10px' }}>rename</a>}
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
-            {threads.length > 0 && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
+            {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={() => {
               const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
@@ -1187,14 +1237,40 @@ export default function CC() {
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
-                {threads.map(th => (
-                  <a key={th.brain} onClick={() => switchThread(th)}
-                     style={{ display: 'block', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', textDecoration: 'none',
-                              color: cur === th.brain ? C.ink : C.dim, fontSize: '13px', lineHeight: 1.4 }}>
-                    {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
-                    <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{(th.last || th.started || '').slice(0, 10)}</span>
-                  </a>
+                {threadGroups.map(g => (
+                  <div key={g.label}>
+                    <p style={{ ...mono, color: C.faint, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', margin: '6px 10px 2px' }}>{g.label}</p>
+                    {g.items.map(th => {
+                      const act = { ...mono, color: C.faint, fontSize: '10px', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
+                      return (
+                        <div key={th.brain} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 10px', borderRadius: '6px' }}>
+                          {renaming === th.brain
+                            ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
+                                     onKeyDown={e => { if (e.key === 'Enter') finishRename(th.brain); else if (e.key === 'Escape') setRenaming(null) }}
+                                     onBlur={() => setRenaming(null)} onClick={e => e.stopPropagation()}
+                                     style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
+                            : <a onClick={() => switchThread(th)}
+                                 style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4 }}>
+                                {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
+                                <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
+                              </a>}
+                          {renaming !== th.brain && (
+                            <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                              <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
+                              <a onClick={() => updateThread(th.brain, { pinned: !th.pinned })} style={act}>{th.pinned ? 'unpin' : 'pin'}</a>
+                              <a onClick={() => updateThread(th.brain, { archived: !th.archived })} style={act}>{th.archived ? 'unarchive' : 'archive'}</a>
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 ))}
+                {(archivedCount > 0 || showArchived) && (
+                  <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '8px 10px 4px', borderTop: `1px solid ${C.line}`, paddingTop: '8px' }}>
+                    {archivedCount} archived · <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showArchived ? 'hide' : 'show'}</a>
+                  </p>
+                )}
               </div>
             )}
           </div>

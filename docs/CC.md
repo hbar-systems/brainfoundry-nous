@@ -37,6 +37,8 @@ Several conversations at once (2026-09-28): each thread answers on its own, up t
 
 Remarks in the margin (2026-09-28): select words in one of the brain's messages and a gold "remark" button appears; it opens a note beside that message (below it on a narrow screen) with the quoted span and a box for your remark. Make as many as you like across messages; they wait, even across a reload, per thread in your browser. The composer says how many go with your next message, and Send delivers your line plus a block the reasoner reads: which message, the exact span, your remark. Send with an empty composer sends the remarks alone. The conversation's width is yours too: "narrow / wide / full width" in the footer.
 
+The shape of threads (2026-09-30): the list is grouped by day (today, yesterday, then the date), with pinned threads in their own group on top. Each row has three small links: "rename" (an inline box; Enter saves, Escape cancels; up to 80 characters, and the brain's own chat session takes the new name too), "pin" or "unpin", and "archive". Archived threads leave the list; a footer line "N archived · show" brings them back with "unarchive" on each. The current thread's name sits under "Talk to your brain" with its own "rename". The bridge keeps all of this in `threads.json` (`POST /cc/threads/update` with `brain` and any of `title`, `pinned`, `archived`; `GET /cc/threads?archived=1` includes the archived ones). Nothing is deleted: archive hides, it does not remove the brain's record.
+
 If step 4 fails, the old way still works: the terminal at `https://console.<your brain>/claude/` runs the same CLI; `claude auth login` there does the same thing.
 
 ## What it can and cannot do
