@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -338,7 +338,7 @@ function SignIn({ onDone, health, onOpenPane }) {
   )
 }
 
-export default function CC() {
+function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])            // attachments chosen for the next message
@@ -1506,3 +1506,38 @@ export default function CC() {
     </>
   )
 }
+
+
+// A crash inside the page shows its reason here, with a reload and a copy, instead of Next's blank
+// "Application error" (2026-10-01: a client-side exception under "details" in Firefox could not be
+// read from the box). The error text is also logged to the bridge's audit through /cc/client-error.
+class CCBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null, info: null } }
+  static getDerivedStateFromError(err) { return { err } }
+  componentDidCatch(err, info) {
+    this.setState({ info })
+    try {
+      fetch('/cc/client-error', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: String(err && err.message || err), stack: String(err && err.stack || '').slice(0, 4000), component: String(info && info.componentStack || '').slice(0, 2000), ua: navigator.userAgent }) }).catch(() => {})
+    } catch {}
+  }
+  render() {
+    if (!this.state.err) return this.props.children
+    const text = `${String(this.state.err && this.state.err.message || this.state.err)}\n\n${String(this.state.err && this.state.err.stack || '')}\n${String(this.state.info && this.state.info.componentStack || '')}`
+    return (
+      <div style={{ padding: '40px 32px', color: '#e8e0d5', fontFamily: 'var(--font-display, serif)', maxWidth: '860px', margin: '0 auto' }}>
+        <p style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#c9a96e', margin: '0 0 10px 0' }}>CC · the page hit an error</p>
+        <p style={{ fontSize: '14px', lineHeight: 1.6, margin: '0 0 12px 0' }}>{String(this.state.err && this.state.err.message || this.state.err)}</p>
+        <p style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: '12px', margin: '0 0 16px 0' }}>
+          <a onClick={() => window.location.reload()} style={{ color: '#c9a96e', cursor: 'pointer', textDecoration: 'underline' }}>reload</a>
+          {'  '}<a onClick={() => { try { navigator.clipboard.writeText(text) } catch {} }} style={{ color: '#9a8f82', cursor: 'pointer', textDecoration: 'underline' }}>copy the error</a>
+          {'  '}<a onClick={() => { try { localStorage.removeItem('cc.font'); localStorage.removeItem('cc.width') } catch {}; window.location.reload() }} style={{ color: '#9a8f82', cursor: 'pointer', textDecoration: 'underline' }}>reset the page's saved choices and reload</a>
+        </p>
+        <pre style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: '11px', color: '#6b5f52', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text.slice(0, 3000)}</pre>
+        <p style={{ fontSize: '12px', color: '#6b5f52' }}>The error is recorded on the box; the operator's seat reads it from there.</p>
+      </div>
+    )
+  }
+}
+
+export default function CCPage() { return <CCBoundary><CC /></CCBoundary> }

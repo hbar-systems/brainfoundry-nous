@@ -2554,6 +2554,18 @@ class Handler(BaseHTTPRequestHandler):
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
+        if route == "/client-error":
+            # the page's error boundary reports a crash (2026-10-01); kept in the state dir, never content of a turn
+            try:
+                STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with (STATE_DIR / "client-errors.jsonl").open("a") as f:
+                    f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "message": str(req.get("message", ""))[:500],
+                                        "stack": str(req.get("stack", ""))[:4000], "component": str(req.get("component", ""))[:2000], "ua": str(req.get("ua", ""))[:200]}) + "\n")
+                print(f"client error reported: {str(req.get('message', ''))[:160]}", flush=True)
+            except Exception:
+                pass
+            self._send(200, {"ok": True})
+            return
         if route == "/telegram/token":
             self._send(200 if (out := _tg_set(str(req.get("token", "")).strip())).get("ok") else 400, out)
             return
