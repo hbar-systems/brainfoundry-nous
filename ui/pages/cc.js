@@ -508,6 +508,7 @@ function CC() {
   const queueRef = useRef(null)                    // one message typed while a turn runs
   const sendRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
+  const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
   const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
   const [showAuto, setShowAuto] = useState(false)
