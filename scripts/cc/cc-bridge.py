@@ -119,6 +119,7 @@ ONE_ENABLED = bool(os.environ.get("ONE_SECRET"))
 # limited to the verbs in /etc/sudoers.d/cc-bridge. Off when the bridge user has sudo.
 BOX_ENABLED = os.environ.get("CC_BOX", "").strip() == "1"
 HOOK_SCRIPT = Path(__file__).resolve().parent / "cc-permit-hook.py"
+POST_HOOK_SCRIPT = Path(__file__).resolve().parent / "cc-post-hook.py"
 ASK_TOKEN = os.environ.setdefault("CC_ASK_TOKEN", __import__("secrets").token_hex(16))
 if ONE_ENABLED:
     SYSTEM += (
@@ -379,6 +380,9 @@ if BOX_ENABLED:
         ". 'Your home' means yours; 'my home' means theirs. The person chooses a posture: 'cards' (every edit "
         "and command asks), 'auto' (ordinary edits and commands run; sudo and connected-app writes still ask), or 'judged' "
         "(a small typed-judgment model scores each action; harmless ones run with the score shown, the rest ask). "
+        "Carry a task through to its end in one turn: do not stop after a few steps to report progress or to ask whether to "
+        "continue; each card the person allows is their yes to the whole task. Stop only when it is done, or when you truly "
+        "need something only the person has (a decision, a device, a password), and then say exactly what. "
         "Report briefly: what you did and what you found, "
         "a line each, no preamble; inline code only for names and paths."
     )
@@ -1213,7 +1217,11 @@ def _hook_settings() -> str:
     """Claude Code settings JSON for this turn: the permission hook, with a timeout that
     outlives the permit; in the auto posture also the ask rules that keep sudo on a card."""
     s = {"hooks": {"PermissionRequest": [{"hooks": [
-        {"type": "command", "command": f"{HOOK_PYTHON} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}]}}
+        {"type": "command", "command": f"{HOOK_PYTHON} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}],
+        # after every write the file is opened to the group, so the bridge (another user after the
+        # split) can show it in the Files pane (2026-10-01)
+        "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [
+        {"type": "command", "command": f"{HOOK_PYTHON} {POST_HOOK_SCRIPT}", "timeout": 10}]}]}}
     if _posture_current() == "auto":
         s["permissions"] = {"ask": ASK_ALWAYS}
     return json.dumps(s)
@@ -1734,14 +1742,20 @@ def _tool_brief(name: str, inp: dict) -> str:
     return name
 
 
-def _stream_turn(cmd: list[str], on_event, run: Run | None = None) -> tuple[dict | None, str, int]:
+def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str = "") -> tuple[dict | None, str, int]:
     """Run the reasoner with stream-json output, forwarding events as they arrive.
     Returns (result_event, stderr_tail, returncode). The run (when given) learns the
     reasoner's session id from the init event, so the permission hook finds its cards."""
     run = run or Run(None, "")
     cmd = cmd + ["--verbose", "--include-partial-messages"]
     cmd[cmd.index("json")] = "stream-json"
-    proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # The prompt goes in through stdin, never as an argument: sudo writes every argument of the
+    # reasoner's command line into the system journal, memory excerpts included (hbar 2026-10-01).
+    proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        proc.stdin.write(prompt); proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
     last = [time.time()]
     in_tool = [False]   # a tool call was issued and no event has followed yet: the reasoner is working, not stuck
     stop = threading.Event()
@@ -1812,7 +1826,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
     prompt, used = _compose(message)
     print(f"memory chunks={used}", flush=True)
     tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
-    cmd = [REASONER, "-p", prompt, "--output-format", "json",
+    cmd = [REASONER, "-p", "--output-format", "json",
            "--allowedTools", *tools, "--append-system-prompt", SYSTEM,
            # No MCP servers from the user's own Claude Code config: the account's
            # Claude.ai connectors (Gmail, Calendar, Drive) otherwise sit in the tool
@@ -1843,7 +1857,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             on_event(kind, payload)
         if run is not None:
             run.claude_sid = session_id
-        data, stderr, rc = _stream_turn(cmd, _fwd, run=run)
+        data, stderr, rc = _stream_turn(cmd, _fwd, run=run, prompt=prompt)
         if data is None and rc == -9:
             return f"The reasoner went silent for over {TIMEOUT_S // 60} minutes outside a tool call, or a tool ran past {TOOL_TIMEOUT_S // 60} minutes, and was stopped. The work it committed so far stands; ask it to continue.", session_id, True
         out = json.dumps(data) if data else ""
@@ -1861,7 +1875,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             return f"The reasoner could not answer this turn: {err}", session_id, True
     else:
         try:
-            proc = subprocess.run(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), capture_output=True, text=True, timeout=TIMEOUT_S)
+            proc = subprocess.run(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
         out = proc.stdout.strip()

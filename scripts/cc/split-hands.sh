@@ -95,7 +95,9 @@ do)
     fi
     sudo -u "$HANDS_USER" -H "$HANDS_HOME/.local/bin/claude" --version 2>/dev/null | head -1 || echo "  (claude for $HANDS_USER not verified; run: sudo -u $HANDS_USER -H claude --version)"
     echo "== 4/7 sudoers: the bridge may run commands as the hands, nothing else"
-    printf '%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$HANDS_USER" "hbar" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands >/dev/null
+    # !syslog: sudo would otherwise write the reasoner's whole command line into the journal, memory
+    # excerpts and the ask token included (found on hbar 2026-10-01); the bridge keeps its own audit
+    printf 'Defaults:%s !syslog\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$BRIDGE_USER" "$HANDS_USER" "hbar" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands >/dev/null
     sudo chmod 440 /etc/sudoers.d/cc-hands; sudo visudo -cf /etc/sudoers.d/cc-hands >/dev/null
     echo "== 5/7 the operator token"
     TOK=$(getenv CC_OPERATOR_TOKEN); [ -n "$TOK" ] || TOK=$(python3 -c 'import secrets;print(secrets.token_hex(24))')

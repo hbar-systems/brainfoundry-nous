@@ -453,3 +453,30 @@ def test_voice_backend_falls_back_to_eleven_when_the_spoke_is_silent(monkeypatch
     clock[0] = 1031.0
     assert m._spoke_answers(m.TTS_URL, probe=lambda: True) is True
     assert m._voice_backend() == "spoke"
+
+
+def test_post_hook_opens_written_file_and_prompt_goes_through_stdin(monkeypatch, tmp_path):
+    """2026-10-01: the reasoner writes files closed (600); the post-write hook opens them to the group.
+    The prompt travels through stdin, never on the command line that sudo logs."""
+    import subprocess as _sp, os as _os, json as _json
+    f = tmp_path / "made.txt"; f.write_text("x"); _os.chmod(f, 0o600)
+    hook = ROOT / "scripts" / "cc" / "cc-post-hook.py"
+    _sp.run([sys.executable, str(hook)], input=_json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(f)}}), text=True, check=True)
+    assert _os.stat(f).st_mode & 0o777 == 0o664
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    settings = _json.loads(m._hook_settings())
+    assert settings["hooks"]["PostToolUse"][0]["matcher"] == "Write|Edit|MultiEdit|NotebookEdit"
+    # the command the reasoner is started with carries no prompt text
+    seen = {}
+    def fake_popen(argv, **kw):
+        seen["argv"] = argv; seen["stdin"] = kw.get("stdin")
+        class P:
+            stdin = type("S", (), {"write": lambda self, t: seen.__setitem__("prompt", t), "close": lambda self: None})()
+            stdout = iter([]); returncode = 0
+            def wait(self): return 0
+            stderr = type("E", (), {"read": lambda self: ""})()
+            def kill(self): pass
+        return P()
+    monkeypatch.setattr(m.subprocess, "Popen", fake_popen)
+    m._stream_turn([m.REASONER, "-p", "--output-format", "json"], lambda k, p: None, prompt="the secret memory")
+    assert "the secret memory" not in " ".join(seen["argv"]) and seen["prompt"] == "the secret memory" and seen["stdin"] is not None

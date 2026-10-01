@@ -170,6 +170,12 @@ class Files:
             handler.send_response(404); handler.send_header("Content-Type", "application/json")
             handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
             return
+        if not os.access(p, os.R_OK):
+            # the hands wrote it closed; the post-write hook opens new files, this covers older ones (2026-10-01)
+            body = b'{"error": "the reasoner wrote this file closed to the bridge; ask it: open the file to the group (chmod g+r)"}'
+            handler.send_response(403); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
         size = p.stat().st_size
         ctype = mimetypes.guess_type(p.name)[0] or ("text/plain; charset=utf-8" if self.kind(p) == "text" else "application/octet-stream")
         start, end = 0, size - 1
