@@ -321,7 +321,13 @@ class Uploads:
             b"Content-Type: " + ctype.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw)
         day = time.strftime("%Y-%m-%d", time.gmtime())
         dest_dir = self.dir / day
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            if not os.access(dest_dir, os.W_OK):
+                raise PermissionError(str(dest_dir))
+        except PermissionError:
+            # the reasoner made today's folder closed to the bridge (hbar 2026-10-04); say so, do not die
+            return {"error": f"today's folder {dest_dir} was made by the reasoner closed to the bridge; ask it: chmod g+w {dest_dir}; the fixups and umask rules prevent this from now on"}
         saved = []
         for part in msg.iter_parts():
             fn = part.get_filename()
@@ -333,7 +339,14 @@ class Uploads:
             i = 1
             while dest.exists():
                 dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
-            dest.write_bytes(data)
+            try:
+                dest.write_bytes(data)
+            except PermissionError:
+                return {"error": f"could not write into {dest_dir}: closed to the bridge"}
+            try:
+                os.chmod(dest, 0o664)
+            except OSError:
+                pass
             saved.append({"name": dest.name, "path": str(dest), "size": len(data)})
         if not saved:
             return {"error": "no file in the upload"}

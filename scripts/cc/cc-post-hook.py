@@ -25,6 +25,10 @@ def main() -> None:
         st = os.stat(path)
         if st.st_mode & 0o060 != 0o060:
             os.chmod(path, (st.st_mode & 0o777) | 0o064)
+        d = os.path.dirname(path)
+        ds = os.stat(d)
+        if ds.st_uid == os.getuid() and ds.st_mode & 0o020 != 0o020:
+            os.chmod(d, (ds.st_mode & 0o777) | 0o2070)   # group may write; new files inherit the group
     except OSError:
         pass
 

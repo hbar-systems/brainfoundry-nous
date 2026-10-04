@@ -97,7 +97,9 @@ do)
     echo "== 4/7 sudoers: the bridge may run commands as the hands, nothing else"
     # !syslog: sudo would otherwise write the reasoner's whole command line into the journal, memory
     # excerpts and the ask token included (found on hbar 2026-10-01); the bridge keeps its own audit
-    printf 'Defaults:%s !syslog\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$BRIDGE_USER" "$HANDS_USER" "hbar" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands >/dev/null
+    # umask 0002 for what the bridge starts as the hands: the two users write into the same folders
+    # (in/, out/, the world); without it a folder the reasoner made refused the bridge's upload (hbar 2026-10-04)
+    printf 'Defaults:%s !syslog\nDefaults:%s umask_override, umask=0002\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$BRIDGE_USER" "$BRIDGE_USER" "$HANDS_USER" "hbar" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands >/dev/null
     sudo chmod 440 /etc/sudoers.d/cc-hands; sudo visudo -cf /etc/sudoers.d/cc-hands >/dev/null
     echo "== 5/7 the operator token"
     TOK=$(getenv CC_OPERATOR_TOKEN); [ -n "$TOK" ] || TOK=$(python3 -c 'import secrets;print(secrets.token_hex(24))')

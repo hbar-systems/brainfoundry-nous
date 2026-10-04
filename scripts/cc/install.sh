@@ -157,6 +157,7 @@ Environment=CC_CWD=$BRAIN_DIR
 Environment=CC_TOOLS=Read,Grep,Glob
 EnvironmentFile=-$ENV_FILE
 ExecStart=$BRIDGE_HOME/.cc-bridge/venv/bin/python $BRAIN_DIR/scripts/cc/cc-bridge.py
+UMask=0002
 Restart=always
 RestartSec=2
 

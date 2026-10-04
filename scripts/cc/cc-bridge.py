@@ -2464,7 +2464,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
             return
         if route == "/upload":
-            d = UPLOADS.save_multipart(self)
+            try:
+                d = UPLOADS.save_multipart(self)
+            except Exception as e:   # a failed save is an answer, not a dead thread and a 502 (2026-10-04)
+                d = {"error": f"could not save the attachment: {type(e).__name__}"}
             self._send(200 if d.get("ok") else 400, d)
             return
         if route == "/transcribe":
