@@ -1746,6 +1746,9 @@ def _tool_brief(name: str, inp: dict) -> str:
         return f"{name.lower()}: " + str(inp.get("file_path", ""))[-80:]
     if name in ("Grep", "Glob"):
         return f"{name.lower()}: " + str(inp.get("pattern", ""))[:60]
+    if name in ("Agent", "Task"):
+        # a subagent the turn fanned out to; the board counts these and shows what the last one is for
+        return "subagent: " + str(inp.get("description") or inp.get("subagent_type") or "started")[:80]
     return name
 
 
@@ -2040,7 +2043,7 @@ def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: s
     ms = int((time.time() - t0) * 1000)
     print(f"turn in={len(message)} out={len(reply)} ms={ms} error={is_error} proposal={bool(card)} pane={(pane or {}).get('route')} via={source}", flush=True)
     _audit_turn({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "thread": (sid or "")[:8],
-                 "brain_session": (_load_state().get("brain_session_id") or "")[:8], "in": len(message), "out": len(reply),
+                 "brain_session": (run.thread or "")[:8], "brain": run.thread, "run": run.id, "in": len(message), "out": len(reply),
                  "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                  "proposal": (card or {}).get("id"),
                  "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source,
@@ -2293,6 +2296,79 @@ def _tg_loop() -> None:
             time.sleep(30 if code in (401, 404) else 10)
 
 
+# ---- mission control: one board for all running work (2026-10-06) ----
+# GET /board assembles tiles from what is already tracked here: RUNS (with each turn's events
+# and waiting cards), the turn audit, threads.json, the jobs registry and pending permits.
+BOARD_FILE = STATE_DIR / "board.json"       # {"dismissed": [tile keys]}
+_BOARD_RESULTS: dict = {}                   # (thread, stamp) -> the last answer, read once from the brain's record
+
+
+def _board_dismissed() -> set:
+    try:
+        return set(json.loads(BOARD_FILE.read_text()).get("dismissed") or [])
+    except Exception:
+        return set()
+
+
+def _board_dismiss(key: str) -> None:
+    keys = [k for k in _board_dismissed() if k != key] + [key]
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    BOARD_FILE.write_text(json.dumps({"dismissed": keys[-500:]}))
+
+
+def _board_result(thread: str, stamp: int) -> str:
+    """The last answer of a finished conversation, for its result line; from the brain's own
+    record, asked once per (thread, last turn) and kept."""
+    k = (thread, stamp)
+    if k in _BOARD_RESULTS:
+        return _BOARD_RESULTS[k]
+    text = ""
+    d = _brain_api("GET", f"/sessions/{thread}/messages")
+    for m in reversed((d or {}).get("messages") or []):
+        if m.get("role") == "assistant" and m.get("content"):
+            text = str(m["content"])[:6000]
+            break
+    if len(_BOARD_RESULTS) > 200:
+        _BOARD_RESULTS.clear()
+    _BOARD_RESULTS[k] = text
+    return text
+
+
+def _run_view(r: Run) -> dict:
+    with r.lock:
+        events = list(r.events)
+        partial = "".join(r.partial)
+    steps = [pl for k, pl in events if k == "tool"]
+    cards = [pl for k, pl in events if k == "ask" and not pl.get("auto") and pl.get("id") in ASKS]
+    last = ""
+    for k, pl in reversed(events):
+        if k == "tool":
+            last = pl.get("brief") or pl.get("name") or ""
+            break
+        if k == "text":
+            last = cc_extras.last_sentence(partial)
+            break
+    return {"run": r.id, "thread": r.thread, "title": r.title, "message": r.message, "started": r.started, "done": r.done,
+            "waiting": r.waiting, "steps": len(steps), "agents": sum(1 for pl in steps if (pl.get("name") or "") in ("Agent", "Task")),
+            "cards": cards, "last": last[:200], "payload": r.payload, "stopped": r.stopped}
+
+
+def _board() -> dict:
+    runs = [_run_view(r) for r in list(RUNS.values())]
+    try:
+        lines = TURNS_LOG.read_text().splitlines()[-3000:] if TURNS_LOG.exists() else []
+    except OSError:
+        lines = []
+    jobs = []
+    for j in JOBS.list(20):
+        jobs.append(JOBS.get(j["id"], 800) or j)
+    pend = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
+    out = cc_extras.board_tiles(runs, lines, jobs, _threads_load(), pend, _board_dismissed(), time.time(),
+                                result_fn=_board_result, roots=(str(OUT_DIR), WORLD_DIR, str(IN_DIR)))
+    out["max_runs"] = MAX_RUNS
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "cc-bridge/0.2"
 
@@ -2418,6 +2494,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _host_system())
         elif route == "/telegram/status":
             self._send(200, _tg_status())
+        elif route == "/board":
+            self._send(200, _board())
         elif route == "/usage":
             # Cost and usage (2026-09-29): totals from the turn audit, never content.
             try:
@@ -2628,6 +2706,12 @@ class Handler(BaseHTTPRequestHandler):
                          "title": th.get("title"), "prompt_hash": PROMPT_HASH})
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
+            return
+        if route == "/board/dismiss":
+            key = str(req.get("key", "")).strip()[:200]
+            if key:
+                _board_dismiss(key)
+            self._send(200, {"ok": bool(key)})
             return
         if route == "/client-error":
             # the page's error boundary reports a crash (2026-10-01); kept in the state dir, never content of a turn

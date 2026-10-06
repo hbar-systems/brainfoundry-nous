@@ -206,6 +206,7 @@ export default function Panes() {
           {canTalk && <a onClick={() => saveHandsfree(!handsfree)} title="What you say sends by itself; after the answer has been spoken, listening restarts" style={{ ...link, color: handsfree ? C.gold : C.dim }}>hands-free {handsfree ? 'on' : 'off'}</a>}
           {auto.length > 0 && <a onClick={(e) => { e.stopPropagation(); setShowAuto(s => !s) }} style={link}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a>}
           <a href="/files" style={link}>files</a>
+          <a href="/board" title="Mission control: one tile per run" style={link}>board</a>
           <a href="/talk" style={link}>one conversation</a>
           {showAuto && auto.length > 0 && (
             <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', right: '4px', top: '100%', zIndex: 30, backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', padding: '6px 10px', maxHeight: '50vh', overflowY: 'auto', minWidth: '320px' }}>

@@ -539,3 +539,180 @@ def usage_summary(lines, now: float | None = None, titles: dict | None = None) -
     out["cost_note"] = ("USD as the reasoner reported it" if out["all"]["cost"] is not None
                         else "no cost figures: a subscription sign-in reports none; tokens are the measure")
     return out
+
+
+# ---- mission control: one board for all running work (2026-10-06) ----
+# Pure assembly from what the bridge already tracks: the run registry (turns in flight and the
+# ones just finished, with their events and waiting cards), the turn audit, the threads list,
+# the jobs registry and pending permits. No new run system.
+
+BOARD_ORDER = {"waiting": 0, "failed": 1, "answering": 2, "done": 3}
+
+
+def last_sentence(text: str, n: int = 180) -> str:
+    """The last meaningful line of a piece of prose: its final sentence, without markdown noise."""
+    s = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    s = re.sub(r"<pane>.*?</pane>", " ", s, flags=re.S)
+    s = re.sub(r"\*\*|__|`", "", s)          # emphasis marks are not words
+    lines = [l.strip(" #*>-|`") for l in s.splitlines() if l.strip(" #*>-|`")]
+    if not lines:
+        return ""
+    last = lines[-1]
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", last) if p.strip()]
+    out = parts[-1] if parts else last
+    if len(out) < 24 and len(parts) > 1:
+        out = parts[-2] + " " + out
+    return out[:n]
+
+
+def first_sentence(text: str, n: int = 200) -> str:
+    """The result line of a finished answer: its opening sentence (an answer leads with its outcome)."""
+    s = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    s = re.sub(r"<pane>.*?</pane>", " ", s, flags=re.S)
+    s = re.sub(r"\*\*|__|`", "", s)
+    lines = [l.strip(" #*>-|`") for l in s.splitlines() if l.strip(" #*>-|`")]
+    if not lines:
+        return ""
+    first = re.split(r"(?<=[.!?])\s+", lines[0])[0].strip()
+    return (first or lines[0])[:n]
+
+
+def links_in(text: str, roots: tuple = (), limit: int = 4) -> list:
+    """Links a run produced, read from its answer: web addresses, and files under the given roots."""
+    out, seen = [], set()
+    for m in re.finditer(r"https?://[^\s)>\]\"'`]+", text or ""):
+        u = m.group(0).rstrip(".,;:")
+        if u not in seen:
+            seen.add(u); out.append({"label": re.sub(r"^https?://", "", u)[:48], "href": u, "kind": "url"})
+    for root in [r for r in roots if r]:
+        for m in re.finditer(re.escape(root.rstrip("/")) + r"/[^\s)>\]\"'`]+", text or ""):
+            fp = m.group(0).rstrip(".,;:")
+            if fp not in seen:
+                seen.add(fp); out.append({"label": fp.rsplit("/", 1)[-1][:48], "href": "/files?path=" + fp, "kind": "file", "path": fp})
+    return out[:limit]
+
+
+def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: list, dismissed: set, now: float,
+                result_fn=None, roots: tuple = (), horizon_s: int = 86400) -> dict:
+    """One tile per run: every conversation that is answering, waiting on the person, or finished
+    in the last 24 h, plus background jobs and permits still waiting. Order: waiting on you,
+    failed (pinned until dismissed), answering, done."""
+    # a thread's stored title carries the "CC: " mark of the chat record; a tile says the task itself
+    titles = {str(th.get("brain")): re.sub(r"^CC:\s*", "", th.get("title") or "untitled") for th in threads if th.get("brain")}
+    def iso(ts: float) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+    def epoch(s: str) -> float:
+        try:
+            return __import__("calendar").timegm(time.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return 0.0
+    def full_id(short: str) -> str | None:
+        short = str(short or "")
+        if not short:
+            return None
+        if short in titles:
+            return short
+        hit = [b for b in titles if b.startswith(short)]
+        return hit[0] if len(hit) == 1 else None
+    # what the audit knows per thread in the window: totals, the last turn, whether it failed
+    per: dict = {}
+    for raw in audit_lines:
+        try:
+            e = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            continue
+        th = full_id(e.get("brain") or e.get("brain_session"))
+        ts = epoch(e.get("ts"))
+        if not th or not ts:
+            continue
+        p = per.setdefault(th, {"turns": 0, "tok": 0, "cost": None, "last_ts": 0.0, "last": None, "fail_ts": 0.0})
+        if now - ts <= horizon_s:
+            p["turns"] += 1
+            p["tok"] += int(e.get("tok_in") or 0) + int(e.get("tok_out") or 0)
+            if isinstance(e.get("cost"), (int, float)):
+                p["cost"] = (p["cost"] or 0.0) + float(e["cost"])
+        if ts >= p["last_ts"]:
+            p["last_ts"] = ts; p["last"] = e
+    tiles = []
+    live_threads = set()
+    card_ids = set()
+    for r in runs:
+        th = r.get("thread")
+        cards = r.get("cards") or []
+        for c in cards:
+            card_ids.add(c.get("id"))
+        if r.get("done"):
+            continue
+        if th:
+            live_threads.add(th)
+        stats = per.get(th or "", {})
+        state = "waiting" if (cards or r.get("waiting")) else "answering"
+        tiles.append({"key": f"run:{r.get('run')}", "kind": "run", "run": r.get("run"), "thread": th,
+                      "title": titles.get(str(th)) or re.sub(r"^CC:\s*", "", r.get("title") or "") or (r.get("message") or "")[:80] or "new conversation",
+                      "state": state, "started": iso(r.get("started") or now), "elapsed_s": int(now - (r.get("started") or now)),
+                      "steps": r.get("steps") or 0, "agents": r.get("agents") or 0, "last": r.get("last") or "",
+                      "cards": cards, "links": [], "tok": stats.get("tok") or 0, "cost": stats.get("cost"), "turns": stats.get("turns") or 0,
+                      "href": f"/talk?thread={th}" if th else None})
+    done_runs = {r.get("thread"): r for r in runs if r.get("done") and r.get("thread")}
+    # finished conversations: active within the window, or failed and not yet dismissed
+    for th_id, title in titles.items():
+        if th_id in live_threads:
+            continue
+        thr = next((x for x in threads if str(x.get("brain")) == th_id), {})
+        stats = per.get(th_id, {})
+        last_ts = max(epoch(thr.get("last") or thr.get("started")), stats.get("last_ts") or 0.0)
+        last = stats.get("last") or {}
+        mem = done_runs.get(th_id) or {}
+        payload = mem.get("payload") or {}
+        failed = bool(payload.get("error")) if payload else bool(last.get("error"))
+        stamp = int(last_ts)
+        key = f"thread:{th_id}:{stamp}"
+        if key in dismissed or thr.get("archived"):
+            continue
+        if not failed and (not last_ts or now - last_ts > horizon_s):
+            continue
+        if failed and now - last_ts > 7 * 86400:
+            continue
+        text = payload.get("reply") or (result_fn(th_id, stamp) if result_fn else "") or ""
+        links = links_in(text, roots)
+        pane = (payload.get("pane") or {}).get("route") if payload else last.get("pane")
+        if pane and not any(l["href"] == pane for l in links):
+            links.insert(0, {"label": "opened: " + str(pane).split("?")[0].strip("/"), "href": pane, "kind": "pane"})
+        tiles.append({"key": key, "kind": "thread", "run": mem.get("run"), "thread": th_id, "title": title,
+                      "state": "failed" if failed else "done", "started": iso(last_ts) if last_ts else None,
+                      "elapsed_s": int((payload.get("ms") or last.get("ms") or 0) / 1000), "ago_s": int(now - last_ts) if last_ts else None,
+                      "steps": int((payload.get("meta") or {}).get("steps") or 0), "agents": 0,
+                      "last": first_sentence(text) or ("stopped by you" if mem.get("stopped") else ""),
+                      "cards": [], "links": links[:4], "tok": stats.get("tok") or 0, "cost": stats.get("cost"), "turns": stats.get("turns") or 0,
+                      "via": last.get("via"), "href": f"/talk?thread={th_id}"})
+    for j in jobs:
+        started = float(j.get("started") or 0)
+        ended = j.get("ended")
+        key = f"job:{j.get('id')}"
+        if key in dismissed:
+            continue
+        failed = ended is not None and (j.get("rc") or 0) != 0
+        if ended is not None and not failed and now - float(ended) > horizon_s:
+            continue
+        if failed and now - float(ended) > 7 * 86400:
+            continue
+        tail = [l for l in str(j.get("tail") or "").splitlines() if l.strip() and not l.startswith("# ")]
+        tiles.append({"key": key, "kind": "job", "run": j.get("id"), "thread": None, "title": j.get("title") or j.get("command") or "job",
+                      "state": "answering" if ended is None else ("failed" if failed else "done"), "word": "running" if ended is None else None,
+                      "started": iso(started) if started else None, "elapsed_s": int((float(ended) if ended is not None else now) - started) if started else 0,
+                      "ago_s": int(now - float(ended)) if ended is not None else None, "steps": 0, "agents": 0,
+                      "last": (tail[-1][:180] if tail else ("exit %s" % j.get("rc") if ended is not None else "started")),
+                      "cards": [], "links": [{"label": "log", "href": "/files?path=" + str(j.get("log") or ""), "kind": "file"}] if j.get("log") else [],
+                      "tok": 0, "cost": None, "turns": 0, "href": "/files?path=" + str(j.get("log") or "") if j.get("log") else None})
+    for pm in pending:
+        if pm.get("id") in card_ids:
+            continue
+        tiles.append({"key": f"permit:{pm.get('id')}", "kind": "permit", "run": None, "thread": None, "title": pm.get("summary") or "an action waits for your yes",
+                      "state": "waiting", "started": pm.get("created_at"), "elapsed_s": 0, "steps": 0, "agents": 0, "last": "proposed earlier, still waiting",
+                      "cards": [pm], "links": [], "tok": 0, "cost": None, "turns": 0, "href": None})
+    def sort_key(tl):
+        recency = -(epoch(tl.get("started")) if tl.get("started") else 0)
+        return (BOARD_ORDER.get(tl["state"], 9), recency)
+    tiles.sort(key=sort_key)
+    counts = {k: sum(1 for tl in tiles if tl["state"] == k) for k in BOARD_ORDER}
+    return {"tiles": tiles[:40], "counts": counts, "now": iso(now)}

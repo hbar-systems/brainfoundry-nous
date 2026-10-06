@@ -177,3 +177,63 @@ def test_usage_summary_buckets(tmp_path):
     assert u["all"]["cost"] is None and "subscription" in u["cost_note"]
     u2 = X.usage_summary([json.dumps({"ts": "2026-09-29T10:00:00Z", "cost": 0.25}), json.dumps({"ts": "2026-09-29T10:01:00Z", "cost": 0.5})], now=now)
     assert abs(u2["today"]["cost"] - 0.75) < 1e-9 and "USD" in u2["cost_note"]
+
+
+def test_board_tiles_states_order_cards_and_links():
+    """Mission control (2026-10-06): one tile per run from what the bridge tracks. Waiting on you first,
+    failed pinned until dismissed, then answering, then done; cards ride on their tile; a finished
+    tile carries its result line and the links its answer named; jobs and loose permits are tiles too."""
+    import time as _t
+    now = 1_791_300_000.0
+    iso = lambda ts: _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(ts))
+    threads = [
+        {"brain": "aaaa1111-full", "title": "coach baseline", "last": iso(now - 600)},
+        {"brain": "bbbb2222-full", "title": "video crop", "last": iso(now - 60)},
+        {"brain": "cccc3333-full", "title": "storage mount", "last": iso(now - 3600)},
+        {"brain": "dddd4444-full", "title": "old one", "last": iso(now - 3 * 86400)},
+        {"brain": "eeee5555-full", "title": "broke yesterday", "last": iso(now - 30 * 3600)},
+        {"brain": "ffff6666-full", "title": "archived", "last": iso(now - 100), "archived": True},
+    ]
+    runs = [
+        {"run": "r1", "thread": "bbbb2222-full", "title": "video crop", "message": "crop it", "started": now - 252, "done": False, "waiting": 0,
+         "steps": 6, "agents": 2, "cards": [], "last": "ran: ffmpeg -i in.mp4", "payload": None, "stopped": False},
+        {"run": "r2", "thread": "aaaa1111-full", "title": "coach baseline", "message": "go", "started": now - 40, "done": False, "waiting": 1,
+         "steps": 1, "agents": 0, "cards": [{"id": "PRM-1", "summary": "run on the box: git commit", "platform": "box"}], "last": "", "payload": None, "stopped": False},
+        {"run": "r3", "thread": "cccc3333-full", "title": "storage mount", "message": "mount", "started": now - 3700, "done": True, "waiting": 0, "steps": 0, "agents": 0, "cards": [],
+         "last": "", "payload": {"reply": "The box is mounted at /mnt/box. See https://example.org/docs and /home/hands/out/2026-10-06/mount.sh for the script.", "error": False, "ms": 91000, "meta": {"steps": 4}, "pane": {"route": "/files?path=/home/hands/out"}}, "stopped": False},
+    ]
+    audit = [
+        json.dumps({"ts": iso(now - 700), "brain": "aaaa1111-full", "ms": 5000, "error": False, "tok_in": 100, "tok_out": 50}),
+        json.dumps({"ts": iso(now - 3600), "brain_session": "cccc3333", "ms": 91000, "error": False, "tok_in": 1000, "tok_out": 500, "cost": 0.25, "via": "telegram"}),
+        json.dumps({"ts": iso(now - 30 * 3600), "brain_session": "eeee5555", "ms": 1000, "error": True}),
+        "not json",
+    ]
+    jobs = [{"id": "J1", "title": "render the cut", "started": now - 500, "ended": None, "rc": None, "log": "/home/hands/out/jobs/J1.log", "tail": "# J1\nframe 120\nframe 240\n"},
+            {"id": "J2", "title": "tests", "started": now - 900, "ended": now - 800, "rc": 2, "log": "/home/hands/out/jobs/J2.log", "tail": "1 failed\n"}]
+    pending = [{"id": "PRM-1", "summary": "dup of the card"}, {"id": "PRM-9", "summary": "send the email"}]
+    b = X.board_tiles(runs, audit, jobs, threads, pending, set(), now, result_fn=lambda th, st: "", roots=("/home/hands/out",))
+    by = {tl["key"].split(":")[0] + ":" + (tl.get("title") or ""): tl for tl in b["tiles"]}
+    states = [tl["state"] for tl in b["tiles"]]
+    assert states == sorted(states, key=lambda s: X.BOARD_ORDER[s])
+    assert b["counts"] == {"waiting": 2, "failed": 2, "answering": 2, "done": 1}
+    w = next(tl for tl in b["tiles"] if tl.get("run") == "r2")
+    assert w["state"] == "waiting" and w["cards"][0]["id"] == "PRM-1" and w["href"] == "/talk?thread=aaaa1111-full" and w["tok"] == 150
+    a = next(tl for tl in b["tiles"] if tl.get("run") == "r1")
+    assert a["state"] == "answering" and a["elapsed_s"] == 252 and a["agents"] == 2 and a["last"].startswith("ran: ffmpeg")
+    d = next(tl for tl in b["tiles"] if tl.get("thread") == "cccc3333-full")
+    assert d["state"] == "done" and d["last"] == "The box is mounted at /mnt/box." and d["cost"] == 0.25 and d["via"] == "telegram"
+    hrefs = [l["href"] for l in d["links"]]
+    assert "/files?path=/home/hands/out" in hrefs and "https://example.org/docs" in hrefs and "/files?path=/home/hands/out/2026-10-06/mount.sh" in hrefs
+    f = next(tl for tl in b["tiles"] if tl.get("thread") == "eeee5555-full")
+    assert f["state"] == "failed"                       # older than a day, still pinned
+    assert not any(tl.get("thread") in ("dddd4444-full", "ffff6666-full") for tl in b["tiles"])   # old and done, or archived: not shown
+    j1 = next(tl for tl in b["tiles"] if tl["key"] == "job:J1"); j2 = next(tl for tl in b["tiles"] if tl["key"] == "job:J2")
+    assert j1["state"] == "answering" and j1["word"] == "running" and j1["last"] == "frame 240" and j2["state"] == "failed" and j2["last"] == "1 failed"
+    loose = [tl for tl in b["tiles"] if tl["kind"] == "permit"]
+    assert len(loose) == 1 and loose[0]["cards"][0]["id"] == "PRM-9"          # the card already on a run is not doubled
+    # dismissing the failed thread and the failed job removes them; nothing else moves
+    gone = {f["key"], "job:J2"}
+    b2 = X.board_tiles(runs, audit, jobs, threads, pending, gone, now, roots=("/home/hands/out",))
+    assert b2["counts"]["failed"] == 0 and len(b2["tiles"]) == len(b["tiles"]) - 2
+    assert X.last_sentence("First part. Then the final sentence here.\n") == "Then the final sentence here."
+    assert X.first_sentence("**Done.** The rest follows.\n\nMore.") == "Done."
