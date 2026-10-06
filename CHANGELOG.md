@@ -4,6 +4,10 @@ The single source of truth for the running version is the `VERSION` file
 at the repo root. Bump policy is in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 Older entries below carry only their date — semver tagging starts at 0.8.2.
 
+## Unreleased
+
+- cc: side by side (2026-10-06). `/panes` tiles one to four conversations like terminal windows; each pane is the CC page in an iframe (`/cc?pane=1&thread=<id|new>`), so it keeps streaming, cards, voice and files. A pane holds its own thread and never moves the box's current thread; the layout is kept in the browser (`cc.panes`); a pane's border lights while it answers; on a narrow screen one pane shows with numbered chips. The CC header gains "side by side"; cards notify once from `/panes`, not per pane. The box still answers `CC_MAX_RUNS` (3) at once.
+
 ## 0.13.0 — 2026-09-30 — the brain replaces the laptop: hands, spokes, voice, phone, several conversations
 
 The largest release: everything from 2026-09-16 to 2026-09-30 in the CC console and its bridge. Rolled to hbar continuously through the Update tab; tagged once the two-user split had run a clean day.

@@ -534,9 +534,18 @@ function CC() {
   // browser knows to be answering, by thread key.
   const [cur, setCur] = useState(null)
   const curRef = useRef(null)
+  // Side by side (2026-10-06): /panes tiles this page in iframes, each opened as
+  // /cc?pane=<n>&thread=<brain id | new>. A pane holds its own thread: it never moves the
+  // box's current thread (no /cc/threads/switch, no /cc/new), so panes do not pull each other.
+  const paneModeRef = useRef(null)
+  const [paneMode, setPaneMode] = useState(null)
   const runningRef = useRef({})
   const runIdRef = useRef({})     // thread key -> run id from the stream's 'begin', to re-follow a broken stream
-  const showThread = (key) => { curRef.current = key; setCur(key); setBusy(!!runningRef.current[key]) }
+  const showThread = (key) => {
+    curRef.current = key; setCur(key); setBusy(!!runningRef.current[key])
+    // a pane on /panes tells its host which thread it shows, so the layout survives a reload
+    if (paneModeRef.current && key && !String(key).startsWith('new:')) { try { window.parent.postMessage({ type: 'cc-pane-thread', pane: paneModeRef.current, thread: key }, window.location.origin) } catch {} }
+  }
   // notes follow the thread shown
   useEffect(() => {
     notesKeyRef.current = `cc.notes.${cur && !String(cur).startsWith('new:') ? cur : 'new'}`
@@ -602,7 +611,8 @@ function CC() {
   }, [])
   useEffect(() => {
     const n = (health && health.cards_waiting) || 0
-    if (n > cardsSeenRef.current) {
+    // side by side: the panes stay quiet, /panes notifies once for all of them
+    if (n > cardsSeenRef.current && !paneModeRef.current) {
       try {
         if (typeof Notification !== 'undefined') {
           if (Notification.permission === 'granted') new Notification('Your brain needs a yes', { body: n === 1 ? 'A card waits for you.' : `${n} cards wait for you.` })
@@ -668,11 +678,21 @@ function CC() {
     return groups
   })()
   useEffect(() => {
+    let pin = null
+    try {
+      const q = new URLSearchParams(window.location.search)
+      if (q.get('pane')) { paneModeRef.current = q.get('pane'); setPaneMode(q.get('pane')) }
+      pin = q.get('thread')
+    } catch {}
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(h => {
         setHealth(h)
-        if (h && h.brain_session_id) {
+        if (pin === 'new') { freshRef.current = true }
+        else if (pin) {
+          showThread(pin); loadHistory(pin)
+          if ((h.runs || []).some(r => r.thread === pin)) attach(pin)
+        } else if (h && h.brain_session_id) {
           showThread(h.brain_session_id); loadHistory(h.brain_session_id)
           // the box's current thread may be answering already (another tab, the phone): follow it
           if ((h.runs || []).some(r => r.thread === h.brain_session_id)) attach(h.brain_session_id)
@@ -726,9 +746,11 @@ function CC() {
     // from this page; this thread's own turn, if one is in flight, is followed through /cc/live.
     if (th.brain === curRef.current) { setShowThreads(false); return }
     setTurns([]); setPane(null); showThread(th.brain); loadHistory(th.brain)
-    try {
-      await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
-    } catch {}
+    if (!paneModeRef.current) {
+      try {
+        await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
+      } catch {}
+    }
     if (th.running || runningRef.current[th.brain]) attach(th.brain)
     loadHealth()
     setShowThreads(false)
@@ -1189,7 +1211,7 @@ function CC() {
     // Allowed while a thread answers: it goes on by itself; this page turns to a blank one.
     freshRef.current = true
     showThread(null)
-    try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
+    if (!paneModeRef.current) { try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {} }
     setTurns([])
     setPane(null)
     loadHealth()
@@ -1223,15 +1245,18 @@ function CC() {
     <>
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
-      <div style={{ padding: '28px 32px 20px', maxWidth: pane ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+      <div style={{ padding: paneMode ? '10px 14px 10px' : '28px 32px 20px', maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
-          <div>
+          <div style={{ minWidth: 0 }}>
+            {!paneMode && <>
             <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 4px 0' }}>
               cc · reasoning from inside the brain
             </p>
             <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
+            </>}
+            {paneMode && !curThread && <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>new conversation</p>}
             {curThread && (
               <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '4px 0 0 0', display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' }}>
                 {renaming === 'header'
@@ -1247,6 +1272,7 @@ function CC() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
+            {!paneMode && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={() => {
               const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
               copyText(md)
