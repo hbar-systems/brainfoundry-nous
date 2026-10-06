@@ -46,6 +46,22 @@ const SLASH = [
   { c: '/help', d: 'this list' },
 ]
 
+// The composer's buttons in a pane (2026-10-06): icons, one line high. Drawn here; never the browser's own look.
+function IconBtn({ children, onClick, disabled, primary, on, title }) {
+  const off = !!disabled
+  return (
+    <button onClick={onClick} disabled={off} title={title} aria-label={title}
+      style={{ width: '34px', height: '34px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, borderRadius: '9px',
+               cursor: off ? 'default' : 'pointer', border: primary ? 'none' : `1px solid ${on ? C.gold : C.line}`,
+               backgroundColor: primary ? (off ? C.card : C.gold) : 'transparent', color: primary ? (off ? C.dim : C.onAccent) : (on ? C.gold : C.dim) }}>{children}</button>
+  )
+}
+const ico = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }
+const IcoClip = () => <svg {...ico}><path d="M21.4 11.1l-9.2 9.2a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.5-8.5" /></svg>
+const IcoMic = () => <svg {...ico}><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v1a7 7 0 0014 0v-1M12 18v4" /></svg>
+const IcoStop = () => <svg {...ico}><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+const IcoSend = () => <svg {...ico}><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+
 function Btn({ children, onClick, disabled, primary, small, title, accent }) {
   const off = !!disabled
   return (
@@ -540,6 +556,11 @@ function CC() {
   // box's current thread (no /cc/threads/switch, no /cc/new), so panes do not pull each other.
   const paneModeRef = useRef(null)
   const [paneMode, setPaneMode] = useState(null)
+  // Reading space in a pane (2026-10-06): the stream is the pane. The pane's title bar on /panes
+  // carries the title, the state and the one menu; this page tells it its state and takes its
+  // commands (export, details). The rows of links under the composer open only with "details".
+  const [paneDetails, setPaneDetails] = useState(false)
+  const exportRef = useRef(null)
   const runningRef = useRef({})
   const runIdRef = useRef({})     // thread key -> run id from the stream's 'begin', to re-follow a broken stream
   const showThread = (key) => {
@@ -737,10 +758,31 @@ function CC() {
       if (e.data && e.data.type === 'cc-send' && typeof e.data.text === 'string' && sendRef.current) {
         sendRef.current(e.data.text)
       }
+      // the pane's own menu on /panes (2026-10-06)
+      if (e.data && e.data.type === 'cc-pane-cmd') {
+        if (e.data.cmd === 'export' && exportRef.current) exportRef.current()
+        if (e.data.cmd === 'details') { setShowDetails(true); setPaneDetails(v => !v) }
+        if (e.data.cmd === 'focus' && boxRef.current) boxRef.current.focus()
+      }
     }
     window.addEventListener('message', onMsg)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath) }
+    // voice and hands-free are chosen once on /panes; the other panes hear the change
+    const onStore = (e) => {
+      if (e.key === 'cc.speak') setSpeak(e.newValue === '1')
+      if (e.key === 'cc.handsfree') setHandsfree(e.newValue === '1')
+    }
+    window.addEventListener('storage', onStore)
+    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath); window.removeEventListener('storage', onStore) }
   }, [])
+
+  // the whole conversation as markdown: copied, and downloaded as a file (the header's button, or the pane's menu)
+  function exportThread() {
+    const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
+    if (!md) return
+    copyText(md)
+    try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' })); a.download = `cc-thread-${new Date().toISOString().slice(0, 10)}.md`; a.click() } catch {}
+  }
+  exportRef.current = exportThread
 
   async function switchThread(th) {
     // Allowed while another thread answers: that stream keeps running on the box and detaches
@@ -874,9 +916,16 @@ function CC() {
     if (!el) return
     const n = turns.length
     if (n === lastCountRef.current) return
+    const before = lastCountRef.current
     lastCountRef.current = n
     const last = turns[n - 1]
     if (!last) return
+    if (paneModeRef.current && before === 0 && n > 1) {
+      // a pane opening on an existing conversation shows its latest exchange, at once (2026-10-06)
+      const bottom = () => { el.scrollTop = el.scrollHeight }
+      bottom(); requestAnimationFrame(bottom); setTimeout(bottom, 120)
+      return
+    }
     if (last.who === 'brain') {
       const nodes = el.querySelectorAll('[data-turn]')
       const node = nodes[nodes.length - 1]
@@ -887,6 +936,25 @@ function CC() {
   }, [turns])
 
   const loggedIn = !!(health && health.auth && health.auth.loggedIn)
+  // A pane tells the page that holds it what it is doing, for the one-line title bar (2026-10-06).
+  useEffect(() => {
+    if (!paneMode) return
+    const live = [...turns].reverse().find(x => x.live)
+    const lastDone = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
+    const waiting = pending.length > 0 || turns.some(x => (x.asks || []).some(a => !a.decided && !a.auto))
+    try {
+      window.parent.postMessage({ type: 'cc-pane-state', busy, since: busySince, steps: live && live.steps ? live.steps.length : 0,
+        last: live && live.steps && live.steps.length ? String(live.steps[live.steps.length - 1]).slice(0, 120) : '', writing: !!(live && live.text),
+        waiting, lastMs: lastDone ? lastDone.ms : null, details: paneDetails, turns: turns.length }, window.location.origin)
+    } catch {}
+  }, [paneMode, busy, busySince, turns, pending, paneDetails])
+  // In a pane the composer is one line that grows with what is typed, up to six.
+  useEffect(() => {
+    if (!paneMode || !boxRef.current) return
+    const el = boxRef.current
+    el.style.height = 'auto'
+    el.style.height = Math.min(132, Math.max(34, el.scrollHeight)) + 'px'
+  }, [draft, paneMode])
 
   // Talking to the brain (2026-09-27): the owner speaks and the composer fills as the words
   // come. Chrome and Safari on iOS recognise speech in the browser and nothing leaves the
@@ -1266,11 +1334,11 @@ function CC() {
   return (
     <>
       <Head><title>CC · BrainFoundry</title></Head>
-      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: 'calc(100vh - 60px)' }}>
-      <div style={{ padding: paneMode ? '10px 14px 10px' : '28px 32px 20px', maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
-                    fontFamily, display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
+      <div style={{ padding: paneMode ? '6px 10px 8px' : '28px 32px 20px', maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+                    fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div style={{ minWidth: 0 }}>
             {!paneMode && <>
             <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 4px 0' }}>
@@ -1295,11 +1363,7 @@ function CC() {
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {!paneMode && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
-            {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={() => {
-              const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
-              copyText(md)
-              try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' })); a.download = `cc-thread-${new Date().toISOString().slice(0, 10)}.md`; a.click() } catch {}
-            }}>export</Btn>}
+            {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
@@ -1342,8 +1406,8 @@ function CC() {
           </div>
         </div>
 
-        {firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
-        {loggedIn && turns.length === 0 && (
+        {!paneMode && firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
+        {!paneMode && loggedIn && turns.length === 0 && (
           <p style={{ margin: '0 0 16px 0', color: C.faint, fontSize: '13px' }}>
             New here? <a onClick={() => openPane({ route: '/guide', title: 'Guide' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>The guide</a> explains what this brain can do, with a seven-step tutorial that checks itself. Or type /help.
           </p>
@@ -1387,7 +1451,7 @@ function CC() {
             </p>
           )}
           {turns.map((t, i) => (
-            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: room ? 'nowrap' : 'wrap', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: '8px 0', position: 'relative' }}>
+            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: room ? 'nowrap' : 'wrap', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative' }}>
               {notes.some(n => n.turn === i) && (
                 <div style={room ? { position: 'absolute', left: 'calc(100% + 14px)', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px' }
                                   : { order: 2, width: '100%', display: 'flex', flexDirection: 'column', gap: '8px', margin: '6px 0 0 0' }}>
@@ -1395,7 +1459,7 @@ function CC() {
                 </div>
               )}
               <div style={{
-                maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: paneMode && t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
               }}>
@@ -1447,7 +1511,7 @@ function CC() {
             <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
           </div>
         )}
-        {(() => {
+        {!paneMode && (() => {
           const live = [...turns].reverse().find(x => x.live)
           const last = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
           return (
@@ -1463,7 +1527,7 @@ function CC() {
         {notes.filter(n => n.text.trim()).length > 0 && (
           <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
-        {latest.length > 0 && (
+        {latest.length > 0 && (!paneMode || paneDetails) && (
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span>latest:</span>
             {latest.map(f => (
@@ -1473,14 +1537,15 @@ function CC() {
           </p>
         )}
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
-          <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
-            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+        <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
+          <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
+            placeholder={paneMode && loggedIn && !listening ? (busy ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
-            style={{ flex: '1 1 240px', minWidth: 0, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
+            style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
                      border: `1px solid ${listening ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
           <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
+          {!paneMode && (
           <div style={{ display: 'flex', gap: '8px', flex: '0 0 auto', marginLeft: 'auto' }}>
             <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">attach</Btn>
             <Btn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} accent={listening}
@@ -1491,6 +1556,17 @@ function CC() {
             {busy && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
             <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
           </div>
+          )}
+          {paneMode && (
+            <div style={{ display: 'flex', gap: '4px', flex: '0 0 auto', alignItems: 'flex-end' }}>
+              <IconBtn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there"><IcoClip /></IconBtn>
+              <IconBtn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} on={listening}
+                title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}><IcoMic /></IconBtn>
+              {busy && <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>}
+              <IconBtn primary onClick={busy && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}
+                title={busy ? 'Stop the answer and send this now (Cmd/Ctrl+Enter); Enter alone queues it' : 'Send (Enter)'}><IcoSend /></IconBtn>
+            </div>
+          )}
         </div>
         {(listening || transcribing || talkNote) && (
           <p style={{ ...mono, color: listening ? C.gold : C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>
@@ -1512,25 +1588,26 @@ function CC() {
             {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px' }}>{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
           </p>
         )}
+        <div style={paneMode ? { display: paneDetails ? 'block' : 'none', maxHeight: '45vh', overflowY: 'auto', borderTop: `1px solid ${C.line}`, marginTop: '6px', paddingBottom: '4px' } : undefined}>
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '10px 0 0 0', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           {showDetails && <span>{health && health.session ? 'thread continues across reloads' : 'a new thread starts with your first message'}</span>}
           {showDetails && health && health.tools ? <span><a onClick={() => setShowTools(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{health.tools.split(',').length} tools without a card</a></span> : null}
           {showDetails && health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
-          {sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
-          {health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
-          {loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
+          {!paneMode && sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
+          {!paneMode && health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
+          {!paneMode && loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
           {showDetails && usage && usage.today ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>today {usage.today.turns} turn{usage.today.turns === 1 ? '' : 's'} · {kTok(usage.today.in)} in · {kTok(usage.today.out)} out{usage.today.cost !== null && usage.today.cost !== undefined ? ` · $${usage.today.cost.toFixed(2)}` : ''}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
-          {health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
+          {!paneMode && health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
           {health && health.cards_waiting > 0 ? <span><a onClick={() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
           {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
-          <span><a onClick={() => setShowDetails(s => !s)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showDetails ? 'less' : 'details'}</a></span>
+          <span><a onClick={() => (paneMode ? setPaneDetails(false) : setShowDetails(s => !s))} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{paneMode ? 'close details' : showDetails ? 'less' : 'details'}</a></span>
           {showDetails ? <span><a onClick={() => setShowFonts(s => !s)} title="the font of the conversation" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>font{fontPick ? `: ${fontPick.label}` : ''}</a></span> : null}
-          {!pane ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
-          {auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
+          {!pane && !paneMode ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
+          {!paneMode && auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
         {showTools && health && health.tools && (
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0', lineHeight: 1.6, wordBreak: 'break-word', maxHeight: '84px', overflowY: 'auto' }}>{health.tools.split(',').join('  ')}</p>
@@ -1551,6 +1628,7 @@ function CC() {
             ))}
           </ul>
         )}
+        </div>
       </div>
       {pane && <Pane pane={pane} onClose={() => { setPane(null); loadHealth() }} />}
       </div>
