@@ -129,6 +129,10 @@ Two ways to give the reasoner the owner's repositories. The simple one: `CC_WORL
 
 `out` (what the reasoner made) and `in` (what you gave it) are the desk. The world is the archive. On anything under them the Files pane offers "file this", and the chat has `/file <path> [where]`: the reasoner moves the artifact into the world where it belongs and commits there, never pushes, and says in one line where it went. Text is committed at its place (a system's ops/, a dated note under ops/, a discussion); binaries are never committed: they go to the media archive (or the owning system's archive/) with a short committed note beside the system that names them. When the place is not clear it asks with two options. Added 2026-09-24; needs the world in the laptop's shape.
 
+## Stop and interrupt
+
+While a turn answers: "stop" (or Esc, or `/stop`) ends it. What it said so far stays as the reply with "(stopped by you)", and every step it finished stands; the next message resumes the same thread from the reasoner's own session. "send now" (or Cmd/Ctrl+Enter) is the terminal's interrupt, one turn at a time: your message is queued and the turn is stopped, so the message goes in the moment the turn ends. Enter alone still queues for when it finishes. From Telegram, `/stop`. The bridge route is `POST /cc/stop` with `thread` or `run`.
+
 ## Side by side
 
 `/panes` (the "side by side" button in the CC header) shows one to four conversations at once, like terminal windows. Each pane is the CC page itself, pinned to one thread with `/cc?pane=1&thread=<brain id>` (or `thread=new`); a pinned page never calls `/cc/threads/switch` or `/cc/new`, so panes do not pull each other or the phone. Choose a pane's conversation from its title, "new" starts a fresh one, "alone" opens it full width, × closes the pane (the thread stays in threads). The layout is kept per browser. The box answers `CC_MAX_RUNS` conversations at once (3 by default); a fourth pane's turn waits.

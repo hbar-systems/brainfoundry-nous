@@ -519,6 +519,11 @@ class Run:
         self.done = False
         self.payload: dict | None = None
         self.lock = threading.Lock()
+        # Stop (2026-10-06): the owner can end a turn mid-way ("stop", or "stop and send" from the
+        # page). The reasoner process is kept here; the text so far is kept for the reply.
+        self.proc = None
+        self.stopped = False
+        self.partial: list = []
 
     def emit(self, kind: str, payload: dict) -> None:
         with self.lock:
@@ -527,6 +532,8 @@ class Run:
             if kind == "done":
                 self.done = True
                 self.payload = payload
+            if kind == "text" and payload.get("t"):
+                self.partial.append(payload["t"])
             sinks = list(self.sinks)
         for f in sinks:
             try:
@@ -1742,6 +1749,34 @@ def _tool_brief(name: str, inp: dict) -> str:
     return name
 
 
+def _stop_proc(proc) -> None:
+    """End a reasoner process. It runs as the hands through sudo; sudo's real uid is the bridge's,
+    so the bridge may signal it, and sudo relays the signal to the reasoner."""
+    try:
+        proc.terminate()
+    except Exception:
+        return
+    def _later():
+        try:
+            proc.wait(timeout=8)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    threading.Thread(target=_later, daemon=True).start()
+
+
+def _stop_run(run: Run) -> bool:
+    if run.done:
+        return False
+    run.stopped = True
+    run.emit("tool", {"name": "stop", "brief": "stopped by you"})
+    if run.proc is not None:
+        _stop_proc(run.proc)
+    return True
+
+
 def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str = "") -> tuple[dict | None, str, int]:
     """Run the reasoner with stream-json output, forwarding events as they arrive.
     Returns (result_event, stderr_tail, returncode). The run (when given) learns the
@@ -1752,6 +1787,9 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
     # The prompt goes in through stdin, never as an argument: sudo writes every argument of the
     # reasoner's command line into the system journal, memory excerpts included (hbar 2026-10-01).
     proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run.proc = proc
+    if run.stopped:          # stopped before the reasoner even started
+        _stop_proc(proc)
     try:
         proc.stdin.write(prompt); proc.stdin.close()
     except (BrokenPipeError, OSError):
@@ -1858,6 +1896,11 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         if run is not None:
             run.claude_sid = session_id
         data, stderr, rc = _stream_turn(cmd, _fwd, run=run, prompt=prompt)
+        if run is not None and run.stopped:
+            # The owner stopped this turn. What was said stays; the thread resumes from the
+            # reasoner's own session (the transcript holds every step finished before the stop).
+            said = "".join(run.partial).strip()
+            return (said + "\n\n" if said else "") + "(stopped by you)", run.claude_sid or session_id, False
         if data is None and rc == -9:
             return f"The reasoner went silent for over {TIMEOUT_S // 60} minutes outside a tool call, or a tool ran past {TOOL_TIMEOUT_S // 60} minutes, and was stopped. The work it committed so far stands; ask it to continue.", session_id, True
         out = json.dumps(data) if data else ""
@@ -2188,6 +2231,10 @@ def _tg_handle(update: dict) -> None:
         return
     if text == "/new":
         TG.save(thread=None); TG.call("sendMessage", chat_id=chat_id, text="new conversation"); return
+    if text == "/stop":
+        th = TG.state().get("thread")
+        run = _run_for_thread(th) if th else None
+        TG.call("sendMessage", chat_id=chat_id, text="stopping" if (run and _stop_run(run)) else "nothing is answering"); return
     if text == "/status":
         act = _runs_active()
         TG.call("sendMessage", chat_id=chat_id, text=f"{len(act)} answering; cards waiting {_cards_waiting()}; thread {(TG.state().get('thread') or 'none')[:8]}; hands {HANDS_USER or 'one user'}")
@@ -2213,7 +2260,7 @@ def _tg_handle(update: dict) -> None:
         TG.call("sendMessage", chat_id=chat_id, text=f"posture: {_posture_current()}" + ("" if want in ("cards", "auto", "judged", "") else " (cards, auto or judged)")); return
     th = TG.state().get("thread")
     if th and _run_for_thread(th):
-        TG.call("sendMessage", chat_id=chat_id, text="still answering the last one; wait, or /new for another conversation"); return
+        TG.call("sendMessage", chat_id=chat_id, text="still answering the last one; /stop ends it, /new opens another conversation"); return
     threading.Thread(target=_tg_turn, args=(chat_id, text), daemon=True).start()
 
 
@@ -2516,6 +2563,17 @@ class Handler(BaseHTTPRequestHandler):
             VOICE_ID = match[0]["id"]; _env_file_set("CC_VOICE_ID", VOICE_ID); os.environ["CC_VOICE_ID"] = VOICE_ID
             print(f"voice set to {match[0]['name']}", flush=True)
             self._send(200, {"ok": True, "voice": match[0]["name"], "id": VOICE_ID})
+            return
+        if route == "/stop":
+            # End a turn mid-way (2026-10-06). By run id, or the thread's running turn.
+            want_run, want_thread = str(req.get("run") or "").strip(), str(req.get("thread") or "").strip()
+            run = RUNS.get(want_run) if want_run else _run_for_thread(want_thread) if want_thread else None
+            if run is None or run.done:
+                self._send(404, {"ok": False, "error": "nothing is answering there"})
+                return
+            _stop_run(run)
+            print(f"turn stopped by the owner run={run.id} thread={(run.thread or '')[:8]}", flush=True)
+            self._send(200, {"ok": True, "run": run.id, "thread": run.thread})
             return
         if route == "/posture":
             want = str(req.get("posture", "")).strip().lower()

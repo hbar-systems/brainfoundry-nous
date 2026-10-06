@@ -33,6 +33,7 @@ function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(
 function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
 const SLASH = [
   { c: '/new', d: 'start a new thread' },
+  { c: '/stop', d: 'stop the answer in progress; the thread keeps everything up to here (Esc does the same)' },
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
   { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks), /posture auto (the vendor classifier decides), /posture judged (TypeSafe scores each action; harmless runs, the rest ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
@@ -1081,6 +1082,7 @@ function CC() {
   async function slash(text) {
     const [cmd, ...rest] = text.slice(1).split(/\s+/); const arg = rest.join(' ').trim()
     if (cmd === 'new') { fresh(); return true }
+    if (cmd === 'stop') { await stopTurn(); return true }
     if (cmd === 'posture') {
       const r = await fetch('/cc/posture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture: arg }) })
       const d = await r.json().catch(() => ({}))
@@ -1233,7 +1235,27 @@ function CC() {
   }
 
   sendRef.current = send
+  // Stop and interrupt (2026-10-06). Esc or "stop" ends the answer in progress; the thread keeps
+  // what was said and every finished step, and the next message resumes it. "send now" (or
+  // Cmd/Ctrl+Enter while it answers) queues the message and stops the turn, so the message goes
+  // in the moment the turn ends: the terminal's interrupt, one turn at a time.
+  async function stopTurn() {
+    const key = curRef.current
+    if (!key || !runningRef.current[key]) return false
+    const body = String(key).startsWith('new:') ? { run: runIdRef.current[key] || '' } : { thread: key }
+    try {
+      const r = await fetch('/cc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      return r.ok
+    } catch { return false }
+  }
+  async function sendNow() {
+    await send()
+    await stopTurn()
+  }
+
   function onKey(e) {
+    if (e.key === 'Escape' && busy) { e.preventDefault(); stopTurn(); return }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && busy && draft.trim()) { e.preventDefault(); sendNow(); return }
     if (e.key === 'Tab' && draft.startsWith('/') && !/\s/.test(draft)) {
       const m = SLASH.find(s => s.c.startsWith(draft))
       if (m) { e.preventDefault(); setDraft(m.c + ' '); return }
@@ -1453,7 +1475,7 @@ function CC() {
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end', marginTop: '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={2}
-            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; your next message here sends when this turn ends. New thread opens another conversation now.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={!loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             style={{ flex: '1 1 240px', minWidth: 0, resize: 'vertical', minHeight: '48px', padding: '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
@@ -1465,6 +1487,8 @@ function CC() {
               title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}>
               {listening ? 'stop' : transcribing ? 'hearing' : 'talk'}
             </Btn>
+            {busy && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
+            {busy && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
             <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
           </div>
         </div>
