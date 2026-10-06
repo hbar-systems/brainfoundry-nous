@@ -8,6 +8,7 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 - cc: side by side (2026-10-06). `/panes` tiles one to four conversations like terminal windows; each pane is the CC page in an iframe (`/cc?pane=1&thread=<id|new>`), so it keeps streaming, cards, voice and files. A pane holds its own thread and never moves the box's current thread; the layout is kept in the browser (`cc.panes`); a pane's border lights while it answers; on a narrow screen one pane shows with numbered chips. The CC header gains "side by side"; cards notify once from `/panes`, not per pane. The box still answers `CC_MAX_RUNS` (3) at once.
 
+- fix: side by side showed {"error": "not_found"} in every pane: the iframes loaded /cc, which Caddy routes to the bridge. The CC page is also served at /talk; panes, "alone" and "one conversation" use it (2026-10-06).
 - cc: stop and interrupt (2026-10-06). `POST /cc/stop` (by `thread` or `run`) ends a turn mid-way: the reasoner process is terminated through sudo (the bridge may signal it; sudo relays), the reply keeps what was said so far plus "(stopped by you)", and the thread resumes from the reasoner's own session, so every finished step stands. The page: "stop" while it answers, Esc, and `/stop`; "send now" (or Cmd/Ctrl+Enter) queues the message and stops the turn, so it goes in the moment the turn ends. Telegram: `/stop`. Not a message injected into a running turn; that waits for the Agent SDK bridge.
 
 ## 0.13.0 — 2026-09-30 — the brain replaces the laptop: hands, spokes, voice, phone, several conversations

@@ -135,7 +135,7 @@ While a turn answers: "stop" (or Esc, or `/stop`) ends it. What it said so far s
 
 ## Side by side
 
-`/panes` (the "side by side" button in the CC header) shows one to four conversations at once, like terminal windows. Each pane is the CC page itself, pinned to one thread with `/cc?pane=1&thread=<brain id>` (or `thread=new`); a pinned page never calls `/cc/threads/switch` or `/cc/new`, so panes do not pull each other or the phone. Choose a pane's conversation from its title, "new" starts a fresh one, "alone" opens it full width, × closes the pane (the thread stays in threads). The layout is kept per browser. The box answers `CC_MAX_RUNS` conversations at once (3 by default); a fourth pane's turn waits.
+`/panes` (the "side by side" button in the CC header) shows one to four conversations at once, like terminal windows. Each pane is the CC page itself at `/talk` (the same page; Caddy sends a fresh load of `/cc` to the bridge), pinned to one thread with `/talk?pane=1&thread=<brain id>` (or `thread=new`); a pinned page never calls `/cc/threads/switch` or `/cc/new`, so panes do not pull each other or the phone. Choose a pane's conversation from its title, "new" starts a fresh one, "alone" opens it full width, × closes the pane (the thread stays in threads). The layout is kept per browser. The box answers `CC_MAX_RUNS` conversations at once (3 by default); a fourth pane's turn waits.
 
 ## Files, jobs and attachments
 

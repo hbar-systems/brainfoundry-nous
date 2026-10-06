@@ -3,7 +3,8 @@ import React, { useEffect, useRef, useState } from 'react'
 
 // Panes: several conversations with the brain side by side, like terminal windows (2026-10-06).
 //
-// Each pane is the CC page itself in an iframe, opened as /cc?pane=<n>&thread=<brain id | new>,
+// Each pane is the CC page itself in an iframe, opened as /talk?pane=<n>&thread=<brain id | new>
+// (/talk, not /cc: Caddy sends a fresh load of /cc to the bridge),
 // so every pane keeps everything the page does (streaming, cards, voice, files, remarks). A pane
 // holds its own thread and never moves the box's current thread. The pane tells this page which
 // thread it shows (postMessage 'cc-pane-thread'), so the layout comes back after a reload.
@@ -122,7 +123,7 @@ export default function Panes() {
           ))}
           {narrow && panes.length < MAX && <Chip onClick={() => { setPanes(ps => [...ps, fresh()]); setFront(panes.length) }}>+</Chip>}
           <span style={{ flex: 1 }} />
-          <a href="/cc" style={{ ...mono, fontSize: '11px', color: C.dim }}>one conversation</a>
+          <a href="/talk" style={{ ...mono, fontSize: '11px', color: C.dim }}>one conversation</a>
         </div>
         <div style={{ flex: 1, minHeight: 0, display: 'grid', gap: '8px',
                       gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridAutoRows: 'minmax(0, 1fr)' }}>
@@ -138,7 +139,7 @@ export default function Panes() {
                   </a>
                   {running[p.thread] && <span style={{ ...mono, fontSize: '10px', color: C.gold }}>answering</span>}
                   <a onClick={() => open(p.id, 'new')} style={{ ...mono, fontSize: '10px', color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>new</a>
-                  {p.thread !== 'new' && <a href={`/cc?thread=${encodeURIComponent(p.thread)}`} target="_top" title="This conversation alone, full width" style={{ ...mono, fontSize: '10px', color: C.dim, textDecoration: 'underline' }}>alone</a>}
+                  {p.thread !== 'new' && <a href={`/talk?thread=${encodeURIComponent(p.thread)}`} target="_top" title="This conversation alone, full width" style={{ ...mono, fontSize: '10px', color: C.dim, textDecoration: 'underline' }}>alone</a>}
                   {panes.length > 1 && <a onClick={() => close(p.id)} title="Close this pane; the conversation stays in threads" style={{ ...mono, fontSize: '12px', color: C.dim, cursor: 'pointer' }}>×</a>}
                 </div>
                 {picker === p.id && (
@@ -156,7 +157,7 @@ export default function Panes() {
                   </div>
                 )}
                 <iframe ref={el => { frames.current[p.id] = el }} key={`${p.id}:${p.src}`} title={`pane ${i + 1}`}
-                        src={`/cc?pane=1&thread=${encodeURIComponent(p.src)}`}
+                        src={`/talk?pane=1&thread=${encodeURIComponent(p.src)}`}
                         allow="microphone; clipboard-write"
                         style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', backgroundColor: C.bg }} />
               </div>
