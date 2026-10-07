@@ -116,9 +116,12 @@ function Md({ text }) {
             // An absolute path on the box opens the Files pane at that file or folder.
             const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
             const isAbs = s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300
-            const isFile = s && base && /^[\w][\w. -]{0,120}\.[A-Za-z0-9]{1,5}$/.test(s.trim())
+            // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
+            // message if any, else the world (the bridge falls back to the world's root when the guess misses)
+            const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
             if (isAbs || isFile) {
-              const target = isAbs ? s.trim().replace(/[.,:;)]+$/, '') : `${base}/${s.trim()}`
+              const rel = s.trim()
+              const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
               return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: target }))} title={`Open ${target}`}
                 style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
             }

@@ -43,7 +43,11 @@ class Files:
         if not raw:
             return None
         try:
-            p = Path(raw).expanduser().resolve()
+            p = Path(raw).expanduser()
+            # a relative name ("world-map.html", "ops/x.md") is a path in the world, not in the bridge's cwd
+            if not p.is_absolute() and "world" in self.roots:
+                p = self.roots["world"] / p
+            p = p.resolve()
         except Exception:
             return None
         for root in self.roots.values():
@@ -67,6 +71,13 @@ class Files:
         if not raw:
             return {"path": None, "roots": [{"label": k, "path": str(v)} for k, v in self.roots.items()], "entries": []}
         p = self.resolve(raw)
+        if (p is None or not p.exists()) and "world" in self.roots:
+            # The page guesses a bare file name's folder from the last folder named in the message;
+            # when that guess misses, the same name at the world's root is the next place (hbar 2026-10-07:
+            # `world-map.html` opened under the chats folder the message had just named).
+            alt = (self.roots["world"] / Path(raw).name).resolve()
+            if alt.is_file():
+                p = alt
         if p is None or not p.exists():
             return {"error": "not a path the reasoner can reach"}
         if p.is_file():
