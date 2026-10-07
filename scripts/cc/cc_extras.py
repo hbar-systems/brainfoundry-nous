@@ -78,6 +78,15 @@ class Files:
             alt = (self.roots["world"] / Path(raw).name).resolve()
             if alt.is_file():
                 p = alt
+        if (p is None or not p.exists()) and "out" in self.roots and self.roots["out"].is_dir():
+            # Then the desk: files the reasoner made live in out/<date>/, newest day first
+            # (hbar 2026-10-07: `loop-map.html` sat in out/2026-10-07/ and missed both guesses).
+            name = Path(raw).name
+            for day in sorted((d for d in self.roots["out"].iterdir() if d.is_dir()), reverse=True)[:60]:
+                alt = (day / name).resolve()
+                if alt.is_file() and self.resolve(str(alt)):
+                    p = alt
+                    break
         if p is None or not p.exists():
             return {"error": "not a path the reasoner can reach"}
         if p.is_file():
