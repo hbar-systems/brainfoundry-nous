@@ -158,6 +158,7 @@ export default function Panes() {
   }
   const setCount = (n) => { setWide(null); setPanes(ps => (n <= ps.length ? ps.slice(0, n) : [...ps, ...Array.from({ length: n - ps.length }, () => fresh())])) }
   const open = (id, thread) => { setPanes(ps => ps.map(p => (p.id === id ? { ...p, src: thread, thread } : p))); setStates(st => ({ ...st, [id]: null })); setPicker(null); setMenu(null) }
+  const swap = (from, to) => setPanes(ps => { const x = ps.findIndex(q => q.id === from), y = ps.findIndex(q => q.id === to); if (x < 0 || y < 0 || x === y) return ps; const n = ps.slice(); [n[x], n[y]] = [n[y], n[x]]; return n })
   const close = (id) => { setPanes(ps => (ps.length > 1 ? ps.filter(p => p.id !== id) : ps)); setFront(0); setMenu(null); if (wide === id) setWide(null) }
   const tell = (id, cmd) => { const el = frames.current[id]; try { if (el && el.contentWindow) el.contentWindow.postMessage({ type: 'cc-pane-cmd', cmd }, window.location.origin) } catch {} setMenu(null) }
   const startRename = (p) => { if (!p.thread || p.thread === 'new') return; setRenaming(p.id); setRenameVal(title(p.thread)); setMenu(null) }
@@ -228,8 +229,12 @@ export default function Panes() {
             return (
               <div key={p.id} style={{ display: hidden ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, border: `1px solid ${st.kind === 'busy' ? C.gold : st.kind === 'waiting' ? C.warn : C.line}`, borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
                 {/* the one header line: number, state, title (click renames), what it is doing, the menu */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px 4px 10px', borderBottom: `1px solid ${C.line}`, backgroundColor: C.card, height: '28px', boxSizing: 'border-box' }}>
-                  <span style={{ ...mono, fontSize: '11px', color: C.dim }}>{i + 1}</span>
+                <div draggable={!narrow && panes.length > 1 && renaming !== p.id}
+                     onDragStart={e => { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move' }}
+                     onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
+                     onDrop={e => { e.preventDefault(); swap(e.dataTransfer.getData('text/plain'), p.id) }}
+                     style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px 4px 10px', borderBottom: `1px solid ${C.line}`, backgroundColor: C.card, height: '28px', boxSizing: 'border-box', cursor: !narrow && panes.length > 1 ? 'grab' : 'default' }}>
+                  <span style={{ ...mono, fontSize: '11px', color: C.dim }} title="Drag this bar onto another pane to swap places">{i + 1}</span>
                   <span title={st.kind === 'busy' ? 'answering' : st.kind === 'waiting' ? 'a card waits for your yes' : 'idle'}
                         style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, backgroundColor: st.color, animation: st.kind === 'busy' ? 'panepulse 1.2s ease-in-out infinite' : 'none' }} />
                   {renaming === p.id

@@ -139,9 +139,9 @@ export default function Files() {
               const active = sel && sel.path === full
               return (
                 <div key={e.name} onClick={() => (e.dir ? load(full) : setSel({ path: full, kind: e.kind, size: e.size, mtime: e.mtime }))}
-                  style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', backgroundColor: active ? T.card : 'transparent', borderBottom: `1px solid ${T.line}` }}>
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', backgroundColor: active ? T.card : 'transparent', borderBottom: `1px solid ${T.line}` }}>
                   <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.dir ? 'dir' : e.kind}</span>
-                  <span style={{ fontSize: '14px', color: T.ink, flex: 1, wordBreak: 'break-all' }}>{e.name}{e.dir ? '/' : ''}</span>
+                  <span style={{ fontSize: '14px', color: T.ink, flex: '1 1 160px', minWidth: 0, overflowWrap: 'anywhere' }}>{e.name}{e.dir ? '/' : ''}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{e.dir ? '' : fmtSize(e.size)}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
                 </div>
