@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -87,53 +87,63 @@ function CopyLink({ text, label, style }) {
   const [done, setDone] = useState(false)
   return <a onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
 }
-function Md({ text }) {
+// Selection snapped to the whole paragraph (2026-10-09). The renderer's `components` used to be
+// written inline in Md: new function identities on every render, so React unmounted and rebuilt
+// every <p>, <code>, <li> of every message on each render (the 2.5 s state poll, the pick popup's
+// own setState, a stream chunk). The DOM nodes holding the selection's ends were destroyed and the
+// browser moved the ends up to the parent, which selects the paragraph or several blocks above.
+// Now the components are built once per `base` (useMemo) and Md is memoised on its text, so a
+// message's DOM is reused in place and a dragged selection stays exactly as dragged.
+function mdComponents(base) {
+  return {
+    a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" style={{ color: C.gold }} />,
+    p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
+    ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
+    ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
+    // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
+    // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
+    // inline code rendered as full-width boxes and broke sentences apart).
+    // every code block carries its own copy button (2026-09-29: "we need things to have a copyable button")
+    pre: ({ node, ...props }) => (
+      <div style={{ position: 'relative', margin: '4px 0 8px 0' }}>
+        <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
+        <CopyLink text={hastText(node)} style={{ position: 'absolute', top: '6px', right: '8px' }} />
+      </div>
+    ),
+    code: ({ node, ...props }) => {
+      // An absolute path on the box opens the Files pane at that file or folder.
+      const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
+      const isAbs = s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300
+      // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
+      // message if any, else the world (the bridge falls back to the world's root when the guess misses)
+      const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
+      if (isAbs || isFile) {
+        const rel = s.trim()
+        const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
+        return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: target }))} title={`Open ${target}`}
+          style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
+      }
+      return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
+    },
+    table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
+    th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
+    td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
+  }
+}
+const Md = React.memo(function Md({ text }) {
   // The reasoner answers in markdown. Render it, but keep it plain: no raw HTML,
   // links open in a new tab, code stays monospace.
   // The last absolute folder named in the message is the base for bare filenames in it,
   // so "index.html" next to "/home/cc/out/.../" opens as that file (2026-09-22).
   const dirs = (text || '').match(/\/(?:home|opt|srv|var|tmp)\/[^\s`'")]+\//g) || []
   const base = dirs.length ? dirs[dirs.length - 1].replace(/\/$/, '') : null
+  const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
-        components={{
-          a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" style={{ color: C.gold }} />,
-          p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
-          ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
-          ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
-          // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
-          // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
-          // inline code rendered as full-width boxes and broke sentences apart).
-          // every code block carries its own copy button (2026-09-29: "we need things to have a copyable button")
-          pre: ({ node, ...props }) => (
-            <div style={{ position: 'relative', margin: '4px 0 8px 0' }}>
-              <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
-              <CopyLink text={hastText(node)} style={{ position: 'absolute', top: '6px', right: '8px' }} />
-            </div>
-          ),
-          code: ({ node, ...props }) => {
-            // An absolute path on the box opens the Files pane at that file or folder.
-            const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
-            const isAbs = s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300
-            // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
-            // message if any, else the world (the bridge falls back to the world's root when the guess misses)
-            const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
-            if (isAbs || isFile) {
-              const rel = s.trim()
-              const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
-              return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: target }))} title={`Open ${target}`}
-                style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
-            }
-            return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
-          },
-          table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
-          th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
-          td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
-        }}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
-}
+})
 
 function ProposalCard({ p, onDecide }) {
   // One proposed write, waiting for the person. The summary names platform,
@@ -631,7 +641,7 @@ function CC() {
       const i = parseInt(host.getAttribute('data-turn'), 10)
       if (!(turns[i] && turns[i].who === 'brain')) { setPick(null); return }
       const r = sel.getRangeAt(0).getBoundingClientRect(); const c = convRef.current.getBoundingClientRect()
-      setPick({ turn: i, quote: q.slice(0, 400), x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
+      setPick({ turn: i, quote: q.slice(0, 400), raw: sel.toString(), x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
     } catch { setPick(null) }
   }
   function addNote() {
@@ -726,7 +736,10 @@ function CC() {
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
         if (!d || !Array.isArray(d.messages)) return
-        setTurns(d.messages.map(m => ({ who: m.role === 'user' ? 'me' : 'brain', text: m.content })))
+        // a hand-back is recorded as a bracketed line ("[agent report received: ...]"); it shows as a small line again
+        setTurns(d.messages.map(m => (m.role !== 'user' && /^\[agent report received[^\]]*\]$/.test((m.content || '').trim())
+          ? { who: 'note', text: m.content.trim().slice(1, -1) }
+          : { who: m.role === 'user' ? 'me' : 'brain', text: m.content })))
       })
       .catch(() => {})
   }
@@ -841,7 +854,7 @@ function CC() {
 
   // the whole conversation as markdown: copied, and downloaded as a file (the header's button, or the pane's menu)
   function exportThread() {
-    const md = turns.filter(x => x.text).map(x => `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`).join('\n\n---\n\n')
+    const md = turns.filter(x => x.text).map(x => (x.who === 'note' ? `_${x.text}_` : `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`)).join('\n\n---\n\n')
     if (!md) return
     copyText(md)
     try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' })); a.download = `cc-thread-${new Date().toISOString().slice(0, 10)}.md`; a.click() } catch {}
@@ -870,7 +883,14 @@ function CC() {
     // the live bubble is the LAST LIVE turn, not the last turn: a message queued behind it sits below it (a reply was lost to that on 2026-09-28)
     const liveIdx = c => { for (let i = c.length - 1; i >= 0; i--) if (c[i].live) return i; return -1 }
     const upd = f => { if (!mine()) return; setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = f(c[i]); return c }) }
-    if (!withBegin && mine()) setTurns(t => [...t, { who: 'brain', text: '', live: true, steps: [] }])
+    // Every assistant text block of a run is its own bubble, kept in order, never replaced by a later
+    // one (2026-10-09: a long report vanished when a subagent handed back and the run's LAST text
+    // became the whole reply). `runId` tags the run's bubbles so a replay (re-attach, the poll, a
+    // broken stream followed through /cc/live) swaps them for the same ones instead of doubling them.
+    let runId = null
+    let curText = ''   // the text of the block being written, for the voice
+    const newLive = model => ({ who: 'brain', text: '', live: true, steps: [], run: runId, model })
+    if (!withBegin && mine()) setTurns(t => [...t, newLive()])
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''; let data = null
     for (;;) {
       const { value, done } = await reader.read()
@@ -883,12 +903,17 @@ function CC() {
         if (!ev || !dl) continue
         let pl = {}; try { pl = JSON.parse(dl) } catch { continue }
         if (ev === 'begin') {
-          if (pl.run) runIdRef.current[key] = pl.run
+          if (pl.run) { runIdRef.current[key] = pl.run; runId = pl.run }
           if (withBegin && mine()) setTurns(t => {
-            const rest = t.filter(x => !x.live)
-            const lastMe = rest.length && rest[rest.length - 1].who === 'me' && rest[rest.length - 1].text === (pl.message || '')
-            return [...rest, ...(lastMe ? [] : [{ who: 'me', text: pl.message || '' }]), { who: 'brain', text: '', live: true, steps: [] }]
+            const mineOfRun = x => x.live || (runId && x.run === runId)
+            const at = t.findIndex(mineOfRun)
+            const rest = t.filter(x => !mineOfRun(x))
+            const pos = at >= 0 ? at : rest.length
+            const before = pos > 0 ? rest[pos - 1] : null
+            const lastMe = before && before.who === 'me' && before.text === (pl.message || '')
+            return [...rest.slice(0, pos), ...(lastMe ? [] : [{ who: 'me', text: pl.message || '' }]), newLive(), ...rest.slice(pos)]
           })
+          else if (mine()) upd(x => ({ ...x, run: runId }))
         }
         else if (ev === 'start') {
           if (mine()) {
@@ -898,7 +923,36 @@ function CC() {
           }
           upd(x => ({ ...x, model: pl.model }))
         }
-        else if (ev === 'text') { clearTimeout(cueRef.current); upd(x => { const nt = x.text + (pl.t || ''); if (speak && health && health.voice) speakProgress(nt, false); return { ...x, text: nt } }) }
+        else if (ev === 'text') {
+          clearTimeout(cueRef.current)
+          curText += (pl.t || '')
+          if (speak && health && health.voice && mine()) speakProgress(curText, false)
+          upd(x => ({ ...x, text: x.text + (pl.t || '') }))
+        }
+        else if (ev === 'block') {
+          // a new assistant text block: the one written so far stays as it is, the next gets its own bubble
+          if (speak && health && health.voice && curText && mine()) speakProgress(curText, true)
+          curText = ''; if (mine()) spokenRef.current = 0
+          if (mine()) setTurns(t => {
+            const c = t.slice(); const i = liveIdx(c)
+            if (i < 0 || !c[i].text) return c
+            c[i] = { ...c[i], live: false }
+            c.splice(i + 1, 0, newLive(c[i].model))
+            return c
+          })
+        }
+        else if (ev === 'note') {
+          // a hand-back (a background subagent reported in): a small labelled line, not the person's message
+          if (mine()) setTurns(t => {
+            const c = t.slice(); const i = liveIdx(c)
+            const note = { who: 'note', text: pl.label || 'agent report received', run: runId }
+            if (i < 0) { c.push(note); return c }
+            if (c[i].text) { c[i] = { ...c[i], live: false }; c.splice(i + 1, 0, note, newLive(c[i].model)) }
+            else c.splice(i, 0, note)
+            return c
+          })
+          curText = ''; if (mine()) spokenRef.current = 0
+        }
         else if (ev === 'tool') upd(x => ({ ...x, steps: [...x.steps, pl.brief || pl.name] }))
         else if (ev === 'ask') upd(x => ({ ...x, asks: [...(x.asks || []), pl] }))
         else if (ev === 'done') data = pl
@@ -919,7 +973,26 @@ function CC() {
     }
     const reply = data.reply || '(no answer)'
     if (mine()) {
-      setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null, sources: data.sources || [] }; return c })
+      setTurns(t => {
+        const c = t.slice(); const i = liveIdx(c); if (i < 0) return c
+        const cur = c[i]
+        const fin = { live: false, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null, sources: data.sources || [] }
+        // The reply is the run's LAST text. Earlier blocks stay as streamed; only the last bubble is
+        // settled to the reply (it has the proposal and pane markers cut out). A stopped turn adds its note.
+        if (!cur.text && !data.error && !data.stopped) {
+          // the run ended with nothing written after the last hand-back: the reply is already the bubble above
+          let k = i - 1
+          while (k >= 0 && !(c[k].who === 'brain' && c[k].run && c[k].run === cur.run)) k--
+          if (k >= 0) {
+            c[k] = { ...c[k], ...fin, steps: [...(c[k].steps || []), ...(cur.steps || [])], asks: [...(c[k].asks || []), ...(cur.asks || [])] }
+            c.splice(i, 1)
+            return c
+          }
+        }
+        const text = data.stopped && cur.text ? (cur.text + '\n\n(stopped by you)').trim() : reply
+        c[i] = { ...cur, ...fin, text }
+        return c
+      })
       if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
       spokenRef.current = 0
       if (data.pane) openPane(data.pane)
@@ -1532,7 +1605,7 @@ function CC() {
           {pick && (
             <span style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
               {[['remark', 'a note in the margin on the selected span; it goes with your next message', () => addNote()],
-                ['copy', 'copy the selected words', () => { try { navigator.clipboard.writeText(pick.quote) } catch {} setPick(null) }],
+                ['copy', 'copy the selected words', () => { try { navigator.clipboard.writeText(pick.raw || pick.quote) } catch {} setPick(null) }],
                 ['ask', 'put the selected words into the composer to ask about them', () => { setDraft(d => (d ? d + '\n' : '') + `About this: "${pick.quote}" `); setPick(null); if (boxRef.current) boxRef.current.focus() }]].map(([label, title, fn]) => (
                 <a key={label} onMouseDown={e => { e.preventDefault(); fn() }} title={title}
                    style={{ ...mono, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: label === 'remark' ? '#141210' : C.ink, backgroundColor: label === 'remark' ? C.gold : C.card, border: `1px solid ${C.gold}`, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>{label}</a>
@@ -1554,7 +1627,11 @@ function CC() {
               {health.session ? ' The previous thread continues.' : ''}
             </p>
           )}
-          {turns.map((t, i) => (
+          {turns.map((t, i) => (t.who === 'note' ? (
+            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '3px 0' : '4px 0' }}>
+              <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
+            </div>
+          ) : (
             <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: room ? 'nowrap' : 'wrap', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative' }}>
               {notes.some(n => n.turn === i) && (
                 <div style={room ? { position: 'absolute', left: 'calc(100% + 14px)', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px' }
@@ -1600,7 +1677,7 @@ function CC() {
                 )}
               </div>
             </div>
-          ))}
+          )))}
           {srv && srv.queue && srv.queue.map(q => (
             <div key={q.id} style={{ display: 'flex', justifyContent: 'flex-end', margin: paneMode ? '5px 0' : '8px 0' }}>
               <div style={{ maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: C.me, border: `1px solid ${C.line}`, color: C.meText, fontSize: '14px', lineHeight: 1.6, opacity: 0.55 }}>

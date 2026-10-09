@@ -525,3 +525,58 @@ def test_post_hook_opens_written_file_and_prompt_goes_through_stdin(monkeypatch,
     monkeypatch.setattr(m.subprocess, "Popen", fake_popen)
     m._stream_turn([m.REASONER, "-p", "--output-format", "json"], lambda k, p: None, prompt="the secret memory")
     assert "the secret memory" not in " ".join(seen["argv"]) and seen["prompt"] == "the secret memory" and seen["stdin"] is not None
+
+
+def test_stream_turn_keeps_every_text_block_and_marks_handbacks(monkeypatch, tmp_path):
+    """2026-10-09: a long report, then a background subagent hands back and the reasoner answers
+    again. The CLI emits two results; the bridge announces each text block and the hand-back, and the
+    run keeps every piece in order (the last result alone is only the final text)."""
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json
+def p(o): print(json.dumps(o), flush=True)
+def blk(t):
+    p({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
+    p({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}})
+p({"type": "system", "subtype": "init", "model": "claude-x", "session_id": "s1"})
+blk("The full report.")
+p({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Agent", "input": {"description": "audit"}}]}})
+p({"type": "user", "message": {"content": [{"type": "tool_result", "content": "started"}]}})
+blk("Waiting on the agent.")
+p({"type": "result", "result": "Waiting on the agent.", "session_id": "s1", "is_error": False, "num_turns": 2, "usage": {}})
+p({"type": "user", "message": {"role": "user", "content": "<task-notification><summary>Agent audit finished</summary></task-notification>"}})
+blk("Got it, thanks.")
+p({"type": "result", "result": "Got it, thanks.", "session_id": "s1", "is_error": False, "num_turns": 3, "usage": {}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    run = m.Run(None, "go")
+    reply, sid, err = m._run_turn("go", None, on_event=run.emit, run=run)
+    assert reply == "Got it, thanks."
+    kinds = [k for k, _ in run.events]
+    assert kinds.count("block") == 3 and kinds.count("note") == 1
+    assert [tuple(i) for i in run.items] == [
+        ("text", "The full report."), ("text", "Waiting on the agent."),
+        ("note", "agent report received: Agent audit finished"), ("text", "Got it, thanks.")]
+    # the brain's record: everything before the final reply, the hand-back as a bracketed line
+    assert m._earlier_pieces(run) == ["The full report.", "Waiting on the agent.", "[agent report received: Agent audit finished]"]
+    run.stopped = True
+    assert m._earlier_pieces(run) == []
+
+
+def test_handback_label_only_for_notifications(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._handback_label({"message": {"content": [{"type": "tool_result", "content": "task-notification"}]}}) is None
+    assert m._handback_label({"message": {"content": "hello"}}) is None
+    assert m._handback_label({"message": {"content": [{"type": "text", "text": "Another Claude session sent a message: x"}]}}) == "agent report received"
+
+
+def test_console_keeps_selection_and_blocks():
+    """The page cannot be run here; guard the two causes by source. Markdown components must not be
+    created inline per render (it rebuilt the DOM under a selection), and every text block is a bubble."""
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    assert "const Md = React.memo(" in src and "useMemo(() => mdComponents(base), [base])" in src
+    assert "components={{" not in src
+    assert "ev === 'block'" in src and "ev === 'note'" in src and "x.run === runId" in src

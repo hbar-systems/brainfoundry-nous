@@ -527,6 +527,10 @@ class Run:
         self.proc = None
         self.stopped = False
         self.partial: list = []
+        # Every piece of the run in order (2026-10-09): ["text", str] for each assistant text block
+        # and ["note", str] for a hand-back (a background subagent reporting in). The reasoner's
+        # final result carries only the LAST text; the page and the brain's record keep all of it.
+        self.items: list = []
 
     def emit(self, kind: str, payload: dict) -> None:
         with self.lock:
@@ -537,6 +541,17 @@ class Run:
                 self.payload = payload
             if kind == "text" and payload.get("t"):
                 self.partial.append(payload["t"])
+                if not self.items or self.items[-1][0] != "text":
+                    self.items.append(["text", ""])
+                self.items[-1][1] += payload["t"]
+            elif kind == "block":
+                # a new assistant text block starts: its own piece, and a paragraph break in the running text
+                if self.partial:
+                    self.partial.append("\n\n")
+                if not self.items or self.items[-1][0] != "text" or self.items[-1][1]:
+                    self.items.append(["text", ""])
+            elif kind == "note":
+                self.items.append(["note", str(payload.get("label") or "agent report received")])
             sinks = list(self.sinks)
         for f in sinks:
             try:
@@ -1394,7 +1409,28 @@ def _brain_api(method: str, path: str, body: dict | None = None):
         return None
 
 
-def _record_turn(state: dict, message: str, reply: str, card: dict | None) -> dict:
+def _earlier_pieces(run) -> list:
+    """What the run said before its final reply, in order, for the brain's record: each earlier
+    assistant text block, and a bracketed line for each hand-back. The final text block is the
+    reply itself, so it is left out (a stopped turn's reply already holds everything)."""
+    if run is None or run.stopped:
+        return []
+    items = [list(i) for i in run.items]
+    if items and items[-1][0] == "text":
+        items.pop()
+    out = []
+    for kind, txt in items:
+        if kind == "note":
+            out.append(f"[{txt}]")
+        else:
+            t, _ = _extract_proposal(txt)
+            t, _ = _extract_pane(t)
+            if t.strip():
+                out.append(t.strip())
+    return out
+
+
+def _record_turn(state: dict, message: str, reply: str, card: dict | None, earlier: list | None = None) -> dict:
     """Write this turn into the brain's chat record. Creates the brain session on the first
     turn of a thread (model_name "cc", title from the first message) and registers the
     thread. Fail-soft: CC keeps working if the api is unreachable."""
@@ -1412,6 +1448,8 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None) -> di
         _threads_save(threads)
     sid = state["brain_session_id"]
     _brain_api("POST", f"/sessions/{sid}/messages", {"role": "user", "content": message})
+    for piece in (earlier or []):
+        _brain_api("POST", f"/sessions/{sid}/messages", {"role": "assistant", "content": piece})
     text = reply or ""
     if card:
         if card.get("auto"):
@@ -1783,6 +1821,24 @@ def _stop_run(run: Run) -> bool:
     return True
 
 
+def _handback_label(ev: dict) -> str | None:
+    """The label for a user-type stream event that is a hand-back (a task notification or a
+    message from another session); None for tool results and anything else."""
+    c = (ev.get("message") or {}).get("content")
+    if isinstance(c, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return None
+        c = "\n".join(str(b.get("text") or "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(c, str) or not c.strip():
+        return None
+    low = c.lower()
+    if "task-notification" not in low and "another claude session" not in low:
+        return None
+    m = re.search(r"<summary>(.*?)</summary>", c, re.S)
+    s = " ".join(m.group(1).split())[:80] if m else ""
+    return "agent report received" + (f": {s}" if s else "")
+
+
 def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str = "") -> tuple[dict | None, str, int]:
     """Run the reasoner with stream-json output, forwarding events as they arrive.
     Returns (result_event, stderr_tail, returncode). The run (when given) learns the
@@ -1843,10 +1899,11 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
             elif kind == "stream_event":
                 e = ev.get("event") or {}
                 d = e.get("delta") or {}
-                if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "text" and seen_text:
-                    # A new piece of prose after a tool call: the page glued "...test.Now the
-                    # reducer..." together (2026-09-28); each piece starts on its own line.
-                    on_event("text", {"t": "\n\n"})
+                if e.get("type") == "content_block_start" and (e.get("content_block") or {}).get("type") == "text":
+                    # A new assistant text block. The page glued "...test.Now the reducer..."
+                    # together (2026-09-28), then kept only the run's last block (2026-10-09):
+                    # each block is announced, and the page keeps each as its own bubble.
+                    on_event("block", {})
                 if e.get("type") == "content_block_delta" and d.get("type") == "text_delta" and d.get("text"):
                     seen_text = True
                     on_event("text", {"t": d.get("text", "")})
@@ -1855,8 +1912,15 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
                     if blk.get("type") == "tool_use":
                         in_tool[0] = True
                         on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input"))})
+            elif kind == "user":
+                # A hand-back: a background subagent finished and the reasoner starts another
+                # step on its own ("Another Claude session sent a message" / <task-notification>).
+                # It is not the person's message; the page shows a small labelled line.
+                label = _handback_label(ev)
+                if label:
+                    on_event("note", {"label": label})
             elif kind == "result":
-                result = ev
+                result = ev   # one per step of the run; the last one is the final
     finally:
         stop.set()
     proc.wait()
@@ -2120,11 +2184,11 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 st = _load_state()
                 if st.get("session_id") == sid or not st.get("session_id"):
                     st["session_id"] = sid
-                    st = _record_turn(st, message, reply, card)
+                    st = _record_turn(st, message, reply, card, _earlier_pieces(run))
                     _save_state(st)
                 state = st
             else:
-                state = _record_turn(state, message, reply, card)
+                state = _record_turn(state, message, reply, card, _earlier_pieces(run))
                 cur = _load_state()
                 if cur.get("brain_session_id") == state.get("brain_session_id"):
                     cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
@@ -2150,7 +2214,8 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "model": META.get("model")})
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
-               "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES)}
+               "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES),
+               "stopped": bool(run.stopped)}
     run.emit("done", payload)
     _runs_prune()
     return 200, payload
