@@ -155,6 +155,7 @@ export default function Board() {
           <span style={{ flex: 1 }} />
           {board && board.max_runs ? <span style={{ ...mono, fontSize: '11px', color: C.dim }}>up to {board.max_runs} answer at once</span> : null}
           <a href="/panes" style={link}>side by side</a>
+          <a href="/gallery" style={link}>gallery</a>
           <a href="/talk" style={link}>one conversation</a>
           <a href="/files" style={link}>files</a>
         </div>

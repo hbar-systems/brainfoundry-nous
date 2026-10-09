@@ -6,6 +6,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- cc: gallery (2026-10-09). `/gallery` shows the conversations as a deck: the active one in front at full size, the previous and next blurred and dimmed behind it, offset to the sides. Left/right or [ ] switch, scrolling over the sides or the title strip switches, a click on a blurred neighbour brings it forward, Esc leaves; transitions 200 ms, none under prefers-reduced-motion. Each card is the CC page in a frame (as in side by side), so every card is live (state dot, queued messages, permission cards) and only the front one takes the pointer and keyboard; at most 5 are mounted. Order: the thread list's own (pinned, then most recent), kept stable while open. Button "gallery" next to "side by side". Logic in `ui/lib/gallery.js`, tested under node.
+
 - cc: side by side (2026-10-06). `/panes` tiles one to four conversations like terminal windows; each pane is the CC page in an iframe (`/cc?pane=1&thread=<id|new>`), so it keeps streaming, cards, voice and files. A pane holds its own thread and never moves the box's current thread; the layout is kept in the browser (`cc.panes`); a pane's border lights while it answers; on a narrow screen one pane shows with numbered chips. The CC header gains "side by side"; cards notify once from `/panes`, not per pane. The box still answers `CC_MAX_RUNS` (3) at once.
 
 - fix: side by side showed {"error": "not_found"} in every pane: the iframes loaded /cc, which Caddy routes to the bridge. The CC page is also served at /talk; panes, "alone" and "one conversation" use it (2026-10-06).

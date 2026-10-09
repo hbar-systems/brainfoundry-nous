@@ -761,3 +761,41 @@ console.log(JSON.stringify({
     assert d["locS"] == [{"i": 1, "off": 0}, {"i": 0, "off": 5}, {"i": 2, "off": 3}, {"i": 1, "off": 0}]
     assert d["pos"] == [8, 10, -1]
     assert d["mono"] is True
+
+
+def test_ui_gallery_deck_logic():
+    import json
+    out = _node(r"""
+const G = require('./gallery')
+let n = 0; const mk = () => 'u' + (n++)
+const th = (...ids) => ids.map(b => ({ brain: b }))
+const a = G.mergeCards([], th('x', 'y', 'z'), mk)
+// a later poll keeps the deck order, drops a gone thread, appends a new one at the end
+const b = G.mergeCards(a, th('z', 'y', 'w'), mk)
+// a 'new' card that was named x is not listed twice when x shows up in the list
+const c0 = [{ uid: 'n1', thread: 'new' }, { uid: 'n2', thread: 'x' }]
+const c = G.mergeCards(c0, th('x', 'y'), mk)
+console.log(JSON.stringify({
+  a: a.map(x => x.thread + ':' + x.uid), b: b.map(x => x.thread + ':' + x.uid), c: c.map(x => x.thread),
+  idx: [G.indexOfThread(a, 'z'), G.indexOfThread(a, 'nope')],
+  step: [G.step(0, -1, 5), G.step(4, 1, 5), G.step(2, 1, 5), G.step(0, 1, 0)],
+  win: [G.windowIndices(10, 0), G.windowIndices(10, 5), G.windowIndices(10, 9), G.windowIndices(3, 1), G.windowIndices(0, 0)],
+  slots: [-3, -1, 0, 2].map(d => G.slot(d)),
+  keys: ['ArrowLeft', '[', 'ArrowRight', ']', 'a', 'Escape'].map(G.keyAction),
+  wheel: [G.wheelAction({ deltaX: 0, deltaY: 40 }, 0, 1000), G.wheelAction({ deltaX: -30, deltaY: 5 }, 0, 1000),
+          G.wheelAction({ deltaX: 0, deltaY: 40 }, 900, 1000), G.wheelAction({ deltaX: 0, deltaY: 1 }, 0, 1000)],
+}))""")
+    d = json.loads(out)
+    assert d["a"] == ["x:u0", "y:u1", "z:u2"]
+    assert [x.split(":")[0] for x in d["b"]] == ["y", "z", "w"]
+    assert d["c"] == ["new", "x", "y"]
+    assert d["idx"] == [2, 0]
+    assert d["step"] == [0, 4, 3, 0]
+    assert d["win"] == [[0, 1, 2], [3, 4, 5, 6, 7], [7, 8, 9], [0, 1, 2], []]
+    assert len(d["win"][1]) == 5
+    s = d["slots"]
+    assert s[2]["x"] == 0 and s[2]["blur"] == 0 and s[2]["scale"] == 1
+    assert s[1]["x"] < 0 < -s[1]["x"] and s[1]["blur"] > 0 and s[1]["bright"] < 1
+    assert s[3]["blur"] > s[1]["blur"] and s[3]["x"] > 0 and s[0]["opacity"] == 0
+    assert d["keys"] == [-1, -1, 1, 1, None, None]
+    assert d["wheel"] == [1, -1, 0, 0]

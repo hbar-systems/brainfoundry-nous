@@ -243,6 +243,7 @@ export default function Panes() {
           {auto.length > 0 && <a onClick={(e) => { e.stopPropagation(); setShowAuto(s => !s) }} style={link}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a>}
           {!narrow && customLayout && <a onClick={resetLayout} title="Back to even columns and rows" style={link}>reset layout</a>}
           <a href="/files" style={link}>files</a>
+          <a href="/gallery" title="Your conversations as a deck, the neighbours blurred behind the front one" style={link}>gallery</a>
           <a href="/board" title="Mission control: one tile per run" style={link}>board</a>
           <a href="/talk" style={link}>one conversation</a>
           {showAuto && auto.length > 0 && (

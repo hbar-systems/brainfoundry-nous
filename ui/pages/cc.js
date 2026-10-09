@@ -703,6 +703,22 @@ function CC() {
     measure(); window.addEventListener('resize', measure); const t = setInterval(measure, 2000)
     return () => { window.removeEventListener('resize', measure); clearInterval(t) }
   }, [])
+  // In the gallery the front card is this page in a frame, so keys typed here never reach the deck.
+  // Outside a text field, left/right/[/] and Esc go up to it ('cc-pane-key'); /panes ignores them.
+  // Capture phase and the span check: Esc that clears an underlined span stays inside the page.
+  useEffect(() => {
+    if (!paneMode) return
+    const fwd = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (e.key === 'Escape' && spanRef.current) return
+      if (!['ArrowLeft', 'ArrowRight', '[', ']', 'Escape'].includes(e.key)) return
+      try { window.parent.postMessage({ type: 'cc-pane-key', key: e.key }, window.location.origin) } catch {}
+    }
+    document.addEventListener('keydown', fwd, true)
+    return () => document.removeEventListener('keydown', fwd, true)
+  }, [paneMode])
   useEffect(() => {
     // Esc, or a press outside the conversation, clears the underlined span
     const key = (e) => { if (e.key === 'Escape' && spanRef.current) clearSpan() }
@@ -1703,6 +1719,7 @@ function CC() {
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {!paneMode && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
+            {!paneMode && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
             {!paneMode && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
             {showThreads && (
