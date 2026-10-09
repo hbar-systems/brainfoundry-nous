@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '../lib/pathlinks'
+import { ladder, locate, positionOf } from '../lib/spanpick'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -86,7 +87,7 @@ function hastText(node) {
 function copyText(text) { try { navigator.clipboard.writeText(text || '') } catch {} }
 function CopyLink({ text, label, style }) {
   const [done, setDone] = useState(false)
-  return <a onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
+  return <a data-nopick="1" onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
 }
 // A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
 // there inline), hover on an image shows it small beside the link.
@@ -428,6 +429,36 @@ function SignIn({ onDone, health, onOpenPane }) {
   )
 }
 
+// Press, do not drag (2026-10-09). A message's rendered text nodes, flattened to one string with a
+// "\n" where one block ends and the next begins, plus where each node sits in that string. Read-only:
+// nothing here changes the DOM React owns; the underline is a CSS highlight over a Range.
+const PICK_BLOCK = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre,tr'
+function flattenText(root) {
+  const nodes = [], segs = []
+  let text = '', prev = null
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('button,textarea,style,script,[data-nopick]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  })
+  let n
+  while ((n = w.nextNode())) {
+    const v = n.nodeValue
+    if (!v) continue
+    const b = (n.parentElement && n.parentElement.closest(PICK_BLOCK)) || root
+    if (prev && b !== prev) text += '\n'
+    segs.push({ start: text.length, len: v.length }); nodes.push(n); text += v; prev = b
+  }
+  return { text, nodes, segs }
+}
+// where a click landed: { node, offset } in a text node, or null
+function caretAt(x, y) {
+  try {
+    if (document.caretPositionFromPoint) { const c = document.caretPositionFromPoint(x, y); if (c && c.offsetNode) return { node: c.offsetNode, offset: c.offset } }
+    if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(x, y); if (r) return { node: r.startContainer, offset: r.startOffset } }
+  } catch {}
+  return null
+}
+const HL_OK = () => { try { return !!(window.CSS && CSS.highlights && window.Highlight) } catch { return false } }
+
 function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
@@ -438,6 +469,8 @@ function CC() {
   // message, the exact span, the remark. Replaces retyping quotes into the composer.
   const [notes, setNotes] = useState([])            // { id, turn, quote, text }
   const [pick, setPick] = useState(null)            // a selection waiting for its "remark" button: { turn, quote, x, y }
+  const spanRef = useRef(null)                  // the pressed span: { turn, bubble, anchor, level }
+  const downRef = useRef(null)                  // where the mouse went down, and whether text was already selected
   const [room, setRoom] = useState(false)           // is there a margin to the right of the column?
   const notesKeyRef = useRef('cc.notes.new')
   const [jobs, setJobs] = useState([])              // recent jobs on the box (cc-job)
@@ -670,6 +703,13 @@ function CC() {
     measure(); window.addEventListener('resize', measure); const t = setInterval(measure, 2000)
     return () => { window.removeEventListener('resize', measure); clearInterval(t) }
   }, [])
+  useEffect(() => {
+    // Esc, or a press outside the conversation, clears the underlined span
+    const key = (e) => { if (e.key === 'Escape' && spanRef.current) clearSpan() }
+    const down = (e) => { if (spanRef.current && convRef.current && !convRef.current.contains(e.target)) clearSpan() }
+    document.addEventListener('keydown', key); document.addEventListener('mousedown', down)
+    return () => { document.removeEventListener('keydown', key); document.removeEventListener('mousedown', down); unpaintSpan() }
+  }, [])
   function onPick() {
     // a mouse-up inside the conversation: a non-empty selection inside one of the brain's messages offers a remark
     try {
@@ -679,37 +719,122 @@ function CC() {
       const host = node && node.closest ? node.closest('[data-turn]') : null
       if (!host || !convRef.current) { setPick(null); return }
       const i = parseInt(host.getAttribute('data-turn'), 10)
-      if (!(turns[i] && turns[i].who === 'brain')) { setPick(null); return }
+      if (!(turns[i] && (turns[i].who === 'brain' || turns[i].who === 'me'))) { setPick(null); return }
       const r = sel.getRangeAt(0).getBoundingClientRect(); const c = convRef.current.getBoundingClientRect()
-      setPick({ turn: i, quote: q.slice(0, 400), raw: sel.toString(), x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
+      setPick({ turn: i, quote: q.slice(0, 400), raw: sel.toString(), press: false, x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
     } catch { setPick(null) }
+  }
+  // The press gesture (2026-10-09): a plain click (no drag distance, no text already selected, not on a
+  // link, button, input or the pick popup) on a word of a message underlines the clause around it;
+  // a click inside the underlined span widens it (phrase, sentence, paragraph); wider / narrower in
+  // the popup do the same; Esc or a click elsewhere clears it. A real drag selection goes through
+  // onPick exactly as before.
+  function unpaintSpan() { try { if (window.CSS && CSS.highlights) CSS.highlights.delete('cc-span') } catch {} }
+  function clearSpan() { unpaintSpan(); if (spanRef.current) { spanRef.current = null; setPick(p => (p && p.press ? null : p)) } }
+  function showSpan(bubble, turn, fl, anchor, lad, level) {
+    const [a, b] = lad[level]
+    const la = locate(fl.segs, a, false), lb = locate(fl.segs, b, true)
+    if (!la || !lb) return false
+    const range = document.createRange()
+    range.setStart(fl.nodes[la.i], la.off); range.setEnd(fl.nodes[lb.i], lb.off)
+    if (HL_OK()) { CSS.highlights.set('cc-span', new Highlight(range)) }
+    else { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range) }   // no highlight support: a plain selection, same words
+    const raw = fl.text.slice(a, b).replace(/\n{2,}/g, '\n')
+    const quote = raw.replace(/\s+/g, ' ').trim()
+    const r = range.getBoundingClientRect(); const c = convRef.current.getBoundingClientRect()
+    spanRef.current = { turn, bubble, anchor, level, s: a, e: b }
+    setPick({ turn, quote: quote.slice(0, 400), raw, press: true, level, max: lad.length - 1, x: Math.max(8, r.left - c.left), y: Math.max(0, r.top - c.top + convRef.current.scrollTop - 30) })
+    return true
+  }
+  function stepSpan(d) {
+    const cur = spanRef.current
+    if (!cur || !cur.bubble.isConnected) { clearSpan(); return }
+    const fl = flattenText(cur.bubble); const lad = ladder(fl.text, cur.anchor)
+    const level = Math.max(0, Math.min(lad.length - 1, cur.level + d))
+    if (!lad.length || !showSpan(cur.bubble, cur.turn, fl, cur.anchor, lad, level)) clearSpan()
+  }
+  function pressAt(e) {
+    const bubble = e.target.closest ? e.target.closest('[data-bubble]') : null
+    if (!bubble || !convRef.current) return false
+    const host = bubble.closest('[data-turn]'); const i = host ? parseInt(host.getAttribute('data-turn'), 10) : -1
+    const t = turns[i]
+    if (!t || !t.text || t.job || (t.who !== 'brain' && t.who !== 'me')) return false
+    const cp = caretAt(e.clientX, e.clientY)
+    if (!cp || cp.node.nodeType !== 3 || !bubble.contains(cp.node)) return false
+    const fl = flattenText(bubble)
+    const idx = fl.nodes.indexOf(cp.node)
+    if (idx < 0) return false
+    const pos = positionOf(fl.segs, idx, cp.offset)
+    // the click must be on the text itself, not the padding beside it
+    try {
+      const rg = document.createRange(); rg.setStart(cp.node, Math.max(0, cp.offset - 1)); rg.setEnd(cp.node, Math.min(cp.node.nodeValue.length, cp.offset + 1))
+      const rs = Array.from(rg.getClientRects())
+      if (rs.length && !rs.some(q => e.clientX >= q.left - 6 && e.clientX <= q.right + 6 && e.clientY >= q.top - 4 && e.clientY <= q.bottom + 4)) return false
+    } catch {}
+    const cur = spanRef.current
+    const again = cur && cur.bubble === bubble && pos >= cur.s && pos < cur.e
+    const anchor = again ? cur.anchor : pos
+    const lad = ladder(fl.text, anchor)
+    if (!lad.length) return false
+    return showSpan(bubble, i, fl, anchor, lad, Math.min(lad.length - 1, again ? cur.level + 1 : 0))
+  }
+  function onConvDown(e) {
+    let had = false; try { const sel = window.getSelection(); had = !!(sel && sel.toString().trim()) } catch {}
+    downRef.current = { x: e.clientX, y: e.clientY, had }
+  }
+  function onConvUp(e) {
+    const d = downRef.current; downRef.current = null
+    if (e.target.closest && e.target.closest('[data-pickui]')) return
+    let q = ''; try { const sel = window.getSelection(); q = sel ? sel.toString().trim() : '' } catch {}
+    if (q) { clearSpan(); onPick(); return }          // a dragged selection: as before
+    const moved = !d || Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3
+    const blocked = e.target.closest && e.target.closest('a,button,input,textarea,select,label,summary,[role="button"],[data-nopick]')
+    if (!moved && !d.had && e.button === 0 && e.detail <= 1 && !blocked && pressAt(e)) return
+    clearSpan(); setPick(null)
   }
   function addNote() {
     if (!pick) return
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setNotes(n => [...n, { id, turn: pick.turn, quote: pick.quote, text: '' }])
-    setPick(null); try { window.getSelection().removeAllRanges() } catch {}
+    setNotes(n => [...n, { id, turn: pick.turn, who: (turns[pick.turn] && turns[pick.turn].who) || 'brain', quote: pick.quote, text: '', mode: 'keep' }])
+    clearSpan(); setPick(null); try { window.getSelection().removeAllRanges() } catch {}
     setTimeout(() => { const el = document.getElementById(`note-${id}`); if (el) el.focus() }, 30)
   }
   const setNote = (id, text) => setNotes(n => n.map(x => (x.id === id ? { ...x, text } : x)))
+  const setNoteMode = (id, mode) => setNotes(n => n.map(x => (x.id === id ? { ...x, mode } : x)))
   const dropNote = (id) => setNotes(n => n.filter(x => x.id !== id))
+  // "send now": this remark alone, as its own message with the quoted span
+  function sendNote(id) {
+    const n = notes.find(x => x.id === id)
+    if (!n || !n.text.trim()) return
+    const block = notesBlock([n])
+    setNotes(ns => ns.filter(x => x.id !== id))
+    send(block)
+  }
   // the block the reasoner receives: which message, the exact span, the remark
-  function notesBlock() {
-    const live = notes.filter(n => n.text.trim())
+  function notesBlock(list) {
+    const live = (list || notes).filter(n => n.text.trim())
     if (!live.length) return ''
     const lines = live.map((n, k) => {
       const t = turns[n.turn]; const head = t ? (t.text || '').replace(/\s+/g, ' ').trim().slice(0, 60) : ''
-      return `${k + 1}. your message #${n.turn + 1}${head ? ` ("${head}${head.length >= 60 ? '…' : ''}")` : ''}, the span I marked: "${n.quote}"\n   my remark: ${n.text.trim()}`
+      const whose = n.who === 'me' ? 'my message' : 'your message'
+      return `${k + 1}. ${whose} #${n.turn + 1}${head ? ` ("${head}${head.length >= 60 ? '…' : ''}")` : ''}, the span I marked: "${n.quote}"\n   my remark: ${n.text.trim()}`
     })
-    return `[remarks in the margin, each on a span I selected in one of your earlier messages]\n${lines.join('\n')}`
+    return `[remarks in the margin, each on a span I marked in the conversation]\n${lines.join('\n')}`
   }
   const noteCard = (n) => (
       <div key={n.id} style={{ width: room ? '250px' : '100%', border: `1px solid ${C.gold}55`, borderLeft: `3px solid ${C.gold}`, borderRadius: '8px', backgroundColor: C.card, padding: '8px 10px', boxSizing: 'border-box' }}>
         <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: C.dim, fontStyle: 'italic', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>“{n.quote}”</p>
         <textarea id={`note-${n.id}`} value={n.text} onChange={e => setNote(n.id, e.target.value)} rows={2} placeholder="your remark on this span"
-          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); boxRef.current && boxRef.current.focus() } }}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (n.mode === 'send') sendNote(n.id); else boxRef.current && boxRef.current.focus() } }}
           style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontSize: '13px', lineHeight: 1.5, color: C.ink, backgroundColor: 'transparent', border: `1px solid ${C.line}`, borderRadius: '6px', padding: '6px 8px', outline: 'none', fontFamily: 'inherit' }} />
-        <a onClick={() => dropNote(n.id)} style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>remove</a>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
+          {[['keep', 'just note it', 'kept, and sent with your next message'], ['send', 'send now', 'sent at once as its own message, with the quoted span']].map(([m, label, tip]) => (
+            <a key={m} onClick={() => setNoteMode(n.id, m)} title={tip}
+               style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', cursor: 'pointer', color: (n.mode || 'keep') === m ? C.gold : C.faint, borderBottom: `1px solid ${(n.mode || 'keep') === m ? C.gold : 'transparent'}` }}>{label}</a>
+          ))}
+          {n.mode === 'send' && <a onClick={() => sendNote(n.id)} title="Send this remark now (Cmd/Ctrl+Enter)" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', cursor: n.text.trim() ? 'pointer' : 'default', color: n.text.trim() ? '#141210' : C.faint, backgroundColor: n.text.trim() ? C.gold : 'transparent', border: `1px solid ${C.gold}`, padding: '1px 8px', borderRadius: '5px' }}>send</a>}
+          <a onClick={() => dropNote(n.id)} style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: 'auto' }}>remove</a>
+        </div>
       </div>
   )
   const flushLocal = () => { const next = queueRef.current.shift(); if (!next) return; setTurns(t => t.filter(x => x.qid !== next.qid)); setTimeout(() => sendRef.current && sendRef.current(next.text), 0) }
@@ -1641,14 +1766,16 @@ function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
-        <div ref={convRef} onMouseUp={onPick} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative' }}>
+        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative' }}>
+          <style>{`::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
           {pick && (
-            <span style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
-              {[['remark', 'a note in the margin on the selected span; it goes with your next message', () => addNote()],
-                ['copy', 'copy the selected words', () => { try { navigator.clipboard.writeText(pick.raw || pick.quote) } catch {} setPick(null) }],
-                ['ask', 'put the selected words into the composer to ask about them', () => { setDraft(d => (d ? d + '\n' : '') + `About this: "${pick.quote}" `); setPick(null); if (boxRef.current) boxRef.current.focus() }]].map(([label, title, fn]) => (
-                <a key={label} onMouseDown={e => { e.preventDefault(); fn() }} title={title}
-                   style={{ ...mono, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: label === 'remark' ? '#141210' : C.ink, backgroundColor: label === 'remark' ? C.gold : C.card, border: `1px solid ${C.gold}`, padding: '4px 9px', borderRadius: '6px', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>{label}</a>
+            <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
+              {[['note', 'a note in the margin on this span: keep it for your next message, or send it now', () => addNote(), true],
+                ['copy', 'copy the exact words', () => { try { navigator.clipboard.writeText(pick.raw || pick.quote) } catch {} clearSpan(); setPick(null) }, true],
+                ...(pick.press ? [['narrower', 'shrink the underlined span', () => stepSpan(-1), pick.level > 0],
+                                  ['wider', 'widen the underlined span: phrase, sentence, paragraph (or click it again)', () => stepSpan(1), pick.level < pick.max]] : [])].map(([label, title, fn, on]) => (
+                <a key={label} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); if (on) fn() }} title={title}
+                   style={{ ...mono, fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: label === 'note' ? '#141210' : (on ? C.ink : C.faint), backgroundColor: label === 'note' ? C.gold : C.card, border: `1px solid ${on ? C.gold : C.line}`, padding: '4px 9px', borderRadius: '6px', cursor: on ? 'pointer' : 'default', boxShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>{label}</a>
               ))}
             </span>
           )}
@@ -1679,7 +1806,7 @@ function CC() {
                   {notes.filter(n => n.turn === i).map(noteCard)}
                 </div>
               )}
-              <div style={{
+              <div data-bubble="1" style={{
                 maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: paneMode && t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,

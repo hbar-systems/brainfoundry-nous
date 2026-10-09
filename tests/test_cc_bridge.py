@@ -722,3 +722,42 @@ console.log(JSON.stringify({
     assert {"kind": "url", "target": "https://x.y", "label": "site"} in d["refs"]
     assert {"kind": "file", "target": "notes/b.md", "label": "loc"} in d["refs"]
     assert d["count"] == 4
+
+
+def test_ui_spanpick_phrase_sentence_paragraph_and_mapping():
+    import json
+    out = _node(r"""
+const S = require('./spanpick')
+const t = 'The brain reads files, then, after a long pause that nobody expected at all, it answers the question in plain words. Next sentence here.\nSecond paragraph with e.g. an abbreviation and 3.5 numbers (and a side note, quite long) end.\n\nlast'
+const at = (w) => t.indexOf(w) + 1
+const lad = (w) => S.ladder(t, at(w)).map(([a, b]) => t.slice(a, b))
+const long = 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen'
+const lw = S.pickSpan(long, long.indexOf('eight') + 1, 0)
+const segs = [{ start: 0, len: 5 }, { start: 6, len: 4 }, { start: 11, len: 3 }]
+console.log(JSON.stringify({
+  brain: lad('brain'), pause: lad('pause'), next: lad('Next'), abbr: lad('abbreviation'), side: lad('side'),
+  longw: long.slice(lw[0], lw[1]).split(' ').length, longhas: long.slice(lw[0], lw[1]).includes('eight'),
+  empty: [S.pickSpan('', 0, 0), S.pickSpan('   ', 2, 1), S.ladder('', 0)],
+  gap: S.pickSpan('alpha beta gamma delta epsilon', 5, 0).map(Number),
+  end: S.pickSpan('alpha beta gamma delta', 999, 0).map(Number),
+  nums: (() => { const x = 'It costs 1,000 euros. Really.'; const r = S.pickSpan(x, 12, 1); return x.slice(r[0], r[1]) })(),
+  locS: [S.locate(segs, 6, false), S.locate(segs, 5, true), S.locate(segs, 14, true), S.locate(segs, 5, false)],
+  pos: [S.positionOf(segs, 1, 2), S.positionOf(segs, 1, 99), S.positionOf(segs, 7, 0)],
+  mono: [t, 'a b c d e f g', 'x'].every(s => { for (let o = 0; o <= s.length; o++) { const L = S.ladder(s, o); for (let k = 1; k < L.length; k++) if (!(L[k][0] <= L[k-1][0] && L[k][1] >= L[k-1][1])) return false } return true }),
+}))""")
+    d = json.loads(out)
+    assert d["brain"][0] == "The brain reads files" and len(d["brain"]) == 3 and d["brain"][1].endswith("plain words.")
+    assert d["brain"][2].endswith("Next sentence here.")
+    assert d["pause"][0] == "after a long pause that nobody expected at all"
+    assert d["next"][0] == "Next sentence here." and len(d["next"]) == 2
+    assert d["abbr"][0].startswith("Second paragraph with e.g.") and d["abbr"][0].endswith("3.5 numbers")
+    assert d["abbr"][1].endswith("end.") and len(d["abbr"]) == 2
+    assert d["side"][0] == "(and a side note"
+    assert d["longw"] == 12 and d["longhas"]
+    assert d["empty"] == [None, None, []]
+    assert d["gap"] == [0, 29] or d["gap"][0] == 0
+    assert d["end"][1] == 22
+    assert d["nums"] == "It costs 1,000 euros."
+    assert d["locS"] == [{"i": 1, "off": 0}, {"i": 0, "off": 5}, {"i": 2, "off": 3}, {"i": 1, "off": 0}]
+    assert d["pos"] == [8, 10, -1]
+    assert d["mono"] is True
