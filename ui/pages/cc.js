@@ -189,30 +189,50 @@ function ProposalCard({ p, onDecide }) {
   )
 }
 
-function Pane({ pane, onClose }) {
+function Pane({ pane, onClose, side, onSide }) {
   // A summoned surface (D54): an existing console page, same origin and auth, shown
   // beside the conversation and dismissed with one click. Pages hide their own nav
   // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
   // the whole console; the page itself may go fullscreen (allowFullScreen).
   const [narrow, setNarrow] = useState(false)
   const [wide, setWide] = useState(false)
+  // The width is the owner's: drag the divider on the pane's inner edge. Remembered in cc.paneW (px).
+  const [w, setW] = useState(null)
+  const [drag, setDrag] = useState(false)
+  useEffect(() => { try { const v = parseInt(localStorage.getItem('cc.paneW') || '', 10); if (v >= 280) setW(v) } catch {} }, [])
+  const startDrag = (e) => {
+    e.preventDefault()
+    const x0 = e.clientX, w0 = w || Math.min(window.innerWidth * 0.48, 760), dir = side === 'left' ? 1 : -1
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+    setDrag(true)
+    let last = w0
+    const move = (ev) => { last = Math.round(Math.max(280, Math.min(window.innerWidth - 320, w0 + dir * (ev.clientX - x0)))); setW(last) }
+    const up = () => { setDrag(false); try { localStorage.setItem('cc.paneW', String(last)) } catch {}; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up)
+  }
   useEffect(() => {
     const f = () => setNarrow(window.innerWidth < 960)
     f(); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f)
   }, [])
   const box = (narrow || wide)
     ? { position: 'fixed', top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px))', right: 0, bottom: 0, left: 0, zIndex: 150, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
-    : { width: 'min(48vw, 760px)', flexShrink: 0, borderLeft: `1px solid ${C.line}`, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
+    : { width: w ? `${w}px` : 'min(48vw, 760px)', flexShrink: 0, backgroundColor: C.brain, display: 'flex', flexDirection: 'column', position: 'relative' }
+  const inline = !(narrow || wide)
   return (
     <div style={box}>
+      {inline && <div onPointerDown={startDrag} onDoubleClick={() => { setW(null); try { localStorage.removeItem('cc.paneW') } catch {} }} title="Drag to resize; double-click to reset"
+           style={{ position: 'absolute', top: 0, bottom: 0, [side === 'left' ? 'right' : 'left']: '-4px', width: '9px', cursor: 'col-resize', zIndex: 5, touchAction: 'none', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ width: '1px', height: '100%', backgroundColor: drag ? C.gold : C.line }} />
+      </div>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
         <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>
         <span style={{ display: 'flex', gap: '8px' }}>
+          {inline && <Btn small onClick={onSide} title="Put it on the other side of the conversation">{side === 'left' ? 'to right' : 'to left'}</Btn>}
           {!narrow && <Btn small onClick={() => setWide(x => !x)} title={wide ? 'Back beside the conversation' : 'Cover the whole console'}>{wide ? 'beside' : 'wide'}</Btn>}
           <Btn small onClick={onClose} title="Put it away">close</Btn>
         </span>
       </div>
-      <iframe src={pane.route} title={pane.title || pane.route} allowFullScreen allow="fullscreen" style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain }} />
+      <iframe src={pane.route} title={pane.title || pane.route} allowFullScreen allow="fullscreen" style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain, pointerEvents: drag ? 'none' : 'auto' }} />
     </div>
   )
 }
@@ -493,6 +513,15 @@ function CC() {
   const WIDTHS = ['860px', '1180px', 'none']
   const [width, setWidth] = useState('860px')
   useEffect(() => { try { const w = localStorage.getItem('cc.width'); if (w && WIDTHS.includes(w)) setWidth(w) } catch {} }, [])
+  // Layout the owner chose (2026-10-09): hide the title block or the hints, put the side pane left or right.
+  // Saved in the browser; "reset layout" in the footer line clears all of it (and the pane width).
+  const [hidden, setHidden] = useState({})           // { hero: true, hint: true }
+  const [paneSide, setPaneSide] = useState('right')
+  useEffect(() => { try { setHidden(JSON.parse(localStorage.getItem('cc.hidden') || '{}') || {}); if (localStorage.getItem('cc.paneSide') === 'left') setPaneSide('left') } catch {} }, [])
+  const hide = (k, v) => setHidden(h => { const n = { ...h, [k]: v }; if (!v) delete n[k]; try { localStorage.setItem('cc.hidden', JSON.stringify(n)) } catch {}; return n })
+  const flipSide = () => setPaneSide(s => { const n = s === 'left' ? 'right' : 'left'; try { localStorage.setItem('cc.paneSide', n) } catch {}; return n })
+  const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
+  const layoutChanged = Object.keys(hidden).length > 0 || paneSide === 'left'
   const cycleWidth = () => { const w = WIDTHS[(WIDTHS.indexOf(width) + 1) % WIDTHS.length]; setWidth(w); try { localStorage.setItem('cc.width', w) } catch {} }
   // The font of the conversation (2026-09-30): the Chat tab's six fonts, offered under "details";
   // each row of the picker is drawn in its own font, so the choice is seen before it is made.
@@ -1337,15 +1366,16 @@ function CC() {
   return (
     <>
       <Head><title>CC · BrainFoundry</title></Head>
-      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
+      <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
       <div style={{ padding: paneMode ? '6px 10px 8px' : '28px 32px 20px', maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
           <div style={{ minWidth: 0 }}>
-            {!paneMode && <>
+            {!paneMode && !hidden.hero && <>
             <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 4px 0' }}>
               cc · reasoning from inside the brain
+              <a onClick={() => hide('hero', true)} title="Hide this title; it comes back with reset layout" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>hide</a>
             </p>
             <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
             </>}
@@ -1410,10 +1440,11 @@ function CC() {
           </div>
         </div>
 
-        {!paneMode && firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
-        {!paneMode && loggedIn && turns.length === 0 && (
+        {!paneMode && !hidden.hint && firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
+        {!paneMode && !hidden.hint && loggedIn && turns.length === 0 && (
           <p style={{ margin: '0 0 16px 0', color: C.faint, fontSize: '13px' }}>
             New here? <a onClick={() => openPane({ route: '/guide', title: 'Guide' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>The guide</a> explains what this brain can do, with a seven-step tutorial that checks itself. Or type /help.
+            <a onClick={() => hide('hint', true)} style={{ ...mono, fontSize: '11px', marginLeft: '12px', cursor: 'pointer', textDecoration: 'underline' }}>hide</a>
           </p>
         )}
 
@@ -1610,6 +1641,8 @@ function CC() {
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           <span><a onClick={() => (paneMode ? setPaneDetails(false) : setShowDetails(s => !s))} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{paneMode ? 'close details' : showDetails ? 'less' : 'details'}</a></span>
           {showDetails ? <span><a onClick={() => setShowFonts(s => !s)} title="the font of the conversation" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>font{fontPick ? `: ${fontPick.label}` : ''}</a></span> : null}
+          {!paneMode && (layoutChanged || pane || width !== '860px') ? <span><a onClick={resetLayout} title="Show every block again, put the side pane back on the right at its usual width" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>reset layout</a></span> : null}
+          {!paneMode && hidden.hero ? <span><a onClick={() => hide('hero', false)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
           {!pane && !paneMode ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {!paneMode && auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
@@ -1634,7 +1667,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} onClose={() => { setPane(null); loadHealth() }} />}
+      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onClose={() => { setPane(null); loadHealth() }} />}
       </div>
     </>
   )

@@ -24,6 +24,9 @@ const C = {
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 const KEY = 'cc.panes'
 const MAX = 4
+const LKEY = 'cc.panes.layout'   // column / row weights the owner dragged (2026-10-09)
+const MINW = 0.3                  // no column or row shrinks below this share of an even split
+const clampW = (v, n) => (Array.isArray(v) && v.length === n && v.every(x => typeof x === 'number' && isFinite(x) && x > 0) ? v : Array(n).fill(1))
 
 function Chip({ children, onClick, on, title }) {
   return (
@@ -71,8 +74,36 @@ export default function Panes() {
   const [showAuto, setShowAuto] = useState(false)
   const [, setTick] = useState(0)
   const frames = useRef({})
+  const gridRef = useRef(null)
+  const [colW, setColW] = useState([])             // column weights, dragged by the dividers
+  const [rowW, setRowW] = useState([])
+  const [dragging, setDragging] = useState(false)  // while a divider moves, the frames must not eat the pointer
 
   useEffect(() => { setPanes(load()) }, [])
+  useEffect(() => { try { const v = JSON.parse(localStorage.getItem(LKEY) || 'null'); if (v) { setColW(v.c || []); setRowW(v.r || []) } } catch {} }, [])
+  const saveLayout = (c, r) => { setColW(c); setRowW(r); try { localStorage.setItem(LKEY, JSON.stringify({ c, r })) } catch {} }
+  const resetLayout = () => { setColW([]); setRowW([]); setWide(null); try { localStorage.removeItem(LKEY) } catch {} }
+  // drag the divider after track k (axis 'x' = between columns, 'y' = between rows): the two tracks trade weight
+  const startDrag = (axis, k) => (e) => {
+    const el = gridRef.current; if (!el) return
+    e.preventDefault()
+    const n = axis === 'x' ? cols : rows
+    const w0 = clampW(axis === 'x' ? colW : rowW, n)
+    const total = w0.reduce((a, b) => a + b, 0)
+    const size = axis === 'x' ? el.clientWidth : el.clientHeight
+    const start = axis === 'x' ? e.clientX : e.clientY
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+    setDragging(true)
+    const move = (ev) => {
+      const d = ((axis === 'x' ? ev.clientX : ev.clientY) - start) / Math.max(1, size) * total
+      const pair = w0[k] + w0[k + 1]
+      const a = Math.min(pair - MINW, Math.max(MINW, w0[k] + d))
+      const w = w0.slice(); w[k] = a; w[k + 1] = pair - a
+      if (axis === 'x') saveLayout(w, rowW); else saveLayout(colW, w)
+    }
+    const up = () => { setDragging(false); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up)
+  }
   useEffect(() => {
     if (!panes.length) return
     try { localStorage.setItem(KEY, JSON.stringify(panes.map(p => ({ thread: p.thread })))) } catch {}
@@ -184,6 +215,10 @@ export default function Panes() {
   const shown = narrow ? panes.slice(front, front + 1) : panes
   const visible = wide && !narrow ? shown.filter(p => p.id === wide) : shown
   const cols = visible.length <= 3 ? visible.length : 2
+  const rows = Math.max(1, Math.ceil(visible.length / Math.max(1, cols)))
+  const cw = clampW(colW, cols), rw = clampW(rowW, rows)
+  const track = (w) => w.map(x => `${x}fr`).join(' 6px ')
+  const customLayout = colW.length > 0 || rowW.length > 0
   const menuItem = { ...mono, display: 'block', padding: '6px 12px', fontSize: '12px', color: C.ink, cursor: 'pointer', whiteSpace: 'nowrap', borderRadius: '6px', textDecoration: 'none' }
 
   return (
@@ -206,6 +241,7 @@ export default function Panes() {
           {health && health.voice && <a onClick={() => saveSpeak(!speak)} title="Read every answer aloud, in every pane" style={{ ...link, color: speak ? C.gold : C.dim }}>voice {speak ? 'on' : 'off'}{health.voice_name ? ` (${String(health.voice_name).split(' ')[0]})` : ''}</a>}
           {canTalk && <a onClick={() => saveHandsfree(!handsfree)} title="What you say sends by itself; after the answer has been spoken, listening restarts" style={{ ...link, color: handsfree ? C.gold : C.dim }}>hands-free {handsfree ? 'on' : 'off'}</a>}
           {auto.length > 0 && <a onClick={(e) => { e.stopPropagation(); setShowAuto(s => !s) }} style={link}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a>}
+          {!narrow && customLayout && <a onClick={resetLayout} title="Back to even columns and rows" style={link}>reset layout</a>}
           <a href="/files" style={link}>files</a>
           <a href="/board" title="Mission control: one tile per run" style={link}>board</a>
           <a href="/talk" style={link}>one conversation</a>
@@ -220,14 +256,28 @@ export default function Panes() {
             </div>
           )}
         </div>
-        <div style={{ flex: 1, minHeight: 0, display: 'grid', gap: '8px',
-                      gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridAutoRows: 'minmax(0, 1fr)' }}>
+        <div ref={gridRef} style={{ flex: 1, minHeight: 0, display: 'grid', gap: 0,
+                      gridTemplateColumns: track(cw), gridTemplateRows: track(rw) }}>
+          {!narrow && Array.from({ length: cols - 1 }, (_, k) => (
+            <div key={`dx${k}`} onPointerDown={startDrag('x', k)} onDoubleClick={() => saveLayout(Array(cols).fill(1), rowW)} title="Drag to resize; double-click to even out"
+                 style={{ gridColumn: 2 * k + 2, gridRow: '1 / -1', cursor: 'col-resize', touchAction: 'none', display: 'flex', justifyContent: 'center', zIndex: 5 }}>
+              <div style={{ width: '1px', height: '100%', backgroundColor: C.line }} />
+            </div>
+          ))}
+          {!narrow && Array.from({ length: rows - 1 }, (_, k) => (
+            <div key={`dy${k}`} onPointerDown={startDrag('y', k)} onDoubleClick={() => saveLayout(colW, Array(rows).fill(1))} title="Drag to resize; double-click to even out"
+                 style={{ gridRow: 2 * k + 2, gridColumn: '1 / -1', cursor: 'row-resize', touchAction: 'none', display: 'flex', alignItems: 'center', zIndex: 5 }}>
+              <div style={{ height: '1px', width: '100%', backgroundColor: C.line }} />
+            </div>
+          ))}
           {shown.map((p) => {
             const i = panes.indexOf(p)
             const st = stateOf(p)
             const hidden = wide && !narrow && p.id !== wide
+            const vi = visible.indexOf(p)
+            const place = vi < 0 ? {} : { gridColumn: 2 * (vi % cols) + 1, gridRow: 2 * Math.floor(vi / cols) + 1 }
             return (
-              <div key={p.id} style={{ display: hidden ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, border: `1px solid ${st.kind === 'busy' ? C.gold : st.kind === 'waiting' ? C.warn : C.line}`, borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
+              <div key={p.id} style={{ ...place, display: hidden ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, border: `1px solid ${st.kind === 'busy' ? C.gold : st.kind === 'waiting' ? C.warn : C.line}`, borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
                 {/* the one header line: number, state, title (click renames), what it is doing, the menu */}
                 <div draggable={!narrow && panes.length > 1 && renaming !== p.id}
                      onDragStart={e => { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move' }}
@@ -278,7 +328,7 @@ export default function Panes() {
                 <iframe ref={el => { frames.current[p.id] = el }} key={`${p.id}:${p.src}`} title={`pane ${i + 1}`}
                         src={`/talk?pane=1&thread=${encodeURIComponent(p.src)}`}
                         allow="microphone; clipboard-write"
-                        style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', backgroundColor: C.bg }} />
+                        style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', backgroundColor: C.bg, pointerEvents: dragging ? 'none' : 'auto' }} />
               </div>
             )
           })}
