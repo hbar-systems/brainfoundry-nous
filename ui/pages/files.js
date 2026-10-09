@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
+import MdView from '../components/MdView'
 
 // Files: what the reasoner made, what you gave it, and the repositories it works in,
 // browsed and played inside the console. Served by the bridge (/cc/files), which only
@@ -10,6 +11,9 @@ const T = { ink: 'var(--text)', dim: 'var(--text-dim, #9a8f82)', faint: 'var(--t
 
 function fmtSize(n) { if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`; return `${(n / 1073741824).toFixed(2)} GB` }
 function fmtWhen(ts) { const d = new Date(ts * 1000); return d.toISOString().slice(0, 16).replace('T', ' ') }
+const isMdPath = (p) => /\.(md|markdown)$/i.test(p || '')
+// The sidecar view is hand-made html; it runs in a sandbox that has scripts but no forms (hbar 2026-10-09).
+const VIEW_SANDBOX = 'allow-scripts allow-same-origin allow-popups allow-downloads'
 function raw(p) { return '/cc/files/raw' + p.split('/').map(encodeURIComponent).join('/') }
 
 export default function Files() {
@@ -17,6 +21,8 @@ export default function Files() {
   const [error, setError] = useState(null)
   const [sel, setSel] = useState(null)         // selected file info {path, kind, size}
   const [text, setText] = useState(null)
+  // The md is the input, a visual is the output (2026-10-09): a note opens as its view, the source is one click away.
+  const [mode, setMode] = useState('view')
   const [recent, setRecent] = useState([])
   // Edit and save (2026-09-28): a text file inside the world, out or in becomes a textarea; Save posts
   // it to the bridge, which refuses secrets, .git and the brain repo. A stale copy is a conflict.
@@ -47,12 +53,12 @@ export default function Files() {
     fetch(raw(sel.path), { cache: 'no-store' }).then(r => r.text()).then(setText).catch(() => setText('(could not read)'))
   }
   useEffect(() => {
-    setText(null); setEditing(false); setSaveNote(null)
+    setText(null); setEditing(false); setSaveNote(null); setMode('view')
     if (sel && sel.kind === 'text' && sel.size < 400000) readText()
   }, [sel && sel.path])
   const editable = (p) => /\/(world|out|in)\//.test('/' + p + '/')
   const dirty = editing && draft !== text
-  function startEdit() { setDraft(text || ''); setEditing(true); setSaveNote(null) }
+  function startEdit() { setDraft(text || ''); setEditing(true); setMode('source'); setSaveNote(null) }
   function cancelEdit() { setEditing(false); setDraft(''); setSaveNote(null) }
   async function save() {
     if (!sel || saving) return
@@ -122,10 +128,10 @@ export default function Files() {
                 <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.dim, padding: '12px 16px 4px' }}>newest, made by the brain</p>
                 {recent.length === 0 && <p style={{ padding: '4px 16px 12px', fontSize: '13px', color: T.dim }}>Nothing yet. out is what the reasoner made, in is what you gave it, work is your repositories, world is the read-only mirror, brain is the brain's own code.</p>}
                 {recent.map(e => (
-                  <div key={e.path} onClick={() => { setSel({ path: e.path, kind: e.kind, size: e.size, mtime: e.mtime }); load(e.dir) }}
+                  <div key={e.path} onClick={() => { setSel({ path: e.path, kind: e.kind, size: e.size, mtime: e.mtime, view: e.view }); load(e.dir) }}
                     style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', borderBottom: `1px solid ${T.line}` }}>
                     <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.kind}</span>
-                    <span style={{ fontSize: '14px', color: T.ink, flex: 1, wordBreak: 'break-all' }}>{e.name}<span style={{ ...mono, fontSize: '10px', color: T.faint, marginLeft: '8px' }}>{e.dir.split('/').slice(-2).join('/')}</span></span>
+                    <span style={{ fontSize: '14px', color: T.ink, flex: 1, wordBreak: 'break-all' }}>{e.name}{e.view && <span style={{ ...mono, fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.gold, border: `1px solid ${T.gold}`, borderRadius: '8px', padding: '0 6px', marginLeft: '8px' }}>view</span>}<span style={{ ...mono, fontSize: '10px', color: T.faint, marginLeft: '8px' }}>{e.dir.split('/').slice(-2).join('/')}</span></span>
                     <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
                   </div>
                 ))}
@@ -138,10 +144,10 @@ export default function Files() {
               const full = `${data.path.replace(/\/$/, '')}/${e.name}`
               const active = sel && sel.path === full
               return (
-                <div key={e.name} onClick={() => (e.dir ? load(full) : setSel({ path: full, kind: e.kind, size: e.size, mtime: e.mtime }))}
+                <div key={e.name} onClick={() => (e.dir ? load(full) : setSel({ path: full, kind: e.kind, size: e.size, mtime: e.mtime, view: e.view }))}
                   style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', backgroundColor: active ? T.card : 'transparent', borderBottom: `1px solid ${T.line}` }}>
                   <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.dir ? 'dir' : e.kind}</span>
-                  <span style={{ fontSize: '14px', color: T.ink, flex: '1 1 160px', minWidth: 0, overflowWrap: 'anywhere' }}>{e.name}{e.dir ? '/' : ''}</span>
+                  <span style={{ fontSize: '14px', color: T.ink, flex: '1 1 160px', minWidth: 0, overflowWrap: 'anywhere' }}>{e.name}{e.dir ? '/' : ''}{e.view && <span title="a hand-made view sits beside this note; it opens first" style={{ ...mono, fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.gold, border: `1px solid ${T.gold}`, borderRadius: '8px', padding: '0 6px', marginLeft: '8px' }}>view</span>}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{e.dir ? '' : fmtSize(e.size)}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
                 </div>
@@ -155,6 +161,12 @@ export default function Files() {
             <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '14px', color: T.ink, wordBreak: 'break-all', flex: 1 }}>{sel.path.split('/').pop()}</span>
               <span style={{ ...mono, fontSize: '11px', color: T.faint }}>{fmtSize(sel.size)}</span>
+              {isMdPath(sel.path) && sel.kind === 'text' && !editing && (
+                <span style={{ ...mono, fontSize: '12px', display: 'inline-flex', gap: '8px', alignItems: 'baseline' }} title="the md is the input; the view is the output">
+                  <a onClick={() => setMode('view')} style={{ color: mode === 'view' ? T.gold : T.dim, textDecoration: mode === 'view' ? 'none' : 'underline', cursor: 'pointer', borderBottom: mode === 'view' ? `1px solid ${T.gold}` : 0 }}>{sel.view ? 'view' : 'view (auto)'}</a>
+                  <a onClick={() => setMode('source')} style={{ color: mode === 'source' ? T.gold : T.dim, textDecoration: mode === 'source' ? 'none' : 'underline', cursor: 'pointer', borderBottom: mode === 'source' ? `1px solid ${T.gold}` : 0 }}>source</a>
+                </span>
+              )}
               <a href={raw(sel.path)} download style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download</a>
               <a onClick={() => ask(sel.path)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>ask the brain</a>
               {sel.kind === 'text' && text !== null && editable(sel.path) && !editing && <a onClick={startEdit} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>edit</a>}
@@ -169,7 +181,11 @@ export default function Files() {
               {sel.kind === 'video' && <video controls preload="metadata" src={raw(sel.path)} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000' }} />}
               {sel.kind === 'image' && <img src={raw(sel.path)} alt={sel.path} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />}
               {(sel.kind === 'pdf' || sel.kind === 'html') && <iframe src={raw(sel.path)} title={sel.path} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: sel.kind === 'html' ? '#fff' : 'transparent' }} />}
-              {sel.kind === 'text' && (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large to show here; download it.' : 'reading…'}</p>
+              {sel.kind === 'text' && isMdPath(sel.path) && mode === 'view' && !editing && (sel.view
+                ? <iframe key={sel.view} src={raw(sel.view)} title={sel.view} sandbox={VIEW_SANDBOX} allow="fullscreen" allowFullScreen style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: '#fff' }} />
+                : (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large for the view; open the source or download it.' : 'reading…'}</p>
+                  : <MdView key={sel.path + ':' + sel.mtime} text={text} path={sel.path} open={load} />))}
+              {sel.kind === 'text' && !(isMdPath(sel.path) && mode === 'view' && !editing) && (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large to show here; download it.' : 'reading…'}</p>
                 : editing ? <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} spellCheck={false} autoFocus
                     style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, flex: 1, minHeight: '60vh', width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: '10px', color: T.ink, backgroundColor: T.card, border: `1px solid ${dirty ? T.gold : T.line}`, borderRadius: '8px', outline: 'none' }} />
                 : <pre onDoubleClick={() => { if (editable(sel.path)) startEdit() }} style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}

@@ -580,3 +580,145 @@ def test_console_keeps_selection_and_blocks():
     assert "const Md = React.memo(" in src and "useMemo(() => mdComponents(base), [base])" in src
     assert "components={{" not in src
     assert "ev === 'block'" in src and "ev === 'note'" in src and "x.run === runId" in src
+
+
+# ---- Files pane: links in answers, attachments, markdown views (hbar 2026-10-09) ----
+
+def _extras():
+    spec = importlib.util.spec_from_file_location("cc_extras_t", ROOT / "scripts" / "cc" / "cc_extras.py")
+    m = importlib.util.module_from_spec(spec)
+    sys.modules["cc_extras_t"] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+def _roots(tmp_path):
+    # the roots as cc-bridge.py builds them: out and in under the hands' home, the world, the brain repo
+    home = tmp_path / "hands"
+    for d in ("out/2026-10-07", "in/2026-10-09", "world/ops", "world/systems/hbar.x/ops", "brain"):
+        (home / d).mkdir(parents=True)
+    (home / "world" / "ops" / "2026-10-09_hackathon-brief.md").write_text("# Brief\n")
+    (home / "world" / "systems" / "hbar.x" / "ops" / "deep-note.md").write_text("# Deep\n")
+    (home / "out" / "2026-10-07" / "loop-map.html").write_text("<p>x</p>")
+    (home / "in" / "2026-10-09" / "Screenshot 2026-10-09 at 10.12.34 AM.png").write_bytes(b"\x89PNG")
+    X = _extras()
+    return home, X.Files({"out": str(home / "out"), "in": str(home / "in"), "world": str(home / "world"), "brain": str(home / "brain")})
+
+
+def test_link_forms_in_answers_all_resolve(tmp_path):
+    # Root cause of "not a path the reasoner can reach" for ops/<date>_...-brief.md: resolve() accepted only
+    # an exact absolute path or an exact path relative to the world, so a bare name (the page guesses a
+    # folder and misses), an uppercase suffix, trailing punctuation, :line, #anchor, a world/ prefix or a
+    # path from another machine all failed. locate() cleans and searches; resolve() stays strict.
+    home, f = _roots(tmp_path)
+    want = str(home / "world" / "ops" / "2026-10-09_hackathon-brief.md")
+    b = "2026-10-09_hackathon-brief"
+    for ref in (f"ops/{b}.md", f"/{home.as_posix().lstrip('/')}/world/ops/{b}.md", f"{b}.md", f"ops/{b}.MD", f"OPS/{b}.md",
+                f"ops/{b}.md.", f"`ops/{b}.md`", f"ops/{b}.md)", f"./ops/{b}.md,", f"ops/{b}.md:12", f"ops/{b}.md#goal",
+                f"world/ops/{b}.md", f"/Users/hbar/hbar.world/ops/{b}.md", f"/home/cc/world/ops/{b}.md", f"file://{want}"):
+        d = f.listing(ref)
+        assert d.get("path") == want and d.get("file"), (ref, d)
+    # a bare name deeper in the world, and on the desk (newest day first)
+    assert f.listing("deep-note.md")["path"].endswith("systems/hbar.x/ops/deep-note.md")
+    assert f.listing("hbar.x/ops/deep-note.md")["path"].endswith("systems/hbar.x/ops/deep-note.md")
+    assert f.listing("loop-map.html")["path"].endswith("out/2026-10-07/loop-map.html")
+
+
+def test_locate_never_leaves_the_roots(tmp_path):
+    home, f = _roots(tmp_path)
+    (tmp_path / "secret.md").write_text("no")
+    for ref in ("/etc/passwd", "../secret.md", "../../etc/passwd", "ops/../../secret.md", "secret.md", f"{tmp_path.as_posix()}/secret.md", "nothing-here.md", "", "   "):
+        r = f.listing(ref) if ref.strip() else f.listing(ref or None)
+        assert not r.get("file") and not r.get("entries"), (ref, r)
+        if ref.strip():
+            assert r.get("error"), (ref, r)
+    assert f.resolve(f"{tmp_path.as_posix()}/secret.md") is None
+
+
+def test_attachment_with_spaces_lists_and_resolves(tmp_path):
+    home, f = _roots(tmp_path)
+    p = home / "in" / "2026-10-09" / "Screenshot 2026-10-09 at 10.12.34 AM.png"
+    d = f.listing(str(p))
+    assert d["file"] and d["kind"] == "image"
+    assert f.listing(str(p) + ".")["path"] == str(p)       # a sentence-final full stop
+    assert f.listing(str(p).lower())["path"] == str(p)     # case folded by a rewrite
+
+
+def test_md_sidecar_is_listed_and_reported(tmp_path):
+    home, f = _roots(tmp_path)
+    ops = home / "world" / "ops"
+    (ops / "plan.md").write_text("# Plan\n"); (ops / "plan.view.html").write_text("<p>view</p>")
+    (ops / "other.MD").write_text("# O\n"); (ops / "other.MD.view.html").write_text("<p>v</p>")
+    (ops / "lonely.md").write_text("# L\n"); (ops / "page.html").write_text("<p>h</p>")
+    d = f.listing(str(ops))
+    by = {e["name"]: e for e in d["entries"]}
+    assert by["plan.md"]["view"] == str(ops / "plan.view.html")
+    assert by["other.MD"]["view"] == str(ops / "other.MD.view.html")
+    assert "view" not in by["lonely.md"] and "view" not in by["page.html"] and "view" not in by["plan.view.html"]
+    one = f.listing(str(ops / "plan.md"))
+    assert one["file"] and one["view"] == str(ops / "plan.view.html") and one["kind"] == "text"
+    assert "view" not in f.listing(str(ops / "lonely.md"))
+    rec = {e["name"]: e for e in f.recent("world")}
+    assert rec["plan.md"]["view"] == str(ops / "plan.view.html")
+    # the sidecar is served like any html (the pane puts it in a sandboxed iframe)
+    assert f.kind(ops / "plan.view.html") == "html"
+
+
+def _node(script: str) -> str:
+    import shutil, subprocess
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not installed")
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30, cwd=str(ROOT / "ui" / "lib"))
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def test_ui_path_links_find_attachments_and_hrefs():
+    import json
+    out = _node(r"""
+const L = require('./pathlinks')
+const t = 'Attached on the box: /home/hands/in/2026-10-09/Screenshot 2026-10-09 at 10.12.34 AM.png, /home/hands/in/2026-10-09/b.pdf. See /home/hands/out/2026-10-09/x.md.'
+console.log(JSON.stringify({
+  paths: L.splitPaths(t).filter(p => p.t === 'path').map(p => p.v),
+  img: [L.isImagePath('/a/b.PNG'), L.isImagePath('/a/b.md')],
+  hrefs: ['ops/a.md#x', 'https://a.b/c.md', '/cc/files', '#top', 'mailto:a@b.c', 'file:///home/hands/in/x.png', 'ops/a%20b.md'].map(L.hrefToPath),
+  raw: L.rawUrl('/home/hands/in/a b.png'),
+  file: ['ops/x.md', 'x.MD', '/home/hands/out/a b.png', 'not a file', '../x.md'].map(L.looksLikeFile),
+}))""")
+    d = json.loads(out)
+    assert d["paths"] == ["/home/hands/in/2026-10-09/Screenshot 2026-10-09 at 10.12.34 AM.png",
+                          "/home/hands/in/2026-10-09/b.pdf", "/home/hands/out/2026-10-09/x.md"]
+    assert d["img"] == [True, False]
+    assert d["hrefs"] == ["ops/a.md", None, None, None, None, "/home/hands/in/x.png", "ops/a b.md"]
+    assert d["raw"] == "/cc/files/raw/home/hands/in/a%20b.png"
+    assert d["file"] == [True, True, True, False, False]
+
+
+def test_ui_markdown_view_structure():
+    import json
+    out = _node(r"""
+const V = require('./mdview')
+const md = ['---', 'k: v', '---', '# Title', 'intro `ops/a.md` and [site](https://x.y) and [loc](notes/b.md)', '## Table', '| name | n |', '|---|--:|', '| b | 10 |', '| a | 9 |', '| c | 100% |',
+  '## Tasks', '- [x] one', '- [ ] two', '  - [ ] nested', '```', '# not a heading', '| x | y |', '|---|---|', '```', '### Deep', 'text'].join('\n')
+const p = V.parseMd(md)
+const flat = []; const walk = s => { flat.push([s.level, s.title, s.blocks.map(b => b.type).join('+')]); s.children.forEach(walk) }; p.root.children.forEach(walk)
+const t = p.root.children[0].children[0].blocks[0]
+console.log(JSON.stringify({
+  meta: p.meta, flat,
+  table: t.rows, align: t.align,
+  byN: V.sortRows(t.rows, 1, 'asc').map(r => r[0]), byNdesc: V.sortRows(t.rows, 1, 'desc').map(r => r[0]), byName: V.sortRows(t.rows, 0, 'asc').map(r => r[0]),
+  tasks: p.root.children[0].children[1].blocks.filter(b => b.type === 'tasks')[0].items,
+  refs: V.extractRefs(md), count: V.countSections(p.root),
+}))""")
+    d = json.loads(out)
+    assert d["meta"] == "k: v"
+    assert d["flat"] == [[1, "Title", "md"], [2, "Table", "table"], [2, "Tasks", "tasks+md"], [3, "Deep", "md"]]
+    assert d["table"] == [["b", "10"], ["a", "9"], ["c", "100%"]] and d["align"] == ["left", "right"]
+    assert d["byN"] == ["a", "b", "c"] and d["byNdesc"] == ["c", "b", "a"] and d["byName"] == ["a", "b", "c"]
+    assert [(i["text"], i["done"], i["depth"]) for i in d["tasks"]] == [("one", True, 0), ("two", False, 0), ("nested", False, 1)]
+    assert {"kind": "file", "target": "ops/a.md", "label": "ops/a.md"} in d["refs"]
+    assert {"kind": "url", "target": "https://x.y", "label": "site"} in d["refs"]
+    assert {"kind": "file", "target": "notes/b.md", "label": "loc"} in d["refs"]
+    assert d["count"] == 4

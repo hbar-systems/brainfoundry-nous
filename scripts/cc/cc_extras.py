@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 MAX_UPLOAD = 50 * 1024 * 1024
-TEXT_SUFFIXES = {".md", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg"}
+TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg"}
 KIND_BY_SUFFIX = {
     **{s: "audio" for s in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")},
     **{s: "video" for s in (".mp4", ".webm", ".mov", ".m4v")},
@@ -67,31 +67,189 @@ class Files:
             return "text"
         return "other"
 
+    # The markdown is the input, a visual is the output (hbar rule 2026-10-09). A note may have a
+    # sidecar next to it, `<name>.view.html` (or `<name>.md.view.html`); the Files pane shows it first.
+    @staticmethod
+    def sidecar(p: Path) -> str | None:
+        if p.suffix.lower() not in (".md", ".markdown"):
+            return None
+        for n in (p.with_suffix("").name + ".view.html", p.name + ".view.html"):
+            c = p.with_name(n)
+            try:
+                if c.is_file():
+                    return str(c)
+            except OSError:
+                pass
+        return None
+
+    # ---- finding the file a link means (hbar 2026-10-09: ops/<date>_hackathon-...-brief.md answered
+    # 'not a path the reasoner can reach' from a link in an answer). resolve() stays strict (it is the
+    # security check); locate() is the forgiving front door: it cleans what a message wraps around a
+    # path, then tries every root, then a case-insensitive walk, then a bounded search by name.
+    SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".next", "dist", "build", ".cache", "site-packages", "target", ".mypy_cache", ".pytest_cache"}
+    SEARCH_ENTRIES = 80000
+    SEARCH_SECONDS = 2.5
+
+    @staticmethod
+    def clean_ref(raw: str) -> str:
+        s = (raw or "").strip()
+        for _ in range(3):
+            before = s
+            s = s.strip().strip("`'\"<>").strip()
+            if s.lower().startswith("file://"):
+                s = s[7:]
+            s = re.sub(r"#[^/]*$", "", s) if re.search(r"\.[A-Za-z0-9]{1,6}#[^/]*$", s) else s   # x.md#heading
+            s = re.sub(r"(?<=[A-Za-z0-9_\]\)]):\d+(?::\d+)?$", "", s)                         # x.md:12 or :12:3
+            s = s.rstrip(".,;:)]}>!?'\"*`")
+            if s.startswith("./"):
+                s = s[2:]
+            if s == before:
+                break
+        return s
+
+    def _ok(self, p: Path) -> Path | None:
+        try:
+            q = self.resolve(str(p))
+            return q if q is not None and q.exists() else None
+        except OSError:
+            return None
+
+    @staticmethod
+    def _ci_child(base: Path, part: str) -> Path | None:
+        c = base / part
+        if c.exists():
+            return c
+        try:
+            low = part.lower()
+            for e in base.iterdir():
+                if e.name.lower() == low:
+                    return e
+        except OSError:
+            pass
+        return None
+
+    def _ci_under(self, base: Path, parts: list[str]) -> Path | None:
+        cur = base
+        for part in parts:
+            if part in ("", "."):
+                continue
+            if part == "..":
+                return None
+            cur = self._ci_child(cur, part)
+            if cur is None:
+                return None
+        return cur
+
+    def _search(self, rel: str) -> Path | None:
+        """A file whose path ends with `rel` (a bare name or a short relative path), found by a
+        bounded walk, root by root; within a root the shallowest, then the newest."""
+        want = rel.strip("/").lower()
+        if not want or ".." in want.split("/"):
+            return None
+        deadline = time.monotonic() + self.SEARCH_SECONDS
+        seen = 0
+        order = [k for k in ("world", "work", "in", "out", "brain") if k in self.roots] + [k for k in self.roots if k not in ("world", "work", "in", "out", "brain")]
+        for label in order:
+            root = self.roots[label]
+            best = None
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS]
+                seen += len(filenames) + len(dirnames)
+                for fn in filenames:
+                    if fn.lower() == want.rsplit("/", 1)[-1]:
+                        fp = Path(dirpath) / fn
+                        if ("/" + str(fp).lower()).endswith("/" + want):
+                            try:
+                                key = (len(fp.parts), -fp.stat().st_mtime)
+                            except OSError:
+                                continue
+                            if best is None or key < best[0]:
+                                best = (key, fp)
+                if seen > self.SEARCH_ENTRIES or time.monotonic() > deadline:
+                    break
+            if best is not None:
+                q = self._ok(best[1])
+                if q is not None:
+                    return q
+            if seen > self.SEARCH_ENTRIES or time.monotonic() > deadline:
+                break
+        return None
+
+    def locate(self, raw: str) -> Path | None:
+        """Where a reference in a message points, or None. Always inside a root."""
+        if not raw or not str(raw).strip():
+            return None
+        for c in dict.fromkeys([raw, self.clean_ref(raw)]):
+            if not c:
+                continue
+            p = self.resolve(c)
+            if p is not None and p.exists():
+                return p
+        c = self.clean_ref(raw)
+        if not c:
+            return None
+        if c.startswith("~"):
+            c = os.path.expanduser(c)
+        parts = [x for x in c.split("/") if x]
+        if c.startswith("/"):
+            # a path from another machine ("/Users/hbar/hbar.world/ops/x.md", "/home/cc/world/ops/x.md"):
+            # the longest tail that exists under one of our roots
+            for i in range(1, len(parts)):
+                for root in self.roots.values():
+                    q = self._ok(root.joinpath(*parts[i:]))
+                    if q is not None:
+                        return q
+            for i in range(0, len(parts)):
+                for root in self.roots.values():
+                    q = self._ci_under(root, parts[i:])
+                    q = self._ok(q) if q is not None else None
+                    if q is not None:
+                        return q
+            return None
+        order = [k for k in ("world", "work", "out", "in", "brain") if k in self.roots]
+        for label in order:
+            root = self.roots[label]
+            q = self._ok(root.joinpath(*parts))
+            if q is not None:
+                return q
+            if parts and parts[0].lower() in (label, root.name.lower(), "hbar.world") and len(parts) > 1:
+                q = self._ok(root.joinpath(*parts[1:]))
+                if q is not None:
+                    return q
+        for label in order:
+            root = self.roots[label]
+            q = self._ci_under(root, parts)
+            q = self._ok(q) if q is not None else None
+            if q is not None:
+                return q
+            if parts and parts[0].lower() in (label, root.name.lower(), "hbar.world") and len(parts) > 1:
+                q = self._ci_under(root, parts[1:])
+                q = self._ok(q) if q is not None else None
+                if q is not None:
+                    return q
+        if not parts:
+            return None
+        # the page guessed a folder for a bare name and missed: find the file by its name anywhere
+        # in the roots (world first, then the desk), with as much of the path as was given
+        for tail in (parts, parts[-1:]):
+            q = self._search("/".join(tail))
+            if q is not None:
+                return q
+        return None
+
     def listing(self, raw: str | None) -> dict:
         if not raw:
             return {"path": None, "roots": [{"label": k, "path": str(v)} for k, v in self.roots.items()], "entries": []}
-        p = self.resolve(raw)
-        if (p is None or not p.exists()) and "world" in self.roots:
-            # The page guesses a bare file name's folder from the last folder named in the message;
-            # when that guess misses, the same name at the world's root is the next place (hbar 2026-10-07:
-            # `world-map.html` opened under the chats folder the message had just named).
-            alt = (self.roots["world"] / Path(raw).name).resolve()
-            if alt.is_file():
-                p = alt
-        if (p is None or not p.exists()) and "out" in self.roots and self.roots["out"].is_dir():
-            # Then the desk: files the reasoner made live in out/<date>/, newest day first
-            # (hbar 2026-10-07: `loop-map.html` sat in out/2026-10-07/ and missed both guesses).
-            name = Path(raw).name
-            for day in sorted((d for d in self.roots["out"].iterdir() if d.is_dir()), reverse=True)[:60]:
-                alt = (day / name).resolve()
-                if alt.is_file() and self.resolve(str(alt)):
-                    p = alt
-                    break
+        p = self.locate(raw)
         if p is None or not p.exists():
             return {"error": "not a path the reasoner can reach"}
         if p.is_file():
             st = p.stat()
-            return {"path": str(p), "file": True, "size": st.st_size, "mtime": int(st.st_mtime), "kind": self.kind(p)}
+            d = {"path": str(p), "file": True, "size": st.st_size, "mtime": int(st.st_mtime), "kind": self.kind(p)}
+            v = self.sidecar(p)
+            if v:
+                d["view"] = v
+            return d
         entries = []
         try:
             for c in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
@@ -101,8 +259,12 @@ class Files:
                     st = c.stat()
                 except OSError:
                     continue
-                entries.append({"name": c.name, "dir": c.is_dir(), "size": 0 if c.is_dir() else st.st_size,
-                                "mtime": int(st.st_mtime), "kind": "dir" if c.is_dir() else self.kind(c)})
+                ent = {"name": c.name, "dir": c.is_dir(), "size": 0 if c.is_dir() else st.st_size,
+                       "mtime": int(st.st_mtime), "kind": "dir" if c.is_dir() else self.kind(c)}
+                v = None if ent["dir"] else self.sidecar(c)
+                if v:
+                    ent["view"] = v
+                entries.append(ent)
         except PermissionError:
             return {"error": "no permission to read this folder"}
         parent = str(p.parent) if self.resolve(str(p.parent)) else None
@@ -179,8 +341,14 @@ class Files:
                     continue
                 found.append((st.st_mtime, fp, st.st_size))
         found.sort(key=lambda x: -x[0])
-        return [{"path": str(fp), "name": fp.name, "dir": str(fp.parent), "size": sz, "mtime": int(mt), "kind": self.kind(fp)}
-                for mt, fp, sz in found[:n]]
+        out = []
+        for mt, fp, sz in found[:n]:
+            e = {"path": str(fp), "name": fp.name, "dir": str(fp.parent), "size": sz, "mtime": int(mt), "kind": self.kind(fp)}
+            v = self.sidecar(fp)
+            if v:
+                e["view"] = v
+            out.append(e)
+        return out
 
     def serve(self, handler, raw: str) -> None:
         """Stream a file with the right type; honour a single byte range."""

@@ -1,7 +1,8 @@
 import Head from 'next/head'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '../lib/pathlinks'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -87,6 +88,36 @@ function CopyLink({ text, label, style }) {
   const [done, setDone] = useState(false)
   return <a onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
 }
+// A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
+// there inline), hover on an image shows it small beside the link.
+function openPath(p) { window.dispatchEvent(new CustomEvent('cc-open-path', { detail: p })) }
+function PathLink({ path, children, style }) {
+  const [hov, setHov] = useState(false)
+  const img = isImagePath(path)
+  return (
+    <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
+      <a onClick={(e) => { e.stopPropagation(); openPath(path) }} title={`Open ${path}`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline dotted', overflowWrap: 'anywhere', ...(style || {}) }}>{children || path}</a>
+      {hov && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
+    </span>
+  )
+}
+// Plain text (the person's own messages) with its paths made into links.
+function LinkedText({ text }) {
+  const parts = useMemo(() => splitPaths(text), [text])
+  if (parts.length === 1 && parts[0].t === 'text') return <>{text}</>
+  return <>{parts.map((p, i) => (p.t === 'path' ? <PathLink key={i} path={p.v} /> : <React.Fragment key={i}>{p.v}</React.Fragment>))}</>
+}
+// A thumbnail for a file chosen in the composer (images only), made from the file itself, freed on removal.
+function ChipThumb({ file }) {
+  const [url, setUrl] = useState(null)
+  useEffect(() => {
+    if (!file || !/^image\//.test(file.type || '')) return undefined
+    const u = URL.createObjectURL(file); setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [file])
+  if (!url) return null
+  return <img src={url} alt="" style={{ width: '28px', height: '28px', objectFit: 'cover', borderRadius: '4px', verticalAlign: 'middle', marginRight: '6px', backgroundColor: '#000' }} />
+}
 // Selection snapped to the whole paragraph (2026-10-09). The renderer's `components` used to be
 // written inline in Md: new function identities on every render, so React unmounted and rebuilt
 // every <p>, <code>, <li> of every message on each render (the 2.5 s state poll, the pick popup's
@@ -96,7 +127,17 @@ function CopyLink({ text, label, style }) {
 // message's DOM is reused in place and a dragged selection stays exactly as dragged.
 function mdComponents(base) {
   return {
-    a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" style={{ color: C.gold }} />,
+    a: ({ node, ...props }) => {
+      // a path on the box (found in the text by remarkPathLinks, or written as a markdown link to a file)
+      // opens in the Files pane; a web address opens in a new tab
+      const cc = props['data-ccpath']
+      const fp = cc || hrefToPath(props.href)
+      if (fp) {
+        const target = fp.startsWith('/') ? fp : (base && !fp.includes('/') ? `${base}/${fp}` : fp)
+        return <PathLink path={target}>{props.children}</PathLink>
+      }
+      return <a {...props} target="_blank" rel="noreferrer" style={{ color: C.gold }} />
+    },
     p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
     ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
     ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
@@ -113,15 +154,14 @@ function mdComponents(base) {
     code: ({ node, ...props }) => {
       // An absolute path on the box opens the Files pane at that file or folder.
       const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
-      const isAbs = s && /^\/(home|opt|srv|var|tmp)\/\S+$/.test(s.trim()) && s.length < 300
+      const isAbs = s && /^\/(home|opt|srv|var|tmp)\/[^\n]+$/.test(s.trim()) && s.length < 300
       // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
       // message if any, else the world (the bridge falls back to the world's root when the guess misses)
       const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
       if (isAbs || isFile) {
         const rel = s.trim()
         const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
-        return <a onClick={() => window.dispatchEvent(new CustomEvent('cc-open-path', { detail: target }))} title={`Open ${target}`}
-          style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.gold, padding: '1px 5px', borderRadius: '4px', cursor: 'pointer', textDecoration: 'underline dotted' }}>{s}</a>
+        return <PathLink path={target} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
       }
       return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
     },
@@ -140,7 +180,7 @@ const Md = React.memo(function Md({ text }) {
   const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
 })
@@ -1653,7 +1693,7 @@ function CC() {
                   </div>
                 )}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
-                {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
+                {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
                 {t.voices && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
                     {t.voices.map(v => (
@@ -1783,7 +1823,7 @@ function CC() {
         )}
         {files.length > 0 && (
           <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px' }}>{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
+            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}><ChipThumb file={f} />{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
           </p>
         )}
         <div style={paneMode ? { display: paneDetails ? 'block' : 'none', maxHeight: '45vh', overflowY: 'auto', borderTop: `1px solid ${C.line}`, marginTop: '6px', paddingBottom: '4px' } : undefined}>
