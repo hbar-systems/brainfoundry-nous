@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
+import { applyStyle, clearStyle } from '../lib/layout'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -79,6 +80,22 @@ export default function App({ Component, pageProps }) {
     if (Number.isFinite(navH) && navH >= 32 && navH <= 96) {
       document.documentElement.style.setProperty('--nav-h', `${navH}px`)
     }
+  }, [])
+
+  // The owner's layout file (2026-10-09): colours, text size and weight from GET /cc/layout, set one
+  // custom property at a time (ui/lib/layout.js re-checks every name and value). The last answer is
+  // kept in this browser so the next page opens in the right colours before the request returns.
+  // Pages without the CC bridge get a 404 and stay stock.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const root = document.documentElement
+    const put = (resolved) => { clearStyle(root, document.body); if (resolved) applyStyle(resolved, root, document.body) }
+    try { const c = localStorage.getItem('cc.layout.resolved'); if (c) put(JSON.parse(c)) } catch {}
+    fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d) return
+      put(d.resolved)
+      try { if (d.resolved) localStorage.setItem('cc.layout.resolved', JSON.stringify(d.resolved)); else localStorage.removeItem('cc.layout.resolved') } catch {}
+    }).catch(() => {})
   }, [])
 
   return (

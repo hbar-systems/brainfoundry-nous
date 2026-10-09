@@ -231,7 +231,7 @@ PANE_ROUTES = {
     "/update": "Update", "/federation": "Federation", "/tasks": "Tasks", "/research": "Research",
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
-    "/terminal": "Terminal", "/files": "Files", "/guide": "Guide",
+    "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -261,6 +261,13 @@ SYSTEM += (
     "memory), end your answer with one <pane>/route</pane> block using exactly one "
     "of: " + ", ".join(f"{r} ({n})" for r, n in PANE_ROUTES.items()) + ", or /apps/<app-id>. The screen "
     "opens beside the conversation. Do not add a pane for ordinary answers."
+)
+SYSTEM += (
+    " Personalizing the console: when the person asks to set up, personalize or rearrange the console, or "
+    "says they have not yet and wants to, read docs/personalize-interview.md in the brain repository and follow "
+    "it: ask its fixed questions one or two at a time, in plain conversation, then end one answer with a single "
+    "<layout>{\"answers\": {...}}</layout> block exactly as that file says. That block only PROPOSES a layout; "
+    "the person applies it with one click, so say that it is waiting for them."
 )
 
 # The workshop (optional): a read-only mirror of the owner's own repositories on the box
@@ -326,6 +333,7 @@ if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
+import cc_layout  # noqa: E402
 OUT_DIR = HANDS_HOME / "out"
 IN_DIR = HANDS_HOME / "in"
 for _d in (OUT_DIR, IN_DIR):
@@ -904,7 +912,7 @@ _SPEAK_CODE = re.compile(r"```.*?```", re.S)
 _SPEAK_INLINE = re.compile(r"`([^`]*)`")
 _SPEAK_URL = re.compile(r"https?://\S+")
 _SPEAK_MARKS = re.compile(r"[*_#>|]+")
-_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>", re.S)
+_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>", re.S)
 
 
 def _speakable(text: str) -> str:
@@ -1425,6 +1433,7 @@ def _earlier_pieces(run) -> list:
         else:
             t, _ = _extract_proposal(txt)
             t, _ = _extract_pane(t)
+            t, _, _ = cc_layout.parse_marker(t)
             if t.strip():
                 out.append(t.strip())
     return out
@@ -2178,6 +2187,14 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 _save_state(state)
         reply, proposal = _extract_proposal(reply)
         reply, pane = _extract_pane(reply)
+        reply, _lay, _lay_err = cc_layout.parse_marker(reply)
+        if _lay is not None:
+            try:
+                LAYOUT.propose(_lay, "interview", cc_layout.summary(_lay))
+            except OSError as e:
+                print(f"layout proposal not saved: {type(e).__name__}", flush=True)
+        elif _lay_err:
+            reply = (reply + f"\n\n(The layout was not proposed: {_lay_err})").strip()
         card = _propose(proposal) if proposal else None
         try:
             if explicit is None:
@@ -2461,6 +2478,72 @@ def _tg_loop() -> None:
             time.sleep(30 if code in (401, 404) else 10)
 
 
+# ---- the owner's layout file (2026-10-09) ----
+# ~/.cc-bridge/layout.json, beside board.json: the owner's own file on the box, outside every tracked
+# template file, so Update never conflicts. Owner access without a permit, like /files/write: it is the
+# person's own console settings, a closed schema (cc_layout.py), and a layout that did not come from
+# the person (the interview, an installed pack) is only a proposal until they press apply.
+LAYOUT = cc_layout.Store(STATE_DIR, Path(CWD) / "brain-apps")
+
+
+def _layout_view() -> dict:
+    cur = LAYOUT.get()
+    return {"layout": cur, "resolved": cc_layout.resolve(cur) if cur else None,
+            "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(),
+            "questions": [{**q, "options": [list(o) for o in q["options"]]} for q in cc_layout.QUESTIONS]}
+
+
+def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tuple[int, dict]:
+    """Every /layout route, as (status, object). Errors from the schema are 400 with the reason."""
+    body = body or {}
+    try:
+        if method == "GET" and route == "/layout":
+            return 200, _layout_view()
+        if method == "GET" and route == "/layout/export":
+            cur = LAYOUT.get()
+            if cur is None:
+                return 404, {"error": "no layout set yet: save one first"}
+            return 200, cc_layout.export_pack(cur, query.get("name") or None, query.get("repo") or None, query.get("author") or None)
+        if method != "POST":
+            return 404, {"error": "not_found"}
+        if route == "/layout/save":
+            LAYOUT.save(body.get("layout"), answers=body.get("answers"))
+        elif route == "/layout/answers":
+            LAYOUT.save(cc_layout.from_answers(body.get("answers")), answers=body.get("answers"))
+        elif route == "/layout/propose":
+            lay = cc_layout.from_answers(body["answers"]) if "answers" in body else body.get("layout")
+            LAYOUT.propose(lay, str(body.get("source") or "page"), str(body.get("note") or ""), answers=body.get("answers"))
+        elif route == "/layout/approve":
+            if LAYOUT.approve(str(body.get("id") or "")) is None:
+                return 404, {"error": "no such proposal"}
+        elif route == "/layout/dismiss":
+            if not LAYOUT.dismiss(str(body.get("id") or "")):
+                return 404, {"error": "no such proposal"}
+        elif route == "/layout/undo":
+            if LAYOUT.undo() is None:
+                return 404, {"error": "nothing to undo"}
+        elif route == "/layout/reset":
+            LAYOUT.reset()
+        elif route == "/layout/export/write":
+            cur = LAYOUT.get()
+            if cur is None:
+                return 404, {"error": "no layout set yet: save one first"}
+            pk = cc_layout.export_pack(cur, body.get("name") or None, body.get("repo") or None, body.get("author") or None)
+            d = OUT_DIR / ("layout-pack-" + pk["id"][len("layout-"):])
+            for rel, text in pk["files"].items():
+                f = d / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(text, encoding="utf-8")
+            return 200, {"ok": True, "dir": str(d), "id": pk["id"], "repo_set": pk["repo_set"], "files": sorted(pk["files"])}
+        else:
+            return 404, {"error": "not_found"}
+    except cc_layout.LayoutError as e:
+        return 400, {"error": str(e)}
+    except (KeyError, TypeError) as e:
+        return 400, {"error": f"bad request: {type(e).__name__}"}
+    return 200, {"ok": True, **_layout_view()}
+
+
 # ---- mission control: one board for all running work (2026-10-06) ----
 # GET /board assembles tiles from what is already tracked here: RUNS (with each turn's events
 # and waiting cards), the turn audit, threads.json, the jobs registry and pending permits.
@@ -2598,7 +2681,7 @@ class Handler(BaseHTTPRequestHandler):
                              "voice_name": _voice_current_name(), "transcribe_backend": _voice_backend("stt"),
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
                              "telegram": (TG.owner() is not None) if TG is not None else None,
-                             "cards_waiting": _cards_waiting(), "turn_running": bool(_runs_active()),
+                             "cards_waiting": _cards_waiting(), "layout_proposals": len(LAYOUT.proposals()), "turn_running": bool(_runs_active()),
                              "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
@@ -2664,6 +2747,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _state(t))
         elif route == "/board":
             self._send(200, _board())
+        elif route.startswith("/layout"):
+            self._send(*_layout_api("GET", route, None, self._query()))
         elif route == "/usage":
             # Cost and usage (2026-09-29): totals from the turn audit, never content.
             try:
@@ -2697,6 +2782,13 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         if route not in ("/ask", "/jobs/start") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
+        if route.startswith("/layout"):
+            body = self._json(limit=40000)
+            if body is None:
+                self._send(400, {"error": "unreadable or too large"})
+                return
+            self._send(*_layout_api("POST", route, body, self._query()))
             return
         if route == "/files/write":
             # The person edits a text file in the Files pane and saves (2026-09-28). No permit: their

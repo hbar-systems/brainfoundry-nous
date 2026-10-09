@@ -4,6 +4,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
+import { localPlan, capture, stamp } from '../lib/layout'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -614,6 +615,54 @@ function CC() {
   const flipSide = () => setPaneSide(s => { const n = s === 'left' ? 'right' : 'left'; try { localStorage.setItem('cc.paneSide', n) } catch {}; return n })
   const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
   const layoutChanged = Object.keys(hidden).length > 0 || paneSide === 'left'
+  // The owner's layout file (2026-10-09), kept on the box by the bridge (GET /cc/layout). A layout the
+  // browser has not applied yet is applied once: it is written into the keys above and the states are
+  // set, so dragging, hiding and the font picker still work afterwards and stay in this browser until
+  // "save layout" writes them back to the file. Colours, zoom and weight are applied in _app.js.
+  const [layoutBase, setLayoutBase] = useState(null)
+  const [layoutNote, setLayoutNote] = useState('')
+  useEffect(() => {
+    let on = true
+    fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!on || !d || !d.layout) return
+      setLayoutBase(d.layout)
+      let seen = null
+      try { seen = localStorage.getItem('cc.layout.applied') } catch {}
+      const st = stamp(d.layout)
+      if (seen === st) return
+      const plan = localPlan(d.layout)
+      try {
+        Object.keys(plan.set).forEach(k => localStorage.setItem(k, plan.set[k]))
+        plan.remove.forEach(k => localStorage.removeItem(k))
+        localStorage.setItem('cc.layout.applied', st)
+      } catch {}
+      try { setHidden(JSON.parse(plan.set['cc.hidden'] || '{}')) } catch {}
+      setPaneSide(plan.set['cc.paneSide'] === 'left' ? 'left' : 'right')
+      setWidth(plan.set['cc.width'] || '860px')
+      setFont(plan.set['cc.font'] || '')
+      setSpeak(plan.set['cc.speak'] === '1'); setHandsfree(plan.set['cc.handsfree'] === '1')
+      // the default view: once per browser session, only from the bare console page
+      try {
+        const q = new URLSearchParams(window.location.search)
+        if (d.layout.view !== 'talk' && !q.has('pane') && !q.has('thread') && !sessionStorage.getItem('cc.layout.view')) {
+          sessionStorage.setItem('cc.layout.view', '1')
+          window.location.href = d.layout.view === 'gallery' ? '/gallery' : '/panes'
+        }
+      } catch {}
+    }).catch(() => {})
+    return () => { on = false }
+  }, [])
+  const saveLayout = async () => {
+    let lay
+    try { lay = capture(k => localStorage.getItem(k), layoutBase) } catch { return }
+    try {
+      const r = await fetch('/cc/layout/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ layout: lay }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok && d.layout) { setLayoutBase(d.layout); try { localStorage.setItem('cc.layout.applied', stamp(d.layout)) } catch {}; setLayoutNote('layout saved') }
+      else setLayoutNote(d.error || 'could not save the layout')
+    } catch { setLayoutNote('could not save the layout') }
+    setTimeout(() => setLayoutNote(''), 4000)
+  }
   const cycleWidth = () => { const w = WIDTHS[(WIDTHS.indexOf(width) + 1) % WIDTHS.length]; setWidth(w); try { localStorage.setItem('cc.width', w) } catch {} }
   // The font of the conversation (2026-09-30): the Chat tab's six fonts, offered under "details";
   // each row of the picker is drawn in its own font, so the choice is seen before it is made.
@@ -1718,9 +1767,9 @@ function CC() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
-            {!paneMode && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
-            {!paneMode && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
-            {!paneMode && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
+            {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
+            {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
+            {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
@@ -1977,18 +2026,21 @@ function CC() {
           {showDetails && health && typeof health.memory === 'boolean' ? <span>memory {health.memory ? 'on' : 'off'}</span> : null}
           {!paneMode && sysWarn.length > 0 ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline' }}>{sysWarn[0]}{sysWarn.length > 1 ? ` (+${sysWarn.length - 1})` : ''}</a></span> : null}
           {!paneMode && health && health.voice ? <span><a onClick={() => { if (speak) stopSpeaking(); setSpeakSaved(!speak) }} style={{ color: speak ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>voice {speak ? 'on' : 'off'}</a>{health.voice_name ? ` (${health.voice_name})` : ''}</span> : null}
-          {!paneMode && loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
+          {!paneMode && !hidden.handsfree && loggedIn && canTalk ? <span><a onClick={() => setHandsfreeSaved(!handsfree)} title="What you say sends by itself; after the answer has finished speaking, listening restarts" style={{ color: handsfree ? C.gold : C.dim, cursor: 'pointer', textDecoration: 'underline' }}>hands-free {handsfree ? 'on' : 'off'}</a></span> : null}
           {showDetails && usage && usage.today ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>today {usage.today.turns} turn{usage.today.turns === 1 ? '' : 's'} · {kTok(usage.today.in)} in · {kTok(usage.today.out)} out{usage.today.cost !== null && usage.today.cost !== undefined ? ` · $${usage.today.cost.toFixed(2)}` : ''}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
           {!paneMode && health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
           {health && health.cards_waiting > 0 ? <span><a onClick={() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
-          {health && health.out ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
+          {health && health.out && !hidden.files ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
           {showDetails && loggedIn && health.auth.email ? <span>connected as {health.auth.email} · <a onClick={signOut} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>disconnect</a></span> : null}
           <span><a onClick={() => (paneMode ? setPaneDetails(false) : setShowDetails(s => !s))} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{paneMode ? 'close details' : showDetails ? 'less' : 'details'}</a></span>
           {showDetails ? <span><a onClick={() => setShowFonts(s => !s)} title="the font of the conversation" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>font{fontPick ? `: ${fontPick.label}` : ''}</a></span> : null}
           {!paneMode && (layoutChanged || pane || width !== '860px') ? <span><a onClick={resetLayout} title="Show every block again, put the side pane back on the right at its usual width" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>reset layout</a></span> : null}
+          {!paneMode && health && health.layout_proposals > 0 ? <span><a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="A layout from the interview or an installed pack waits for your yes" style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.layout_proposals} layout proposal{health.layout_proposals === 1 ? '' : 's'} wait{health.layout_proposals === 1 ? 's' : ''} for you</a></span> : null}
+          {showDetails && !paneMode ? <span><a onClick={saveLayout} title="Keep how the console looks now (blocks, pane side and width, column, font, voice) in your layout file on the box" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>save layout</a>{' · '}<a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="Your answers, colours, undo and the shareable pack" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>layout page</a></span> : null}
+          {layoutNote ? <span style={{ color: C.gold }}>{layoutNote}</span> : null}
           {!paneMode && hidden.hero ? <span><a onClick={() => hide('hero', false)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
           {!pane && !paneMode ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {!paneMode && auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}

@@ -102,7 +102,7 @@ if CC_ENABLED:
 
 # Routes that built-ins or the API itself occupy. Installed apps cannot use
 # any of these for their tab.route. /cc and /dashboard stay reserved either way.
-RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc", "/dashboard", "/", "/terminal", "/claude", "/files", "/guide"}
+RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc", "/dashboard", "/", "/terminal", "/claude", "/files", "/guide", "/layout"}
 
 
 # ---------- pydantic models ----------
