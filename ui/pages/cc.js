@@ -399,8 +399,17 @@ function CC() {
   // tab title: a dot, how long the thread shown has been answering, its step count and last step.
   const [busySince, setBusySince] = useState(null)
   const [tick, setTick] = useState(0)
-  useEffect(() => { if (!busy) { setBusySince(null); return } setBusySince(Date.now()); const t = setInterval(() => setTick(x => x + 1), 1000); return () => clearInterval(t) }, [busy])
-  useEffect(() => { try { document.title = (busy ? '● ' : '') + 'CC · BrainFoundry' } catch {} }, [busy])
+  // The bridge's own answer to "is it working" (2026-10-09): polled every 2.5 s for the thread shown.
+  // `busy` alone is what THIS page started or follows; a turn started elsewhere (another tab, a pane,
+  // Telegram, a queued message that just began) or a stream a proxy cut left the line saying idle
+  // while the bridge refused the next message. The line, the dot and the composer read `active`.
+  const [srv, setSrv] = useState(null)                // { running, run:{seconds,steps,agents,last}, queue:[{id,message}] }
+  const srvAtRef = useRef(0)
+  const pollRef = useRef(null)
+  const srvRunning = !!(srv && srv.running)
+  const active = busy || srvRunning
+  useEffect(() => { if (!active) { setBusySince(null); return } setBusySince(Date.now()); const t = setInterval(() => setTick(x => x + 1), 1000); return () => clearInterval(t) }, [active])
+  useEffect(() => { try { document.title = (active ? '● ' : '') + 'CC · BrainFoundry' } catch {} }, [active])
   const fmtElapsed = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s` }
   // The brain speaks (2026-09-23): when the bridge has a voice, answers are read aloud as
   // they finish while this is on. Remembered per browser. One player at a time.
@@ -554,7 +563,7 @@ function CC() {
     load(); const t = setInterval(load, 300000)
     return () => { on = false; clearInterval(t) }
   }, [])
-  const queueRef = useRef(null)                    // one message typed while a turn runs
+  const queueRef = useRef([])                      // messages typed while a NEW thread's first turn runs (it has no id to queue on yet): [{ qid, text }]
   const sendRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
   const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
@@ -653,7 +662,30 @@ function CC() {
         <a onClick={() => dropNote(n.id)} style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>remove</a>
       </div>
   )
+  const flushLocal = () => { const next = queueRef.current.shift(); if (!next) return; setTurns(t => t.filter(x => x.qid !== next.qid)); setTimeout(() => sendRef.current && sendRef.current(next.text), 0) }
   const markRunning = (key, on) => { if (on) runningRef.current[key] = true; else delete runningRef.current[key]; if (curRef.current === key) setBusy(!!on) }
+
+  // Poll the bridge for the thread shown. If it is answering and this page is not following, follow
+  // it (replays the turn so far). Queued messages are the bridge's, shown from here.
+  useEffect(() => {
+    let stop = false
+    const tick = async () => {
+      const k = curRef.current
+      if (!k || String(k).startsWith('new:')) { if (!stop) setSrv(null); return }
+      try {
+        const r = await fetch(`/cc/state?thread=${encodeURIComponent(k)}`, { cache: 'no-store' })
+        const d = r.ok ? await r.json() : null
+        if (stop || !d || curRef.current !== k) return
+        srvAtRef.current = Date.now(); setSrv(d)
+        if (d.running && !runningRef.current[k]) attach(k)
+      } catch {}
+    }
+    pollRef.current = tick
+    setSrv(null)
+    tick()
+    const iv = setInterval(tick, 2500)
+    return () => { stop = true; clearInterval(iv) }
+  }, [cur])
 
   // A card that waited unanswered for 15 minutes on 2026-09-27 because the owner had left the
   // page: the footer now says so within 20 s and the browser shows a notification once per card.
@@ -880,7 +912,11 @@ function CC() {
         if (r2.ok && r2.body) return await consume(r2, key, true)
       } catch {}
     }
-    if (!data) data = { reply: 'The stream ended without an answer.', error: true }
+    if (!data) {
+      // the stream broke but the bridge may still be answering: say nothing, the poll re-attaches and replays it
+      try { const rs = await fetch(`/cc/state?thread=${encodeURIComponent(key)}`, { cache: 'no-store' }); const ds = rs.ok ? await rs.json() : null; if (ds && ds.running) return null } catch {}
+      data = { reply: 'The stream ended without an answer.', error: true }
+    }
     const reply = data.reply || '(no answer)'
     if (mine()) {
       setTurns(t => { const c = t.slice(); const i = liveIdx(c); if (i >= 0) c[i] = { ...c[i], live: false, text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null, sources: data.sources || [] }; return c })
@@ -902,7 +938,8 @@ function CC() {
     } catch {}
     markRunning(thread, false)
     loadThreads(); loadLatest()
-    if (curRef.current === thread && queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
+    if (curRef.current === thread && queueRef.current.length) flushLocal()
+    setTimeout(() => pollRef.current && pollRef.current(), 400)
   }
 
   // The write gate: a proposal card's Send approves the permit and executes that one
@@ -975,11 +1012,11 @@ function CC() {
     const lastDone = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
     const waiting = pending.length > 0 || turns.some(x => (x.asks || []).some(a => !a.decided && !a.auto))
     try {
-      window.parent.postMessage({ type: 'cc-pane-state', busy, since: busySince, steps: live && live.steps ? live.steps.length : 0,
+      window.parent.postMessage({ type: 'cc-pane-state', busy: active, since: busySince, steps: live && live.steps ? live.steps.length : 0,
         last: live && live.steps && live.steps.length ? String(live.steps[live.steps.length - 1]).slice(0, 120) : '', writing: !!(live && live.text),
         waiting, lastMs: lastDone ? lastDone.ms : null, details: paneDetails, turns: turns.length }, window.location.origin)
     } catch {}
-  }, [paneMode, busy, busySince, turns, pending, paneDetails])
+  }, [paneMode, active, busySince, turns, pending, paneDetails])
   // In a pane the composer is one line that grows with what is typed, up to six.
   useEffect(() => {
     if (!paneMode || !boxRef.current) return
@@ -1167,14 +1204,14 @@ function CC() {
   // Hands-free: once armed, listen again as soon as nothing is being said or thought.
   useEffect(() => {
     if (!handsfree || !armedRef.current || !loggedIn) return
-    if (speaking || busy || listening || transcribing) return
+    if (speaking || active || listening || transcribing) return
     const t = setTimeout(() => {
       if (!handsfreeRef.current || !armedRef.current || listeningRef.current || speakingRef.current) return
       armedRef.current = false
       startListening('')
     }, 400)
     return () => clearTimeout(t)
-  }, [handsfree, speaking, busy, listening, transcribing, loggedIn])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handsfree, speaking, active, listening, transcribing, loggedIn])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { clearPause(); const r = recRef.current; if (r) { try { r.abort() } catch {} } const m = mediaRef.current; if (m) { try { m.recorder.stop() } catch {} } }, [])
 
   // Typed with a slash: a few things the page handles itself, like the CLI's own commands.
@@ -1269,7 +1306,22 @@ function CC() {
       setFiles([])
       text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ')
     }
-    if (busy) { queueRef.current = text; if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true }]); return }
+    // A message sent while the thread answers is accepted by the bridge and queued there (2026-10-09):
+    // delivered as the next turn the moment the running one ends, in order, cancellable below.
+    const realKey = curRef.current && !String(curRef.current).startsWith('new:') && !freshRef.current ? curRef.current : null
+    const queueOnServer = async (key) => {
+      try {
+        const rq = await fetch('/cc/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: key, message: text }) })
+        if (rq.status !== 202) return false
+        const dq = await rq.json().catch(() => ({}))
+        srvAtRef.current = Date.now(); setSrv(s0 => ({ ...(s0 || { running: true }), queue: dq.queue || [] }))
+        return true
+      } catch { return false }
+    }
+    if ((busy || srvRunning) && realKey) {
+      if (await queueOnServer(realKey)) { if (typeof forced !== 'string') setDraft(''); return }
+    }
+    if (busy && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
     if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
     // The thread this turn belongs to: the one shown, or a fresh one under a temporary key until
@@ -1289,6 +1341,14 @@ function CC() {
         data = await consume(r, key, false)
       } else {
         data = await r.json().catch(() => ({}))
+        if (!isNew && (r.status === 202 || (r.status === 409 && data.error === 'busy'))) {
+          // the page thought the thread idle, the bridge says it answers: queue instead of refusing
+          if (r.status === 202 || await queueOnServer(key)) {
+            setTurns(t => (t.length && t[t.length - 1].who === 'me' && t[t.length - 1].text === text ? t.slice(0, -1) : t))
+            if (r.status === 202) { srvAtRef.current = Date.now(); setSrv(s0 => ({ ...(s0 || { running: true }), queue: data.queue || [] })) }
+            return
+          }
+        }
         const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
         if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
         if (data.pane && curRef.current === key) openPane(data.pane)
@@ -1304,7 +1364,8 @@ function CC() {
       if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
     } finally {
       markRunning(key, false)
-      if (curRef.current === key && queueRef.current) { const next = queueRef.current; queueRef.current = null; setTurns(t => t.filter(x => !x.queued)); setTimeout(() => sendRef.current && sendRef.current(next), 0) }
+      if (curRef.current === key && queueRef.current.length) flushLocal()
+      setTimeout(() => pollRef.current && pollRef.current(), 400)
       if (boxRef.current) boxRef.current.focus()
     }
   }
@@ -1341,12 +1402,20 @@ function CC() {
   // in the moment the turn ends: the terminal's interrupt, one turn at a time.
   async function stopTurn() {
     const key = curRef.current
-    if (!key || !runningRef.current[key]) return false
+    if (!key || !(runningRef.current[key] || srvRunning)) return false
     const body = String(key).startsWith('new:') ? { run: runIdRef.current[key] || '' } : { thread: key }
     try {
       const r = await fetch('/cc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       return r.ok
     } catch { return false }
+  }
+  async function cancelQueued(id) {
+    const key = curRef.current
+    try {
+      const r = await fetch('/cc/queue/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: key, id }) })
+      const d = await r.json().catch(() => ({}))
+      if (d && d.queue) setSrv(s0 => ({ ...(s0 || {}), queue: d.queue }))
+    } catch {}
   }
   async function sendNow() {
     await send()
@@ -1354,8 +1423,8 @@ function CC() {
   }
 
   function onKey(e) {
-    if (e.key === 'Escape' && busy) { e.preventDefault(); stopTurn(); return }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && busy && draft.trim()) { e.preventDefault(); sendNow(); return }
+    if (e.key === 'Escape' && active) { e.preventDefault(); stopTurn(); return }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && active && draft.trim()) { e.preventDefault(); sendNow(); return }
     if (e.key === 'Tab' && draft.startsWith('/') && !/\s/.test(draft)) {
       const m = SLASH.find(s => s.c.startsWith(draft))
       if (m) { e.preventDefault(); setDraft(m.c + ' '); return }
@@ -1506,6 +1575,7 @@ function CC() {
                     <Btn small onClick={() => send(`Read the log of job ${t.job.id} (${t.job.log}) and tell me the result in a few lines; if it made files, open them beside the chat.`)}>ask the brain about it</Btn>
                   </div>
                 )}
+                {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
                 {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : t.text}
                 {t.voices && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
@@ -1531,7 +1601,15 @@ function CC() {
               </div>
             </div>
           ))}
-          {busy && !(turns.length && turns[turns.length - 1].live) && <div style={{ color: C.dim, fontSize: '13px', fontStyle: 'italic', margin: '8px 0' }}>thinking on the box…</div>}
+          {srv && srv.queue && srv.queue.map(q => (
+            <div key={q.id} style={{ display: 'flex', justifyContent: 'flex-end', margin: paneMode ? '5px 0' : '8px 0' }}>
+              <div style={{ maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: C.me, border: `1px solid ${C.line}`, color: C.meText, fontSize: '14px', lineHeight: 1.6, opacity: 0.55 }}>
+                <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => cancelQueued(q.id)} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>
+                {q.message}
+              </div>
+            </div>
+          ))}
+          {active && !(turns.length && turns[turns.length - 1].live) && <div style={{ color: C.dim, fontSize: '13px', fontStyle: 'italic', margin: '8px 0' }}>thinking on the box…</div>}
           <div ref={endRef} />
         </div>
 
@@ -1550,10 +1628,18 @@ function CC() {
           const live = [...turns].reverse().find(x => x.live)
           const last = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
           return (
-            <p style={{ ...mono, fontSize: '11px', margin: '12px 0 0 0', color: busy ? C.gold : C.faint, display: 'flex', gap: '10px', alignItems: 'baseline' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: busy ? C.gold : C.line, animation: busy ? 'ccpulse 1.2s ease-in-out infinite' : 'none' }} />
-              {busy
-                ? <span>answering{busySince ? ` for ${fmtElapsed(Date.now() - busySince + tick * 0)}` : ''}{live && live.steps && live.steps.length ? ` · ${live.steps.length} step${live.steps.length === 1 ? '' : 's'} · last: ${String(live.steps[live.steps.length - 1]).slice(0, 90)}` : live && live.text ? ' · writing' : ' · thinking'}</span>
+            <p style={{ ...mono, fontSize: '11px', margin: '12px 0 0 0', color: active ? C.gold : C.faint, display: 'flex', gap: '10px', alignItems: 'baseline' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: active ? C.gold : C.line, animation: active ? 'ccpulse 1.2s ease-in-out infinite' : 'none' }} />
+              {active
+                ? (() => {
+                    // elapsed and steps come from the bridge when it reports the run (it knows turns started elsewhere, and subagents), else from this page
+                    const sr = srvRunning && srv.run ? srv.run : null
+                    const ms = sr ? sr.seconds * 1000 + (Date.now() - srvAtRef.current) : (busySince ? Date.now() - busySince : null)
+                    const nSteps = sr ? sr.steps : (live && live.steps ? live.steps.length : 0)
+                    const lastStep = sr ? sr.last : (live && live.steps && live.steps.length ? String(live.steps[live.steps.length - 1]) : '')
+                    const nq = srv && srv.queue ? srv.queue.length : 0
+                    return <span>answering{ms !== null ? ` for ${fmtElapsed(ms)}` : ''}{nSteps ? ` · ${nSteps} step${nSteps === 1 ? '' : 's'}` : (live && live.text ? ' · writing' : ' · thinking')}{sr && sr.agents ? ` · ${sr.agents} subagent${sr.agents === 1 ? '' : 's'}` : ''}{nq ? ` · ${nq} queued` : ''}{lastStep ? ` · last: ${lastStep.slice(0, 90)}` : ''}</span>
+                  })()
                 : <span>idle{last ? ` · last answer ${(last.ms / 1000).toFixed(1)} s${last.meta && last.meta.steps > 1 ? `, ${last.meta.steps} steps` : ''}` : ''}</span>}
               <style>{`@keyframes ccpulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
             </p>
@@ -1574,7 +1660,7 @@ function CC() {
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
-            placeholder={paneMode && loggedIn && !listening ? (busy ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : busy ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
@@ -1587,9 +1673,9 @@ function CC() {
               title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}>
               {listening ? 'stop' : transcribing ? 'hearing' : 'talk'}
             </Btn>
-            {busy && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
-            {busy && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
-            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{busy && draft.trim() ? 'queue' : 'send'}</Btn>
+            {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
+            {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
+            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : 'send'}</Btn>
           </div>
           )}
           {paneMode && (
@@ -1597,9 +1683,9 @@ function CC() {
               <IconBtn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there"><IcoClip /></IconBtn>
               <IconBtn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} on={listening}
                 title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}><IcoMic /></IconBtn>
-              {busy && <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>}
-              <IconBtn primary onClick={busy && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}
-                title={busy ? 'Stop the answer and send this now (Cmd/Ctrl+Enter); Enter alone queues it' : 'Send (Enter)'}><IcoSend /></IconBtn>
+              {active && <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>}
+              <IconBtn primary onClick={active && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}
+                title={active ? 'Stop the answer and send this now (Cmd/Ctrl+Enter); Enter alone queues it' : 'Send (Enter)'}><IcoSend /></IconBtn>
             </div>
           )}
         </div>

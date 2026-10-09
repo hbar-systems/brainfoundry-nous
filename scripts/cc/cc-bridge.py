@@ -23,6 +23,9 @@ Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method}
   POST /cc/chat           {"message"} -> {"reply","session_id","ms","error"}
   POST /cc/new            fresh thread
+  GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...]}  the real busy state of a thread
+  POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
+  POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -1968,7 +1971,91 @@ META: dict = {}   # the last turn's model and token counts, shown on the page
 
 
 # ----------------------------------------------------------------- http ----
-def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page") -> tuple[int, dict]:
+# Queued messages (2026-10-09). A message sent to a thread that is answering is not refused: it
+# waits here, in order, and is delivered as the thread's next turn the moment the running one
+# ends (the bridge does this itself, so it works with the page closed). A message cannot be
+# injected into a running turn: the reasoner is driven headlessly one turn per process, and its
+# stdin is closed after the prompt. Queue is the mechanism.
+QUEUES: dict[str, list] = {}              # brain thread id -> [{"id", "message", "at", "source"}]
+MAX_QUEUE = 20
+
+
+def _queue_view(thread: str | None) -> list:
+    return [{"id": q["id"], "message": q["message"][:2000], "at": q["at"]} for q in list(QUEUES.get(thread or "", []))]
+
+
+def _queue_push(key: str, message: str, source: str) -> tuple[int, dict]:
+    """Append under RUNS_LOCK (the caller holds it)."""
+    q = QUEUES.setdefault(key, [])
+    if len(q) >= MAX_QUEUE:
+        return 429, {"error": "queue_full", "reply": f"{MAX_QUEUE} messages are already queued on this conversation.", "queue": _queue_view(key)}
+    item = {"id": __import__("secrets").token_hex(4), "message": message, "at": time.time(), "source": source}
+    q.append(item)
+    print(f"queued id={item['id']} thread={key[:8]} depth={len(q)} via={source}", flush=True)
+    return 202, {"queued": item["id"], "position": len(q), "thread": key, "queue": _queue_view(key),
+                 "reply": f"Queued ({len(q)} waiting). It goes in the moment the running answer ends."}
+
+
+def _queue_add(thread: str, message: str, source: str = "page") -> tuple[int, dict]:
+    """Accept a message for a thread that is answering (or has messages queued ahead of it).
+    202 with the queue; 409 'idle' when nothing runs there, so the caller sends it as a turn."""
+    with RUNS_LOCK:
+        if not (_run_for_thread(thread) or QUEUES.get(thread)):
+            return 409, {"error": "idle", "queue": []}
+        return _queue_push(thread, message, source)
+
+
+def _queue_cancel(thread: str, qid: str) -> dict:
+    with RUNS_LOCK:
+        q = QUEUES.get(thread) or []
+        n = len(q)
+        q[:] = [x for x in q if x["id"] != qid]
+        if not q:
+            QUEUES.pop(thread, None)
+    return {"ok": len(q) < n, "queue": _queue_view(thread)}
+
+
+def _drain_async(thread: str | None) -> None:
+    if thread and QUEUES.get(thread):
+        threading.Thread(target=_drain, args=(thread,), daemon=True).start()
+
+
+def _drain(thread: str) -> None:
+    """Start the thread's next queued message as a turn, if the thread is idle. A head that was
+    cancelled between the peek and the start is skipped on the next pass."""
+    for _ in range(MAX_QUEUE + 1):
+        with RUNS_LOCK:
+            q = QUEUES.get(thread) or []
+            if not q or _run_for_thread(thread):
+                return
+            head = q[0]
+        status, payload = _turn(head["message"], thread=thread, new=False, source="queue", from_queue=head["id"])
+        if payload.get("error") != "gone":
+            return
+
+
+def _state(thread: str | None) -> dict:
+    """What is really happening on a thread, for the page's status line and queue: the answer to
+    "is it working" comes from the same registry the busy refusal reads (2026-10-09)."""
+    r = _run_for_thread(thread) if thread else None
+    run = None
+    if r is not None:
+        v = _run_view(r)
+        run = {"run": r.id, "seconds": int(time.time() - r.started), "steps": v["steps"], "agents": v["agents"],
+               "last": v["last"], "waiting": r.waiting, "message": r.message[:120]}
+    return {"thread": thread, "running": r is not None, "run": run, "queue": _queue_view(thread),
+            "others": sum(1 for x in _runs_active() if x is not r), "now": time.time()}
+
+
+def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None) -> tuple[int, dict]:
+    """A turn, then the thread's next queued message (if any) is started."""
+    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue)
+    if status in (200, 500):
+        _drain_async(payload.get("thread"))
+    return status, payload
+
+
+def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None) -> tuple[int, dict]:
     """One turn, for the page and for Telegram (2026-09-29). Picks the conversation (an explicit
     thread, a new one, or the box's current one), registers the Run, runs the reasoner, records
     the turn in the brain, emits "done" to every sink, and returns (status, payload). on_run(run)
@@ -1995,6 +2082,19 @@ def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: s
             state = {}
     with RUNS_LOCK:
         key = state.get("brain_session_id")
+        if from_queue:
+            # delivery of a queued message: only while it is still the head and the thread is free
+            q = QUEUES.get(key or "") or []
+            if not q or q[0]["id"] != from_queue:
+                return 409, {"error": "gone", "reply": ""}
+            if _run_for_thread(key):
+                return 409, {"error": "busy", "reply": ""}
+            q.pop(0)
+            if not q:
+                QUEUES.pop(key, None)
+        elif key and (QUEUES.get(key) or (queue and _run_for_thread(key))):
+            # busy with queue allowed, or queued messages still ahead: this one goes behind them
+            return _queue_push(key, message, source)
         if key and _run_for_thread(key):
             return 409, {"error": "busy", "reply": "This conversation is still answering. Wait for it, or start another."}
         active = _runs_active()
@@ -2494,6 +2594,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _host_system())
         elif route == "/telegram/status":
             self._send(200, _tg_status())
+        elif route == "/state":
+            t = self._query().get("thread") or None
+            self._send(200, _state(t))
         elif route == "/board":
             self._send(200, _board())
         elif route == "/usage":
@@ -2644,6 +2747,17 @@ class Handler(BaseHTTPRequestHandler):
             VOICE_ID = match[0]["id"]; _env_file_set("CC_VOICE_ID", VOICE_ID); os.environ["CC_VOICE_ID"] = VOICE_ID
             print(f"voice set to {match[0]['name']}", flush=True)
             self._send(200, {"ok": True, "voice": match[0]["name"], "id": VOICE_ID})
+            return
+        if route == "/queue":
+            t, m = str(req.get("thread") or "").strip(), str(req.get("message") or "").strip()
+            if not t or not m:
+                self._send(400, {"error": "thread and message needed"})
+                return
+            code, pl = _queue_add(t, m)
+            self._send(code, pl)
+            return
+        if route == "/queue/cancel":
+            self._send(200, _queue_cancel(str(req.get("thread") or "").strip(), str(req.get("id") or "").strip()))
             return
         if route == "/stop":
             # End a turn mid-way (2026-10-06). By run id, or the thread's running turn.
@@ -2842,7 +2956,7 @@ class Handler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
             run.attach(sink)
-        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run)
+        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True)
         if status != 200 or not stream:
             self._send(status, payload)
 

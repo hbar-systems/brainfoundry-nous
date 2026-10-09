@@ -325,6 +325,51 @@ p({"type": "result", "result": "ok", "session_id": "s7", "is_error": False, "num
     busy.emit("done", {})
 
 
+def test_queue_accepts_orders_cancels_and_delivers(monkeypatch, tmp_path):
+    """2026-10-09: a message to an answering thread is queued (202), not refused; /state tells the
+    truth about the thread; queued messages are cancellable, keep order, and start as the thread's
+    next turns the moment the running one ends."""
+    import time
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json
+def p(o): print(json.dumps(o), flush=True)
+p({"type": "system", "subtype": "init", "model": "claude-x", "session_id": "s9"})
+p({"type": "result", "result": "ok", "session_id": "s9", "is_error": False, "num_turns": 1, "usage": {}, "modelUsage": {}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._threads_save([{"claude": "s9", "brain": "brain-q", "title": "t"}])
+    # nothing running: the queue door says idle, state says not running
+    assert m._queue_add("brain-q", "x")[0] == 409
+    assert m._state("brain-q")["running"] is False
+    busy = m.Run("brain-q", "long one"); m.RUNS[busy.id] = busy
+    busy.emit("tool", {"name": "Agent", "brief": "agent"})
+    st = m._state("brain-q")
+    assert st["running"] and st["run"]["agents"] == 1 and st["run"]["steps"] == 1 and st["run"]["seconds"] >= 0
+    # busy: refused without queue (409), queued with it (202); order kept
+    assert m._turn("a", thread="brain-q", new=False)[0] == 409
+    c1, p1 = m._turn("first", thread="brain-q", new=False, queue=True)
+    c2, p2 = m._queue_add("brain-q", "second")
+    c3, p3 = m._queue_add("brain-q", "third")
+    assert (c1, c2, c3) == (202, 202, 202)
+    assert [q["message"] for q in m._state("brain-q")["queue"]] == ["first", "second", "third"]
+    # cancel the middle one
+    assert m._queue_cancel("brain-q", p2["queued"])["ok"]
+    assert [q["message"] for q in m._queue_view("brain-q")] == ["first", "third"]
+    # the running turn ends: the bridge itself delivers the queue, in order
+    busy.emit("done", {})
+    deadline = time.time() + 10
+    m._drain_async("brain-q")
+    while time.time() < deadline and (m.QUEUES.get("brain-q") or m._runs_active()):
+        time.sleep(0.05)
+    assert not m.QUEUES.get("brain-q") and not m._runs_active()
+    said = [r.message for r in sorted(m.RUNS.values(), key=lambda r: r.started) if r.id != busy.id]
+    assert said == ["first", "third"]
+
+
 def test_hook_runs_with_system_python_when_split(monkeypatch, tmp_path):
     """After the split the hook must not use the bridge's venv (closed to the hands); hbar 2026-09-29."""
     monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
