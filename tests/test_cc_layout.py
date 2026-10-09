@@ -39,6 +39,8 @@ def test_default_validates_and_is_stock():
     {"v": 2},
     {"name": "<script>"},
     {"voice": {"speak": 1}},
+    {"density": "airy"},
+    {"density": None},
 ])
 def test_closed_schema_refuses(bad):
     with pytest.raises(L.LayoutError):
@@ -214,3 +216,21 @@ const done=l.applyStyle({vars:{'--bg':'#000000','--accent':'url(x)','background'
 console.log(JSON.stringify({done,set,zoom:root.style.zoom,w:body.style.fontWeight}));
 """)
     assert out["set"] == {"--bg": "#000000", "--text": "#e6e6e6"} and out["zoom"] == "1.12" and out["w"] == "300"
+
+
+def test_density_default_valid_and_summary():
+    assert L.DEFAULT["density"] == "compact" and L.validate({})["density"] == "compact"
+    lay = L.validate({"density": "comfortable"})
+    assert lay["density"] == "comfortable" and "comfortable spacing" in L.summary(lay)
+    assert L.summary({"density": "compact"}) == "the stock console"
+
+
+def test_js_density_in_plan_and_capture():
+    out = _node_json(r"""
+const l=require('./layout.js');
+const a=l.localPlan({density:'comfortable'}), b=l.localPlan({density:'compact'});
+const cap=l.capture(k=>({'cc.density':'comfortable'}[k]||null),{v:1});
+const cap2=l.capture(k=>null,{v:1});
+console.log(JSON.stringify({a:a.set['cc.density'],b:b.set['cc.density']||null,brm:b.remove.includes('cc.density'),c:cap.density,c2:cap2.density}));
+""")
+    assert out == {"a": "comfortable", "b": None, "brm": True, "c": "comfortable", "c2": "compact"}

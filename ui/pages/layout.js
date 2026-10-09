@@ -100,6 +100,10 @@ export default function LayoutPage() {
       <div style={label}>accent</div>
       {ACCENTS.map(([n, hex]) => <Chip key={n} on={(accent || null) === hex} onClick={() => setAccent(hex)}>{n}</Chip>)}
 
+      <div style={label}>spacing</div>
+      {[['compact', 'compact'], ['comfortable', 'comfortable']].map(([v, w]) => <Chip key={v} on={((lay && lay.density) || 'compact') === v} title="Spacing inside message bubbles"
+        onClick={() => { const base = JSON.parse(JSON.stringify(lay || d.default)); base.density = v; post('/layout/save', { layout: base, answers: Object.keys(d.answers || {}).length ? d.answers : undefined }) }}>{w}</Chip>)}
+
       <div style={label}>history</div>
       <Btn onClick={() => post('/layout/undo')}>undo</Btn>
       <Btn onClick={() => post('/layout/reset')} disabled={!lay} title="Back to the stock console in every browser; undo brings your layout back">reset to stock</Btn>

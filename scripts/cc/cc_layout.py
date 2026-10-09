@@ -4,7 +4,7 @@ Imported by cc-bridge.py (same directory). Standard library only.
 
 A layout is a small, versioned, closed JSON object: which blocks of the console show, which side
 the pane sits on and how wide, the column width, a colour preset plus a few colour variables, a
-font by name, a size and weight, the default view, voice. It is DATA, never CSS: every key and every
+font by name, a size, weight and spacing density, the default view, voice. It is DATA, never CSS: every key and every
 value is checked against a fixed list, so a layout that came from another brain (a pack) or from the
 interview cannot carry a style rule, a url or a script. Unknown keys are refused, not dropped.
 
@@ -36,6 +36,7 @@ COLUMNS = ("narrow", "wide", "full")
 THEMES = ("default", "black", "light")
 SIZES = ("small", "normal", "large")
 WEIGHTS = ("normal", "thin")
+DENSITIES = ("compact", "comfortable")   # spacing inside message bubbles (2026-10-09)
 VIEWS = ("talk", "gallery", "panes")
 VAR_KEYS = ("--accent", "--bg", "--surface", "--surface2", "--text", "--muted", "--border")
 PANE_MIN, PANE_MAX = 280, 1400
@@ -64,7 +65,7 @@ DEFAULT = {
     "panels": {k: True for k in PANELS},
     "pane": {"side": "right", "width": None},
     "column": "narrow", "theme": "default", "vars": {},
-    "font": None, "size": "normal", "weight": "normal",
+    "font": None, "size": "normal", "weight": "normal", "density": "compact",
     "view": "talk", "voice": {"speak": False, "handsfree": False},
 }
 _TOP = set(DEFAULT)
@@ -127,6 +128,8 @@ def validate(obj) -> dict:
         out["size"] = _enum(obj["size"], SIZES, "size")
     if "weight" in obj:
         out["weight"] = _enum(obj["weight"], WEIGHTS, "weight")
+    if "density" in obj:
+        out["density"] = _enum(obj["density"], DENSITIES, "density")
     if "view" in obj:
         out["view"] = _enum(obj["view"], VIEWS, "view")
     if "voice" in obj:
@@ -168,6 +171,8 @@ def summary(layout: dict) -> str:
         parts.append(f"{lay['size']} text")
     if lay["weight"] != "normal":
         parts.append(f"{lay['weight']} type")
+    if lay["density"] != "compact":
+        parts.append(f"{lay['density']} spacing")
     if lay["view"] != "talk":
         parts.append(f"opens on {lay['view']}")
     if lay["voice"]["speak"] or lay["voice"]["handsfree"]:

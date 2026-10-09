@@ -140,15 +140,23 @@ function mdComponents(base) {
       }
       return <a {...props} target="_blank" rel="noreferrer" style={{ color: C.gold }} />
     },
-    p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 8px 0' }} />,
-    ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
-    ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 8px 0', paddingLeft: '20px' }} />,
+    // Spacing comes from CSS variables set on the conversation (density: compact | comfortable), so
+    // changing it does not rebuild any message. `.cc-md li > p` carries no margin (see the style tag).
+    p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0' }} />,
+    ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
+    ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
+    li: ({ node, ...props }) => <li {...props} style={{ margin: 'var(--cc-li, 2px) 0' }} />,
+    h1: ({ node, ...props }) => <h1 {...props} style={{ fontSize: '17px', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
+    h2: ({ node, ...props }) => <h2 {...props} style={{ fontSize: '16px', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
+    h3: ({ node, ...props }) => <h3 {...props} style={{ fontSize: '15px', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
+    h4: ({ node, ...props }) => <h4 {...props} style={{ fontSize: '14px', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
+    blockquote: ({ node, ...props }) => <blockquote {...props} style={{ margin: '4px 0 var(--cc-gap, 6px) 0', padding: '0 0 0 10px', borderLeft: `2px solid ${C.line}`, color: C.dim }} />,
     // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
     // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
     // inline code rendered as full-width boxes and broke sentences apart).
     // every code block carries its own copy button (2026-09-29: "we need things to have a copyable button")
     pre: ({ node, ...props }) => (
-      <div style={{ position: 'relative', margin: '4px 0 8px 0' }}>
+      <div style={{ position: 'relative', margin: '4px 0 var(--cc-gap, 6px) 0' }}>
         <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
         <CopyLink text={hastText(node)} style={{ position: 'absolute', top: '6px', right: '8px' }} />
       </div>
@@ -167,7 +175,7 @@ function mdComponents(base) {
       }
       return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
     },
-    table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 8px 0' }} />,
+    table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
     td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
   }
@@ -611,9 +619,18 @@ function CC() {
   const [hidden, setHidden] = useState({})           // { hero: true, hint: true }
   const [paneSide, setPaneSide] = useState('right')
   useEffect(() => { try { setHidden(JSON.parse(localStorage.getItem('cc.hidden') || '{}') || {}); if (localStorage.getItem('cc.paneSide') === 'left') setPaneSide('left') } catch {} }, [])
+  // Reading density (2026-10-09): compact (default) or comfortable, a footer link, kept in this browser.
+  const [density, setDensity] = useState('compact')
+  useEffect(() => { try { if (localStorage.getItem('cc.density') === 'comfortable') setDensity('comfortable') } catch {} }, [])
+  const toggleDensity = () => setDensity(d => { const n = d === 'compact' ? 'comfortable' : 'compact'; try { if (n === 'comfortable') localStorage.setItem('cc.density', n); else localStorage.removeItem('cc.density') } catch {}; return n })
+  // The title block shrinks to one slim line once the thread has more than two messages (more height
+  // for the messages). "show title" is an explicit choice (cc.heroShow) and keeps the full title.
+  const [heroShow, setHeroShow] = useState(false)
+  useEffect(() => { try { if (localStorage.getItem('cc.heroShow') === '1') setHeroShow(true) } catch {} }, [])
+  const setHeroPref = (v) => { setHeroShow(v); try { if (v) localStorage.setItem('cc.heroShow', '1'); else localStorage.removeItem('cc.heroShow') } catch {} }
   const hide = (k, v) => setHidden(h => { const n = { ...h, [k]: v }; if (!v) delete n[k]; try { localStorage.setItem('cc.hidden', JSON.stringify(n)) } catch {}; return n })
   const flipSide = () => setPaneSide(s => { const n = s === 'left' ? 'right' : 'left'; try { localStorage.setItem('cc.paneSide', n) } catch {}; return n })
-  const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
+  const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); setDensity('compact'); setHeroShow(false); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.density', 'cc.heroShow', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
   const layoutChanged = Object.keys(hidden).length > 0 || paneSide === 'left'
   // The owner's layout file (2026-10-09), kept on the box by the bridge (GET /cc/layout). A layout the
   // browser has not applied yet is applied once: it is written into the keys above and the states are
@@ -639,6 +656,7 @@ function CC() {
       try { setHidden(JSON.parse(plan.set['cc.hidden'] || '{}')) } catch {}
       setPaneSide(plan.set['cc.paneSide'] === 'left' ? 'left' : 'right')
       setWidth(plan.set['cc.width'] || '860px')
+      setDensity(plan.set['cc.density'] === 'comfortable' ? 'comfortable' : 'compact')
       setFont(plan.set['cc.font'] || '')
       setSpeak(plan.set['cc.speak'] === '1'); setHandsfree(plan.set['cc.handsfree'] === '1')
       // the default view: once per browser session, only from the bare console page
@@ -1735,21 +1753,23 @@ function CC() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
+  const slimHero = !paneMode && !hidden.hero && !heroShow && turns.length > 2
   return (
     <>
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
-      <div style={{ padding: paneMode ? '6px 10px 8px' : '28px 32px 20px', maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+      <div style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
-        <div style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: slimHero ? '6px' : '14px' }}>
           <div style={{ minWidth: 0 }}>
             {!paneMode && !hidden.hero && <>
-            <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 4px 0' }}>
+            <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: slimHero ? 0 : '0 0 4px 0' }}>
               cc · reasoning from inside the brain
-              <a onClick={() => hide('hero', true)} title="Hide this title; it comes back with reset layout" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>hide</a>
+              {slimHero && <a onClick={() => setHeroPref(true)} title="Show the full title again; this stays until you hide it" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>show title</a>}
+              <a onClick={() => { setHeroPref(false); hide('hero', true) }} title="Hide this title; it comes back with reset layout" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>hide</a>
             </p>
-            <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>
+            {!slimHero && <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>}
             </>}
             {paneMode && !curThread && <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>new conversation</p>}
             {curThread && (
@@ -1832,8 +1852,8 @@ function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
-        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative' }}>
-          <style>{`::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
+        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', ...(density === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
+          <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
               {[['note', 'a note in the margin on this span: keep it for your next message, or send it now', () => addNote(), true],
@@ -1873,9 +1893,9 @@ function CC() {
                 </div>
               )}
               <div data-bubble="1" style={{
-                maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: paneMode && t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
-                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 1.6, opacity: t.queued ? 0.55 : 1,
+                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.job && (
                   <div>
@@ -2041,7 +2061,8 @@ function CC() {
           {!paneMode && health && health.layout_proposals > 0 ? <span><a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="A layout from the interview or an installed pack waits for your yes" style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.layout_proposals} layout proposal{health.layout_proposals === 1 ? '' : 's'} wait{health.layout_proposals === 1 ? 's' : ''} for you</a></span> : null}
           {showDetails && !paneMode ? <span><a onClick={saveLayout} title="Keep how the console looks now (blocks, pane side and width, column, font, voice) in your layout file on the box" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>save layout</a>{' · '}<a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="Your answers, colours, undo and the shareable pack" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>layout page</a></span> : null}
           {layoutNote ? <span style={{ color: C.gold }}>{layoutNote}</span> : null}
-          {!paneMode && hidden.hero ? <span><a onClick={() => hide('hero', false)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
+          {!paneMode && hidden.hero ? <span><a onClick={() => { setHeroPref(true); hide('hero', false) }} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
+          {!paneMode ? <span><a onClick={toggleDensity} title="spacing inside messages: compact or comfortable" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{density}</a></span> : null}
           {!pane && !paneMode ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {!paneMode && auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
         </p>
