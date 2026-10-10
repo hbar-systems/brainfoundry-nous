@@ -1857,6 +1857,7 @@ function CC() {
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
               {[['note', 'a note in the margin on this span: keep it for your next message, or send it now', () => addNote(), true],
+                ['ask', 'put the selected words into the composer to ask about them', () => { setDraft(d => (d ? d + '\n' : '') + `About this: "${pick.quote}" `); clearSpan(); setPick(null); if (boxRef.current) boxRef.current.focus() }, true],
                 ['copy', 'copy the exact words', () => { try { navigator.clipboard.writeText(pick.raw || pick.quote) } catch {} clearSpan(); setPick(null) }, true],
                 ...(pick.press ? [['narrower', 'shrink the underlined span', () => stepSpan(-1), pick.level > 0],
                                   ['wider', 'widen the underlined span: phrase, sentence, paragraph (or click it again)', () => stepSpan(1), pick.level < pick.max]] : [])].map(([label, title, fn, on]) => (
