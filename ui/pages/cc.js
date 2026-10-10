@@ -90,6 +90,13 @@ function CopyLink({ text, label, style }) {
   const [done, setDone] = useState(false)
   return <a data-nopick="1" onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
 }
+function InlineCode({ node, children, ...props }) {
+  const [done, setDone] = useState(false)
+  const txt = (Array.isArray(children) ? children.join('') : String(children == null ? '' : children))
+  return <code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
+    onClick={(e) => { e.stopPropagation(); copyText(txt); setDone(true); setTimeout(() => setDone(false), 1200) }}
+    style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
+}
 // A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
 // there inline), hover on an image shows it small beside the link.
 function openPath(p) { window.dispatchEvent(new CustomEvent('cc-open-path', { detail: p })) }
@@ -173,7 +180,7 @@ function mdComponents(base) {
         const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
         return <PathLink path={target} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
       }
-      return <code {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '1px 5px', borderRadius: '4px' }} />
+      return <InlineCode {...props} />
     },
     table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
@@ -1886,15 +1893,15 @@ function CC() {
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>
           ) : (
-            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: room ? 'nowrap' : 'wrap', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative' }}>
+            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'flex-start', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative' }}>
               {notes.some(n => n.turn === i) && (
                 <div style={room ? { position: 'absolute', left: 'calc(100% + 14px)', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px' }
-                                  : { order: 2, width: '100%', display: 'flex', flexDirection: 'column', gap: '8px', margin: '6px 0 0 0' }}>
+                                  : { order: t.who === 'me' ? 0 : 2, flex: '0 0 min(280px, 34%)', display: 'flex', flexDirection: 'column', gap: '8px', margin: t.who === 'me' ? '0 10px 0 0' : '0 0 0 10px' }}>
                   {notes.filter(n => n.turn === i).map(noteCard)}
                 </div>
               )}
               <div data-bubble="1" style={{
-                maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
