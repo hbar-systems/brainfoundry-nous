@@ -237,3 +237,65 @@ def test_board_tiles_states_order_cards_and_links():
     assert b2["counts"]["failed"] == 0 and len(b2["tiles"]) == len(b["tiles"]) - 2
     assert X.last_sentence("First part. Then the final sentence here.\n") == "Then the final sentence here."
     assert X.first_sentence("**Done.** The rest follows.\n\nMore.") == "Done."
+
+
+def test_jobs_carry_their_thread_and_are_taken_per_thread(tmp_path):
+    """2026-10-11: a finished job's tile goes to the conversation whose hands started it. The
+    record carries `thread` (or "unknown") and `run`; a job started before its conversation had
+    an id is resolved through the run registry on finish and on every read; take_unseen(thread)
+    hands over only that thread's jobs; the rest stay listed as unseen_others until their own
+    page takes them, or the person dismisses them, or a day passes."""
+    runs = {"r-new": None}
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"}, resolve=lambda rid: runs.get(rid))
+    a = j.start("echo a", str(tmp_path), "job of A", thread="thread-A", run="r-a")
+    b = j.start("echo b", str(tmp_path), "job of a new conversation", thread="unknown", run="r-new")
+    c = j.start("echo c", str(tmp_path), "job of nobody", thread="", run="")
+    assert a["thread"] == "thread-A" and a["run"] == "r-a"
+    assert b["thread"] == "unknown" and b["run"] == "r-new"
+    assert c["thread"] == "unknown" and c["run"] is None
+    # get() reads the registry without the lock, so wait for the unseen set (filled last) and not for `running`
+    def settled(*xs):
+        for _ in range(60):
+            if all(x["id"] in j.unseen for x in xs):
+                return True
+            time.sleep(0.1)
+        return False
+    assert settled(a, b, c)
+    assert all(j.get(x["id"])["rc"] == 0 for x in (a, b, c))
+    # the record on disk says so too
+    on_disk = {r["id"]: r for r in json.loads((tmp_path / "out" / "jobs" / "jobs.json").read_text())}
+    assert on_disk[a["id"]]["thread"] == "thread-A" and on_disk[b["id"]]["thread"] == "unknown"
+    # page B polls with its thread: nothing of its own yet (the run has no thread), A's and the orphan are "others"
+    assert j.take_unseen("thread-B") == []
+    assert sorted(o["id"] for o in j.unseen_others("thread-B")) == sorted([a["id"], b["id"], c["id"]])
+    # page A takes only its own; A's tile never reaches B's page
+    fin = j.take_unseen("thread-A")
+    assert [x["id"] for x in fin] == [a["id"]] and fin[0]["thread"] == "thread-A" and "a" in fin[0]["tail"]
+    assert a["id"] not in {o["id"] for o in j.unseen_others("thread-B")}
+    # the new conversation's first turn has been recorded by now: the run resolves, the job follows
+    runs["r-new"] = "thread-B"
+    assert j.get(b["id"])["thread"] == "thread-B" and [x["id"] for x in j.list() if x["thread"] == "thread-B"] == [b["id"]]
+    assert [x["id"] for x in j.take_unseen("thread-B")] == [b["id"]]
+    # the orphan belongs to nobody: every page sees it in the strip (without the log's tail) until dismissed
+    others = j.unseen_others("thread-A")
+    assert [o["id"] for o in others] == [c["id"]] and "tail" not in others[0] and others[0]["thread"] == "unknown"
+    assert j.mark_seen(c["id"]) is True and j.mark_seen(c["id"]) is False and j.unseen_others(None) == []
+    # without a thread nothing is taken by a page that cannot own a job; and old unseen ids expire
+    d = j.start("echo d", str(tmp_path), "late", thread="thread-A")
+    assert settled(d)
+    assert j.take_unseen(None) and j.unseen_others("thread-A") == []   # the old caller shape still takes everything
+    e = j.start("echo e", str(tmp_path), "stale", thread="thread-A")
+    assert settled(e)
+    j.UNSEEN_TTL = 0
+    time.sleep(0.05)
+    assert j.take_unseen("thread-A") == [] and e["id"] not in j.unseen
+
+
+def test_board_lists_every_job_with_its_thread():
+    """The board stays global (2026-10-11): a job tile shows whichever thread started it, None when unknown."""
+    now = 1_800_000_000.0
+    jobs = [{"id": "J1", "title": "mine", "started": now - 60, "ended": now - 10, "rc": 0, "log": "/o/J1.log", "thread": "t-1", "tail": "x\n"},
+            {"id": "J2", "title": "orphan", "started": now - 60, "ended": None, "rc": None, "log": "/o/J2.log", "thread": "unknown", "tail": ""}]
+    b = X.board_tiles([], [], jobs, [], [], set(), now)
+    by = {t["key"]: t for t in b["tiles"]}
+    assert by["job:J1"]["thread"] == "t-1" and by["job:J2"]["thread"] is None and len(by) == 2

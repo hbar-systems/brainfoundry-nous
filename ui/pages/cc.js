@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
+import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -490,6 +491,15 @@ function CC() {
   const [room, setRoom] = useState(false)           // is there a margin to the right of the column?
   const notesKeyRef = useRef('cc.notes.new')
   const [jobs, setJobs] = useState([])              // recent jobs on the box (cc-job)
+  // Finished jobs of other conversations (2026-10-11): shown once in a strip under the conversation,
+  // never as a tile here. Dismissed ids are kept in this browser (cc.jobs.hidden).
+  const [otherJobs, setOtherJobs] = useState([])
+  const [hiddenJobs, setHiddenJobs] = useState(() => { try { return JSON.parse(localStorage.getItem('cc.jobs.hidden') || '[]') } catch { return [] } })
+  const hideJob = (item) => {
+    if (dismissAction(item) === 'seen') { fetch('/cc/jobs/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id }) }).catch(() => {}) }
+    setHiddenJobs(h => { const n = [...h.filter(x => x !== item.id), item.id].slice(-200); try { localStorage.setItem('cc.jobs.hidden', JSON.stringify(n)) } catch {} return n })
+    setOtherJobs(o => o.filter(j => j.id !== item.id))
+  }
   const [latest, setLatest] = useState([])          // the newest files the brain made, shown above the composer
   const loadLatest = () => fetch('/cc/files/recent', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setLatest((d.recent || []).slice(0, 4)) }).catch(() => {})
   const fileRef = useRef(null)
@@ -1058,18 +1068,23 @@ function CC() {
   }, [])
   const openPane = (p) => { if (!p) return; if (typeof p === 'string') p = { route: p, title: p.replace(/^\//, '').split('?')[0] || 'pane' }; if (p.route) setPane(p) }
 
-  // Jobs that outlive a turn: poll while any runs; a finished one lands as a small card.
+  // Jobs that outlive a turn: poll while any runs; a finished one lands as a small card, in the
+  // conversation whose hands started it only (2026-10-11: the page names the thread it shows, the
+  // bridge hands over that thread's finished jobs and lists the rest as `others` for the strip).
   useEffect(() => {
     let stop = false
     const tick = async () => {
       try {
-        const r = await fetch('/cc/jobs?take=1', { cache: 'no-store' })
+        const cur = curRef.current
+        const r = await fetch(jobsUrl(cur), { cache: 'no-store' })
         const d = r.ok ? await r.json() : null
         if (!d || stop) return
         setJobs(d.jobs || [])
-        for (const j of (d.finished || [])) {
-          setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
+        const { mine, others } = splitFinished(d.finished || [], cur)
+        if (curRef.current === cur) {
+          for (const j of mine) setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
         }
+        setOtherJobs(stripItems(d.others || [], others, []))
       } catch {}
     }
     tick()
@@ -1605,7 +1620,8 @@ function CC() {
     if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
     if (cmd === 'jobs') {
       const running = jobs.filter(j => j.ended === null), done = jobs.filter(j => j.ended !== null).slice(0, 5)
-      setTurns(t => [...t, { who: 'brain', text: (running.length ? running.map(j => `running: ${j.id} ${j.title}`).join('\n') : 'No job running.') + (done.length ? '\n\nRecent: ' + done.map(j => `${j.id} exit ${j.rc}, ${j.title}`).join('; ') : '') }])
+      const where = (j) => (j.thread && j.thread !== 'unknown' ? (j.thread === curRef.current ? '' : ' (another conversation)') : ' (no conversation)')
+      setTurns(t => [...t, { who: 'brain', text: (running.length ? running.map(j => `running: ${j.id} ${j.title}${where(j)}`).join('\n') : 'No job running.') + (done.length ? '\n\nRecent: ' + done.map(j => `${j.id} exit ${j.rc}, ${j.title}${where(j)}`).join('; ') : '') }])
       return true
     }
     if (cmd === 'help' || cmd === '') {
@@ -2058,6 +2074,7 @@ function CC() {
           {showDetails && usage && usage.today ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>today {usage.today.turns} turn{usage.today.turns === 1 ? '' : 's'} · {kTok(usage.today.in)} in · {kTok(usage.today.out)} out{usage.today.cost !== null && usage.today.cost !== undefined ? ` · $${usage.today.cost.toFixed(2)}` : ''}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
+          {!paneMode && stripItems(otherJobs, [], hiddenJobs).length ? (() => { const items = stripItems(otherJobs, [], hiddenJobs); const first = items[0]; return <span title="A job started by another conversation finished; its tile is there, not here. The board lists every job.">{stripLabel(items)}{first.href ? <> · <a href={first.href} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>open</a></> : null} · <a onClick={() => hideJob(first)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</a>{items.length > 1 ? <> · <a onClick={() => { window.location.href = '/board' }} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>board</a></> : null}</span> })() : null}
           {!paneMode && health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
           {health && health.cards_waiting > 0 ? <span><a onClick={() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }} style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}

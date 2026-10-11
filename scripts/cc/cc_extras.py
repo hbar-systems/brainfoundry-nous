@@ -403,16 +403,32 @@ class Files:
 
 
 class Jobs:
-    """Commands that outlive a turn. One registry file; one log per job."""
+    """Commands that outlive a turn. One registry file; one log per job.
 
-    def __init__(self, out_dir: Path, env_fn, wrap=None):
+    Each job carries the thread whose hands started it (2026-10-11): cc-job sends CC_THREAD_ID
+    and CC_RUN_ID from the reasoner's environment (the bridge sets both when it spawns a turn).
+    A thread is only known once its first turn has been recorded, so a job started in a brand new
+    conversation arrives with the run id alone; `resolve(run_id)` asks the bridge's run registry
+    for the thread later, on finish and on every read. A finished job is handed to its own
+    thread's page once (`take_unseen(thread)`); other pages only see it in `unseen_others`,
+    never as a tile in their conversation. The board lists every job regardless."""
+
+    UNKNOWN = "unknown"
+    UNSEEN_TTL = 24 * 3600      # a finished job nobody took stops being "unseen" after a day
+
+    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None):
         self.dir = out_dir / "jobs"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg = self.dir / "jobs.json"
         self.env_fn = env_fn
         self.wrap = wrap or (lambda argv: argv)   # runs the job as another user when the bridge says so
+        self.resolve = resolve or (lambda run_id: None)   # run id -> thread id, when the bridge knows it by now
         self.lock = threading.Lock()
         self.unseen: set[str] = set()
+
+    @classmethod
+    def known(cls, thread) -> bool:
+        return bool(thread) and str(thread) != cls.UNKNOWN
 
     def _load(self) -> list:
         try:
@@ -423,7 +439,19 @@ class Jobs:
     def _save(self, items: list) -> None:
         self.reg.write_text(json.dumps(items, indent=1))
 
-    def start(self, command: str, cwd: str | None, title: str = "") -> dict:
+    def _fill(self, rec: dict) -> dict:
+        """The record with its thread resolved through the run, when it was unknown at start."""
+        if not self.known(rec.get("thread")) and rec.get("run"):
+            t = None
+            try:
+                t = self.resolve(rec["run"])
+            except Exception:  # noqa: BLE001
+                t = None
+            if t:
+                rec = dict(rec, thread=str(t))
+        return rec
+
+    def start(self, command: str, cwd: str | None, title: str = "", thread: str | None = None, run: str | None = None) -> dict:
         command = (command or "").strip()
         if not command:
             return {"error": "empty command"}
@@ -432,6 +460,13 @@ class Jobs:
         wd = Path(cwd).expanduser() if cwd else None
         if wd is not None and not wd.is_dir():
             return {"error": f"no such folder: {wd}"}
+        thread = str(thread or "").strip()[:80] or None
+        run = str(run or "").strip()[:40] or None
+        if not self.known(thread) and run:
+            try:
+                thread = str(self.resolve(run) or "") or None
+            except Exception:  # noqa: BLE001
+                thread = None
         with self.lock:
             items = self._load()
             jid = f"J{int(time.time())}{len(items) + 1:03d}"
@@ -446,7 +481,8 @@ class Jobs:
                 lf.close()
                 return {"error": f"could not start: {type(e).__name__}"}
             rec = {"id": jid, "title": (title or command)[:120], "command": command[:1000], "cwd": str(wd) if wd else None,
-                   "pid": proc.pid, "started": int(time.time()), "ended": None, "rc": None, "log": str(log)}
+                   "pid": proc.pid, "started": int(time.time()), "ended": None, "rc": None, "log": str(log),
+                   "thread": thread if self.known(thread) else self.UNKNOWN, "run": run}
             items.append(rec)
             self._save(items)
 
@@ -458,6 +494,8 @@ class Jobs:
                 for r in cur:
                     if r["id"] == jid:
                         r["ended"] = int(time.time()); r["rc"] = rc
+                        # by now the turn that started it has usually recorded its thread
+                        r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
                 self._save(cur)
                 self.unseen.add(jid)
         threading.Thread(target=_wait, daemon=True).start()
@@ -465,12 +503,12 @@ class Jobs:
 
     def list(self, n: int = 30) -> list:
         items = self._load()
-        return list(reversed(items))[:n]
+        return [self._fill(r) for r in list(reversed(items))[:n]]
 
     def get(self, jid: str, tail_bytes: int = 4000) -> dict | None:
         for r in self._load():
             if r["id"] == jid:
-                out = dict(r)
+                out = self._fill(dict(r))
                 try:
                     data = Path(r["log"]).read_bytes()
                     out["tail"] = data[-tail_bytes:].decode("utf-8", "replace")
@@ -481,10 +519,45 @@ class Jobs:
                 return out
         return None
 
-    def take_unseen(self) -> list:
+    def _unseen_records(self) -> list:
+        """The unseen finished jobs, newest first; ids that are gone or older than UNSEEN_TTL are dropped. Under the lock."""
+        now = time.time()
+        by_id = {r["id"]: self._fill(r) for r in self._load()}
+        keep = []
+        for i in list(self.unseen):
+            r = by_id.get(i)
+            if r is None or (r.get("ended") is not None and now - float(r["ended"]) > self.UNSEEN_TTL):
+                self.unseen.discard(i)
+                continue
+            keep.append(r)
+        keep.sort(key=lambda r: float(r.get("ended") or 0), reverse=True)
+        return keep
+
+    def take_unseen(self, thread: str | None = None) -> list:
+        """Hand over the finished jobs not yet shown. With a thread: only that thread's jobs, so a
+        page shows what its own hands started and nothing else. Without one: every unseen job (the
+        pre-2026-10-11 behaviour, kept for callers that have no conversation)."""
         with self.lock:
-            ids = list(self.unseen); self.unseen.clear()
+            recs = self._unseen_records()
+            if thread is not None:
+                recs = [r for r in recs if r.get("thread") == thread]
+            for r in recs:
+                self.unseen.discard(r["id"])
+            ids = [r["id"] for r in recs]
         return [self.get(i, 600) for i in ids]
+
+    def unseen_others(self, thread: str | None) -> list:
+        """The finished jobs still unseen that belong to another thread, or to none known. Not
+        taken: each page shows them once in a strip, the owning page takes them as tiles."""
+        with self.lock:
+            recs = [r for r in self._unseen_records() if r.get("thread") != thread or thread is None]
+        return [{k: r.get(k) for k in ("id", "title", "ended", "rc", "log", "thread", "started")} for r in recs]
+
+    def mark_seen(self, jid: str) -> bool:
+        with self.lock:
+            had = jid in self.unseen
+            self.unseen.discard(jid)
+        return had
 
 
 class Uploads:
@@ -885,7 +958,8 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
         if failed and now - float(ended) > 7 * 86400:
             continue
         tail = [l for l in str(j.get("tail") or "").splitlines() if l.strip() and not l.startswith("# ")]
-        tiles.append({"key": key, "kind": "job", "run": j.get("id"), "thread": None, "title": j.get("title") or j.get("command") or "job",
+        th = j.get("thread") if Jobs.known(j.get("thread")) else None
+        tiles.append({"key": key, "kind": "job", "run": j.get("id"), "thread": th, "title": j.get("title") or j.get("command") or "job",
                       "state": "answering" if ended is None else ("failed" if failed else "done"), "word": "running" if ended is None else None,
                       "started": iso(started) if started else None, "elapsed_s": int((float(ended) if ended is not None else now) - started) if started else 0,
                       "ago_s": int(now - float(ended)) if ended is not None else None, "steps": 0, "agents": 0,

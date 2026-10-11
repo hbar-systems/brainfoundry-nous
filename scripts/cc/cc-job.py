@@ -2,7 +2,8 @@
 """cc-job: run a command that outlives a CC turn, on the box, through the bridge. Created 2026-09-22.
 
 Installed as ~/.local/bin/cc-job for the bridge user. Standard library only. The bridge
-passes CC_PORT, CC_BASE and CC_ASK_TOKEN in the reasoner's environment.
+passes CC_PORT, CC_BASE and CC_ASK_TOKEN in the reasoner's environment, and since 2026-10-11
+CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
 
     cc-job run [-C <dir>] [-t "<title>"] -- '<command>'   start; prints the job id
                                     (one quoted string keeps &&, |, > and quotes intact)
@@ -56,7 +57,13 @@ def main(argv: list[str]) -> int:
                 print("cc-job run -- <command>"); return 2
             # Keep the caller's words exactly (quotes included): one argument stays one argument.
             command = rest[0] if len(rest) == 1 else shlex.join(rest)
-            d = _call("POST", "/jobs/start", {"command": command, "cwd": cwd, "title": title})
+            # The thread whose hands start this job (2026-10-11): the bridge puts CC_THREAD_ID and
+            # CC_RUN_ID into the reasoner's environment, and the Bash tool passes them on. The tile
+            # for the finished job then lands in that conversation only; "unknown" keeps it off
+            # every conversation (the board still lists it).
+            d = _call("POST", "/jobs/start", {"command": command, "cwd": cwd, "title": title,
+                                              "thread": os.environ.get("CC_THREAD_ID", "").strip() or "unknown",
+                                              "run": os.environ.get("CC_RUN_ID", "").strip() or None})
             if d.get("error"):
                 print("refused:", d["error"]); return 1
             print(f"started {d['id']} (log {d['log']}); check with: cc-job status {d['id']}"); return 0
@@ -74,7 +81,9 @@ def main(argv: list[str]) -> int:
         if cmd == "list":
             for j in _call("GET", "/jobs").get("jobs", []):
                 state = "running" if j.get("ended") is None else f"rc={j.get('rc')}"
-                print(f"{j['id']}  {state:12} {j['title']}")
+                mine = os.environ.get("CC_THREAD_ID", "").strip()
+                where = "" if not mine or j.get("thread") == mine else ("  (another conversation)" if j.get("thread") not in (None, "", "unknown") else "  (no conversation)")
+                print(f"{j['id']}  {state:12} {j['title']}{where}")
             return 0
     except Exception as e:  # noqa: BLE001
         print(f"the bridge did not answer ({type(e).__name__})"); return 1

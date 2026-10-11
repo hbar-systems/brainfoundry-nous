@@ -342,7 +342,16 @@ for _d in (OUT_DIR, IN_DIR):
     except OSError:
         pass   # the hands' home is not ours to create in; split-hands.sh makes these
 FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), **({} if SAME_ROOT else {"work": WORK_DIR}), "world": WORLD_DIR, "brain": CWD})
-JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv))
+JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv),
+                      resolve=lambda run_id: _job_thread(run_id))
+
+
+def _job_thread(run_id: str | None) -> str | None:
+    """The thread a run belongs to, for a job that started before its conversation had an id
+    (2026-10-11). RUNS is defined further down and consulted at call time; a run pruned from it
+    leaves the job's thread as it was recorded."""
+    r = RUNS.get(run_id or "") if "RUNS" in globals() else None
+    return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
 SYSTEM += (
     f" Files: anything you produce for the person (audio, images, video, documents, data) goes under {OUT_DIR}/<date>/ "
@@ -1558,17 +1567,30 @@ HANDS_ENV_KEYS = ("CC_ASK_TOKEN", "CC_PORT", "CC_BASE", "CC_BIND", "CC_MCP_CONFI
                   "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "LANG", "LC_ALL")
 
 
-def _hands_env() -> dict:
+def _hands_env(extra: dict | None = None) -> dict:
     """The environment the reasoner (and its jobs) run with: only what the hook and cc-job need,
-    never the bridge's keys. Pure; tested. In single-user mode it is the full env as before."""
+    never the bridge's keys. Pure; tested. In single-user mode it is the full env as before.
+    `extra` adds a few named values (empty ones are skipped): the run and thread of a turn."""
     if not HANDS_USER:
-        return _env()
-    env = {k: os.environ[k] for k in HANDS_ENV_KEYS if os.environ.get(k)}
-    env["HOME"] = str(HANDS_HOME)
-    env["USER"] = HANDS_USER
-    env["PATH"] = f"{HANDS_HOME / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
-    env["TERM"] = "dumb"
+        env = _env()
+    else:
+        env = {k: os.environ[k] for k in HANDS_ENV_KEYS if os.environ.get(k)}
+        env["HOME"] = str(HANDS_HOME)
+        env["USER"] = HANDS_USER
+        env["PATH"] = f"{HANDS_HOME / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+        env["TERM"] = "dumb"
+    for k, v in (extra or {}).items():
+        if v:
+            env[k] = str(v)
     return env
+
+
+def _run_env(run) -> dict:
+    """The reasoner's environment for one turn (2026-10-11): CC_RUN_ID always, CC_THREAD_ID once
+    the thread is known (a brand new conversation has no brain id until its first turn is
+    recorded). The Bash tool inherits both, so cc-job can say which conversation started a job
+    and the finished tile lands there, not in whichever page polled first."""
+    return _hands_env({"CC_RUN_ID": getattr(run, "id", None), "CC_THREAD_ID": getattr(run, "thread", None)})
 
 
 def _as_hands(cmd: list, env: dict | None = None) -> list:
@@ -1857,7 +1879,8 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
     cmd[cmd.index("json")] = "stream-json"
     # The prompt goes in through stdin, never as an argument: sudo writes every argument of the
     # reasoner's command line into the system journal, memory excerpts included (hbar 2026-10-01).
-    proc = subprocess.Popen(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = _run_env(run)
+    proc = subprocess.Popen(_as_hands(cmd, env), cwd=RUN_CWD, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     run.proc = proc
     if run.stopped:          # stopped before the reasoner even started
         _stop_proc(proc)
@@ -1997,7 +2020,8 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
             return f"The reasoner could not answer this turn: {err}", session_id, True
     else:
         try:
-            proc = subprocess.run(_as_hands(cmd), cwd=RUN_CWD, env=_hands_env(), input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S)
+            env = _run_env(run)
+            proc = subprocess.run(_as_hands(cmd, env), cwd=RUN_CWD, env=env, input=prompt, capture_output=True, text=True, timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return f"No answer within {TIMEOUT_S} seconds. Try a shorter question.", session_id, True
         out = proc.stdout.strip()
@@ -2771,7 +2795,19 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/files/recent":
             self._send(200, {"recent": FILES.recent(self._query().get("root", "out"))})
         elif route == "/jobs":
-            self._send(200, {"jobs": JOBS.list(), "finished": JOBS.take_unseen() if self._query().get("take") == "1" else []})
+            # 2026-10-11: a page names the thread it shows and takes only that thread's finished
+            # jobs; the rest come back as `others` (not taken) for a small strip. Without a thread
+            # nothing is taken: a page on a brand new conversation cannot own a job yet.
+            q = self._query()
+            th = (q.get("thread") or "").strip() or None
+            others = JOBS.unseen_others(th)
+            if others:
+                titles = {t.get("brain"): t.get("title") for t in _threads_load()}
+                for o in others:
+                    o["thread_title"] = titles.get(o.get("thread")) if cc_extras.Jobs.known(o.get("thread")) else None
+            self._send(200, {"jobs": JOBS.list(), "thread": th,
+                             "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
+                             "others": others})
         elif route.startswith("/jobs/"):
             j = JOBS.get(route[len("/jobs/"):], int(self._query().get("tail") or 4000))
             self._send(200 if j else 404, j or {"error": "no such job"})
@@ -2978,6 +3014,11 @@ class Handler(BaseHTTPRequestHandler):
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
+        if route == "/jobs/seen":
+            # the person dismissed a finished job from the "other conversations" strip (2026-10-11)
+            jid = str(req.get("id", "")).strip()[:40]
+            self._send(200, {"ok": JOBS.mark_seen(jid) if jid else False})
+            return
         if route == "/board/dismiss":
             key = str(req.get("key", "")).strip()[:200]
             if key:
@@ -3030,7 +3071,8 @@ class Handler(BaseHTTPRequestHandler):
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"error": "not the reasoner"})
                 return
-            d = JOBS.start(str(req.get("command", "")), req.get("cwd") or None, str(req.get("title", "")))
+            d = JOBS.start(str(req.get("command", "")), req.get("cwd") or None, str(req.get("title", "")),
+                           thread=str(req.get("thread") or ""), run=str(req.get("run") or ""))
             print(f"job {'started ' + d['id'] if d.get('id') else 'refused: ' + str(d.get('error'))}", flush=True)
             self._send(200 if d.get("id") else 400, d)
             return

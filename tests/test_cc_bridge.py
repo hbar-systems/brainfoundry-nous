@@ -799,3 +799,53 @@ console.log(JSON.stringify({
     assert s[3]["blur"] > s[1]["blur"] and s[3]["x"] > 0 and s[0]["opacity"] == 0
     assert d["keys"] == [-1, -1, 1, 1, None, None]
     assert d["wheel"] == [1, -1, 0, 0]
+
+
+def test_run_env_names_run_and_thread(monkeypatch, tmp_path):
+    """2026-10-11: the reasoner's environment carries CC_RUN_ID and, once known, CC_THREAD_ID, so a
+    job started by its Bash tool (cc-job) can say which conversation it belongs to. Empty values
+    are left out; nothing else of the bridge's env leaks with them."""
+    monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret-a")
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    fresh = m.Run(None, "first message of a new conversation")
+    env = m._run_env(fresh)
+    assert env["CC_RUN_ID"] == fresh.id and "CC_THREAD_ID" not in env and "ELEVENLABS_API_KEY" not in env and "BRAIN_API_KEY" not in env
+    old = m.Run("brain-thread-7", "later message")
+    env = m._run_env(old)
+    assert env["CC_THREAD_ID"] == "brain-thread-7" and env["CC_RUN_ID"] == old.id
+    argv = m._as_hands(["claude", "-p", "hi"], env)
+    assert "CC_THREAD_ID=brain-thread-7" in argv and f"CC_RUN_ID={old.id}" in argv
+    assert m._hands_env() == m._hands_env({"CC_THREAD_ID": ""})
+    # the job registry resolves a run id to its thread through the run registry, at call time
+    m.RUNS[old.id] = old
+    assert m._job_thread(old.id) == "brain-thread-7" and m._job_thread("nope") is None and m._job_thread(fresh.id if fresh.id in m.RUNS else "x") is None
+    m.RUNS.pop(old.id, None)
+
+
+def test_ui_jobs_stay_in_their_thread():
+    """ui/lib/jobs.js (2026-10-11): the page asks for its own thread's jobs, keeps only those as
+    tiles, and shows the rest once in a strip with open and dismiss."""
+    import json
+    out = _node(r"""
+const J = require('./jobs')
+const fin = [{ id: 'J1', thread: 'abc', title: 'mine', rc: 0, ended: 5 }, { id: 'J2', thread: 'xyz', title: 'theirs', rc: 1, ended: 7, log: '/o/J2.log' }, { id: 'J3', thread: 'unknown', title: 'orphan', rc: 0, ended: 6, log: '/o/J3.log' }]
+const s = J.splitFinished(fin, 'abc')
+const others = [{ id: 'J2', thread: 'xyz', title: 'theirs', thread_title: 'CC: music', rc: 1, ended: 7 }, { id: 'J4', thread: 'unknown', title: 'nobody', ended: 1, log: '/o/J4.log' }]
+const strip = J.stripItems(others, s.others, ['J3'])
+console.log(JSON.stringify({
+  urls: [J.jobsUrl('abc'), J.jobsUrl('new:1'), J.jobsUrl(null), J.jobsUrl('unknown')],
+  known: [J.known('abc'), J.known('unknown'), J.known('new:2'), J.known('')],
+  mine: s.mine.map(j => j.id), rest: s.others.map(j => j.id),
+  strip: strip.map(i => [i.id, i.where, i.href, J.dismissAction(i)]),
+  label1: J.stripLabel(strip.slice(0, 1)), labelN: J.stripLabel(strip), label0: J.stripLabel([]),
+  none: J.splitFinished(fin, 'new:1').mine.length,
+}))""")
+    d = json.loads(out)
+    assert d["urls"] == ["/cc/jobs?take=1&thread=abc", "/cc/jobs?take=1", "/cc/jobs?take=1", "/cc/jobs?take=1"]
+    assert d["known"] == [True, False, False, False]
+    assert d["mine"] == ["J1"] and d["rest"] == ["J2", "J3"]
+    # J2 once (from others, with the conversation's title), J3 dismissed, J4 the orphan opens its log and is marked seen on dismiss
+    assert d["strip"] == [["J2", "CC: music", "/talk?thread=xyz", "hide"], ["J4", "no conversation", "/files?path=%2Fo%2FJ4.log", "seen"]]
+    assert d["label1"] == "finished in CC: music: theirs" and d["labelN"] == "2 jobs finished in other conversations" and d["label0"] == ""
+    assert d["none"] == 0   # a page on a new conversation never takes a tile

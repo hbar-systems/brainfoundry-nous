@@ -6,6 +6,8 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- fix: a finished job's card stays in its own conversation (2026-10-11). Every open conversation polled `/cc/jobs?take=1` and the bridge handed each finished job to whichever page asked first, so cards for the music thread's jobs ("JOB FINISHED") appeared in another thread's chat. Now the bridge sets `CC_RUN_ID` and `CC_THREAD_ID` in the reasoner's environment for each turn, cc-job sends them, the job record carries `thread` (or `unknown`) and `run` (a job started in a conversation's first turn is matched through its run when the thread id exists), the page asks for its own thread's jobs (`GET /cc/jobs?take=1&thread=`), and other conversations' finished jobs show once as one small line under the conversation (open, dismiss; `POST /cc/jobs/seen`), never as a card. The board still lists every job, now with its conversation. Logic in `ui/lib/jobs.js`, tested under node; registry and env tests in tests/test_cc_extras.py and tests/test_cc_bridge.py. Permission cards and subagent hand-backs already travelled by run and were not affected.
+
 - system: the images line now separates "unused" (docker's reclaimable: tagged images,
   stopped containers, volumes, build cache, shown by type) from "dangling" (what
   "reclaim now" and the update actually remove); the link appears only when dangling
