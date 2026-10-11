@@ -2575,10 +2575,14 @@ def _tg_handle(update: dict) -> None:
         try:
             data, name = TG.download(ev["file_id"], ev.get("file_name") or "")
             if ev.get("is_voice"):
+                # The audio is kept beside the page's attachments (2026-10-11): a voice note is a
+                # memo as much as a question, and the memo pipeline reads the file, not the words.
+                saved = UPLOADS.save_bytes(f"voice-{int(time.time())}.ogg", data)
                 if _voice_backend("stt") is None:
                     TG.call("sendMessage", chat_id=chat_id, text="voice notes need CC_STT_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env"); return
                 text = (text + " " if text else "") + _transcribe(data, name or "voice.ogg", ev.get("mime") or "audio/ogg").strip()
                 TG.call("sendMessage", chat_id=chat_id, text=f"heard: {text}")
+                text += f"\n\nVoice note on the box: {saved}"
             else:
                 saved = UPLOADS.save_bytes(name or f"telegram-{int(time.time())}", data)
                 text = (text or "Look at the attached file.") + f"\n\nAttached on the box: {saved}"
