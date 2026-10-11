@@ -99,6 +99,7 @@ def docker() -> Dict[str, Any]:
     d["not_running"] = [c["name"] for c in down]
     df = _run(["docker", "system", "df", "--format", "{{json .}}"])
     total_reclaim = 0.0
+    by_type: Dict[str, float] = {}
     for line in df.splitlines():
         try:
             row = json.loads(line)
@@ -107,9 +108,22 @@ def docker() -> Dict[str, Any]:
         if row.get("Type") == "Images":
             d["images"] = {"count": row.get("TotalCount"), "size": row.get("Size")}
         rec = str(row.get("Reclaimable") or "0B").split(" ")[0]
-        total_reclaim += _to_gb(rec)
+        gb = _to_gb(rec)
+        by_type[str(row.get("Type") or "?")] = round(gb, 2)
+        total_reclaim += gb
     d["reclaimable_gb"] = round(total_reclaim, 2)
+    d["reclaimable_by_type"] = by_type
+    # "Reclaimable" above is everything no running container uses: tagged images, stopped
+    # containers, volumes, build cache. "reclaim now" and the update only remove dangling
+    # (untagged) images, so that is the number the button must show (hbar, 2026-10-11: the
+    # tile said 1.79 GB, the button reclaimed 0B).
+    d["dangling_gb"] = dangling_gb(_run(["docker", "images", "-f", "dangling=true", "--format", "{{.Size}}"]))
     return d
+
+
+def dangling_gb(sizes: str) -> float:
+    """Sum of `docker images -f dangling=true --format {{.Size}}` lines, in GB."""
+    return round(sum(_to_gb(x) for x in sizes.splitlines() if x.strip()), 2)
 
 
 def _to_gb(s: str) -> float:

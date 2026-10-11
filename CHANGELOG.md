@@ -6,6 +6,11 @@ Older entries below carry only their date — semver tagging starts at 0.8.2.
 
 ## Unreleased
 
+- system: the images line now separates "unused" (docker's reclaimable: tagged images,
+  stopped containers, volumes, build cache, shown by type) from "dangling" (what
+  "reclaim now" and the update actually remove); the link appears only when dangling
+  images exist. The tile said 1.79 GB, the button reclaimed 0B (2026-10-11).
+
 - cc: layout file (2026-10-09). The owner's arrangement of the console is a small closed JSON file on the box (`~/.cc-bridge/layout.json`, outside every tracked file, so Update never conflicts): blocks shown, pane side and width, column, colour preset and a few hex variables, a font by name, size, weight, default view, voice. Read and written by the bridge (`/cc/layout...`, no permit: the owner's own settings), applied by the console on load, saved from the console (`save layout`) or at `/layout`. A fixed ten-question interview (`docs/personalize-interview.md`) turns answers into a layout PROPOSAL the owner applies with a click; the layout exports as a brain-app-style pack and arrives on another brain as a proposal. See docs/CC.md, Layout.
 
 - cc: gallery (2026-10-09). `/gallery` shows the conversations as a deck: the active one in front at full size, the previous and next blurred and dimmed behind it, offset to the sides. Left/right or [ ] switch, scrolling over the sides or the title strip switches, a click on a blurred neighbour brings it forward, Esc leaves; transitions 200 ms, none under prefers-reduced-motion. Each card is the CC page in a frame (as in side by side), so every card is live (state dot, queued messages, permission cards) and only the front one takes the pointer and keyboard; at most 5 are mounted. Order: the thread list's own (pinned, then most recent), kept stable while open. Button "gallery" next to "side by side". Logic in `ui/lib/gallery.js`, tested under node.

@@ -67,8 +67,8 @@ export default function System() {
         <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Containers and images</h2>
         <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
           {(dk.containers || []).map(c => <div key={c.name}><span style={{ color: c.state === 'running' ? T.ok : T.alert }}>{c.state}</span> {c.name} <span style={{ color: T.faint }}>{c.status} · {c.image}</span></div>)}
-          {dk.images ? <div style={{ marginTop: '6px' }}>{dk.images.count} images, {dk.images.size}{typeof dk.reclaimable_gb === 'number' ? ` · ${dk.reclaimable_gb} GB reclaimable` : ''}
-            {dk.reclaimable_gb >= 1 ? <> · <a onClick={async () => { setPruning('working'); try { const r = await fetch('/api/bf/admin/prune-images', { method: 'POST' }); const d = await r.json().catch(() => ({})); setPruning(d.result || (r.ok ? 'done' : 'failed')) } catch { setPruning('failed') } load() }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>reclaim now</a>{pruning ? ` (${pruning})` : ''}</> : null}</div> : null}
+          {dk.images ? <div style={{ marginTop: '6px' }}>{dk.images.count} images, {dk.images.size}{typeof dk.reclaimable_gb === 'number' ? ` · ${dk.reclaimable_gb} GB unused` : ''}{dk.reclaimable_by_type ? ` (${Object.entries(dk.reclaimable_by_type).filter(([, v]) => v > 0).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(', ') || 'nothing'})` : ''}{typeof dk.dangling_gb === 'number' ? ` · ${dk.dangling_gb} GB dangling` : ''}
+            {dk.dangling_gb >= 0.1 ? <> · <a onClick={async () => { setPruning('working'); try { const r = await fetch('/api/bf/admin/prune-images', { method: 'POST' }); const d = await r.json().catch(() => ({})); setPruning(d.result || (r.ok ? 'done' : 'failed')) } catch { setPruning('failed') } load() }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>reclaim now</a>{pruning ? ` (${pruning})` : ''}</> : null}</div> : null}
           <div>running commit {up.running_commit}{up.previous_commit ? ` · previous ${up.previous_commit}` : ''}{up.built_at ? ` · built ${up.built_at}` : ''}{up.helper_log_at ? ` · last update ${up.helper_log_at.slice(0, 16).replace('T', ' ')}` : ''}</div>
         </div>
 
@@ -105,7 +105,7 @@ export default function System() {
             </div>
           </>
         ) : null}
-        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB. The only action here is "reclaim now": it removes images no container uses, the same step the update runs.</p>
+        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB. "Unused" is everything no running container needs (tagged images, stopped containers, volumes, build cache); the only action here, "reclaim now", removes dangling images only, the same step the update runs, so it appears when there are any.</p>
       </div>
     </>
   )

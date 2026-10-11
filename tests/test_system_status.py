@@ -36,3 +36,7 @@ def test_size_parsing():
 def test_host_reads_this_machine(tmp_path):
     h = s.host(str(tmp_path))
     assert "disk" in h and 0 <= h["disk"]["pct"] <= 100 and h["disk"]["level"] in ("ok", "warn", "alert")
+
+
+def test_dangling_sum_is_what_the_button_can_remove():
+    assert s.dangling_gb("1.2GB\n500MB\n\n") == 1.7 and s.dangling_gb("") == 0.0
