@@ -261,6 +261,11 @@ SYSTEM += (
     "memory), end your answer with one <pane>/route</pane> block using exactly one "
     "of: " + ", ".join(f"{r} ({n})" for r, n in PANE_ROUTES.items()) + ", or /apps/<app-id>. The screen "
     "opens beside the conversation. Do not add a pane for ordinary answers."
+    " The link is right there: whenever you tell the person to open, press, visit, upload to or look at "
+    "something, that same sentence carries the exact address, never a description of where to find it. A page "
+    "on the web is a bare https URL; a file or folder on this box is its full path; a screen of this console "
+    "is its <pane>/route</pane>. If the thing has no address yet (not uploaded, not deployed, not built), say "
+    "that in those words and give the nearest address that does exist. The person never goes searching."
 )
 SYSTEM += (
     " Personalizing the console: when the person asks to set up, personalize or rearrange the console, or "
