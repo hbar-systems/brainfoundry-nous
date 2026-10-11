@@ -31,7 +31,7 @@ function StatusBadge({ status }) {
   const colors = {
     SHIPPED: { bg: '#1e3a26', text: '#7fc99c', label: 'shipped' },
     IN_PROGRESS: { bg: '#3a3520', text: '#d4b86a', label: 'in progress' },
-    PLANNED: { bg: '#2a2420', text: '#8b7d6e', label: 'planned' },
+    PLANNED: { bg: 'var(--border)', text: 'var(--text-dim)', label: 'planned' },
   }
   const c = colors[status]
   return (
@@ -55,14 +55,14 @@ function FeatureRow({ status, title, detail }) {
   return (
     <li style={{
       padding: '14px 0',
-      borderBottom: '1px solid #2a2420',
+      borderBottom: '1px solid var(--border)',
       listStyle: 'none',
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '6px', marginBottom: '4px' }}>
         <StatusBadge status={status} />
-        <span style={{ fontSize: '15px', color: '#e8e0d5', fontWeight: 500 }}>{title}</span>
+        <span style={{ fontSize: '15px', color: 'var(--text)', fontWeight: 500 }}>{title}</span>
       </div>
-      <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#8b7d6e', lineHeight: '1.55' }}>{detail}</p>
+      <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'var(--text-dim)', lineHeight: '1.55' }}>{detail}</p>
     </li>
   )
 }
@@ -74,13 +74,13 @@ export default function Future() {
       <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
 
         <div style={{ marginBottom: '12px' }}>
-          <p style={{ color: '#c9a96e', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 6px 0' }}>
+          <p style={{ color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 6px 0' }}>
             brainfoundry-nous · roadmap
           </p>
-          <h1 style={{ fontSize: '32px', color: '#e8e0d5', margin: '0 0 6px 0', fontWeight: 600 }}>
+          <h1 style={{ fontSize: '32px', color: 'var(--text)', margin: '0 0 6px 0', fontWeight: 600 }}>
             What&apos;s coming next
           </h1>
-          <p style={{ color: '#8b7d6e', fontSize: '14px', margin: '0 0 32px 0' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '14px', margin: '0 0 32px 0' }}>
             Your brain runs on a public, open-source codebase. This is the live roadmap — what shipped, what&apos;s being built, and what&apos;s waiting in line.
           </p>
         </div>
@@ -88,21 +88,21 @@ export default function Future() {
         {/* Community contribution callout */}
         <div style={{
           padding: '18px 22px',
-          backgroundColor: '#1c1814',
+          backgroundColor: 'var(--surface2)',
           border: '1px solid #c9a96e40',
           borderRadius: '10px',
           marginBottom: '40px',
         }}>
-          <p style={{ color: '#e8e0d5', fontSize: '14px', margin: '0 0 8px 0', fontWeight: 500 }}>
+          <p style={{ color: 'var(--text)', fontSize: '14px', margin: '0 0 8px 0', fontWeight: 500 }}>
             BrainFoundry is a public AI project.
           </p>
-          <p style={{ color: '#8b7d6e', fontSize: '13px', lineHeight: '1.6', margin: 0 }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '13px', lineHeight: '1.6', margin: 0 }}>
             Want to contribute, suggest a feature, or build something custom on top? The brain template is open source at{' '}
-            <a href="https://github.com/hbar-systems/brainfoundry-nous" target="_blank" rel="noreferrer" style={{ color: '#c9a96e', textDecoration: 'underline' }}>
+            <a href="https://github.com/hbar-systems/brainfoundry-nous" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>
               github.com/hbar-systems/brainfoundry-nous
             </a>{' '}
             — fork it, file issues, or email{' '}
-            <a href="mailto:hello@hbar.systems?subject=contribute" style={{ color: '#c9a96e', textDecoration: 'underline' }}>
+            <a href="mailto:hello@hbar.systems?subject=contribute" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>
               hello@hbar.systems
             </a>
             . Your friction is our roadmap.
@@ -111,7 +111,7 @@ export default function Future() {
 
         {/* Shipped */}
         <section style={{ marginBottom: '40px' }}>
-          <h2 style={{ fontSize: '18px', color: '#e8e0d5', margin: '0 0 12px 0', fontWeight: 600 }}>Shipped</h2>
+          <h2 style={{ fontSize: '18px', color: 'var(--text)', margin: '0 0 12px 0', fontWeight: 600 }}>Shipped</h2>
           <ul style={{ padding: 0, margin: 0 }}>
             {SHIPPED.map((f, i) => <FeatureRow key={`s${i}`} status="SHIPPED" title={f.title} detail={f.detail} />)}
           </ul>
@@ -119,7 +119,7 @@ export default function Future() {
 
         {/* In progress */}
         <section style={{ marginBottom: '40px' }}>
-          <h2 style={{ fontSize: '18px', color: '#e8e0d5', margin: '0 0 12px 0', fontWeight: 600 }}>In progress</h2>
+          <h2 style={{ fontSize: '18px', color: 'var(--text)', margin: '0 0 12px 0', fontWeight: 600 }}>In progress</h2>
           <ul style={{ padding: 0, margin: 0 }}>
             {IN_PROGRESS.map((f, i) => <FeatureRow key={`i${i}`} status="IN_PROGRESS" title={f.title} detail={f.detail} />)}
           </ul>
@@ -127,14 +127,14 @@ export default function Future() {
 
         {/* Planned */}
         <section style={{ marginBottom: '40px' }}>
-          <h2 style={{ fontSize: '18px', color: '#e8e0d5', margin: '0 0 12px 0', fontWeight: 600 }}>Planned</h2>
+          <h2 style={{ fontSize: '18px', color: 'var(--text)', margin: '0 0 12px 0', fontWeight: 600 }}>Planned</h2>
           <ul style={{ padding: 0, margin: 0 }}>
             {PLANNED.map((f, i) => <FeatureRow key={`p${i}`} status="PLANNED" title={f.title} detail={f.detail} />)}
           </ul>
         </section>
 
         {/* Footer */}
-        <p style={{ color: '#6b5f52', fontSize: '12px', textAlign: 'center', marginTop: '60px', fontStyle: 'italic' }}>
+        <p style={{ color: 'var(--muted)', fontSize: '12px', textAlign: 'center', marginTop: '60px', fontStyle: 'italic' }}>
           This roadmap lives in the open. Last updated 2026-04-29.
         </p>
 

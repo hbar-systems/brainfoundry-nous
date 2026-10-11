@@ -115,7 +115,8 @@ export default function App({ Component, pageProps }) {
         <style>{`
           /* Theme tokens — six palettes selectable via [data-theme] on <html>.
              Token names: --bg page, --surface card, --surface2 lifted card,
-             --text primary, --muted secondary, --accent highlights/links,
+             --text primary, --text-dim readable secondary, --muted faint/labels,
+             --accent highlights/links,
              --border dividers, --user-bg/--user-text user bubble,
              --assistant-bg/--assistant-text assistant bubble,
              --code-bg/--code-fg fenced code. */
@@ -134,6 +135,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #1c1814;
             --text: #e8e0d5;
             --muted: #6b5f52;
+            --text-dim: #8b7d6e;
             --accent: #c9a96e;
             --border: #2a2420;
             --user-bg: #e8d5b0;
@@ -155,6 +157,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #e0d6c2;
             --text: #1a1812;
             --muted: #6b5f52;
+            --text-dim: #4f463c;
             --accent: #8a6e3c;
             --border: #c9b896;
             --user-bg: #1a1812;
@@ -171,6 +174,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #1a2138;
             --text: #d8e0f0;
             --muted: #5a6680;
+            --text-dim: #8290ac;
             --accent: #6b8cce;
             --border: #2a3450;
             --user-bg: #b8c8e8;
@@ -187,6 +191,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #1a221a;
             --text: #d8e0d0;
             --muted: #5a6650;
+            --text-dim: #828e78;
             --accent: #88a868;
             --border: #2a3528;
             --user-bg: #c8d8b0;
@@ -203,6 +208,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #221414;
             --text: #e8d0d0;
             --muted: #806060;
+            --text-dim: #a08484;
             --accent: #c87878;
             --border: #3a2222;
             --user-bg: #e8c8c8;
@@ -219,6 +225,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #1f1f1f;
             --text: #e0e0e0;
             --muted: #707070;
+            --text-dim: #909090;
             --accent: #b0b0b0;
             --border: #2a2a2a;
             --user-bg: #d0d0d0;
@@ -236,6 +243,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #2a1810;
             --text: #f0d8c0;
             --muted: #7a5a40;
+            --text-dim: #a08068;
             --accent: #d77a3a;
             --border: #3a2218;
             --user-bg: #f0c896;
@@ -253,6 +261,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #143030;
             --text: #c8e0e0;
             --muted: #4a7070;
+            --text-dim: #6f9494;
             --accent: #3a9ea0;
             --border: #1f3838;
             --user-bg: #a8d8d8;
@@ -270,6 +279,7 @@ export default function App({ Component, pageProps }) {
             --surface2: #d8d4e2;
             --text: #1a1825;
             --muted: #6a6478;
+            --text-dim: #4e4860;
             --accent: #5b4d80;
             --border: #b8b0c8;
             --user-bg: #2a2438;

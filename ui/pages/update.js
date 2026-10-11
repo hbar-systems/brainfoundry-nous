@@ -10,14 +10,14 @@ import { useEffect, useRef, useState } from 'react'
 //   error     → preflight or run-time error; show red banner + raw error
 
 const COLORS = {
-  bg: '#0e0c0b',
-  surface: '#1c1814',
-  surface2: '#161310',
-  text: '#e8e0d5',
-  muted: '#8b7d6e',
-  mutedDim: '#6b5f52',
-  accent: '#c9a96e',
-  border: '#2a2420',
+  bg: 'var(--bg)',
+  surface: 'var(--surface2)',
+  surface2: 'var(--surface)',
+  text: 'var(--text)',
+  muted: 'var(--text-dim)',
+  mutedDim: 'var(--muted)',
+  accent: 'var(--accent)',
+  border: 'var(--border)',
   success: { bg: '#1e3a26', text: '#7fc99c' },
   warn: { bg: '#3a3520', text: '#d4b86a' },
   err: { bg: '#3a2020', text: '#d49a9a' },
@@ -50,7 +50,7 @@ function AutoUpdateSwitch() {
     <div style={{ marginBottom: '18px', padding: '12px 14px', border: `1px solid ${COLORS.border}`, borderRadius: '8px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: COLORS.muted }}>
       <button onClick={() => save({ enabled: !on })} disabled={busy || (!on && !!cfg.preflight_error)}
         title={cfg.preflight_error || (on ? 'Turn automatic updates off' : 'Turn automatic updates on')}
-        style={{ padding: '6px 12px', borderRadius: '6px', border: `1px solid ${on ? COLORS.accent : COLORS.border}`, backgroundColor: on ? COLORS.accent : 'transparent', color: on ? '#0e0c0b' : COLORS.muted, cursor: 'pointer', fontSize: '13px' }}>
+        style={{ padding: '6px 12px', borderRadius: '6px', border: `1px solid ${on ? COLORS.accent : COLORS.border}`, backgroundColor: on ? COLORS.accent : 'transparent', color: on ? 'var(--bg)' : COLORS.muted, cursor: 'pointer', fontSize: '13px' }}>
         {on ? 'Keeping this brain updated' : 'Keep this brain updated'}
       </button>
       <span>
@@ -391,7 +391,7 @@ export default function Update() {
               fontSize: '14px',
               fontFamily: 'system-ui, sans-serif',
               fontWeight: 500,
-              color: buttonDisabled ? COLORS.mutedDim : '#0e0c0b',
+              color: buttonDisabled ? COLORS.mutedDim : 'var(--bg)',
               backgroundColor: buttonDisabled ? COLORS.surface : COLORS.accent,
               border: `1px solid ${buttonDisabled ? COLORS.border : COLORS.accent}`,
               borderRadius: '8px',
@@ -543,14 +543,14 @@ export default function Update() {
             <div
               ref={logBoxRef}
               style={{
-                backgroundColor: '#08070a',
+                backgroundColor: 'var(--code-bg)',
                 border: `1px solid ${COLORS.border}`,
                 borderRadius: '8px',
                 padding: '14px 16px',
                 fontFamily: 'DM Mono, ui-monospace, monospace',
                 fontSize: '12px',
                 lineHeight: '1.55',
-                color: '#cfc6b8',
+                color: 'var(--code-fg)',
                 height: '420px',
                 overflowY: 'auto',
                 whiteSpace: 'pre-wrap',
@@ -560,7 +560,7 @@ export default function Update() {
                 <div key={i} style={{
                   color: entry.kind === 'error' ? COLORS.err.text
                        : entry.kind === 'meta' ? COLORS.muted
-                       : '#cfc6b8',
+                       : 'var(--code-fg)',
                   fontStyle: entry.kind === 'meta' ? 'italic' : 'normal',
                 }}>
                   {entry.kind === 'meta' ? `— ${entry.text}` : entry.text}
@@ -571,8 +571,8 @@ export default function Update() {
         )}
 
         {/* Footer / fallback path */}
-        <div style={{ marginTop: '40px', padding: '18px 20px', backgroundColor: '#161310', border: '1px solid #2a2420', borderRadius: '10px' }}>
-          <p style={{ color: '#e8e0d5', fontSize: '13px', margin: '0 0 10px 0', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>
+        <div style={{ marginTop: '40px', padding: '18px 20px', backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '10px' }}>
+          <p style={{ color: 'var(--text)', fontSize: '13px', margin: '0 0 10px 0', fontWeight: 500, fontFamily: 'system-ui, sans-serif' }}>
             Or update from your laptop terminal (same result)
           </p>
           <p style={{ color: COLORS.mutedDim, fontSize: '12px', margin: '0 0 12px 0', lineHeight: '1.6', fontFamily: 'system-ui, sans-serif' }}>
@@ -580,23 +580,23 @@ export default function Update() {
           </p>
           <ol style={{ color: COLORS.muted, fontSize: '12px', lineHeight: '1.7', paddingLeft: '20px', margin: 0, fontFamily: 'system-ui, sans-serif' }}>
             <li style={{ marginBottom: '8px' }}>
-              Open <strong style={{ color: '#e8e0d5' }}>Terminal</strong> (Mac: <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Cmd+Space</code> &rarr; type &ldquo;Terminal&rdquo; &rarr; Enter; Linux: usually <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Ctrl+Alt+T</code>; Windows: install WSL or use Git Bash).
+              Open <strong style={{ color: 'var(--text)' }}>Terminal</strong> (Mac: <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Cmd+Space</code> &rarr; type &ldquo;Terminal&rdquo; &rarr; Enter; Linux: usually <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>Ctrl+Alt+T</code>; Windows: install WSL or use Git Bash).
             </li>
             <li style={{ marginBottom: '8px' }}>
               SSH into your brain (replace <code style={{ color: COLORS.muted, fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>&lt;handle&gt;</code> with your brain&rsquo;s name):
-              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+              <pre style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text)', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
 {`ssh -i ~/.ssh/brainfoundry-<handle>.key hbar@<handle>.brainfoundry.ai`}
               </pre>
             </li>
             <li style={{ marginBottom: '8px' }}>
               Move into your brain&rsquo;s directory:
-              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+              <pre style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text)', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
 {`cd /home/hbar/brain`}
               </pre>
             </li>
             <li>
               Run the update script:
-              <pre style={{ background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: '6px', padding: '10px 12px', color: '#e8e0d5', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
+              <pre style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text)', fontSize: '11px', fontFamily: 'DM Mono, monospace', margin: '6px 0 0 0', overflowX: 'auto' }}>
 {`./scripts/update_brain.sh`}
               </pre>
             </li>

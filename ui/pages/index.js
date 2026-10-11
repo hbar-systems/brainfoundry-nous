@@ -76,36 +76,36 @@ function FirstRunChecklist() {
   }
 
   return (
-    <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: 24, marginBottom: 32 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, marginBottom: 32 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: 0 }}>{title}</h2>
-        <button onClick={dismiss} style={{ background: 'none', border: 'none', color: '#555', fontSize: 12, cursor: 'pointer' }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', margin: 0 }}>{title}</h2>
+        <button onClick={dismiss} style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: 12, cursor: 'pointer' }}>
           Dismiss
         </button>
       </div>
-      <p style={{ fontSize: 13, color: '#555', margin: '0 0 16px 0' }}>{intro}</p>
+      <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 16px 0' }}>{intro}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {rows.map(r => (
           <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: r.done ? 0.55 : 1 }}>
             <div style={{
               width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
-              border: `1px solid ${r.done ? '#00d4aa55' : '#2a2a2a'}`,
+              border: `1px solid ${r.done ? '#00d4aa55' : 'var(--border)'}`,
               background: r.done ? 'rgba(0,212,170,0.12)' : 'transparent',
               color: '#00d4aa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
             }}>{r.done ? '✓' : ''}</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, color: '#e5e5e5', textDecoration: r.done ? 'line-through' : 'none' }}>{r.label}</div>
-              <div style={{ fontSize: 12, color: '#555' }}>{r.sub}</div>
+              <div style={{ fontSize: 14, color: 'var(--text)', textDecoration: r.done ? 'line-through' : 'none' }}>{r.label}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>{r.sub}</div>
               {r.progress && !r.done && (
-                <div style={{ marginTop: 6, height: 4, background: '#1e1e1e', borderRadius: 2, maxWidth: 260 }}>
-                  <div style={{ height: 4, width: `${Math.min(100, 100 * r.progress.done / Math.max(1, r.progress.target))}%`, background: '#c9a96e', borderRadius: 2 }} />
+                <div style={{ marginTop: 6, height: 4, background: 'var(--border)', borderRadius: 2, maxWidth: 260 }}>
+                  <div style={{ height: 4, width: `${Math.min(100, 100 * r.progress.done / Math.max(1, r.progress.target))}%`, background: 'var(--accent)', borderRadius: 2 }} />
                 </div>
               )}
             </div>
             {!r.done && (
               <a href={r.href} style={{
-                flexShrink: 0, fontSize: 12, fontWeight: 600, color: '#0e0c0b',
-                background: '#c9a96e', borderRadius: 6, padding: '6px 14px', textDecoration: 'none',
+                flexShrink: 0, fontSize: 12, fontWeight: 600, color: 'var(--bg)',
+                background: 'var(--accent)', borderRadius: 6, padding: '6px 14px', textDecoration: 'none',
               }}>{r.cta} &rarr;</a>
             )}
           </div>
@@ -120,11 +120,11 @@ function FirstRunChecklist() {
 // the live "your mind" panel makes it visible. DRAFT copy — operator refines.
 function MindValueCard() {
   return (
-    <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: 24, marginBottom: 32 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, marginBottom: 32 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 30, lineHeight: 1, flexShrink: 0 }}>🧠</div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e5e5e5', margin: '0 0 4px 0' }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', margin: '0 0 4px 0' }}>
             Talk to your brain — it learns you as you go
           </h2>
           <p style={{ fontSize: 13, color: '#777', margin: 0, lineHeight: 1.5 }}>
@@ -133,8 +133,8 @@ function MindValueCard() {
           </p>
         </div>
         <a href="/chat" style={{
-          flexShrink: 0, fontSize: 13, fontWeight: 600, color: '#0e0c0b',
-          background: '#c9a96e', borderRadius: 6, padding: '9px 18px', textDecoration: 'none',
+          flexShrink: 0, fontSize: 13, fontWeight: 600, color: 'var(--bg)',
+          background: 'var(--accent)', borderRadius: 6, padding: '9px 18px', textDecoration: 'none',
         }}>Open Chat &rarr;</a>
       </div>
     </div>
@@ -144,18 +144,18 @@ function MindValueCard() {
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{
-      backgroundColor: '#111',
-      border: '1px solid #1e1e1e',
+      backgroundColor: 'var(--surface)',
+      border: '1px solid var(--border)',
       borderRadius: '12px',
       padding: '24px',
     }}>
-      <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+      <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         {label}
       </div>
-      <div style={{ fontSize: '26px', fontWeight: '700', color: accent || '#e5e5e5', marginBottom: '4px' }}>
+      <div style={{ fontSize: '26px', fontWeight: '700', color: accent || 'var(--text)', marginBottom: '4px' }}>
         {value}
       </div>
-      {sub && <div style={{ fontSize: '13px', color: '#444' }}>{sub}</div>}
+      {sub && <div style={{ fontSize: '13px', color: 'var(--muted)' }}>{sub}</div>}
     </div>
   )
 }
@@ -165,8 +165,8 @@ function StatCard({ label, value, sub, accent }) {
 function ArchBadge({ kind }) {
   const map = {
     active: { text: 'Active', color: '#00d4aa', bg: 'rgba(0,212,170,0.1)', border: '#00d4aa40' },
-    select: { text: 'Select', color: '#888', bg: '#161616', border: '#2a2a2a' },
-    coming: { text: 'Coming', color: '#888', bg: '#1a1a1a', border: '#2a2a2a' },
+    select: { text: 'Select', color: 'var(--muted)', bg: 'var(--surface)', border: 'var(--border)' },
+    coming: { text: 'Coming', color: 'var(--muted)', bg: 'var(--surface2)', border: 'var(--border)' },
   }
   const s = map[kind] || map.select
   return (
@@ -254,10 +254,10 @@ function MindArchitecture() {
 
   return (
     <div style={{ marginBottom: '48px' }}>
-      <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#e5e5e5', margin: '0 0 4px 0' }}>
+      <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text)', margin: '0 0 4px 0' }}>
         Mind Architecture
       </h2>
-      <p style={{ fontSize: '13px', color: '#555', margin: '0 0 16px 0', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '13px', color: 'var(--muted)', margin: '0 0 16px 0', lineHeight: 1.6 }}>
         How the brain retrieves from memory. Pick an architecture — the choice persists and applies from the next chat turn.
       </p>
       {error && (
@@ -275,8 +275,8 @@ function MindArchitecture() {
               key={a.key}
               onClick={clickable ? () => selectArch(a.key) : undefined}
               style={{
-                backgroundColor: '#111',
-                border: `1px solid ${isActive ? '#00d4aa55' : '#1e1e1e'}`,
+                backgroundColor: 'var(--surface)',
+                border: `1px solid ${isActive ? '#00d4aa55' : 'var(--border)'}`,
                 borderRadius: '12px',
                 padding: '24px',
                 boxSizing: 'border-box',
@@ -285,21 +285,21 @@ function MindArchitecture() {
                 transition: 'border-color 0.15s ease',
               }}
               onMouseOver={clickable ? e => { e.currentTarget.style.borderColor = '#00d4aa55' } : undefined}
-              onMouseOut={clickable ? e => { e.currentTarget.style.borderColor = '#1e1e1e' } : undefined}
+              onMouseOut={clickable ? e => { e.currentTarget.style.borderColor = 'var(--border)' } : undefined}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: '#e5e5e5' }}>{a.name}</div>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)' }}>{a.name}</div>
                 <ArchBadge kind={!a.selectable ? 'coming' : isActive ? 'active' : 'select'} />
               </div>
-              <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.6' }}>{a.desc}</div>
+              <div style={{ fontSize: '13px', color: 'var(--muted)', lineHeight: '1.6' }}>{a.desc}</div>
 
               {a.key === 'layer_scoped' && isActive && (
                 <div style={{ marginTop: '14px' }} onClick={e => e.stopPropagation()}>
-                  <div style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '8px' }}>
                     Layers in scope{layerScope.length === 0 ? ' — all' : ''}
                   </div>
                   {declaredLayers.length === 0 ? (
-                    <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.6 }}>
+                    <div style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.6 }}>
                       No memory layers defined yet — Layer-Scoped behaves like Flat Similarity until you add layers in Settings.
                     </div>
                   ) : (
@@ -314,9 +314,9 @@ function MindArchitecture() {
                             style={{
                               fontSize: '11px', padding: '4px 10px', borderRadius: '999px',
                               cursor: busy ? 'wait' : 'pointer',
-                              border: `1px solid ${on ? '#00d4aa55' : '#2a2a2a'}`,
-                              background: on ? 'rgba(0,212,170,0.1)' : '#161616',
-                              color: on ? '#00d4aa' : '#888',
+                              border: `1px solid ${on ? '#00d4aa55' : 'var(--border)'}`,
+                              background: on ? 'rgba(0,212,170,0.1)' : 'var(--surface)',
+                              color: on ? '#00d4aa' : 'var(--muted)',
                             }}
                           >{name}</button>
                         )
@@ -362,10 +362,10 @@ export function Dashboard() {
   return (
     <div style={{ padding: '40px 32px', maxWidth: '920px', margin: '0 auto' }}>
       <div style={{ marginBottom: '40px' }}>
-        <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: '#e5e5e5' }}>
+        <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: 'var(--text)' }}>
           Console
         </h1>
-        <p style={{ color: '#444', fontSize: '13px', margin: 0 }}>
+        <p style={{ color: 'var(--muted)', fontSize: '13px', margin: 0 }}>
           {process.env.NEXT_PUBLIC_BRAIN_NODE_ID || 'brain-node'} &middot; {process.env.NEXT_PUBLIC_BRAIN_HOST || 'localhost'}
         </p>
       </div>
@@ -415,8 +415,8 @@ export function Dashboard() {
           <a key={item.href} href={item.href} style={{ textDecoration: 'none' }}>
             <div
               style={{
-                backgroundColor: '#111',
-                border: '1px solid #1e1e1e',
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '12px',
                 padding: '24px',
                 cursor: 'pointer',
@@ -425,12 +425,12 @@ export function Dashboard() {
                 boxSizing: 'border-box',
               }}
               onMouseOver={e => e.currentTarget.style.borderColor = '#667eea60'}
-              onMouseOut={e => e.currentTarget.style.borderColor = '#1e1e1e'}
+              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border)'}
             >
-              <div style={{ fontSize: '14px', fontWeight: '600', color: '#e5e5e5', marginBottom: '8px' }}>
+              <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)', marginBottom: '8px' }}>
                 {item.label}
               </div>
-              <div style={{ fontSize: '13px', color: '#555', lineHeight: '1.6' }}>
+              <div style={{ fontSize: '13px', color: 'var(--muted)', lineHeight: '1.6' }}>
                 {item.desc}
               </div>
             </div>
@@ -447,8 +447,8 @@ export function Dashboard() {
           </summary>
           <pre style={{
             marginTop: '12px',
-            backgroundColor: '#111',
-            border: '1px solid #1e1e1e',
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
             borderRadius: '8px',
             padding: '16px',
             fontSize: '12px',

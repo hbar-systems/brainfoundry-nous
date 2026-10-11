@@ -80,18 +80,18 @@ export default function Federation() {
       <Head><title>Federation · BrainFoundry</title></Head>
       <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
 
-        <p style={{ color: '#c9a96e', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 6px 0' }}>
+        <p style={{ color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 6px 0' }}>
           brainfoundry-nous · federation
         </p>
-        <h1 style={{ fontSize: '32px', color: '#e8e0d5', margin: '0 0 6px 0', fontWeight: 600 }}>
+        <h1 style={{ fontSize: '32px', color: 'var(--text)', margin: '0 0 6px 0', fontWeight: 600 }}>
           Federation
         </h1>
-        <p style={{ color: '#8b7d6e', fontSize: '14px', margin: '0 0 28px 0' }}>
+        <p style={{ color: 'var(--text-dim)', fontSize: '14px', margin: '0 0 28px 0' }}>
           Direct messages with other brains. Each message is signed by your brain&rsquo;s private key and verified by the recipient.
         </p>
 
         {/* Tab nav */}
-        <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid #2a2420', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
           {['inbox', 'outbox', 'compose'].map(t => (
             <button
               key={t}
@@ -99,9 +99,9 @@ export default function Federation() {
               style={{
                 padding: '10px 16px',
                 background: 'transparent',
-                color: tab === t ? '#e8e0d5' : '#6b5f52',
+                color: tab === t ? 'var(--text)' : 'var(--muted)',
                 border: 'none',
-                borderBottom: tab === t ? '2px solid #c9a96e' : '2px solid transparent',
+                borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
                 cursor: 'pointer',
                 fontSize: '13px',
                 fontFamily: 'DM Mono, monospace',
@@ -134,7 +134,7 @@ export default function Federation() {
         {tab === 'inbox' && (
           <div>
             {inbox.length === 0 && (
-              <p style={{ color: '#6b5f52', fontSize: '13px', fontStyle: 'italic' }}>
+              <p style={{ color: 'var(--muted)', fontSize: '13px', fontStyle: 'italic' }}>
                 No messages yet. When another brain DMs you, it appears here.
               </p>
             )}
@@ -145,18 +145,18 @@ export default function Federation() {
                 style={{
                   padding: '16px 18px',
                   marginBottom: '10px',
-                  background: m.read_at ? '#161310' : '#1c1814',
-                  border: m.read_at ? '1px solid #2a2420' : '1px solid #c9a96e60',
+                  background: m.read_at ? 'var(--surface)' : 'var(--surface2)',
+                  border: m.read_at ? '1px solid var(--border)' : '1px solid #c9a96e60',
                   borderRadius: '8px',
                   cursor: !m.read_at ? 'pointer' : 'default',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                  <span style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>{m.from_brain}</span>
-                  <span style={{ color: '#6b5f52', fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>{fmtTime(m.received_at)}</span>
+                  <span style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>{m.from_brain}</span>
+                  <span style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>{fmtTime(m.received_at)}</span>
                 </div>
-                <p style={{ color: '#e8e0d5', fontSize: '14px', margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>{m.message}</p>
-                <p style={{ color: '#4a3f36', fontFamily: 'DM Mono, monospace', fontSize: '10px', margin: 0 }}>
+                <p style={{ color: 'var(--text)', fontSize: '14px', margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>{m.message}</p>
+                <p style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace', fontSize: '10px', margin: 0 }}>
                   pubkey {m.from_pubkey.slice(0, 12)}...{m.from_pubkey.slice(-6)} · sig verified
                 </p>
               </div>
@@ -168,7 +168,7 @@ export default function Federation() {
         {tab === 'outbox' && (
           <div>
             {outbox.length === 0 && (
-              <p style={{ color: '#6b5f52', fontSize: '13px', fontStyle: 'italic' }}>
+              <p style={{ color: 'var(--muted)', fontSize: '13px', fontStyle: 'italic' }}>
                 No sent DMs yet. Switch to Compose to send one.
               </p>
             )}
@@ -176,15 +176,15 @@ export default function Federation() {
               <div key={m.id} style={{
                 padding: '16px 18px',
                 marginBottom: '10px',
-                background: '#161310',
-                border: '1px solid #2a2420',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                  <span style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>→ {m.to_brain}</span>
-                  <span style={{ color: '#6b5f52', fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>{fmtTime(m.sent_at)}</span>
+                  <span style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace', fontSize: '13px' }}>→ {m.to_brain}</span>
+                  <span style={{ color: 'var(--muted)', fontFamily: 'DM Mono, monospace', fontSize: '11px' }}>{fmtTime(m.sent_at)}</span>
                 </div>
-                <p style={{ color: '#e8e0d5', fontSize: '14px', margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>{m.message}</p>
+                <p style={{ color: 'var(--text)', fontSize: '14px', margin: '0 0 8px 0', whiteSpace: 'pre-wrap' }}>{m.message}</p>
                 <p style={{
                   color: m.delivered ? '#7fc99c' : '#c98080',
                   fontFamily: 'DM Mono, monospace',
@@ -201,7 +201,7 @@ export default function Federation() {
         {/* Compose */}
         {tab === 'compose' && (
           <div>
-            <p style={{ color: '#6b5f52', fontSize: '12px', marginBottom: '14px', fontStyle: 'italic' }}>
+            <p style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '14px', fontStyle: 'italic' }}>
               Recipient is a brain handle (e.g. <code>yury</code>, <code>nous</code>). Their brain at <code>&lt;handle&gt;.brainfoundry.ai</code> must be online to receive.
             </p>
             <input
@@ -213,10 +213,10 @@ export default function Federation() {
               style={{
                 width: '100%',
                 padding: '12px 14px',
-                background: '#161310',
-                border: '1px solid #2a2420',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
-                color: '#e8e0d5',
+                color: 'var(--text)',
                 fontSize: '14px',
                 fontFamily: 'DM Mono, monospace',
                 marginBottom: '12px',
@@ -232,10 +232,10 @@ export default function Federation() {
               style={{
                 width: '100%',
                 padding: '12px 14px',
-                background: '#161310',
-                border: '1px solid #2a2420',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
-                color: '#e8e0d5',
+                color: 'var(--text)',
                 fontSize: '14px',
                 fontFamily: 'inherit',
                 outline: 'none',
@@ -248,9 +248,9 @@ export default function Federation() {
               disabled={!composeTo.trim() || !composeMsg.trim() || sending}
               style={{
                 padding: '10px 18px',
-                background: (composeTo.trim() && composeMsg.trim() && !sending) ? '#c9a96e' : '#161310',
-                color: (composeTo.trim() && composeMsg.trim() && !sending) ? '#0e0c0b' : '#3a2e26',
-                border: '1px solid #2a2420',
+                background: (composeTo.trim() && composeMsg.trim() && !sending) ? 'var(--accent)' : 'var(--surface)',
+                color: (composeTo.trim() && composeMsg.trim() && !sending) ? 'var(--bg)' : 'var(--muted)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 cursor: (composeTo.trim() && composeMsg.trim() && !sending) ? 'pointer' : 'not-allowed',
                 fontSize: '13px',
@@ -259,7 +259,7 @@ export default function Federation() {
             >
               {sending ? 'signing + delivering...' : 'Send'}
             </button>
-            <p style={{ color: '#6b5f52', fontSize: '11px', marginTop: '14px', fontFamily: 'DM Mono, monospace' }}>
+            <p style={{ color: 'var(--muted)', fontSize: '11px', marginTop: '14px', fontFamily: 'DM Mono, monospace' }}>
               Your brain signs the payload locally · ED25519 · delivered to {composeTo ? `${composeTo}.brainfoundry.ai` : '<recipient>.brainfoundry.ai'}/v1/federation/dm/receive
             </p>
           </div>

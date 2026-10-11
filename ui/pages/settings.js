@@ -77,14 +77,14 @@ function AppearancePanel() {
   }
 
   return (
-    <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+    <div style={{ paddingTop: 14, color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
       <p style={{ margin: '0 0 14px 0' }}>
         Set the chat surface's palette and typography. Saved per-browser
         (localStorage); chat picker stays in sync.
       </p>
 
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
           Theme
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -96,9 +96,9 @@ function AppearancePanel() {
               style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '6px 12px 6px 8px',
-                background: theme === t.value ? '#1f1a14' : 'transparent',
-                color: theme === t.value ? '#e8e0d5' : '#8b7d6e',
-                border: `1px solid ${theme === t.value ? '#c9a96e66' : '#2a2420'}`,
+                background: theme === t.value ? 'var(--surface2)' : 'transparent',
+                color: theme === t.value ? 'var(--text)' : 'var(--text-dim)',
+                border: `1px solid ${theme === t.value ? '#c9a96e66' : 'var(--border)'}`,
                 borderRadius: 8,
                 cursor: 'pointer',
                 fontSize: 13,
@@ -117,7 +117,7 @@ function AppearancePanel() {
       </div>
 
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
           Font
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -127,9 +127,9 @@ function AppearancePanel() {
               onClick={() => applyFont(f.value)}
               style={{
                 padding: '6px 12px',
-                background: font === f.value ? '#1f1a14' : 'transparent',
-                color: font === f.value ? '#e8e0d5' : '#8b7d6e',
-                border: `1px solid ${font === f.value ? '#c9a96e66' : '#2a2420'}`,
+                background: font === f.value ? 'var(--surface2)' : 'transparent',
+                color: font === f.value ? 'var(--text)' : 'var(--text-dim)',
+                border: `1px solid ${font === f.value ? '#c9a96e66' : 'var(--border)'}`,
                 borderRadius: 8,
                 cursor: 'pointer',
                 fontSize: 13,
@@ -142,12 +142,12 @@ function AppearancePanel() {
       </div>
 
       <div>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <span>Header size</span>
-          <span style={{ fontFamily: 'DM Mono, monospace', textTransform: 'none', letterSpacing: 0, color: '#c9a96e', fontSize: 11 }}>{navH}px</span>
+          <span style={{ fontFamily: 'DM Mono, monospace', textTransform: 'none', letterSpacing: 0, color: 'var(--accent)', fontSize: 11 }}>{navH}px</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 11, color: '#6b5f52' }}>{NAV_H_MIN}</span>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>{NAV_H_MIN}</span>
           <input
             type="range"
             min={NAV_H_MIN}
@@ -155,18 +155,18 @@ function AppearancePanel() {
             step={1}
             value={navH}
             onChange={(e) => applyNavH(e.target.value)}
-            style={{ flex: 1, accentColor: '#c9a96e' }}
+            style={{ flex: 1, accentColor: 'var(--accent)' }}
           />
-          <span style={{ fontSize: 11, color: '#6b5f52' }}>{NAV_H_MAX}</span>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>{NAV_H_MAX}</span>
           <button
             onClick={resetNavH}
             title="Reset to default (52px)"
-            style={{ background: 'transparent', border: '1px solid #2a2420', color: '#8b7d6e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Mono, monospace' }}
+            style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-dim)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Mono, monospace' }}
           >
             reset
           </button>
         </div>
-        <div style={{ fontSize: 11, color: '#6b5f52', marginTop: 6, fontStyle: 'italic' }}>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, fontStyle: 'italic' }}>
           Or drag the bottom edge of the header itself.
         </div>
       </div>
@@ -255,7 +255,7 @@ function BrainLayoutPanel() {
   }
 
   if (!cfg) {
-    return <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13 }}>
+    return <div style={{ paddingTop: 14, color: 'var(--text-dim)', fontSize: 13 }}>
       {err ? <span style={{ color: '#c87878' }}>{err}</span> : 'Loading…'}
     </div>
   }
@@ -285,7 +285,7 @@ function BrainLayoutPanel() {
   const labelFor = (id) => (tabs.find(t => t.id === id) || {}).label || id
 
   return (
-    <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+    <div style={{ paddingTop: 14, color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
       <p style={{ margin: '0 0 14px 0' }}>
         Adjust your brain's header, theme, and which tabs show — saved on the
         server (so it follows you across devices) with one-step revert. This
@@ -296,7 +296,7 @@ function BrainLayoutPanel() {
 
       {/* Menu title */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Menu header</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Menu header</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             style={{ ...INPUT, flex: 1 }}
@@ -315,14 +315,14 @@ function BrainLayoutPanel() {
 
       {/* Theme */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Theme</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Theme</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {APPEARANCE_THEMES.map(t => (
             <button key={t.value} onClick={() => save({ theme: t.value })} title={t.label} disabled={busy}
               style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 6px 8px',
-                background: cfg.theme === t.value ? '#1f1a14' : 'transparent',
-                color: cfg.theme === t.value ? '#e8e0d5' : '#8b7d6e',
-                border: `1px solid ${cfg.theme === t.value ? '#c9a96e66' : '#2a2420'}`,
+                background: cfg.theme === t.value ? 'var(--surface2)' : 'transparent',
+                color: cfg.theme === t.value ? 'var(--text)' : 'var(--text-dim)',
+                border: `1px solid ${cfg.theme === t.value ? '#c9a96e66' : 'var(--border)'}`,
                 borderRadius: 8, cursor: 'pointer', fontSize: 13, fontFamily: 'DM Mono, monospace' }}>
               <span style={{ width: 14, height: 14, borderRadius: '50%', background: t.swatch, border: '1px solid rgba(0,0,0,0.3)', display: 'inline-block' }} />
               {t.label}
@@ -333,14 +333,14 @@ function BrainLayoutPanel() {
 
       {/* Accent */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Accent</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Accent</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {accents.map(a => (
             <button key={a} onClick={() => save({ accent: a })} title={a} disabled={busy}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
-                background: cfg.accent === a ? '#1f1a14' : 'transparent',
-                color: cfg.accent === a ? '#e8e0d5' : '#8b7d6e',
-                border: `1px solid ${cfg.accent === a ? '#c9a96e66' : '#2a2420'}`,
+                background: cfg.accent === a ? 'var(--surface2)' : 'transparent',
+                color: cfg.accent === a ? 'var(--text)' : 'var(--text-dim)',
+                border: `1px solid ${cfg.accent === a ? '#c9a96e66' : 'var(--border)'}`,
                 borderRadius: 8, cursor: 'pointer', fontSize: 12, fontFamily: 'DM Mono, monospace' }}>
               {a !== 'default' && <span style={{ width: 12, height: 12, borderRadius: '50%', background: a, display: 'inline-block', border: '1px solid rgba(0,0,0,0.3)' }} />}
               {a}
@@ -351,16 +351,16 @@ function BrainLayoutPanel() {
 
       {/* Tabs: show/hide + reorder */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tabs — show / hide / reorder</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tabs — show / hide / reorder</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {orderedIds.map((id, idx) => {
             const locked = protectedTabs.includes(id)
             return (
-              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6 }}>
+              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6 }}>
                 <input type="checkbox" checked={!isHidden(id)} disabled={locked || busy}
-                  onChange={() => toggleHidden(id)} style={{ accentColor: '#c9a96e' }} />
-                <span style={{ flex: 1, color: isHidden(id) ? '#6b5f52' : '#e8e0d5' }}>
-                  {labelFor(id)} {locked && <span style={{ fontSize: 10, color: '#6b5f52' }}>(always shown)</span>}
+                  onChange={() => toggleHidden(id)} style={{ accentColor: 'var(--accent)' }} />
+                <span style={{ flex: 1, color: isHidden(id) ? 'var(--muted)' : 'var(--text)' }}>
+                  {labelFor(id)} {locked && <span style={{ fontSize: 10, color: 'var(--muted)' }}>(always shown)</span>}
                 </span>
                 <button onClick={() => move(id, -1)} disabled={idx === 0 || busy} title="Move up"
                   style={{ ...BTN_GHOST, padding: '2px 8px', opacity: idx === 0 ? 0.4 : 1 }}>↑</button>
@@ -374,7 +374,7 @@ function BrainLayoutPanel() {
 
       {/* Natural-language input — thin translator to a validated diff */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Or just say it</div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Or just say it</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input style={{ ...INPUT, flex: 1 }} value={nl} placeholder='e.g. "hide the economy tab and rename the header to Praxis Müller"'
             onChange={(e) => setNl(e.target.value)}
@@ -382,9 +382,9 @@ function BrainLayoutPanel() {
           <button style={BTN_GHOST} disabled={busy} onClick={proposeNL}>Propose</button>
         </div>
         {proposal && (
-          <div style={{ marginTop: 10, padding: 12, background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 8 }}>
-            <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 6 }}>Proposed change:</div>
-            <pre style={{ margin: 0, color: '#e8e0d5', fontSize: 12, whiteSpace: 'pre-wrap', fontFamily: 'DM Mono, monospace' }}>
+          <div style={{ marginTop: 10, padding: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>Proposed change:</div>
+            <pre style={{ margin: 0, color: 'var(--text)', fontSize: 12, whiteSpace: 'pre-wrap', fontFamily: 'DM Mono, monospace' }}>
               {JSON.stringify(proposal.diff, null, 2)}
             </pre>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -396,7 +396,7 @@ function BrainLayoutPanel() {
       </div>
 
       {/* Revert / Reset */}
-      <div style={{ display: 'flex', gap: 8, borderTop: '1px solid #2a2420', paddingTop: 14 }}>
+      <div style={{ display: 'flex', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
         <button style={BTN_GHOST} disabled={busy} onClick={doRevert}>Revert last change</button>
         <button style={BTN_GHOST} disabled={busy} onClick={doReset}>Reset to default</button>
       </div>
@@ -459,8 +459,8 @@ function Section({ title, subtitle, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={{
-      backgroundColor: '#161310',
-      border: '1px solid #2a2420',
+      backgroundColor: 'var(--surface)',
+      border: '1px solid var(--border)',
       borderRadius: 10,
       marginBottom: 16,
       overflow: 'hidden',
@@ -474,7 +474,7 @@ function Section({ title, subtitle, children, defaultOpen = false }) {
           border: 'none',
           padding: '18px 22px',
           cursor: 'pointer',
-          color: '#e8e0d5',
+          color: 'var(--text)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -485,17 +485,17 @@ function Section({ title, subtitle, children, defaultOpen = false }) {
             {title}
           </div>
           {subtitle && (
-            <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 4, fontStyle: 'italic' }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, fontStyle: 'italic' }}>
               {subtitle}
             </div>
           )}
         </div>
-        <span style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace', fontSize: 14 }}>
+        <span style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace', fontSize: 14 }}>
           {open ? '–' : '+'}
         </span>
       </button>
       {open && (
-        <div style={{ padding: '0 22px 22px 22px', borderTop: '1px solid #2a2420' }}>
+        <div style={{ padding: '0 22px 22px 22px', borderTop: '1px solid var(--border)' }}>
           {children}
         </div>
       )}
@@ -504,18 +504,18 @@ function Section({ title, subtitle, children, defaultOpen = false }) {
 }
 
 const INPUT = {
-  background: '#0e0c0b',
-  border: '1px solid #2a2420',
+  background: 'var(--bg)',
+  border: '1px solid var(--border)',
   borderRadius: 6,
-  color: '#e8e0d5',
+  color: 'var(--text)',
   padding: '8px 12px',
   fontSize: 13,
   fontFamily: 'DM Mono, monospace',
   outline: 'none',
 }
 const BTN = {
-  background: '#c9a96e',
-  color: '#0e0c0b',
+  background: 'var(--accent)',
+  color: 'var(--bg)',
   border: 'none',
   borderRadius: 6,
   padding: '8px 16px',
@@ -527,8 +527,8 @@ const BTN = {
 const BTN_GHOST = {
   ...BTN,
   background: 'transparent',
-  color: '#c9a96e',
-  border: '1px solid #2a2420',
+  color: 'var(--accent)',
+  border: '1px solid var(--border)',
 }
 
 // ---------- Keys ----------
@@ -568,19 +568,19 @@ function KeysPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 12px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 12px 0' }}>
         Your brain calls these providers directly. Keys are stored on your brain only —
         BrainFoundry never sees them. Paste the key, save, done — no container restart.
       </p>
       {/* Key guide (first-use flow, unreleased 0.10.0): where a key comes from,
           which model to pick after, and what happens with no key at all. */}
-      <div style={{ border: '1px solid #2a2420', borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontSize: 12, color: '#8b7d6e', lineHeight: 1.7 }}>
-        <div style={{ color: '#e8e0d5', marginBottom: 4 }}>Getting a key, two minutes</div>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.7 }}>
+        <div style={{ color: 'var(--text)', marginBottom: 4 }}>Getting a key, two minutes</div>
         <div>1. Open one provider, sign in, create a key, copy it:{' '}
-          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Anthropic</a>,{' '}
-          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>OpenAI</a>,{' '}
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Gemini</a>,{' '}
-          <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>Groq</a>.
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>Anthropic</a>,{' '}
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>OpenAI</a>,{' '}
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>Gemini</a>,{' '}
+          <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>Groq</a>.
         </div>
         <div>2. Paste it below and Save. 3. In Models, pick that provider&apos;s model (Anthropic: claude-sonnet-5).</div>
         <div>You pay the provider directly per use; a normal month of chatting is a few euros. No key at all: the local model answers, slowly, with nothing leaving this server.</div>
@@ -594,15 +594,15 @@ function KeysPanel() {
             gap: 10,
             alignItems: 'center',
             padding: '10px 0',
-            borderBottom: '1px solid #1c1814',
+            borderBottom: '1px solid var(--surface2)',
           }}>
-            <div style={{ fontSize: 13, color: '#e8e0d5' }}>{PROVIDER_LABELS[p] || p}</div>
+            <div style={{ fontSize: 13, color: 'var(--text)' }}>{PROVIDER_LABELS[p] || p}</div>
             <div>
               {current ? (
                 <span style={{
                   fontFamily: 'DM Mono, monospace',
                   fontSize: 12,
-                  color: '#c9a96e',
+                  color: 'var(--accent)',
                 }}>{current}</span>
               ) : (
                 <input
@@ -656,14 +656,14 @@ function ModelsPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, margin: '0 0 10px 0' }}>
-        Active: <span style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, margin: '0 0 10px 0' }}>
+        Active: <span style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace' }}>
           {state.active || '(none)'}
         </span>
       </p>
       {Object.entries(groups).map(([provider, models]) => (
         <div key={provider} style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 12, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
             {provider}{provider === 'ollama' ? ' — local, free' : ' — cloud, metered'}
           </div>
           {models.map(m => (
@@ -677,10 +677,10 @@ function ModelsPanel() {
                 textAlign: 'left',
                 marginBottom: 4,
                 padding: '8px 12px',
-                background: state.active === m.name ? '#1c1814' : 'transparent',
-                border: `1px solid ${state.active === m.name ? '#c9a96e' : '#2a2420'}`,
+                background: state.active === m.name ? 'var(--surface2)' : 'transparent',
+                border: `1px solid ${state.active === m.name ? 'var(--accent)' : 'var(--border)'}`,
                 borderRadius: 6,
-                color: '#e8e0d5',
+                color: 'var(--text)',
                 fontFamily: 'DM Mono, monospace',
                 fontSize: 13,
                 cursor: 'pointer',
@@ -724,7 +724,7 @@ function AgenticToolsPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
         Let your brain decide for itself when to reach for a tool — search its own memory, or
         the open web — instead of you flipping a switch each message. Off by default. Works on
         cloud models (Claude, GPT, …) AND capable local models (llama3.3:70b, qwen2.5:72b, …) —
@@ -734,27 +734,27 @@ function AgenticToolsPanel() {
 
       {/* Permission tiers — what green / yellow / red mean (from /tools/tiers). */}
       <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 13 }}>
-        <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+        <div style={{ color: 'var(--accent)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1 }}>
           What green · yellow · red mean
         </div>
         {tiers.map(t => (
           <div key={t.tier} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <span style={{ width: 9, height: 9, borderRadius: '50%', background: TIER_COLOR[t.tier] || '#888', marginTop: 5, flexShrink: 0 }} />
             <div>
-              <div style={{ fontSize: 12.5, color: '#e8e0d5' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text)' }}>
                 {t.label} — <span style={{ color: TIER_COLOR[t.tier] }}>{t.rule}</span>
               </div>
-              <div style={{ fontSize: 12, color: '#9a8c7a', lineHeight: 1.65, marginTop: 2 }}>{t.detail}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.65, marginTop: 2 }}>{t.detail}</div>
             </div>
           </div>
         ))}
       </div>
 
       {/* Enable toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #1c1814' }}>
-        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--surface2)' }}>
+        <div style={{ fontSize: 13, color: 'var(--text)' }}>
           Agentic mode
-          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
             {enabled ? 'On — your brain calls tools on its own judgment.' : 'Off — tools run only when you ask (manual 🌐 toggle).'}
           </div>
         </div>
@@ -766,12 +766,12 @@ function AgenticToolsPanel() {
       {/* Registered tools, dotted by tier */}
       {tools.length > 0 && (
         <div style={{ marginTop: 16 }}>
-          <div style={{ color: '#6b5f52', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tools your brain can call</div>
+          <div style={{ color: 'var(--muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tools your brain can call</div>
           {tools.map(t => (
             <div key={t.name} style={{ display: 'flex', gap: 9, alignItems: 'baseline', padding: '5px 0' }}>
               <span title={t.tier} style={{ width: 8, height: 8, borderRadius: '50%', background: TIER_COLOR[t.tier] || '#888', flexShrink: 0, alignSelf: 'center' }} />
-              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: '#e8e0d5' }}>{t.name}</span>
-              <span style={{ fontSize: 12, color: '#9a8c7a', lineHeight: 1.5 }}>{t.description}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text)' }}>{t.name}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{t.description}</span>
             </div>
           ))}
         </div>
@@ -833,11 +833,11 @@ function WebSearchPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
         Let your brain read the open web (Brave Search). A yellow-tier tool: external,
         read-only, off by default. Results enter chat as <em>untrusted</em> reference data —
         cited by URL, never followed as instructions. Get a key at{' '}
-        <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" style={{ color: '#c9a96e' }}>brave.com/search/api</a>;
+        <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>brave.com/search/api</a>;
         it stays on your brain under your own billing.
       </p>
 
@@ -846,7 +846,7 @@ function WebSearchPanel() {
       <div style={{ marginBottom: 18 }}>
         <button
           onClick={() => setShowHow(v => !v)}
-          style={{ background: 'transparent', border: 'none', color: '#c9a96e', cursor: 'pointer', padding: 0, fontSize: 12, fontFamily: 'inherit' }}
+          style={{ background: 'transparent', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, fontSize: 12, fontFamily: 'inherit' }}
         >
           {showHow ? '▾' : '▸'} How it works
         </button>
@@ -887,9 +887,9 @@ function WebSearchPanel() {
               },
             ].map((sec) => (
               <div key={sec.h}>
-                <div style={{ color: '#c9a96e', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>{sec.h}</div>
+                <div style={{ color: 'var(--accent)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>{sec.h}</div>
                 {sec.lines.map((ln, li) => (
-                  <div key={li} style={{ color: '#9a8c7a', fontSize: 12.5, lineHeight: 1.7 }}>{ln}</div>
+                  <div key={li} style={{ color: 'var(--text-dim)', fontSize: 12.5, lineHeight: 1.7 }}>{ln}</div>
                 ))}
               </div>
             ))}
@@ -898,10 +898,10 @@ function WebSearchPanel() {
       </div>
 
       {/* Enable toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #1c1814' }}>
-        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--surface2)' }}>
+        <div style={{ fontSize: 13, color: 'var(--text)' }}>
           Web search
-          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
             {state.enabled ? 'Enabled — the 🌐 toggle is live in chat.' : 'Disabled.'}
             {state.enabled && !state.key_set && <span style={{ color: '#d9a777' }}> Add a key below to use it.</span>}
           </div>
@@ -912,11 +912,11 @@ function WebSearchPanel() {
       </div>
 
       {/* Brave key */}
-      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 90px 90px', gap: 10, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid #1c1814' }}>
-        <div style={{ fontSize: 13, color: '#e8e0d5' }}>Brave API key</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 90px 90px', gap: 10, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--surface2)' }}>
+        <div style={{ fontSize: 13, color: 'var(--text)' }}>Brave API key</div>
         <div>
           {state.key_set ? (
-            <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: '#c9a96e' }}>{state.key_masked}</span>
+            <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--accent)' }}>{state.key_masked}</span>
           ) : (
             <input type="password" value={draftKey} onChange={e => setDraftKey(e.target.value)} placeholder="paste Brave key…" style={{ ...INPUT, width: '100%' }} />
           )}
@@ -929,9 +929,9 @@ function WebSearchPanel() {
 
       {/* Monthly budget */}
       <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 90px', gap: 10, alignItems: 'center', padding: '12px 0' }}>
-        <div style={{ fontSize: 13, color: '#e8e0d5' }}>
+        <div style={{ fontSize: 13, color: 'var(--text)' }}>
           Monthly cap
-          <div style={{ fontSize: 12, color: '#6b5f52', marginTop: 2 }}>{state.usage_this_month} used this month</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{state.usage_this_month} used this month</div>
         </div>
         <input type="number" min={0} value={draftBudget} onChange={e => setDraftBudget(e.target.value)} style={{ ...INPUT, width: 120 }} />
         <button style={BTN} disabled={busy === 'budget'} onClick={saveBudget}>{busy === 'budget' ? '…' : 'Save'}</button>
@@ -1050,12 +1050,12 @@ function MemoryPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Memory layers (also: "zones" or "collections") are how your brain organises
         what it knows about you. Each layer is a themed notebook. Start blank and
         build your mind, or start from a preset.
       </p>
-      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0', fontStyle: 'italic' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0', fontStyle: 'italic' }}>
         Layers are real now (v0.8). Choose a layer when uploading from
         Knowledge, and ask the brain scoped questions by passing
         <code> layers: ["thinking"] </code> in <code>/chat/rag</code>.
@@ -1064,11 +1064,11 @@ function MemoryPanel() {
       {/* Differentiator surface: after the brain has read enough of your
           corpus to form a model of you, ask IT to propose how the layers
           should be organized. Most AI tools impose structure; we ask first. */}
-      <div style={{ marginBottom: 18, padding: '10px 14px', background: '#13110d', border: '1px solid #2a2420', borderRadius: 8 }}>
-        <div style={{ fontSize: 12, color: '#c9a96e', marginBottom: 4, fontFamily: 'DM Mono, monospace' }}>
+      <div style={{ marginBottom: 18, padding: '10px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 4, fontFamily: 'DM Mono, monospace' }}>
           Let the brain propose a scheme
         </div>
-        <div style={{ fontSize: 12, color: '#6b5f52', lineHeight: 1.6, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 8 }}>
           Reads up to 30 of your most recently stored documents, then proposes a
           set of themed-notebook layers that fit what you've actually written and
           collected. You pick which to accept.
@@ -1078,7 +1078,7 @@ function MemoryPanel() {
           style={{
             background: 'transparent',
             border: '1px solid rgba(201, 169, 110, 0.38)',
-            color: '#c9a96e',
+            color: 'var(--accent)',
             borderRadius: 8,
             padding: '6px 14px',
             cursor: 'pointer',
@@ -1093,7 +1093,7 @@ function MemoryPanel() {
 
       {presets.length > 0 && (
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 8 }}>Presets:</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>Presets:</div>
           {presets.map(p => {
             const already = layers.find(l => l.name === p.name)
             return (
@@ -1117,7 +1117,7 @@ function MemoryPanel() {
       {layers.map((l, i) => (
         <div key={i} style={{
           padding: '10px 14px',
-          border: '1px solid #2a2420',
+          border: '1px solid var(--border)',
           borderRadius: 8,
           marginBottom: 8,
           display: 'flex',
@@ -1125,13 +1125,13 @@ function MemoryPanel() {
           justifyContent: 'space-between',
         }}>
           <div>
-            <div style={{ color: '#c9a96e', fontFamily: 'DM Mono, monospace', fontSize: 13 }}>{l.name}</div>
-            {l.description && <div style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic' }}>{l.description}</div>}
+            <div style={{ color: 'var(--accent)', fontFamily: 'DM Mono, monospace', fontSize: 13 }}>{l.name}</div>
+            {l.description && <div style={{ color: 'var(--muted)', fontSize: 12, fontStyle: 'italic' }}>{l.description}</div>}
             {(() => {
               const s = stats[l.name]
-              if (!s || !s.doc_count) return <div style={{ color: '#4a4038', fontSize: 11, marginTop: 4 }}>no documents yet</div>
+              if (!s || !s.doc_count) return <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 4 }}>no documents yet</div>
               const last = s.last_ingested ? new Date(s.last_ingested).toLocaleDateString() : '—'
-              return <div style={{ color: '#6b5f52', fontSize: 11, marginTop: 4 }}>{s.doc_count} doc{s.doc_count === 1 ? '' : 's'} · {s.chunk_count} chunks · last added {last}</div>
+              return <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 4 }}>{s.doc_count} doc{s.doc_count === 1 ? '' : 's'} · {s.chunk_count} chunks · last added {last}</div>
             })()}
           </div>
           <button onClick={() => remove(i)} style={BTN_GHOST}>Remove</button>
@@ -1158,19 +1158,19 @@ function MemoryPanel() {
           zIndex: 200, padding: 20,
         }}>
           <div style={{
-            background: '#161310', border: '1px solid #2a2420', borderRadius: 12,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
             padding: 24, width: 'min(640px, 100%)', maxHeight: '90vh', overflowY: 'auto',
-            color: '#e8e0d5',
+            color: 'var(--text)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <h2 style={{ fontSize: 15, fontFamily: 'Lora, Georgia, serif', margin: 0 }}>
                 Brain's proposed memory-layer scheme
               </h2>
-              <button onClick={closeProposal} style={{ background: 'none', border: 'none', color: '#6b5f52', cursor: 'pointer', fontSize: 18 }}>×</button>
+              <button onClick={closeProposal} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18 }}>×</button>
             </div>
 
             {proposeLoading && !proposal && (
-              <div style={{ color: '#6b5f52', fontSize: 13, padding: '20px 0' }}>
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '20px 0' }}>
                 Reading your corpus, drafting a scheme…
               </div>
             )}
@@ -1182,14 +1182,14 @@ function MemoryPanel() {
             )}
 
             {proposal && proposal.empty && (
-              <div style={{ color: '#8b7d6e', fontSize: 13, lineHeight: 1.6 }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
                 {proposal.rationale}
               </div>
             )}
 
             {proposal && !proposal.empty && (
               <>
-                <div style={{ fontSize: 12, color: '#8b7d6e', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.5 }}>
                   {proposal.rationale}
                 </div>
 
@@ -1200,8 +1200,8 @@ function MemoryPanel() {
                       style={{
                         display: 'flex', alignItems: 'flex-start', gap: 10,
                         padding: '10px 12px',
-                        background: proposalSelected[l.name] ? '#1f1a14' : 'transparent',
-                        border: `1px solid ${proposalSelected[l.name] ? '#c9a96e66' : '#2a2420'}`,
+                        background: proposalSelected[l.name] ? 'var(--surface2)' : 'transparent',
+                        border: `1px solid ${proposalSelected[l.name] ? '#c9a96e66' : 'var(--border)'}`,
                         borderRadius: 8,
                         marginBottom: 8,
                         cursor: 'pointer',
@@ -1211,18 +1211,18 @@ function MemoryPanel() {
                         type="checkbox"
                         checked={!!proposalSelected[l.name]}
                         onChange={(e) => setProposalSelected(prev => ({ ...prev, [l.name]: e.target.checked }))}
-                        style={{ marginTop: 3, accentColor: '#c9a96e' }}
+                        style={{ marginTop: 3, accentColor: 'var(--accent)' }}
                       />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, color: '#c9a96e', fontFamily: 'DM Mono, monospace', marginBottom: 4 }}>
+                        <div style={{ fontSize: 13, color: 'var(--accent)', fontFamily: 'DM Mono, monospace', marginBottom: 4 }}>
                           {l.name}
                           {layers.find(x => x.name === l.name) && (
-                            <span style={{ marginLeft: 8, fontSize: 10, color: '#6b5f52', textTransform: 'uppercase', letterSpacing: 1 }}>already added</span>
+                            <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1 }}>already added</span>
                           )}
                         </div>
-                        <div style={{ fontSize: 12, color: '#8b7d6e', lineHeight: 1.5, marginBottom: 4 }}>{l.description}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 4 }}>{l.description}</div>
                         {(l.example_docs || []).length > 0 && (
-                          <div style={{ fontSize: 11, color: '#6b5f52', fontFamily: 'DM Mono, monospace' }}>
+                          <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'DM Mono, monospace' }}>
                             e.g. {l.example_docs.slice(0, 3).join(', ')}
                           </div>
                         )}
@@ -1231,14 +1231,14 @@ function MemoryPanel() {
                   ))}
                 </div>
 
-                <div style={{ fontSize: 11, color: '#6b5f52', marginBottom: 14, fontStyle: 'italic' }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 14, fontStyle: 'italic' }}>
                   Sample size: {proposal.sample_size} most-recent docs · model: {proposal.model}
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                   <button
                     onClick={closeProposal}
-                    style={{ background: 'transparent', border: '1px solid #2a2420', color: '#6b5f52', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontSize: 12 }}
+                    style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontSize: 12 }}
                   >
                     Reject
                   </button>
@@ -1246,9 +1246,9 @@ function MemoryPanel() {
                     onClick={acceptProposal}
                     disabled={!Object.values(proposalSelected).some(Boolean)}
                     style={{
-                      background: Object.values(proposalSelected).some(Boolean) ? '#c9a96e' : '#2a2420',
+                      background: Object.values(proposalSelected).some(Boolean) ? 'var(--accent)' : 'var(--border)',
                       border: 'none',
-                      color: Object.values(proposalSelected).some(Boolean) ? '#0e0c0b' : '#6b5f52',
+                      color: Object.values(proposalSelected).some(Boolean) ? 'var(--bg)' : 'var(--muted)',
                       borderRadius: 8, padding: '8px 14px',
                       cursor: Object.values(proposalSelected).some(Boolean) ? 'pointer' : 'not-allowed',
                       fontSize: 12, fontWeight: 600,
@@ -1277,13 +1277,13 @@ function SecurityPanel() {
 
   const Field = ({ label, value, mono = true, copyable = false }) => (
     <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, color: '#6b5f52', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>{label}</div>
       <div style={{
         fontFamily: mono ? 'DM Mono, monospace' : 'inherit',
         fontSize: 13,
-        color: '#e8e0d5',
-        background: '#0e0c0b',
-        border: '1px solid #2a2420',
+        color: 'var(--text)',
+        background: 'var(--bg)',
+        border: '1px solid var(--border)',
         borderRadius: 6,
         padding: '8px 12px',
         wordBreak: 'break-all',
@@ -1302,7 +1302,7 @@ function SecurityPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 18px 0' }}>
         Your brain has an identity. It signs assertions with an ED25519 keypair.
         Peers verify you by fetching your public key from <code>/identity</code>.
         Share the public key freely; never share your private key.
@@ -1370,9 +1370,9 @@ function PeersPanel() {
   }
 
   return (
-    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #2a2420' }}>
-      <div style={{ fontSize: 13, color: '#c9a96e', marginBottom: 4, fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>INTRODUCED PEERS</div>
-      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0' }}>
+    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 13, color: 'var(--accent)', marginBottom: 4, fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>INTRODUCED PEERS</div>
+      <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Brains your brain can call (<code>brain_call</code>). Introducing fetches the peer&rsquo;s
         <code> /identity</code> and pins its public key. Calls reach the peer&rsquo;s public-scoped corpus only.
       </p>
@@ -1383,16 +1383,16 @@ function PeersPanel() {
       )}
 
       {peers.length === 0 && (
-        <p style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic', marginBottom: 12 }}>No peers introduced yet.</p>
+        <p style={{ color: 'var(--muted)', fontSize: 12, fontStyle: 'italic', marginBottom: 12 }}>No peers introduced yet.</p>
       )}
       {peers.map(p => (
         <div key={p.brain_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', marginBottom: 6,
-          background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6 }}>
+          background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 13, color: '#e8e0d5' }}>
+            <div style={{ fontFamily: 'DM Mono, monospace', fontSize: 13, color: 'var(--text)' }}>
               {p.brain_id} {p.pinned ? <span style={{ color: '#7fc99c', fontSize: 10 }}>· pinned</span> : <span style={{ color: '#c9a060', fontSize: 10 }}>· no key</span>}
             </div>
-            <div style={{ fontSize: 11, color: '#6b5f52', wordBreak: 'break-all' }}>{p.endpoint}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{p.endpoint}</div>
           </div>
           <button onClick={() => ping(p)} style={BTN_GHOST}>
             {pingState[p.brain_id] === 'ok' ? 'online' : pingState[p.brain_id] === 'fail' ? 'offline' : pingState[p.brain_id] === '…' ? '…' : 'ping'}
@@ -1409,12 +1409,12 @@ function PeersPanel() {
           onKeyDown={e => { if (e.key === 'Enter') introduce() }}
           placeholder="https://peer.brainfoundry.ai"
           disabled={busy}
-          style={{ flex: 1, padding: '8px 12px', background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6,
-            color: '#e8e0d5', fontSize: 13, fontFamily: 'DM Mono, monospace', outline: 'none' }}
+          style={{ flex: 1, padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6,
+            color: 'var(--text)', fontSize: 13, fontFamily: 'DM Mono, monospace', outline: 'none' }}
         />
         <button onClick={introduce} disabled={!endpoint.trim() || busy}
-          style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #2a2420', cursor: (endpoint.trim() && !busy) ? 'pointer' : 'not-allowed',
-            background: (endpoint.trim() && !busy) ? '#c9a96e' : '#161310', color: (endpoint.trim() && !busy) ? '#0e0c0b' : '#3a2e26', fontSize: 13, fontWeight: 600 }}>
+          style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid var(--border)', cursor: (endpoint.trim() && !busy) ? 'pointer' : 'not-allowed',
+            background: (endpoint.trim() && !busy) ? 'var(--accent)' : 'var(--surface)', color: (endpoint.trim() && !busy) ? 'var(--bg)' : 'var(--muted)', fontSize: 13, fontWeight: 600 }}>
           {busy ? '…' : 'Introduce'}
         </button>
       </div>
@@ -1433,29 +1433,29 @@ function FederationLogPanel() {
   const fmt = (iso) => { try { return new Date(iso).toLocaleString() } catch { return iso } }
 
   return (
-    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #2a2420' }}>
+    <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 13, color: '#c9a96e', fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>FEDERATION ACTIVITY LOG</div>
+        <div style={{ fontSize: 13, color: 'var(--accent)', fontFamily: 'DM Mono, monospace', letterSpacing: '0.04em' }}>FEDERATION ACTIVITY LOG</div>
         <button style={BTN_GHOST} onClick={() => setOpen(o => !o)}>{open ? 'hide' : 'show'}</button>
       </div>
-      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '6px 0 12px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '6px 0 12px 0' }}>
         Every cross-brain call, both directions — who called this brain and who it called.
       </p>
       {open && (
         <>
           <button style={{ ...BTN_GHOST, marginBottom: 10 }} onClick={load}>refresh</button>
-          {entries.length === 0 && <p style={{ color: '#6b5f52', fontSize: 12, fontStyle: 'italic' }}>No federation activity recorded yet.</p>}
+          {entries.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 12, fontStyle: 'italic' }}>No federation activity recorded yet.</p>}
           {[...entries].reverse().map((e, i) => (
-            <div key={i} style={{ padding: '8px 12px', marginBottom: 5, background: '#0e0c0b', border: '1px solid #2a2420', borderRadius: 6, fontSize: 11, fontFamily: 'DM Mono, monospace' }}>
+            <div key={i} style={{ padding: '8px 12px', marginBottom: 5, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, fontFamily: 'DM Mono, monospace' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                 <span style={{ color: e.direction === 'in' ? '#6b8cce' : '#88a868' }}>
                   {e.direction === 'in' ? '← in' : '→ out'} · {e.peer_brain_id}
-                  {e.verified ? <span style={{ color: '#7fc99c' }}> ✓</span> : <span style={{ color: '#6b5f52' }}> (anon)</span>}
+                  {e.verified ? <span style={{ color: '#7fc99c' }}> ✓</span> : <span style={{ color: 'var(--muted)' }}> (anon)</span>}
                 </span>
                 <span style={{ color: e.outcome === 'ok' ? '#7fc99c' : '#c98080' }}>{e.outcome}</span>
               </div>
-              {e.query_summary && <div style={{ color: '#8b7d6e', marginTop: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.query_summary}</div>}
-              <div style={{ color: '#4a3f36', marginTop: 3 }}>
+              {e.query_summary && <div style={{ color: 'var(--text-dim)', marginTop: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.query_summary}</div>}
+              <div style={{ color: 'var(--muted)', marginTop: 3 }}>
                 {fmt(e.ts)}{e.documents_used != null ? ` · ${e.documents_used} docs` : ''}{e.answer_len != null ? ` · ${e.answer_len} chars` : ''}
               </div>
             </div>
@@ -1498,34 +1498,34 @@ hbar chat "hello"`
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 14px 0' }}>
         Talk to your brain from your laptop terminal. One-time install, then
         <code> hbar chat </code> anywhere.
       </p>
 
       {/* Endpoint */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 12, color: '#6b5f52', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>Endpoint:</span>
-        <code style={{ flex: 1, fontSize: 12, color: '#e8e0d5', background: '#0e0c0b', border: '1px solid #2a2420', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{endpoint}</code>
-        <button onClick={() => copyText(endpoint, 'endpoint')} style={{ ...COPY_BTN, color: copied === 'endpoint' ? '#7fc99c' : '#c9a96e' }}>{copied === 'endpoint' ? 'copied' : 'copy'}</button>
+        <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>Endpoint:</span>
+        <code style={{ flex: 1, fontSize: 12, color: 'var(--text)', background: 'var(--bg)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{endpoint}</code>
+        <button onClick={() => copyText(endpoint, 'endpoint')} style={{ ...COPY_BTN, color: copied === 'endpoint' ? '#7fc99c' : 'var(--accent)' }}>{copied === 'endpoint' ? 'copied' : 'copy'}</button>
       </div>
 
       {/* API key with reveal */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 12, color: '#6b5f52', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>API key:</span>
-        <code style={{ flex: 1, fontSize: 12, color: revealed ? '#e8e0d5' : '#6b5f52', background: '#0e0c0b', border: '1px solid #2a2420', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{revealed ? apiKey : masked}</code>
+        <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'DM Mono, monospace', minWidth: 90 }}>API key:</span>
+        <code style={{ flex: 1, fontSize: 12, color: revealed ? 'var(--text)' : 'var(--muted)', background: 'var(--bg)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 4, fontFamily: 'DM Mono, monospace', overflowX: 'auto' }}>{revealed ? apiKey : masked}</code>
         <button onClick={() => setRevealed(r => !r)} style={{ ...COPY_BTN }}>{revealed ? 'hide' : 'reveal'}</button>
-        <button onClick={() => copyText(apiKey, 'key')} disabled={!apiKey} style={{ ...COPY_BTN, color: copied === 'key' ? '#7fc99c' : '#c9a96e', opacity: apiKey ? 1 : 0.4 }}>{copied === 'key' ? 'copied' : 'copy'}</button>
+        <button onClick={() => copyText(apiKey, 'key')} disabled={!apiKey} style={{ ...COPY_BTN, color: copied === 'key' ? '#7fc99c' : 'var(--accent)', opacity: apiKey ? 1 : 0.4 }}>{copied === 'key' ? 'copied' : 'copy'}</button>
       </div>
 
       {/* Setup snippet */}
       <div style={{ position: 'relative' }}>
         <pre style={{
-          background: '#0e0c0b',
-          border: '1px solid #2a2420',
+          background: 'var(--bg)',
+          border: '1px solid var(--border)',
           borderRadius: 6,
           padding: 14,
-          color: '#e8e0d5',
+          color: 'var(--text)',
           fontSize: 12,
           fontFamily: 'DM Mono, monospace',
           overflowX: 'auto',
@@ -1533,11 +1533,11 @@ hbar chat "hello"`
         }}>{snippet}</pre>
         <button
           onClick={() => copyText(snippet, 'snippet')}
-          style={{ ...COPY_BTN, position: 'absolute', top: 8, right: 8, color: copied === 'snippet' ? '#7fc99c' : '#c9a96e' }}
+          style={{ ...COPY_BTN, position: 'absolute', top: 8, right: 8, color: copied === 'snippet' ? '#7fc99c' : 'var(--accent)' }}
         >{copied === 'snippet' ? 'copied' : 'copy block'}</button>
       </div>
 
-      <p style={{ color: '#6b5f52', fontSize: 12, marginTop: 12, lineHeight: 1.55 }}>
+      <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 12, lineHeight: 1.55 }}>
         <code>hbar</code> is the BrainFoundry CLI — one binary for every brain.
         Configured with your endpoint + API key above, it talks to
         <em> your </em> brain only. Your API key never leaves your server unless
@@ -1550,7 +1550,7 @@ hbar chat "hello"`
 const COPY_BTN = {
   padding: '5px 10px',
   background: 'transparent',
-  color: '#c9a96e',
+  color: 'var(--accent)',
   border: '1px solid #c9a96e60',
   borderRadius: 4,
   cursor: 'pointer',
@@ -1565,16 +1565,16 @@ const COPY_BTN = {
 function AppsPanel() {
   return (
     <div style={{ paddingTop: 16, opacity: 0.68 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: 0 }}>
-        <span style={{ color: '#c9a96e', fontSize: 15, marginRight: 8 }}>◇</span>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+        <span style={{ color: 'var(--accent)', fontSize: 15, marginRight: 8 }}>◇</span>
         Brain-apps live on the{' '}
-        <a href="/apps" style={{ color: '#c9a96e', textDecoration: 'none' }}>Apps page</a>.
+        <a href="/apps" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Apps page</a>.
         Install one from a GitHub repo, approve the memory layers and permissions
         it asks for, enable or remove it &mdash; all in one place.
       </p>
       <a href="/apps" style={{
         display: 'inline-block', marginTop: 12, fontSize: 13,
-        color: '#c9a96e', textDecoration: 'none',
+        color: 'var(--accent)', textDecoration: 'none',
       }}>Open the Apps page &rarr;</a>
     </div>
   )
@@ -1592,11 +1592,11 @@ function CCPanel() {
   }, [])
   const row = (k, v) => (
     <div key={k} style={{ display: 'flex', gap: 12, padding: '6px 0', borderBottom: '1px solid rgba(201,169,110,0.12)', fontSize: 13 }}>
-      <span style={{ color: '#8b7d6e', minWidth: 160 }}>{k}</span><span style={{ color: '#e8e0d5', wordBreak: 'break-word' }}>{v}</span>
+      <span style={{ color: 'var(--text-dim)', minWidth: 160 }}>{k}</span><span style={{ color: 'var(--text)', wordBreak: 'break-word' }}>{v}</span>
     </div>
   )
-  if (h === null) return <p style={{ color: '#6b5f52', fontSize: 13, paddingTop: 16 }}>reading…</p>
-  if (h === false) return <p style={{ color: '#6b5f52', fontSize: 13, paddingTop: 16 }}>The bridge is not answering on this console. CC is off, or its box side is not installed (docs/CC.md).</p>
+  if (h === null) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>reading…</p>
+  if (h === false) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>The bridge is not answering on this console. CC is off, or its box side is not installed (docs/CC.md).</p>
   return (
     <div style={{ paddingTop: 16 }}>
       {row('reasoner', h.reasoner || 'none')}
@@ -1609,7 +1609,7 @@ function CCPanel() {
       {row('write gate', h.gate ? `${h.gate} · ${h.auto_count || 0} action${(h.auto_count || 0) === 1 ? '' : 's'} allowed without asking` : 'off')}
       {row('subscription sign-in in the page', h.signin_proxy ? 'enabled (self-operated brain)' : 'off · via the terminal door')}
       {perm && Array.isArray(perm.auto) && perm.auto.length > 0 && row('allowed without asking', perm.auto.map(a => `${a.platform} · ${a.method || 'POST'} · ${a.title || a.action_id}`).join(' ; '))}
-      <p style={{ color: '#6b5f52', fontSize: 12, lineHeight: 1.6, margin: '12px 0 0 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '12px 0 0 0' }}>
         Audit on the server: <code>~/.cc-bridge/turns.jsonl</code> (one line per turn, sizes and timings, no content) and <code>~/.cc-bridge/permitd-audit.jsonl</code> (every proposed, approved, denied and executed write; hash-chained). Change what runs without asking on the CC page itself.
       </p>
     </div>
@@ -1647,7 +1647,7 @@ function ExportPanel() {
 
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.7, margin: '0 0 14px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.7, margin: '0 0 14px 0' }}>
         One archive with your memory (every chunk and its embedding), your chats,
         your persona and governance .md files, the installed-apps registry, and your
         peers. No secrets: no .env, no API keys, no settings sidecar. Built on this
@@ -1655,18 +1655,18 @@ function ExportPanel() {
       </p>
       <button style={BTN} disabled={busy} onClick={build}>{busy ? 'Building…' : 'Export my brain'}</button>
       {last && (
-        <div style={{ marginTop: 12, fontSize: 12, color: '#c9a96e' }}>
+        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--accent)' }}>
           Built {last.name} ({mb(last.size)}).{' '}
-          <a href={`${API}${last.download}`} style={{ color: '#c9a96e' }}>Download</a>
+          <a href={`${API}${last.download}`} style={{ color: 'var(--accent)' }}>Download</a>
         </div>
       )}
       {items.length > 0 && (
         <div style={{ marginTop: 16 }}>
           {items.map(it => (
-            <div key={it.name} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1c1814', fontSize: 12 }}>
-              <span style={{ fontFamily: 'DM Mono, monospace', color: '#e8e0d5', flex: 1 }}>{it.name}</span>
-              <span style={{ color: '#6b5f52' }}>{mb(it.size)}</span>
-              <a href={`${API}/export/${it.name}`} style={{ color: '#c9a96e', textDecoration: 'none' }}>Download</a>
+            <div key={it.name} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--surface2)', fontSize: 12 }}>
+              <span style={{ fontFamily: 'DM Mono, monospace', color: 'var(--text)', flex: 1 }}>{it.name}</span>
+              <span style={{ color: 'var(--muted)' }}>{mb(it.size)}</span>
+              <a href={`${API}/export/${it.name}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>Download</a>
               <button style={BTN_GHOST} onClick={() => remove(it.name)}>Delete</button>
             </div>
           ))}
@@ -1680,7 +1680,7 @@ function ExportPanel() {
 function AdvancedPanel() {
   return (
     <div style={{ paddingTop: 16 }}>
-      <p style={{ color: '#6b5f52', fontSize: 13, lineHeight: 1.6, margin: '0 0 10px 0' }}>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '0 0 10px 0' }}>
         The Governance Kernel enforces mutation policy — which changes require a
         permit, which are auto-approved, which are blocked. Most brains never
         touch this. If you know you need it, it's here.
@@ -1701,9 +1701,9 @@ export default function Settings() {
         fontSize: 32,
         fontWeight: 600,
         margin: '0 0 6px 0',
-        color: '#e8e0d5',
+        color: 'var(--text)',
       }}>Settings</h1>
-      <p style={{ color: '#6b5f52', fontStyle: 'italic', margin: '0 0 28px 0' }}>
+      <p style={{ color: 'var(--muted)', fontStyle: 'italic', margin: '0 0 28px 0' }}>
         Your brain, your keys, your memory. Nothing here leaves this server
         without you telling it to.
       </p>
@@ -1713,7 +1713,7 @@ export default function Settings() {
         subtitle="What this place is, one paragraph."
         defaultOpen={true}
       >
-        <p style={{ color: '#e8e0d5', fontSize: 14, lineHeight: 1.7, paddingTop: 14 }}>
+        <p style={{ color: 'var(--text)', fontSize: 14, lineHeight: 1.7, paddingTop: 14 }}>
           This is <b>your brain</b>. Not a chat product — an instance you own,
           running on your server, answering to nobody but you. It remembers what
           you teach it (memory layers), it answers using models you pick
@@ -1724,12 +1724,12 @@ export default function Settings() {
       </Section>
 
       <Section title="Persona" subtitle="The brain's system prompt — who it is, how it thinks.">
-        <div style={{ paddingTop: 14, color: '#8b7d6e', fontSize: 13, lineHeight: 1.7 }}>
+        <div style={{ paddingTop: 14, color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.7 }}>
           <div>Your persona is the document loaded on every chat turn.</div>
           <div>Edit it freely — saving takes effect on the next message.</div>
           <a href="/persona" style={{
             display: 'inline-block', marginTop: 12, padding: '8px 16px',
-            color: '#0e0c0b', background: '#c9a96e', borderRadius: 8,
+            color: 'var(--bg)', background: 'var(--accent)', borderRadius: 8,
             textDecoration: 'none', fontSize: 13, fontWeight: 600,
           }}>Open the persona editor</a>
         </div>

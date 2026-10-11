@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm'
 // bridge (/cc/guide is docs/CC.md from the brain's checkout; /cc/health carries the counts).
 // Added 2026-09-23.
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" }
-const T = { ink: 'var(--text)', dim: 'var(--text-dim, #9a8f82)', faint: 'var(--text-faint, #6b5f52)', line: 'var(--line, #2a2621)', card: 'var(--card, #16140f)', gold: 'var(--accent, #c9a96e)', codeBg: 'var(--code-bg, #0b0a08)' }
+const T = { ink: 'var(--text)', dim: 'var(--text-dim)', faint: 'var(--muted)', line: 'var(--border)', card: 'var(--surface)', gold: 'var(--accent)', codeBg: 'var(--code-bg)' }
 
 function steps(h) {
   const t = (h && h.tutorial) || {}

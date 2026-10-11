@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 // connections, failed services and the bridge's units from the bridge on the host
 // (GET /cc/system) when CC is on. Every tile carries its level; the reasons are listed.
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" }
-const T = { ink: 'var(--text)', dim: 'var(--text-dim, #9a8f82)', faint: 'var(--text-faint, #6b5f52)', line: 'var(--line, #2a2621)', card: 'var(--card, #16140f)', gold: 'var(--accent, #c9a96e)', ok: '#7fc99c', warn: '#d4b86a', alert: '#d49a9a' }
+const T = { ink: 'var(--text)', dim: 'var(--text-dim)', faint: 'var(--muted)', line: 'var(--border)', card: 'var(--surface)', gold: 'var(--accent)', ok: '#7fc99c', warn: '#d4b86a', alert: '#d49a9a' }
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n || 0}`)
 const tone = (l) => (l === 'alert' ? T.alert : l === 'warn' ? T.warn : l === 'ok' ? T.ok : T.faint)
 

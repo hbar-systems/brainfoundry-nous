@@ -47,10 +47,10 @@ export default function Docs() {
     <div style={{ padding: '40px 32px', maxWidth: '920px', margin: '0 auto' }}>
 
       <div style={{ marginBottom: '32px' }}>
-        <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: '#e5e5e5' }}>
+        <h1 style={{ fontSize: '26px', fontWeight: '700', margin: '0 0 6px 0', color: 'var(--text)' }}>
           Knowledge Base
         </h1>
-        <p style={{ color: '#444', fontSize: '13px', margin: 0 }}>
+        <p style={{ color: 'var(--muted)', fontSize: '13px', margin: 0 }}>
           RAG knowledge base &middot; 384-dim embeddings
         </p>
       </div>
@@ -65,16 +65,16 @@ export default function Docs() {
           style={{
             flex: 1,
             padding: '12px 16px',
-            backgroundColor: '#111',
-            border: '1px solid #1e1e1e',
+            backgroundColor: 'var(--surface)',
+            border: '1px solid var(--border)',
             borderRadius: '8px',
-            color: '#e5e5e5',
+            color: 'var(--text)',
             fontSize: '14px',
             outline: 'none',
             transition: 'border-color 0.15s ease',
           }}
           onFocus={e => e.target.style.borderColor = '#667eea60'}
-          onBlur={e => e.target.style.borderColor = '#1e1e1e'}
+          onBlur={e => e.target.style.borderColor = 'var(--border)'}
         />
         <button
           onClick={doSearch}
@@ -86,8 +86,8 @@ export default function Docs() {
             cursor: searching || !query.trim() ? 'not-allowed' : 'pointer',
             fontSize: '14px',
             fontWeight: '600',
-            background: '#e5e5e5',
-            color: '#0a0a0a',
+            background: 'var(--text)',
+            color: 'var(--bg)',
             opacity: searching || !query.trim() ? 0.4 : 1,
             transition: 'opacity 0.15s ease',
           }}
@@ -99,13 +99,13 @@ export default function Docs() {
       {/* Search results */}
       {results.length > 0 && (
         <div style={{ marginBottom: '40px' }}>
-          <div style={{ fontSize: '12px', color: '#444', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             {results.length} results
           </div>
           {results.map((r, i) => (
             <div key={i} style={{
-              backgroundColor: '#111',
-              border: '1px solid #1e1e1e',
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
               borderRadius: '10px',
               padding: '16px',
               marginBottom: '8px',
@@ -128,7 +128,7 @@ export default function Docs() {
 
       {/* Tags */}
       <div>
-        <div style={{ fontSize: '12px', color: '#444', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
           {loading ? 'Loading...' : tagsError ? 'Tag index unavailable' : `${tags.length} tags`}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '24px' }}>
@@ -143,9 +143,9 @@ export default function Docs() {
                 style={{
                   padding: '5px 12px',
                   borderRadius: '6px',
-                  border: `1px solid ${active ? '#667eea' : '#1e1e1e'}`,
-                  backgroundColor: active ? '#667eea15' : '#111',
-                  color: active ? '#667eea' : '#555',
+                  border: `1px solid ${active ? '#667eea' : 'var(--border)'}`,
+                  backgroundColor: active ? '#667eea15' : 'var(--surface)',
+                  color: active ? '#667eea' : 'var(--muted)',
                   fontSize: '13px',
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
@@ -159,13 +159,13 @@ export default function Docs() {
 
         {docs.length > 0 && (
           <div>
-            <div style={{ fontSize: '12px', color: '#444', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {docs.length} documents
             </div>
             {docs.map((d, i) => (
               <div key={i} style={{
-                backgroundColor: '#111',
-                border: '1px solid #1e1e1e',
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 padding: '12px 16px',
                 marginBottom: '6px',

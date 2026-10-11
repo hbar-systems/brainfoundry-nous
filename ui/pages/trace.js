@@ -2,14 +2,14 @@ import Head from 'next/head'
 import { useEffect, useState } from 'react'
 
 const COLORS = {
-  bg: '#0e0c0b',
-  surface: '#161310',
-  surface2: '#1c1814',
-  text: '#e8e0d5',
-  muted: '#6b5f52',
-  accent: '#c9a96e',
-  border: '#2a2420',
-  dim: '#4a3f36',
+  bg: 'var(--bg)',
+  surface: 'var(--surface)',
+  surface2: 'var(--surface2)',
+  text: 'var(--text)',
+  muted: 'var(--muted)',
+  accent: 'var(--accent)',
+  border: 'var(--border)',
+  dim: 'var(--muted)',
 }
 
 function fmtDate(iso) {
