@@ -233,6 +233,7 @@ PANE_ROUTES = {
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
     "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
+    "/permits": "Permits",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -709,6 +710,7 @@ def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
         outcome = _run_permit(pid, GATE.get(pid))
         card.update({"auto": True, "decided": "approve", "outcome": outcome,
                      "why": "same call, allowed a moment ago" if same_turn else "you allowed this action earlier"})
+        _decision_log(pid, "allow", "same turn" if same_turn else "standing allow", card["why"], session_id)
         if run is not None:
             run.emit("ask", card)
         return {"behavior": "allow"}
@@ -720,11 +722,13 @@ def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
                 outcome = _run_permit(pid, GATE.get(pid))
                 card.update({"auto": True, "decided": "approve", "outcome": outcome,
                              "why": f"judged safe {verdict['safe']:.2f}, on request {verdict['intent']:.2f}, risk {verdict['risk']:.1f}"})
+                _decision_log(pid, "allow", "judged", card["why"], session_id)
                 if run is not None:
                     run.emit("ask", card)
                 return {"behavior": "allow"}
     if run is None:
         GATE.deny(pid)
+        _decision_log(pid, "deny", "nobody watching", "no console page was open for this turn (a background job?)", session_id)
         return {"behavior": "deny", "message": "nobody is watching the page to allow this; ask the person to send the request again from the page"}
     ev = threading.Event()
     ASKS[pid] = {"event": ev, "decision": None, "message": None}
@@ -737,13 +741,16 @@ def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
         a = ASKS.pop(pid, {})
     if a.get("decision") == "allow":
         run.allowed.add((tool, summary))
+        _decision_log(pid, "allow", "the person", "card", session_id)
         return {"behavior": "allow"}
     if a.get("decision") is None:
         try:
             GATE.deny(pid)
         except Exception:
             pass
+        _decision_log(pid, "deny", "timeout", f"no answer within {PERMIT_TTL // 60} minutes", session_id)
         return {"behavior": "deny", "message": f"no answer from the person within {PERMIT_TTL // 60} minutes"}
+    _decision_log(pid, "deny", "the person", a.get("message") or "card", session_id)
     return {"behavior": "deny", "message": a.get("message") or "the person refused this action"}
 
 
@@ -1527,6 +1534,22 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
                 th["claude"] = state["session_id"]
     _threads_save(threads)
     return state
+
+
+DECISIONS_LOG = STATE_DIR / "permit-decisions.jsonl"
+
+
+def _decision_log(pid: str, decided: str, by: str, why: str = "", session_id: str | None = None) -> None:
+    """One line per decision beside permitd's audit: who decided (2026-10-12, the permit history page).
+    Never raises; a failed write only loses the 'who', the permit itself is in permitd's log."""
+    try:
+        STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "permit_id": pid, "decided": decided,
+               "by": by, "why": why, "session": session_id or ""}
+        with open(DECISIONS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _permit_public(pm) -> dict:
@@ -2327,10 +2350,15 @@ def _decide_permit(pid: str, action: str) -> dict:
     pm = GATE.get(pid) if (GATE is not None and pid) else None
     if pm is None:
         return {"ok": False, "error": "no such permit"}
+    one = (pm.args or {}).get("platform") != "box"   # box permits log their decision in _box_ask
     if action != "allow":
         GATE.deny(pid)
         _box_settle(pid, "deny", "the person refused this action")
+        if one:
+            _decision_log(pid, "deny", "the person", "Telegram or elsewhere")
         return {"ok": True, "status": "denied"}
+    if one:
+        _decision_log(pid, "allow", "the person", "Telegram or elsewhere")
     try:
         outcome = _run_permit(pid, pm)
     except Exception as e:
@@ -2811,6 +2839,16 @@ class Handler(BaseHTTPRequestHandler):
                 while not finished.wait(15):
                     sink("ping", {})
                 r.detach(sink)
+        elif route == "/permits/history":
+            qy = self._query()
+            try:
+                off, lim = int(qy.get("offset") or 0), int(qy.get("limit") or 50)
+            except ValueError:
+                off, lim = 0, 50
+            self._send(200, cc_extras.permit_history(STATE_DIR / "permitd-audit.jsonl", DECISIONS_LOG, offset=off,
+                                                     limit=lim, thread=qy.get("thread", ""),
+                                                     decision=qy.get("decision", ""), tool=qy.get("tool", ""),
+                                                     q=qy.get("q", "")))
         elif route == "/permits":
             items = [_permit_public(pm) for pm in GATE.pending()] if GATE else []
             self._send(200, {"pending": items, "writes": GATE is not None, "auto": _auto_load() if GATE else []})
@@ -3152,12 +3190,17 @@ class Handler(BaseHTTPRequestHandler):
             if pm is None:
                 self._send(404, {"ok": False, "error": "no such permit"})
                 return
+            one = (pm.args or {}).get("platform") != "box"   # box permits log their decision in _box_ask
             if route == "/permits/deny":
                 GATE.deny(pid)
                 _box_settle(pid, "deny", "the person refused this action")
+                if one:
+                    _decision_log(pid, "deny", "the person", "Send card")
                 print(f"permit denied {pid}", flush=True)
                 self._send(200, {"ok": True, "status": "denied"})
                 return
+            if one:
+                _decision_log(pid, "allow", "the person", "Send card")
             try:
                 outcome = _run_permit(pid, pm)
             except Exception as e:

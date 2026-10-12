@@ -86,7 +86,7 @@ export default function System() {
               {host.connections ? <div>connections: {host.connections.established} established · listening on {(host.connections.listening_ports || []).join(', ')}</div> : null}
               <div>failed services: {host.failed_units && host.failed_units.length ? <span style={{ color: T.alert }}>{host.failed_units.join(', ')}</span> : 'none'}</div>
               <div>units: {Object.entries(host.units || {}).map(([k, v]) => <span key={k} style={{ color: v === 'active' ? T.ink : T.warn }}>{k} {v}; </span>)}</div>
-              <div>permits recorded {host.permits} · judgments {host.judgments} · jobs running {host.jobs_running}</div>
+              <div><a href="/permits" style={{ color: T.gold, textDecoration: 'underline' }}>permits recorded {host.permits}</a> · judgments {host.judgments} · jobs running {host.jobs_running}</div>
             </div>
           </>
         ) : null}

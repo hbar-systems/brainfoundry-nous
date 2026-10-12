@@ -918,3 +918,64 @@ def test_threads_view_marks_telegram_threads(monkeypatch, tmp_path):
     # the other rows are untouched by the flag
     row = next(x for x in m._threads_view()["threads"] if x["brain"] == "d")
     assert row["running"] is False and row["pinned"] is False and row["archived"] is False
+
+
+# ---- Permit history page (2026-10-12) ----
+import json  # noqa: E402
+
+def _audit_fixture(tmp_path):
+    a = tmp_path / "permitd-audit.jsonl"
+    lines = [
+        {"ts": "2026-10-12T20:00:00+00:00", "event": "proposed", "permit_id": "p1", "tool": "box_act",
+         "args": {"platform": "box", "method": "Bash", "summary": "run on the box: git status"}},
+        {"ts": "2026-10-12T20:00:05+00:00", "event": "approved", "permit_id": "p1", "tool": "box_act", "args": {}},
+        {"ts": "2026-10-12T20:00:06+00:00", "event": "executed", "permit_id": "p1"},
+        {"ts": "2026-10-12T21:00:00+00:00", "event": "proposed", "permit_id": "p2", "tool": "box_act",
+         "args": {"platform": "box", "method": "Write", "summary": "write the file /x with sk-ABCDEFGHIJKLMNOPQRST"}},
+        {"ts": "2026-10-12T21:00:01+00:00", "event": "denied", "permit_id": "p2", "tool": "box_act", "args": {}},
+        {"ts": "2026-10-12T21:30:00+00:00", "event": "proposed", "permit_id": "p3", "tool": "one_execute",
+         "args": {"platform": "gmail", "method": "POST", "summary": "send one email"}},
+        {"ts": "2026-10-12T21:40:00+00:00", "event": "refused", "reason": "egress guard: secret-shaped token"},
+    ]
+    a.write_text("".join(json.dumps(x) + "\n" for x in lines) + "not json\n")
+    d = tmp_path / "permit-decisions.jsonl"
+    d.write_text(json.dumps({"permit_id": "p1", "decided": "allow", "by": "the person", "why": "card", "session": "abcdef123456"}) + "\n"
+                 + json.dumps({"permit_id": "p2", "decided": "deny", "by": "nobody watching", "why": "no page", "session": "zzz"}) + "\n")
+    return a, d
+
+
+def test_permit_history_joins_orders_and_hides_secrets(tmp_path):
+    m = _extras()
+    a, d = _audit_fixture(tmp_path)
+    h = m.permit_history(a, d)
+    assert h["total"] == 4
+    ids = [r["id"] for r in h["items"]]
+    assert ids == ["", "p3", "p2", "p1"]                     # newest first, the loose refusal included
+    p1 = h["items"][3]
+    assert p1["decision"] == "allowed" and p1["by"] == "the person" and p1["thread"] == "abcdef123456"
+    assert p1["summary"] == "run on the box: git status" and p1["method"] == "Bash"
+    p2 = h["items"][2]
+    assert p2["decision"] == "refused" and p2["by"] == "nobody watching"
+    assert "sk-ABCDEF" not in p2["summary"] and "hidden" in p2["summary"]
+    p3 = h["items"][1]
+    assert p3["decision"] == "pending" and p3["by"] == "not recorded" and p3["platform"] == "gmail"
+    assert h["items"][0]["by"] == "the gate" and "egress" in h["items"][0]["why"]
+
+
+def test_permit_history_filters_and_pages(tmp_path):
+    m = _extras()
+    a, d = _audit_fixture(tmp_path)
+    assert [r["id"] for r in m.permit_history(a, d, decision="allowed")["items"]] == ["p1"]
+    assert [r["id"] for r in m.permit_history(a, d, decision="refused")["items"]] == ["", "p2"]
+    assert [r["id"] for r in m.permit_history(a, d, q="email")["items"]] == ["p3"]
+    assert [r["id"] for r in m.permit_history(a, d, tool="Write")["items"]] == ["p2"]
+    assert [r["id"] for r in m.permit_history(a, d, thread="abc")["items"]] == ["p1"]
+    pg = m.permit_history(a, d, offset=1, limit=2)
+    assert pg["total"] == 4 and [r["id"] for r in pg["items"]] == ["p3", "p2"]
+    assert m.permit_history(tmp_path / "missing.jsonl")["total"] == 0
+
+
+def test_permit_history_route_and_pane_exist():
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    assert 'route == "/permits/history"' in src and '"/permits": "Permits"' in src
+    assert (ROOT / "ui" / "pages" / "permits.js").exists()

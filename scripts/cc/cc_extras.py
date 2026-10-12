@@ -978,3 +978,98 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
     tiles.sort(key=sort_key)
     counts = {k: sum(1 for tl in tiles if tl["state"] == k) for k in BOARD_ORDER}
     return {"tiles": tiles[:40], "counts": counts, "now": iso(now)}
+
+
+# ---- Permit history (hbar 2026-10-12: "a place where we can see the historic record of all the permits") ----
+# permitd writes one line per event to permitd-audit.jsonl: proposed, approved, denied, executed, failed,
+# refused, approve_refused (each with permit_id; proposed/approved/denied carry tool and summarized args).
+# The bridge adds permit-decisions.jsonl beside it: who decided (person, standing allow, same turn, judged,
+# nobody watching, timeout) and why. History joins the two by permit id. Read-only; never shows secrets.
+
+_SECRET_SHAPED = re.compile(r"(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|"
+                            r"AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|[A-Fa-f0-9]{40,})")
+_FINAL = {"executed": "allowed", "approved": "allowed", "failed": "allowed, failed", "denied": "refused",
+          "refused": "refused", "approve_refused": "refused", "proposed": "pending"}
+
+
+def _scrub(s) -> str:
+    return _SECRET_SHAPED.sub("[secret-shaped, hidden]", str(s or ""))
+
+
+def _jsonl(path) -> list:
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
+def permit_history(audit_path, decisions_path=None, offset: int = 0, limit: int = 50, thread: str = "",
+                   decision: str = "", tool: str = "", q: str = "") -> dict:
+    """Every permit, newest first, with what it was, how it ended and who decided. Filters: thread
+    (session id prefix), decision (allowed / refused / pending), tool (box method or platform), q (text)."""
+    permits: dict = {}
+    order: list = []
+    loose = []
+    for rec in _jsonl(audit_path):
+        pid = rec.get("permit_id")
+        if not pid:
+            # an event with no permit (the gate refused before one existed): keep the reason only
+            loose.append({"id": "", "ts": rec.get("ts", ""), "tool": "", "method": "", "platform": "", "summary": "",
+                          "decision": "refused", "by": "the gate", "why": _scrub(rec.get("reason") or rec.get("event")),
+                          "thread": "", "events": [rec.get("event", "")]})
+            continue
+        p = permits.get(pid)
+        if p is None:
+            p = permits[pid] = {"id": pid, "ts": rec.get("ts", ""), "tool": rec.get("tool", ""), "method": "",
+                                "platform": "", "summary": "", "decision": "pending", "by": "", "why": "",
+                                "thread": "", "events": []}
+            order.append(pid)
+        args = rec.get("args") or {}
+        if isinstance(args, dict) and args:
+            p["method"] = p["method"] or str(args.get("method") or "")
+            p["platform"] = p["platform"] or str(args.get("platform") or "")
+            p["summary"] = p["summary"] or _scrub(args.get("summary") or args.get("action_id") or "")
+        ev = rec.get("event", "")
+        p["events"].append(ev)
+        if ev in _FINAL and ev != "proposed":
+            p["decision"] = _FINAL[ev]
+            p["decided_at"] = rec.get("ts", "")
+        if rec.get("reason") and not p["why"]:
+            p["why"] = _scrub(rec.get("reason"))
+    for d in _jsonl(decisions_path) if decisions_path else []:
+        p = permits.get(d.get("permit_id"))
+        if p is None:
+            continue
+        p["by"] = str(d.get("by") or "")
+        p["why"] = _scrub(d.get("why") or p["why"])
+        p["thread"] = str(d.get("session") or "")
+    rows = [permits[k] for k in order] + loose
+    for p in rows:
+        if not p["by"]:
+            p["by"] = "the gate" if p["decision"] == "refused" and "denied" not in p["events"] else "not recorded"
+    rows.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    if thread:
+        rows = [r for r in rows if r["thread"].startswith(thread)]
+    if decision:
+        rows = [r for r in rows if r["decision"].startswith(decision)]
+    if tool:
+        rows = [r for r in rows if tool in (r["method"], r["platform"], r["tool"])]
+    if q:
+        ql = q.lower()
+        rows = [r for r in rows if ql in (r["summary"] + " " + r["why"]).lower()]
+    total = len(rows)
+    offset = max(0, int(offset or 0))
+    limit = max(1, min(200, int(limit or 50)))
+    return {"total": total, "offset": offset, "limit": limit, "items": rows[offset:offset + limit]}
