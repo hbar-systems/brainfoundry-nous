@@ -2133,8 +2133,13 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         except json.JSONDecodeError:
             return out[-4000:], session_id, False
     usage = data.get("usage") or {}
-    models = list((data.get("modelUsage") or {}).keys())
+    mu = data.get("modelUsage") or {}
+    # The main model is the one that wrote the most; the first key can be a helper model (2026-10-12:
+    # the footer read sonnet on Opus turns).
+    models = sorted(mu, key=lambda k: -int((mu.get(k) or {}).get("outputTokens") or 0)) if isinstance(mu, dict) else []
     META.update({"model": models[0] if models else (_model_current() or None),
+                 "in_fresh": int(usage.get("input_tokens") or 0),
+                 "cache_write": int(usage.get("cache_creation_input_tokens") or 0),
                  # "in" is what was newly read this turn; "cached" is the thread and instructions
                  # re-read from the cache (cheap on an API key, not a fresh read on a subscription).
                  "in": int(usage.get("input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0),
@@ -2336,6 +2341,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "proposal": (card or {}).get("id"),
                  "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source,
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
+                 "tok_fresh": META.get("in_fresh"), "tok_cache_write": META.get("cache_write"),
                  "model": META.get("model")})
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
                "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES),
@@ -2881,7 +2887,9 @@ class Handler(BaseHTTPRequestHandler):
             for th in _threads_load():
                 if th.get("brain"):
                     titles[str(th["brain"])[:8]] = th.get("title")
-            self._send(200, cc_extras.usage_summary(lines, titles=titles))
+            inv_file = os.environ.get("CC_INVOICES_FILE", "").strip() or (str(Path(WORLD_DIR) / "ops" / "finance" / "invoices.tsv") if WORLD_DIR else "")
+            invoices = cc_extras.invoices_read(inv_file) if inv_file and Path(inv_file).exists() else None
+            self._send(200, cc_extras.usage_summary(lines, titles=titles, invoices=invoices))
         elif route == "/voices":
             if _voice_backend("tts") == "spoke":
                 self._send(200, {"voices": _spoke_voices(), "current": TTS_VOICE, "current_name": TTS_VOICE, "model": TTS_MODEL, "backend": "spoke"})
