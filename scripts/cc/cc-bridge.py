@@ -1379,10 +1379,12 @@ def _threads_view(archived: bool = False) -> dict:
     if not archived:
         items = [x for x in items if not x.get("archived")]
     items = _threads_order(items)[:60]
+    tg_thread = _tg_thread()
     st = _load_state()
     running = {r.thread: r.public() for r in _runs_active() if r.thread}
     for th in items:
         r = running.get(th.get("brain"))
+        th["telegram"] = _is_telegram(th, tg_thread)
         th["running"] = bool(r)
         th["run"] = (r or {}).get("run")
         th["waiting"] = (r or {}).get("waiting", 0)
@@ -1390,6 +1392,21 @@ def _threads_view(archived: bool = False) -> dict:
         th["archived"] = bool(th.get("archived"))
     return {"threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS}
+
+
+def _tg_thread() -> str | None:
+    """The thread the bridge's Telegram bot is in right now (its state file), or None."""
+    try:
+        return (TG.state().get("thread") or None) if TG else None
+    except Exception:
+        return None
+
+
+def _is_telegram(th: dict, tg_thread: str | None = None) -> bool:
+    """Telegram on the laptop (2026-10-12): a thread the phone started (`via`), last wrote to
+    (`last_via`), or is in now (the TG state), so legacy entries without `via` are covered too."""
+    return th.get("via") == "telegram" or th.get("last_via") == "telegram" \
+        or bool(tg_thread and th.get("brain") == tg_thread)
 
 
 def _threads_order(items: list) -> list:
@@ -1460,10 +1477,13 @@ def _earlier_pieces(run) -> list:
     return out
 
 
-def _record_turn(state: dict, message: str, reply: str, card: dict | None, earlier: list | None = None) -> dict:
+def _record_turn(state: dict, message: str, reply: str, card: dict | None, earlier: list | None = None,
+                 source: str = "page") -> dict:
     """Write this turn into the brain's chat record. Creates the brain session on the first
     turn of a thread (model_name "cc", title from the first message) and registers the
-    thread. Fail-soft: CC keeps working if the api is unreachable."""
+    thread. Fail-soft: CC keeps working if the api is unreachable. `source` is where the turn
+    came from (page, telegram, queue): the thread entry keeps it as `via` when created and as
+    `last_via` on every turn, so the console can mark the threads the phone is in (2026-10-12)."""
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if not state.get("brain_session_id"):
         title = ("CC: " + " ".join(message.split())[:70]).strip()
@@ -1474,7 +1494,7 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
         state["title"] = title
         threads = _threads_load()
         threads.append({"claude": state.get("session_id"), "brain": state["brain_session_id"],
-                        "title": title, "started": now, "last": now})
+                        "title": title, "started": now, "last": now, "via": source})
         _threads_save(threads)
     sid = state["brain_session_id"]
     _brain_api("POST", f"/sessions/{sid}/messages", {"role": "user", "content": message})
@@ -1492,6 +1512,7 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
     for th in threads:
         if th.get("brain") == sid:
             th["last"] = now
+            th["last_via"] = source
             if state.get("session_id"):
                 th["claude"] = state["session_id"]
     _threads_save(threads)
@@ -2254,11 +2275,11 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 st = _load_state()
                 if st.get("session_id") == sid or not st.get("session_id"):
                     st["session_id"] = sid
-                    st = _record_turn(st, message, reply, card, _earlier_pieces(run))
+                    st = _record_turn(st, message, reply, card, _earlier_pieces(run), source=source)
                     _save_state(st)
                 state = st
             else:
-                state = _record_turn(state, message, reply, card, _earlier_pieces(run))
+                state = _record_turn(state, message, reply, card, _earlier_pieces(run), source=source)
                 cur = _load_state()
                 if cur.get("brain_session_id") == state.get("brain_session_id"):
                     cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH

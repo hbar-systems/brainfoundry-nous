@@ -860,3 +860,61 @@ console.log(JSON.stringify({
     assert d["strip"] == [["J2", "CC: music", "/talk?thread=xyz", "hide"], ["J4", "no conversation", "/files?path=%2Fo%2FJ4.log", "seen"]]
     assert d["label1"] == "finished in CC: music: theirs" and d["labelN"] == "2 jobs finished in other conversations" and d["label0"] == ""
     assert d["none"] == 0   # a page on a new conversation never takes a tile
+
+
+def _fake_brain_api(calls):
+    """A brain api that creates sessions and swallows messages, recording every call."""
+    def api(method, path, body=None):
+        calls.append((method, path, body))
+        if method == "POST" and path == "/sessions":
+            return {"session_id": "brain-" + str(len(calls))}
+        return {}
+    return api
+
+
+def test_record_turn_keeps_where_the_turn_came_from(monkeypatch, tmp_path):
+    """Telegram on the laptop (2026-10-12): the thread entry keeps `via` from its first turn and
+    `last_via` from every turn, so the console can mark the threads the phone is in."""
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    calls = []
+    monkeypatch.setattr(m, "_brain_api", _fake_brain_api(calls))
+    st = m._record_turn({"session_id": "claude-1"}, "photo 141 please", "done", None, source="telegram")
+    th = m._threads_load()
+    assert len(th) == 1 and th[0]["brain"] == st["brain_session_id"]
+    assert th[0]["via"] == "telegram" and th[0]["last_via"] == "telegram"
+    # the laptop answers in the same thread: the origin stays, the last turn moves
+    m._record_turn(st, "and the stems", "ok", None)
+    th = m._threads_load()
+    assert th[0]["via"] == "telegram" and th[0]["last_via"] == "page"
+    # a thread the page started, then the phone wrote to
+    st2 = m._record_turn({"session_id": "claude-2"}, "from the laptop", "yes", None)
+    m._record_turn(st2, "from the phone", "yes", None, source="telegram")
+    th = {x["brain"]: x for x in m._threads_load()}
+    assert th[st2["brain_session_id"]]["via"] == "page" and th[st2["brain_session_id"]]["last_via"] == "telegram"
+    # the default source is the page, as before
+    assert m._record_turn({"session_id": "claude-3"}, "plain", "r", None) and m._threads_load()[-1]["via"] == "page"
+
+
+def test_threads_view_marks_telegram_threads(monkeypatch, tmp_path):
+    """The list the dropdown shows carries `telegram: true` for a thread the phone started, last
+    wrote to, or is in now (the TG state), so legacy entries without `via` are covered too."""
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m._threads_save([
+        {"brain": "a", "title": "phone started", "started": "2026-10-12T10:00:00Z", "last": "2026-10-12T10:00:00Z", "via": "telegram", "last_via": "page"},
+        {"brain": "b", "title": "phone wrote last", "started": "2026-10-12T09:00:00Z", "last": "2026-10-12T11:00:00Z", "via": "page", "last_via": "telegram"},
+        {"brain": "c", "title": "legacy, the bot is in it", "started": "2026-10-11T09:00:00Z", "last": "2026-10-11T09:30:00Z"},
+        {"brain": "d", "title": "laptop only", "started": "2026-10-12T08:00:00Z", "last": "2026-10-12T08:10:00Z", "via": "page", "last_via": "page"},
+    ])
+    assert m.TG is None   # no token in tests: the view must not need the bot
+    flags = {x["brain"]: x["telegram"] for x in m._threads_view()["threads"]}
+    assert flags == {"a": True, "b": True, "c": False, "d": False}
+
+    class FakeTG:
+        def state(self):
+            return {"thread": "c", "offset": 7}
+    monkeypatch.setattr(m, "TG", FakeTG())
+    flags = {x["brain"]: x["telegram"] for x in m._threads_view()["threads"]}
+    assert flags == {"a": True, "b": True, "c": True, "d": False}
+    # the other rows are untouched by the flag
+    row = next(x for x in m._threads_view()["threads"] if x["brain"] == "d")
+    assert row["running"] is False and row["pinned"] is False and row["archived"] is False
