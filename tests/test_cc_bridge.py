@@ -1002,3 +1002,28 @@ def test_box_map_route_and_pane_exist():
     src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
     assert 'route == "/boxmap"' in src and '"/boxes": "Boxes"' in src
     assert (ROOT / "ui" / "pages" / "boxes.js").exists()
+# ---- Restart when idle (2026-10-12) ----
+
+def _restart_regex():
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    m = re.search(r'_RESTART_CMD = re\.compile\(r"(.+?)"\)\n', src)
+    return re.compile(m.group(1))
+
+
+def test_restart_command_is_recognised_and_nothing_else():
+    rx = _restart_regex()
+    for ok in ("sudo systemctl restart cc-bridge", "sudo -n systemctl restart cc-bridge.service",
+               "sudo /usr/bin/systemctl reload-or-restart cc-bridge"):
+        assert rx.match(ok), ok
+    for bad in ("sudo systemctl restart claude-tab", "sudo systemctl restart cc-bridge; rm -rf /",
+                "sudo systemctl restart cc-bridge && echo", "systemctl status cc-bridge"):
+        assert not rx.match(bad), bad
+
+
+def test_restart_queue_wired_everywhere():
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    assert "signal.signal(signal.SIGHUP" in src and "_restart_watch" in src
+    assert '"/restart/now"' in src and '"/restart/cancel"' in src and '"restart": _restart_status()' in src
+    inst = (ROOT / "scripts" / "cc" / "install.sh").read_text()
+    assert "KillMode=process" in inst and "ExecReload=/bin/kill -HUP \\$MAINPID" in inst
+    assert "reload-or-restart cc-bridge.service" in inst

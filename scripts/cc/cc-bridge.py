@@ -686,7 +686,53 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
     return tool, f"use {tool}", tool not in ("WebFetch", "WebSearch")
 
 
+# ---- Restart when idle (hbar 2026-10-12: "one thread's sudo must not break another thread's work") ----
+# A restart is a request: the bridge exits by itself once no turn is answering, and systemd starts it
+# again (Restart=always). Sources: an approved `sudo systemctl restart cc-bridge` card, SIGHUP (the unit's
+# ExecReload, used by the Update watcher), POST /restart. "now" forces it; "cancel" drops it.
+RESTART = {"pending": False, "since": 0.0, "by": ""}
+RESTART_LOCK = threading.Lock()
+_RESTART_CMD = re.compile(r"^\s*sudo\s+(-n\s+)?(/usr/bin/)?systemctl\s+(restart|reload-or-restart)\s+cc-bridge(\.service)?\s*$")
+
+
+def _restart_request(by: str) -> dict:
+    with RESTART_LOCK:
+        if not RESTART["pending"]:
+            RESTART.update({"pending": True, "since": time.time(), "by": by})
+            print(f"restart queued by {by}; waiting for {len(_runs_active())} turn(s)", flush=True)
+    return _restart_status()
+
+
+def _restart_status() -> dict:
+    return {"pending": RESTART["pending"], "by": RESTART["by"], "waiting_for": len(_runs_active()),
+            "seconds": int(time.time() - RESTART["since"]) if RESTART["pending"] else 0}
+
+
+def _restart_now(why: str) -> None:
+    print(f"restart now ({why})", flush=True)
+    sys.stdout.flush()
+    os._exit(0)          # systemd brings the bridge back (Restart=always)
+
+
+def _restart_watch() -> None:
+    while True:
+        time.sleep(2)
+        if RESTART["pending"] and not _runs_active():
+            time.sleep(1.5)                      # let the last answer reach its page
+            if RESTART["pending"] and not _runs_active():
+                _restart_now(f"idle, queued by {RESTART['by']}")
+
+
 def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
+    r = _box_ask_inner(tool, inp, session_id)
+    if r.get("behavior") == "allow" and tool == "Bash" and _RESTART_CMD.match(str((inp or {}).get("command", ""))):
+        st = _restart_request("an approved card")
+        return {"behavior": "deny", "message": f"restart queued, not run: the bridge restarts by itself once no thread "
+                f"is answering (now {st['waiting_for']} including this one). Do not retry; finish your answer."}
+    return r
+
+
+def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None) -> dict:
     """Called by the hook. Blocks until the person decides, or the permit expires."""
     if not BOX_ENABLED or GATE is None:
         return {"behavior": "deny", "message": "actions on the box are not enabled on this brain"}
@@ -1237,6 +1283,7 @@ def _host_system() -> dict:
     d["connections"] = {"established": len(est.splitlines()), "listening_ports": ports[:40]}
     failed = [ln.split()[0] for ln in run(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines() if ln.strip()]
     d["failed_units"] = failed
+    d["restart"] = _restart_status()
     units = {}
     for u in ("cc-bridge", "claude-tab", "cc-work-pull.timer", "world-mirror.timer", "world-propose.timer", "cc-bridge-watch.path", "cc-install-watch.path", "tailscaled"):
         st = run(["systemctl", "is-active", u]).strip()
@@ -2788,7 +2835,7 @@ class Handler(BaseHTTPRequestHandler):
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
                              "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
-                             "judge": bool(TYPESAFE_KEY),
+                             "judge": bool(TYPESAFE_KEY), "restart": _restart_status(),
                              "voice": _voice_backend("tts") is not None, "voice_backend": _voice_backend("tts"),
                              "voice_name": _voice_current_name(), "transcribe_backend": _voice_backend("stt"),
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
@@ -2934,6 +2981,18 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         if route not in ("/ask", "/jobs/start") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
+        if route in ("/restart", "/restart/now", "/restart/cancel"):
+            if route == "/restart/cancel":
+                with RESTART_LOCK:
+                    RESTART.update({"pending": False, "since": 0.0, "by": ""})
+                self._send(200, _restart_status())
+                return
+            if route == "/restart/now":
+                self._send(200, {"ok": True, "restarting": True})
+                threading.Thread(target=lambda: (time.sleep(0.5), _restart_now("forced from the console")), daemon=True).start()
+                return
+            self._send(200, _restart_request("the console"))
             return
         if route.startswith("/layout"):
             body = self._json(limit=40000)
@@ -3295,6 +3354,8 @@ def main() -> None:
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
     if TG is not None:
         TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
+    threading.Thread(target=_restart_watch, daemon=True).start()
+    signal.signal(signal.SIGHUP, lambda *_: _restart_request("reload signal (Update)"))
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
     httpd.serve_forever()

@@ -157,6 +157,10 @@ Environment=CC_CWD=$BRAIN_DIR
 Environment=CC_TOOLS=Read,Grep,Glob
 EnvironmentFile=-$ENV_FILE
 ExecStart=$BRIDGE_HOME/.cc-bridge/venv/bin/python $BRAIN_DIR/scripts/cc/cc-bridge.py
+# Reload = "restart when idle" (2026-10-12): SIGHUP queues it, the bridge exits once no turn is answering.
+ExecReload=/bin/kill -HUP \$MAINPID
+# Only the bridge itself is stopped; cc-jobs it started keep running across restarts (2026-10-12).
+KillMode=process
 UMask=0002
 Restart=always
 RestartSec=2
@@ -229,7 +233,7 @@ Description=Restart cc-bridge after its file changed
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl restart cc-bridge.service
+ExecStart=/bin/systemctl reload-or-restart cc-bridge.service
 UNIT
 
 # The installer reruns itself when an Update changes it (units, routes, sudoers, env keys
