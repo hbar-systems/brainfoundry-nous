@@ -8,7 +8,8 @@ last ones left off. Five labelled parts, in this order, each one saying which fi
   2. the newest ops/*_idea-register.md: "3. Owed by hbar", "4. Agent queue" (10 lines each), last dated section
   3. ops/steward/queue.md: the repos under "Ready to push", one line each (name, ahead, leak result)
   4. the threads active in the last `hours` from threads.json in the bridge's state dir, newest first,
-     each with the last thing the brain said in it (from the reasoner's own transcript jsonl)
+     each with the last thing the brain said in it (from the reasoner's own transcript jsonl);
+     threads ruled finished in ops/threads/verdicts.tsv are left out, with a count at the end
   5. the memo tape: counts from in/memos/index.json
 
 A missing source reads "(none)"; nothing here raises. Long ops lines are clipped to their gist
@@ -25,6 +26,11 @@ from pathlib import Path
 
 CACHE_S = 120
 _CACHE: dict = {}   # cache key -> (expires_at, block)
+VERDICTS_REL = "ops/threads/verdicts.tsv"   # thread_id, verdict, date, note, source (2026-10-12)
+VERDICTS_CACHE_S = 60
+_VERDICTS_CACHE: dict = {}   # path -> (expires_at, verdicts)
+VERDICTS = ("done", "let-go", "fold", "superseded", "continue", "keep")
+FINISHED = frozenset(("done", "let-go", "fold", "superseded"))
 MAX_THREADS = 12
 SENTENCE_CHARS = 160
 LINE_CHARS = 240   # an ops line beyond this is clipped to its gist
@@ -54,7 +60,7 @@ def recent_block(world_dir, state_dir, hours: int = 48, max_chars: int = 6000, *
         _owed(ops, cap),
         _register(ops, cap),
         _ready_to_push(ops, cap),
-        _threads(Path(state_dir) if state_dir else None, projects, hours, cap),
+        _threads(Path(state_dir) if state_dir else None, projects, hours, cap, load_verdicts(world)),
         _memos(inbox, cap),
     ]
     block = "\n\n".join(_fit(parts, max_chars))
@@ -116,7 +122,7 @@ def _ready_to_push(ops: Path | None, cap: int) -> str:
     return _clip(head + "\n" + ("\n".join(lines) if lines else "(none)"), cap)
 
 
-def _threads(state_dir: Path | None, projects: Path, hours: int, cap: int) -> str:
+def _threads(state_dir: Path | None, projects: Path, hours: int, cap: int, verdicts: dict | None = None) -> str:
     path = state_dir / "threads.json" if state_dir else None
     head = f"## Threads active in the last {hours} h ({path or 'no state dir'}; transcripts under {projects})"
     items = _json(path) if path else None
@@ -124,12 +130,18 @@ def _threads(state_dir: Path | None, projects: Path, hours: int, cap: int) -> st
         return head + "\n(none)"
     since = time.time() - hours * 3600
     live = []
+    hidden = 0
     for th in items:
         if not isinstance(th, dict) or th.get("archived"):
             continue
         t = _when(th.get("last") or th.get("started"))
-        if t is not None and t >= since:
-            live.append((t, th))
+        if t is None or t < since:
+            continue
+        v = verdict_for(verdicts, th) if verdicts else None
+        if v and v.get("verdict") in FINISHED:
+            hidden += 1
+            continue
+        live.append((t, th))
     live.sort(key=lambda x: x[0], reverse=True)
     lines = []
     for t, th in live[:MAX_THREADS]:
@@ -137,7 +149,59 @@ def _threads(state_dir: Path | None, projects: Path, hours: int, cap: int) -> st
         title = " ".join(str(th.get("title") or "(untitled)").split())[:80]
         said = _last_brain_sentence(projects / f"{th.get('claude')}.jsonl") if th.get("claude") else ""
         lines.append(f"- {title} ({stamp}): {said or '(no transcript)'}")
+    if hidden:
+        lines.append(f"{hidden} finished thread{'s' if hidden != 1 else ''} hidden ({VERDICTS_REL})")
     return _clip(head + "\n" + ("\n".join(lines) if lines else "(none)"), cap)
+
+
+# ------------------------------------------------------------- verdicts ----
+def load_verdicts(world_dir) -> dict:
+    """The thread verdicts the central thread rules (2026-10-12): ops/threads/verdicts.tsv in the
+    world, columns thread_id, verdict, date, note, source. Keyed by thread id as written and by its
+    8-char prefix (the console's brain id or the reasoner's claude id, either one). A row
+    with a blank id or a verdict outside VERDICTS is skipped; a later row for the same id wins.
+    Cached 60 s per path; a missing or unreadable file is an empty dict. Never raises."""
+    if not world_dir:
+        return {}
+    path = Path(world_dir) / VERDICTS_REL
+    key = str(path)
+    hit = _VERDICTS_CACHE.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
+    out: dict = {}
+    for ln in _read(path).splitlines():
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        cols = [c.strip() for c in ln.split("\t")]
+        if len(cols) < 2 or cols[0].lower() == "thread_id":
+            continue
+        tid = cols[0]
+        verdict = cols[1].lower().replace(" ", "-").replace("_", "-")
+        if verdict == "folded":
+            verdict = "fold"
+        if not tid or verdict not in VERDICTS:
+            continue
+        row = {"verdict": verdict, "verdict_date": cols[2] if len(cols) > 2 else "",
+               "verdict_note": cols[3] if len(cols) > 3 else "", "verdict_source": cols[4] if len(cols) > 4 else ""}
+        out[tid] = row
+        out[tid[:8]] = row
+    _VERDICTS_CACHE[key] = (time.time() + VERDICTS_CACHE_S, out)
+    return out
+
+
+def verdict_for(verdicts: dict, th: dict) -> dict | None:
+    """The verdict row for one threads.json entry: by its brain id or its claude id, in full or by
+    the 8-char prefix either side; None when the thread has no ruling."""
+    if not verdicts or not isinstance(th, dict):
+        return None
+    for tid in (th.get("brain"), th.get("claude")):
+        tid = str(tid or "").strip()
+        if not tid:
+            continue
+        hit = verdicts.get(tid) or verdicts.get(tid[:8])
+        if hit:
+            return hit
+    return None
 
 
 def _memos(inbox: Path | None, cap: int) -> str:

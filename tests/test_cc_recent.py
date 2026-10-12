@@ -127,3 +127,59 @@ def test_cap_and_cache(tmp_path):
 def test_project_slug_matches_the_reasoners_folder():
     assert R.project_slug("/home/hands/world") == "-home-hands-world"
     assert R.project_slug("/home/hbar/brain") == "-home-hbar-brain"
+
+
+def test_verdicts_hide_finished_threads_and_count_them(tmp_path):
+    """Part 4 leaves out threads ruled done / let-go / fold / superseded in ops/threads/verdicts.tsv
+    and says how many it hid; continue and keep stay listed (2026-10-12)."""
+    R._CACHE.clear(); R._VERDICTS_CACHE.clear()
+    world, state, projects, inbox = _world(tmp_path)
+    (world / "ops" / "threads").mkdir()
+    (world / "ops" / "threads" / "verdicts.tsv").write_text(
+        "thread_id\tverdict\tdate\tnote\tsource\n"
+        "aaa\tLET GO\t2026-10-11\tmerged\tops/2026-10-11_central-thread-map.md\n"   # claude id, verdict as the map writes it
+        "b5\tcontinue\t2026-10-12\tthe memo thread\tops/2026-10-12_central-thread-map.md\n"   # brain id
+    )
+    b = R.recent_block(world, state, projects_dir=projects, in_dir=inbox)
+    t = b.split("## Threads active")[1].split("## Memo tape")[0]
+    assert "CC: music set" not in t and "CC: science" in t and "CC: never answered" in t
+    assert t.rstrip().endswith("1 finished thread hidden (ops/threads/verdicts.tsv)")
+    R._CACHE.clear(); R._VERDICTS_CACHE.clear()
+    (world / "ops" / "threads" / "verdicts.tsv").write_text("aaa\tdone\n" + "bbb\tsuperseded\n")
+    t = R.recent_block(world, state, projects_dir=projects, in_dir=inbox).split("## Threads active")[1]
+    assert "2 finished threads hidden (ops/threads/verdicts.tsv)" in t and "CC: never answered" in t
+
+
+def test_verdict_loader_is_tolerant_and_skips_bad_rows(tmp_path):
+    R._VERDICTS_CACHE.clear()
+    assert R.load_verdicts(None) == {} and R.load_verdicts(tmp_path) == {}   # no file: empty, nothing raises
+    tsv = tmp_path / "ops" / "threads" / "verdicts.tsv"; tsv.parent.mkdir(parents=True)
+    tsv.write_text(
+        "thread_id\tverdict\tdate\tnote\tsource\n"
+        "# a comment\n\n"
+        "49ae031a\tdone\t2026-10-12\trewrite and push done\tmap\n"
+        "d31af4f9-9e98-4ecc-b9b0-6fefbaba8e1a\tFOLD\t2026-10-12\tinto the central thread\tmap\n"
+        "3675fb1c\tfolded\t2026-10-11\t\tmap\n"
+        "3675fb1c\tcontinue\t2026-10-12\tlater row wins\tmap\n"
+        "\tdone\t2026-10-12\tno id\tmap\n"
+        "deadbeef\tmaybe\t2026-10-12\tnot a verdict\tmap\n"
+        "onlyone\n"
+    )
+    R._VERDICTS_CACHE.clear()   # the empty result above was cached too
+    v = R.load_verdicts(tmp_path)
+    assert v["49ae031a"]["verdict"] == "done" and v["49ae031a"]["verdict_date"] == "2026-10-12"
+    assert v["49ae031a"]["verdict_note"] == "rewrite and push done" and v["49ae031a"]["verdict_source"] == "map"
+    assert v["d31af4f9"]["verdict"] == "fold" and v["d31af4f9-9e98-4ecc-b9b0-6fefbaba8e1a"]["verdict"] == "fold"
+    assert v["3675fb1c"]["verdict"] == "continue" and v["3675fb1c"]["verdict_note"] == "later row wins"
+    assert "deadbeef" not in v and "onlyone" not in v and "" not in v and "thread_id" not in v
+    # lookup: by brain id or claude id, full or 8-char prefix either side
+    full_c = "49ae031a-54a5-4e81-a884-ad853467feee"
+    assert R.verdict_for(v, {"brain": "b-unknown", "claude": full_c})["verdict"] == "done"
+    assert R.verdict_for(v, {"brain": "d31af4f9", "claude": None})["verdict"] == "fold"
+    assert R.verdict_for(v, {"brain": "3675fb1c-4e22-4c8c-a842-7884abc89d0c"})["verdict"] == "continue"
+    assert R.verdict_for(v, {"brain": "nope", "claude": "nope2"}) is None and R.verdict_for({}, {"brain": "x"}) is None
+    # cached 60 s per path
+    tsv.write_text("49ae031a\tkeep\n")
+    assert R.load_verdicts(tmp_path)["49ae031a"]["verdict"] == "done"
+    R._VERDICTS_CACHE.clear()
+    assert R.load_verdicts(tmp_path)["49ae031a"]["verdict"] == "keep"

@@ -752,6 +752,19 @@ function CC() {
   // input right now ('header' for the line under the page title).
   const [archivedCount, setArchivedCount] = useState(0)
   const [showArchived, setShowArchived] = useState(false)
+  // Thread verdicts (2026-10-12): the central thread rules each thread in the world file
+  // ops/threads/verdicts.tsv; the bridge merges verdict, verdict_date, verdict_note into each row.
+  // A finished one (done, let go, folded, superseded) is dimmed and hidden while "hide finished"
+  // is on (remembered in localStorage); "continue" gets an accent tag; hover on the tag shows the note.
+  const [hideFinished, setHideFinished] = useState(() => { try { return localStorage.getItem('cc.threads.hideFinished') !== '0' } catch { return true } })
+  const toggleHideFinished = () => setHideFinished(h => { try { localStorage.setItem('cc.threads.hideFinished', h ? '0' : '1') } catch {}; return !h })
+  const FINISHED = { done: 1, 'let-go': 1, fold: 1, superseded: 1 }
+  const verdictTag = (th) => {
+    const v = th.verdict
+    if (!v) return null
+    if (v === 'done') return 'done' + (th.verdict_date ? ' ' + String(th.verdict_date).slice(5, 10) : '')
+    return { 'let-go': 'let go', fold: 'folded', superseded: 'superseded', continue: 'continue', keep: 'keep' }[v] || v
+  }
   const showArchivedRef = useRef(false)
   const [renaming, setRenaming] = useState(null)
   const [renameVal, setRenameVal] = useState('')
@@ -1038,9 +1051,11 @@ function CC() {
     return key === k(now) ? 'today' : key === k(y) ? 'yesterday' : key
   }
   const clock = (ts) => { try { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
+  const finishedCount = threads.filter(th => FINISHED[th.verdict]).length
   const threadGroups = (() => {
     const groups = []; const at = {}
     for (const th of threads) {
+      if (hideFinished && FINISHED[th.verdict]) continue
       const label = th.pinned ? 'pinned' : dayLabel(th.last || th.started)
       if (!(label in at)) { at[label] = groups.length; groups.push({ label, items: [] }) }
       groups[at[label]].items.push(th)
@@ -1823,6 +1838,12 @@ function CC() {
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
+                {finishedCount > 0 && (
+                  <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{finishedCount} finished</span>
+                    <a onClick={toggleHideFinished} title="done, let go, folded or superseded threads, as ruled in ops/threads/verdicts.tsv" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{hideFinished ? 'show finished' : 'hide finished'}</a>
+                  </p>
+                )}
                 {threadGroups.map(g => (
                   <div key={g.label}>
                     <p style={{ ...mono, color: C.faint, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', margin: '6px 10px 2px' }}>{g.label}</p>
@@ -1836,8 +1857,9 @@ function CC() {
                                      onBlur={() => setRenaming(null)} onClick={e => e.stopPropagation()}
                                      style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
                             : <a onClick={() => switchThread(th)}
-                                 style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4 }}>
+                                 style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
                                 {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
+                                {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
                                 <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
                               </a>}
                           {renaming !== th.brain && (
