@@ -233,7 +233,7 @@ PANE_ROUTES = {
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
     "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
-    "/permits": "Permits",
+    "/permits": "Permits", "/boxes": "Boxes",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -2839,6 +2839,24 @@ class Handler(BaseHTTPRequestHandler):
                 while not finished.wait(15):
                     sink("ping", {})
                 r.detach(sink)
+        elif route == "/boxmap":
+            facts = {}
+            fp = Path(WORLD_DIR or "/nonexistent") / "ops" / "box-map" / "boxes.json"
+            try:
+                facts = json.loads(fp.read_text())
+            except Exception:
+                facts = {"boxes": [], "about": f"no facts file yet at {fp}"}
+            peers, self_ip = None, ""
+            try:
+                r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=8)
+                if r.returncode == 0:
+                    j = json.loads(r.stdout)
+                    self_ip = ((j.get("Self") or {}).get("TailscaleIPs") or [""])[0]
+                    peers = [{"ip": (p.get("TailscaleIPs") or [None])[0], "os": p.get("OS"), "online": bool(p.get("Online"))}
+                             for p in (j.get("Peer") or {}).values()]
+            except Exception:
+                peers = None
+            self._send(200, cc_extras.box_map(facts, peers, self_ip))
         elif route == "/permits/history":
             qy = self._query()
             try:

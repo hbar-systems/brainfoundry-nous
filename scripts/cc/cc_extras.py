@@ -1073,3 +1073,35 @@ def permit_history(audit_path, decisions_path=None, offset: int = 0, limit: int 
     offset = max(0, int(offset or 0))
     limit = max(1, min(200, int(limit or 50)))
     return {"total": total, "offset": offset, "limit": limit, "items": rows[offset:offset + limit]}
+
+
+# ---- Box map (hbar 2026-10-12: "a map, a diagram of all the spokes and all the parts") ----
+# Facts are the owner's file (in the world: ops/box-map/boxes.json); the tailnet adds who is online now.
+# Tailnet devices are matched by IP only; a device the facts do not list shows its IP and OS, never its
+# host name (a name can carry something private). Read-only.
+
+def box_map(facts: dict, peers: list | None, self_ip: str = "") -> dict:
+    boxes = [dict(b) for b in (facts or {}).get("boxes") or [] if isinstance(b, dict) and b.get("id")]
+    by_ip = {str(p.get("ip") or ""): p for p in (peers or []) if p.get("ip")}
+    known = set()
+    for b in boxes:
+        ip = str(b.get("tailnet_ip") or "")
+        if not ip:
+            b["online"] = None                      # not on the tailnet: state unknown from here
+        elif ip == self_ip:
+            b["online"] = True
+            known.add(ip)
+        elif peers is None:
+            b["online"] = None
+        else:
+            p = by_ip.get(ip)
+            b["online"] = bool(p and p.get("online"))
+            known.add(ip)
+    for ip, p in sorted(by_ip.items()):
+        if ip not in known:
+            boxes.append({"id": "unlisted-" + ip, "label": f"unlisted device ({p.get('os') or 'unknown os'})",
+                          "ring": 1, "kind": "unlisted", "tailnet_ip": ip, "online": bool(p.get("online")),
+                          "runs": [], "users": [], "doors": [], "inside": [],
+                          "gaps": ["not in the facts file: add it to ops/box-map/boxes.json"]})
+    return {"center": (facts or {}).get("center") or "", "about": (facts or {}).get("about") or "",
+            "tailnet": peers is not None, "boxes": boxes}

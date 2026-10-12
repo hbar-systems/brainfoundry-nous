@@ -979,3 +979,26 @@ def test_permit_history_route_and_pane_exist():
     src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
     assert 'route == "/permits/history"' in src and '"/permits": "Permits"' in src
     assert (ROOT / "ui" / "pages" / "permits.js").exists()
+
+
+# ---- Box map (2026-10-12) ----
+
+def test_box_map_matches_by_ip_and_hides_unlisted_names():
+    m = _extras()
+    facts = {"center": "a", "boxes": [{"id": "a", "ring": 0, "tailnet_ip": "100.0.0.1"},
+                                      {"id": "b", "ring": 1, "tailnet_ip": "100.0.0.2"},
+                                      {"id": "c", "ring": 2, "public_ip": "1.2.3.4"}]}
+    peers = [{"ip": "100.0.0.2", "os": "linux", "online": True, "name": "ignored"},
+             {"ip": "100.0.0.9", "os": "windows", "online": False, "name": "private-name"}]
+    out = m.box_map(facts, peers, self_ip="100.0.0.1")
+    by = {b["id"]: b for b in out["boxes"]}
+    assert by["a"]["online"] is True and by["b"]["online"] is True and by["c"]["online"] is None
+    u = by["unlisted-100.0.0.9"]
+    assert u["online"] is False and "private-name" not in json.dumps(u) and "windows" in u["label"]
+    assert m.box_map(facts, None)["boxes"][1]["online"] is None and m.box_map(facts, None)["tailnet"] is False
+
+
+def test_box_map_route_and_pane_exist():
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    assert 'route == "/boxmap"' in src and '"/boxes": "Boxes"' in src
+    assert (ROOT / "ui" / "pages" / "boxes.js").exists()
