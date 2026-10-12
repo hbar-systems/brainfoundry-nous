@@ -87,6 +87,7 @@ export default function System() {
               <div>failed services: {host.failed_units && host.failed_units.length ? <span style={{ color: T.alert }}>{host.failed_units.join(', ')}</span> : 'none'}</div>
               <div>units: {Object.entries(host.units || {}).map(([k, v]) => <span key={k} style={{ color: v === 'active' ? T.ink : T.warn }}>{k} {v}; </span>)}</div>
               <div><a href="/permits" style={{ color: T.gold, textDecoration: 'underline' }}>permits recorded {host.permits}</a> · judgments {host.judgments} · jobs running {host.jobs_running}</div>
+              {host.restart && host.restart.pending ? <div style={{ color: T.warn }}>restart queued by {host.restart.by}, waiting for {host.restart.waiting_for} {host.restart.waiting_for === 1 ? 'thread' : 'threads'} to finish answering · <a onClick={async () => { await fetch('/cc/restart/now', { method: 'POST' }).catch(() => {}); setTimeout(load, 4000) }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>restart now</a> · <a onClick={async () => { await fetch('/cc/restart/cancel', { method: 'POST' }).catch(() => {}); load() }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div> : <div>restart: none queued (a bridge restart now waits until no thread is answering)</div>}
             </div>
           </>
         ) : null}
