@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -64,7 +65,9 @@ def test_template_ships_the_required_items_with_dates_and_no_private_names():
         assert "Created: " in text, f"{rel} has no creation-date line"
         low = text.lower()
         for word in ("hbar", "yury", "anne", "synthesis.md", "focus.md", "ops/", "systems/"):
-            assert word not in low, f"{rel} carries a private or hbar-specific name: {word}"
+            # whole words only: "planned" is not "anne" (2026-10-12)
+            assert not re.search(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])", low), \
+                f"{rel} carries a private or hbar-specific name: {word}"
 
 
 def test_first_run_lands_the_tree_and_one_commit(tmp_path):

@@ -123,6 +123,7 @@ p({"type": "result", "result": "hello", "session_id": "s1", "is_error": False, "
 
 
 def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
+    monkeypatch.delenv("CC_MCP_CONFIG", raising=False)   # the live box sets it; the test wants none
     m = _load(monkeypatch, tmp_path, with_key=False)
     assert m._mcp_config().endswith("mcp-empty.json") and m._mcp_servers() == []
     f = tmp_path / "mcp.json"; f.write_text('{"mcpServers": {"b-tools": {"command": "/x"}, "a-tools": {"command": "/y"}}}')
