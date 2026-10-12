@@ -65,6 +65,17 @@ def test_compose_with_memory_wraps_chunks_as_content(monkeypatch, tmp_path):
     assert "[2] source=doc-b\n" in prompt
 
 
+def test_compose_recent_block_sits_before_the_message(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    prompt, _ = m._compose("recap", "## Owed by hbar (ops/x.md)\n1. push")
+    assert prompt.index("<recent>") < prompt.index("<message>\nrecap\n</message>")
+    assert "read before answering" in prompt and "1. push" in prompt
+    assert "<recent>" not in m._compose("hello")[0]
+    # the block is asked for on a fresh thread or on the word "recap", never otherwise
+    monkeypatch.setattr(m.cc_recent, "recent_block", lambda *a, **k: "BLOCK")
+    assert m._recent("hello", True) == "BLOCK" and m._recent(" Recap ", False) == "BLOCK" and m._recent("hello", False) == ""
+
+
 def test_login_state_shape(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=False)
     monkeypatch.setattr(m, "_auth_status", lambda fresh=False: {"loggedIn": False, "email": None, "method": None})
