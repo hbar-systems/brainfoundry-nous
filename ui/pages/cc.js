@@ -759,6 +759,12 @@ function CC() {
   // browser knows to be answering, by thread key.
   const [cur, setCur] = useState(null)
   const curRef = useRef(null)
+  // Telegram on the laptop (2026-10-12): the bridge marks the threads the phone is in (`telegram`
+  // on each row). A Telegram thread that moved since this page last saw one (localStorage
+  // cc.telegram.seen) is announced in a strip above the conversation, with "open"; and the thread
+  // shown reloads its turns when the 20 s list says it moved while nothing was answering here.
+  const [tgNews, setTgNews] = useState(null)   // { brain, title, last } the strip announces, or null
+  const threadLastRef = useRef({})             // brain -> `last` this page has shown; null = adopt the next one without a reload
   // Side by side (2026-10-06): /panes tiles this page in iframes, each opened as
   // /cc?pane=<n>&thread=<brain id | new>. A pane holds its own thread: it never moves the
   // box's current thread (no /cc/threads/switch, no /cc/new), so panes do not pull each other.
@@ -938,7 +944,7 @@ function CC() {
       </div>
   )
   const flushLocal = () => { const next = queueRef.current.shift(); if (!next) return; setTurns(t => t.filter(x => x.qid !== next.qid)); setTimeout(() => sendRef.current && sendRef.current(next.text), 0) }
-  const markRunning = (key, on) => { if (on) runningRef.current[key] = true; else delete runningRef.current[key]; if (curRef.current === key) setBusy(!!on) }
+  const markRunning = (key, on) => { if (on) runningRef.current[key] = true; else { delete runningRef.current[key]; threadLastRef.current[key] = null; if (curRef.current) threadLastRef.current[curRef.current] = null }; if (curRef.current === key) setBusy(!!on) }
 
   // Poll the bridge for the thread shown. If it is answering and this page is not following, follow
   // it (replays the turn so far). Queued messages are the bridge's, shown from here.
@@ -1066,6 +1072,27 @@ function CC() {
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
     try { const q = new URLSearchParams(window.location.search).get('ask'); if (q) setDraft(q) } catch {}
   }, [])
+  // Telegram on the laptop (2026-10-12): read the 20 s list (no timer of its own). The thread shown
+  // reloads its turns when its `last` moved and nothing was answering it here (a turn this page
+  // sent or followed sets the slot to null first, so its own completion is adopted, not reloaded).
+  // The newest Telegram thread newer than cc.telegram.seen, and not the one shown, feeds the strip.
+  const tgSeen = () => { try { return localStorage.getItem('cc.telegram.seen') || '' } catch { return '' } }
+  const tgMarkSeen = (last) => { try { if (last && last > tgSeen()) localStorage.setItem('cc.telegram.seen', last) } catch {} }
+  useEffect(() => {
+    const key = curRef.current
+    const shown = key ? threads.find(t => t.brain === key) : null
+    if (shown) {
+      const prev = threadLastRef.current[key]
+      if (prev === undefined || prev === null || shown.running || runningRef.current[key]) threadLastRef.current[key] = shown.last
+      else if (shown.last && shown.last !== prev) { threadLastRef.current[key] = shown.last; loadHistory(key) }
+      if (shown.telegram) tgMarkSeen(shown.last)
+    }
+    const seen = tgSeen()
+    const moved = threads.filter(t => t.telegram && t.last && t.last > seen && t.brain !== key).sort((a, b) => (a.last < b.last ? 1 : -1))
+    setTgNews(moved[0] ? { brain: moved[0].brain, title: moved[0].title, last: moved[0].last } : null)
+  }, [threads, cur])
+  const tgDismiss = () => { if (tgNews) tgMarkSeen(tgNews.last); setTgNews(null) }
+  const tgOpen = () => { const th = tgNews && threads.find(t => t.brain === tgNews.brain); tgDismiss(); if (th) switchThread(th) }
   const openPane = (p) => { if (!p) return; if (typeof p === 'string') p = { route: p, title: p.replace(/^\//, '').split('?')[0] || 'pane' }; if (p.route) setPane(p) }
 
   // Jobs that outlive a turn: poll while any runs; a finished one lands as a small card, in the
@@ -1834,6 +1861,7 @@ function CC() {
                                 {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
                                 <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
                               </a>}
+                          {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
                           {renaming !== th.brain && (
                             <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                               <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
@@ -1874,6 +1902,15 @@ function CC() {
         )}
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
+
+        {!paneMode && tgNews && (
+          <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>From Telegram, {clock(tgNews.last)}: {tgNews.title || 'untitled'}</span>
+            <span style={{ color: C.faint }}>·</span>
+            <a onClick={tgOpen} title="show that conversation here" style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>open</a>
+            <a onClick={tgDismiss} title="hide this until the phone writes again" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</a>
+          </div>
+        )}
 
         <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', ...(density === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
           <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
