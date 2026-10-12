@@ -1356,6 +1356,10 @@ def _tutorial_counts() -> dict:
 
 # ---- the brain's own record of CC threads ----
 THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, last, pinned?, archived?}]
+# Thread verdicts (2026-10-12): the central thread rules each thread done / let-go / fold / superseded /
+# continue / keep in the world file ops/threads/verdicts.tsv (cc_recent.VERDICTS_REL). The bridge only
+# reads it ($CC_WORLD_DIR, else $WORLD_DIR), cached 60 s; the list shows the ruling after the title.
+VERDICTS_WORLD = WORLD_DIR or os.environ.get("WORLD_DIR", "").strip()
 
 
 def _threads_load() -> list:
@@ -1381,6 +1385,7 @@ def _threads_view(archived: bool = False) -> dict:
     items = _threads_order(items)[:60]
     st = _load_state()
     running = {r.thread: r.public() for r in _runs_active() if r.thread}
+    verdicts = cc_recent.load_verdicts(VERDICTS_WORLD)
     for th in items:
         r = running.get(th.get("brain"))
         th["running"] = bool(r)
@@ -1388,7 +1393,12 @@ def _threads_view(archived: bool = False) -> dict:
         th["waiting"] = (r or {}).get("waiting", 0)
         th["pinned"] = bool(th.get("pinned"))
         th["archived"] = bool(th.get("archived"))
+        v = cc_recent.verdict_for(verdicts, th) or {}
+        th["verdict"] = v.get("verdict")
+        th["verdict_date"] = v.get("verdict_date") or ""
+        th["verdict_note"] = v.get("verdict_note") or ""
     return {"threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
+            "finished_count": sum(1 for x in items if x.get("verdict") in cc_recent.FINISHED),
             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS}
 
 
