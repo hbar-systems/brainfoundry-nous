@@ -754,7 +754,59 @@ class Telegram:
         return ev
 
 
-def usage_summary(lines, now: float | None = None, titles: dict | None = None) -> dict:
+# List prices for the "theoretical" line (2026-10-12): USD per million tokens, per model family:
+# fresh input, cache write, cache read, output. Not fetched; a family missing here is priced at the
+# default family and marked assumed. The owner can override with CC_PRICES_FILE (same JSON shape).
+PRICES_AS_OF = "2026-10-12 (assumed list prices; check the provider's price page)"
+PRICES = {"opus": [5.0, 6.25, 0.50, 25.0], "sonnet": [3.0, 3.75, 0.30, 15.0], "haiku": [1.0, 1.25, 0.10, 5.0]}
+PRICE_DEFAULT = "opus"
+
+
+def _price_table() -> tuple:
+    f = os.environ.get("CC_PRICES_FILE", "").strip()
+    if f:
+        try:
+            d = json.loads(Path(f).read_text())
+            return {k: [float(x) for x in v] for k, v in (d.get("prices") or {}).items()}, str(d.get("as_of") or f)
+        except Exception:
+            pass
+    return PRICES, PRICES_AS_OF
+
+
+def turn_list_usd(e: dict, table: dict | None = None) -> float:
+    """What one turn would cost at list API prices, from its tokens. Older turns did not split fresh
+    input from cache writes; their "in" is priced as fresh input (a lower bound)."""
+    table = table or PRICES
+    m = str(e.get("model") or "").lower()
+    fam = next((k for k in table if k in m), PRICE_DEFAULT if PRICE_DEFAULT in table else next(iter(table)))
+    p_in, p_cw, p_cr, p_out = table[fam]
+    fresh, cw = e.get("tok_fresh"), e.get("tok_cache_write")
+    if fresh is None and cw is None:
+        fresh, cw = int(e.get("tok_in") or 0), 0
+    return (int(fresh or 0) * p_in + int(cw or 0) * p_cw + int(e.get("tok_cached") or 0) * p_cr
+            + int(e.get("tok_out") or 0) * p_out) / 1e6
+
+
+def invoices_read(path) -> list:
+    """The owner's invoices for the reasoner (TSV: date provider net_eur gross_eur ref note). Kept in the
+    owner's private files, never in this repo; the console only adds them up by period."""
+    rows = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return rows
+    for ln in lines:
+        if not ln.strip() or ln.startswith("#") or ln.startswith("date\t"):
+            continue
+        c = ln.split("\t")
+        try:
+            rows.append({"date": c[0][:10], "provider": c[1], "net": float(c[2] or 0), "gross": float(c[3] or 0)})
+        except (IndexError, ValueError):
+            continue
+    return rows
+
+
+def usage_summary(lines, now: float | None = None, titles: dict | None = None, invoices: list | None = None) -> dict:
     """Cost and usage (2026-09-29) from the turn audit: one dict per turn with ts, tok_in, tok_cached,
     tok_out, cost, thread, via, ms. Totals for today, the last 7 days, this month and all time;
     the top threads this month; page against telegram. Cost is a sum where the CLI reported one
@@ -765,14 +817,16 @@ def usage_summary(lines, now: float | None = None, titles: dict | None = None) -
     month = today[:7]
     week_from = time.strftime("%Y-%m-%d", time.gmtime(now - 7 * 86400))
     def blank():
-        return {"turns": 0, "in": 0, "cached": 0, "out": 0, "cost": None, "ms": 0, "errors": 0}
+        return {"turns": 0, "in": 0, "cached": 0, "out": 0, "cost": None, "ms": 0, "errors": 0, "list_usd": 0.0}
     def add(b, e):
         b["turns"] += 1
         b["in"] += int(e.get("tok_in") or 0); b["cached"] += int(e.get("tok_cached") or 0); b["out"] += int(e.get("tok_out") or 0)
         b["ms"] += int(e.get("ms") or 0); b["errors"] += 1 if e.get("error") else 0
+        b["list_usd"] += turn_list_usd(e, table)
         c = e.get("cost")
         if isinstance(c, (int, float)):
             b["cost"] = (b["cost"] or 0.0) + float(c)
+    table, as_of = _price_table()
     out = {"today": blank(), "week": blank(), "month": blank(), "all": blank(), "threads": {}, "via": {}, "days": {}}
     for raw in lines:
         try:
@@ -797,8 +851,20 @@ def usage_summary(lines, now: float | None = None, titles: dict | None = None) -
     top = sorted(out["threads"].items(), key=lambda kv: -(kv[1]["in"] + kv[1]["out"]))[:6]
     out["threads"] = [{"thread": k, "title": (titles or {}).get(k), **v} for k, v in top]
     out["days"] = [{"day": k, **v} for k, v in sorted(out["days"].items())][-31:]
-    out["cost_note"] = ("USD as the reasoner reported it" if out["all"]["cost"] is not None
-                        else "no cost figures: a subscription sign-in reports none; tokens are the measure")
+    for k in ("today", "week", "month", "all"):
+        out[k]["invoiced_net_eur"] = 0.0
+        out[k]["invoiced_gross_eur"] = 0.0
+    for inv in invoices or []:
+        d = inv["date"]
+        for k, hit in (("all", True), ("today", d == today), ("week", d >= week_from), ("month", d[:7] == month)):
+            if hit:
+                out[k]["invoiced_net_eur"] += inv["net"]
+                out[k]["invoiced_gross_eur"] += inv["gross"]
+    out["prices_as_of"] = as_of
+    out["invoices"] = invoices is not None
+    out["cost_note"] = ("list USD is computed from tokens at list API prices: what the same work would cost on an "
+                        "API key, not a bill. Real money is the invoiced EUR. The reasoner's own cost figure is not "
+                        "shown: on resumed threads it reads as a running total and overstates many times over")
     return out
 
 

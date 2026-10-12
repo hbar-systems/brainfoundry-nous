@@ -1027,3 +1027,24 @@ def test_restart_queue_wired_everywhere():
     inst = (ROOT / "scripts" / "cc" / "install.sh").read_text()
     assert "KillMode=process" in inst and "ExecReload=/bin/kill -HUP \\$MAINPID" in inst
     assert "reload-or-restart cc-bridge.service" in inst
+# ---- Cost tiles: list price from tokens, real invoices (2026-10-12) ----
+
+def test_list_price_from_tokens_and_invoices(tmp_path):
+    m = _extras()
+    e = {"model": "claude-opus-5-5", "tok_fresh": 1_000_000, "tok_cache_write": 1_000_000, "tok_cached": 10_000_000, "tok_out": 100_000}
+    assert abs(m.turn_list_usd(e) - (5 + 6.25 + 5 + 2.5)) < 1e-9
+    old = {"model": "claude-sonnet-5-5", "tok_in": 1_000_000, "tok_cached": 0, "tok_out": 0}
+    assert abs(m.turn_list_usd(old) - 3.0) < 1e-9           # old lines: "in" priced as fresh input
+    assert abs(m.turn_list_usd({"model": "unknown", "tok_out": 1_000_000}) - 25.0) < 1e-9
+    inv = tmp_path / "invoices.tsv"
+    inv.write_text("date\tprovider\tnet_eur\tgross_eur\tref\tnote\n# c\n2026-10-12\tanthropic\t16.71\t20.55\ta\t\n2026-09-01\tanthropic\t1\t1.23\tb\t\nbad line\n")
+    rows = m.invoices_read(inv)
+    assert len(rows) == 2 and rows[0]["net"] == 16.71
+    now = 1791806400.0  # 2026-10-12T12:00Z
+    import time as _t
+    assert _t.strftime("%Y-%m-%d", _t.gmtime(now)) == "2026-10-12"
+    turns = [json.dumps({"ts": "2026-10-12T10:00:00Z", **e, "cost": 2973.31})]
+    u = m.usage_summary(turns, now=now, invoices=rows)
+    assert abs(u["today"]["list_usd"] - 18.75) < 1e-9 and abs(u["today"]["invoiced_net_eur"] - 16.71) < 1e-9
+    assert abs(u["all"]["invoiced_gross_eur"] - 21.78) < 1e-9 and u["invoices"] is True
+    assert m.usage_summary(turns, now=now)["invoices"] is False

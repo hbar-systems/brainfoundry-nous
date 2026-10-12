@@ -174,7 +174,7 @@ def test_usage_summary_buckets(tmp_path):
     assert u["threads"][0]["thread"] == "bbbb2222" or u["threads"][0]["thread"] == "aaaa1111"
     assert {t["thread"] for t in u["threads"]} == {"aaaa1111", "bbbb2222"} and next(t for t in u["threads"] if t["thread"] == "aaaa1111")["title"] == "coach"
     assert u["via"]["telegram"]["turns"] == 1 and u["via"]["page"]["turns"] == 2
-    assert u["all"]["cost"] is None and "subscription" in u["cost_note"]
+    assert u["all"]["cost"] is None and "invoiced" in u["cost_note"]
     u2 = X.usage_summary([json.dumps({"ts": "2026-09-29T10:00:00Z", "cost": 0.25}), json.dumps({"ts": "2026-09-29T10:01:00Z", "cost": 0.5})], now=now)
     assert abs(u2["today"]["cost"] - 0.75) < 1e-9 and "USD" in u2["cost_note"]
 

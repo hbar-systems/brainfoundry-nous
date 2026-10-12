@@ -96,13 +96,17 @@ export default function System() {
             <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Cost and usage of the reasoner</h2>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
               {[['today', usage.today], ['7 days', usage.week], ['this month', usage.month], ['all time', usage.all]].map(([k, v]) => (
-                <Tile key={k} label={k} value={`${v.turns} turn${v.turns === 1 ? '' : 's'}`} sub={`${fmtTok(v.in)} in (+${fmtTok(v.cached)} cached) · ${fmtTok(v.out)} out${v.cost !== null && v.cost !== undefined ? ` · $${v.cost.toFixed(2)}` : ''}${v.errors ? ` · ${v.errors} failed` : ''}`} />
+                <Tile key={k} label={k} value={`${v.turns} turn${v.turns === 1 ? '' : 's'}`} sub={<>
+                  <span>{fmtTok(v.in)} in (+{fmtTok(v.cached)} cached) · {fmtTok(v.out)} out{v.errors ? ` · ${v.errors} failed` : ''}</span><br />
+                  <span>theoretical: ${(v.list_usd || 0).toFixed(2)} at list API prices</span><br />
+                  <span style={{ color: T.ink }}>invoiced: {usage.invoices ? `EUR ${(v.invoiced_net_eur || 0).toFixed(2)} net, ${(v.invoiced_gross_eur || 0).toFixed(2)} with VAT` : 'no invoices file'}</span>
+                </>} />
               ))}
             </div>
             <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
               {(usage.threads || []).length ? <div>this month by conversation: {usage.threads.map(t => <span key={t.thread}>{(t.title || t.thread || '?').slice(0, 40)} {fmtTok(t.in + t.out)}; </span>)}</div> : null}
               {Object.keys(usage.via || {}).length ? <div>by door: {Object.entries(usage.via).map(([k, v]) => `${k} ${v.turns} turns, ${fmtTok(v.in + v.out)}`).join(' · ')}</div> : null}
-              <div>{usage.cost_note}. "in" is newly read this turn; "cached" is the thread and instructions re-read from the cache.</div>
+              <div>{usage.cost_note}. "in" is newly read this turn; "cached" is the thread and instructions re-read from the cache. Prices: {usage.prices_as_of}. Invoices: world/ops/finance/invoices.tsv.</div>
             </div>
           </>
         ) : null}
