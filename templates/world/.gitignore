@@ -1,0 +1,28 @@
+# The world of one person: text is committed, binaries and secrets never.
+# Created: 2026-10-12 (templates/world in brainfoundry-nous).
+
+# library originals: binaries stay on disk, the manifest beside them is committed
+library/*/
+!library/MANIFEST.md
+!library/README.md
+
+# secrets, anywhere in the world
+.env
+*.env
+*.env.*
+*.key
+*.pem
+*.token
+*credentials*
+
+# OS and editor junk
+.DS_Store
+Thumbs.db
+*~
+*.swp
+.vscode/
+.idea/
+
+# the reasoner's own scratch
+.claude/
+__pycache__/
