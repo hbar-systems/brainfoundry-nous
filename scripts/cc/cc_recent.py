@@ -11,7 +11,9 @@ last ones left off. Five labelled parts, in this order, each one saying which fi
      each with the last thing the brain said in it (from the reasoner's own transcript jsonl)
   5. the memo tape: counts from in/memos/index.json
 
-A missing source reads "(none)"; nothing here raises. The composed block is cached for 120 s.
+A missing source reads "(none)"; nothing here raises. Long ops lines are clipped to their gist
+(the path is there for the rest); the five parts share max_chars, the longest trimmed first.
+The composed block is cached for 120 s.
 Standard library only; no network.
 """
 from __future__ import annotations
@@ -25,6 +27,7 @@ CACHE_S = 120
 _CACHE: dict = {}   # cache key -> (expires_at, block)
 MAX_THREADS = 12
 SENTENCE_CHARS = 160
+LINE_CHARS = 240   # an ops line beyond this is clipped to its gist
 TAIL_BYTES = 256 * 1024   # how much of a transcript to read from its end for the last brain sentence
 
 
@@ -46,7 +49,7 @@ def recent_block(world_dir, state_dir, hours: int = 48, max_chars: int = 6000, *
     if hit and hit[0] > time.time():
         return hit[1]
     ops = world / "ops" if world else None
-    cap = max(600, max_chars // 4)
+    cap = max(600, max_chars // 2)   # a loose cap per part; _fit shares the whole budget fairly
     parts = [
         _owed(ops, cap),
         _register(ops, cap),
@@ -54,7 +57,7 @@ def recent_block(world_dir, state_dir, hours: int = 48, max_chars: int = 6000, *
         _threads(Path(state_dir) if state_dir else None, projects, hours, cap),
         _memos(inbox, cap),
     ]
-    block = _clip("\n\n".join(parts), max_chars)
+    block = "\n\n".join(_fit(parts, max_chars))
     _CACHE[key] = (time.time() + CACHE_S, block)
     return block
 
@@ -210,7 +213,7 @@ def _section(text: str, match, n: int) -> list[str]:
             if nxt.startswith("#") and (len(nxt) - len(nxt.lstrip("#"))) <= level:
                 break
             if nxt.strip():
-                out.append(nxt.rstrip())
+                out.append(_gist(nxt))
                 if len(out) >= n:
                     break
         return out
@@ -256,5 +259,26 @@ def _last_brain_sentence(path: Path) -> str:
     return ""
 
 
+def _gist(line: str) -> str:
+    line = line.rstrip()
+    if len(line) <= LINE_CHARS:
+        return line
+    cut = line[: LINE_CHARS - 4]
+    return (cut[: cut.rfind(" ")] if " " in cut else cut).rstrip() + " ..."
+
+
 def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[: max(0, n - 6)].rstrip() + "\n(cut)"
+
+
+def _fit(parts: list[str], max_chars: int) -> list[str]:
+    """Trim the parts to max_chars together (joined by blank lines), always the longest one first,
+    so a short part never loses its line to a long one."""
+    parts = list(parts)
+    sep = 2 * (len(parts) - 1)
+    while parts and sum(map(len, parts)) + sep > max_chars:
+        i = max(range(len(parts)), key=lambda k: len(parts[k]))
+        over = sum(map(len, parts)) + sep - max_chars
+        second = sorted(map(len, parts))[-2] if len(parts) > 1 else 0
+        parts[i] = _clip(parts[i], max(second - 1, len(parts[i]) - over, 0))
+    return parts

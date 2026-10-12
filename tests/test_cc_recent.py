@@ -111,7 +111,12 @@ def test_cap_and_cache(tmp_path):
     R._CACHE.clear()
     world, state, projects, inbox = _world(tmp_path)
     small = R.recent_block(world, state, max_chars=800, projects_dir=projects, in_dir=inbox)
-    assert len(small) <= 800 and small.endswith("(cut)")
+    assert len(small) <= 800 and "(cut)" in small
+    assert "dispatch held 2 / sent 1" in small   # the short parts keep their lines; the long ones are trimmed
+    assert sum(1 for ln in small.splitlines() if ln.startswith("## ")) == 5
+    R._CACHE.clear()
+    (world / "ops" / "2026-10-13_central-thread-map.md").write_text("# m\n\n## Owed by hbar\n\n1. " + "long " * 100 + "\n")
+    assert "long long ..." in R.recent_block(world, state, projects_dir=projects, in_dir=inbox)   # an ops line clipped to its gist
     first = R.recent_block(world, state, projects_dir=projects, in_dir=inbox)
     (world / "ops" / "2026-10-13_central-thread-map.md").write_text("# newer\n\n## Owed by hbar\n\n1. brand new\n")
     assert R.recent_block(world, state, projects_dir=projects, in_dir=inbox) == first   # cached for 120 s
