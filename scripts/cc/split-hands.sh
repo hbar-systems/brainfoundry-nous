@@ -55,6 +55,13 @@ do)
         fi
     done
     sudo mkdir -p "$HANDS_HOME/in" "$HANDS_HOME/out" "$HANDS_HOME/.cc-bridge"
+    # a new member's box has no world: with CC_INIT_WORLD=1 the template opens one from
+    # templates/world (scripts/cc/init-world.sh, docs/brainfoundry/world-template.md); the
+    # interview's JSON export in CC_WORLD_ANSWERS fills it. Seed-once: an existing world is left.
+    if [ "${CC_INIT_WORLD:-0}" = 1 ] && ! sudo test -d "$HANDS_HOME/world/.git"; then
+        sudo env BRAIN_DIR="$BRAIN_DIR" bash "$BRAIN_DIR/scripts/cc/init-world.sh" --target "$HANDS_HOME/world" --owner "$HANDS_USER" \
+            --persona-out "$BRAIN_DIR/api/brain_persona.local.md" ${CC_WORLD_ANSWERS:+--answers "$CC_WORLD_ANSWERS"}
+    fi
     HAS_WORLD=0; sudo test -d "$HANDS_HOME/world" && HAS_WORLD=1   # a box without the world (e2e) skips the world steps
     if sudo test -f "$BRIDGE_HOME/.cc-bridge/mcp.json" && ! sudo test -f "$HANDS_HOME/.cc-bridge/mcp.json"; then
         sudo cp "$BRIDGE_HOME/.cc-bridge/mcp.json" "$HANDS_HOME/.cc-bridge/mcp.json"     # the packs' file: the hands run the packs
