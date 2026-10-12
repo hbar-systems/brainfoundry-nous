@@ -96,7 +96,7 @@ function InlineCode({ node, children, ...props }) {
   const txt = (Array.isArray(children) ? children.join('') : String(children == null ? '' : children))
   return <code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
     onClick={(e) => { e.stopPropagation(); copyText(txt); setDone(true); setTimeout(() => setDone(false), 1200) }}
-    style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
+    style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
 }
 // A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
 // there inline), hover on an image shows it small beside the link.
@@ -154,10 +154,10 @@ function mdComponents(base) {
     ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
     ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
     li: ({ node, ...props }) => <li {...props} style={{ margin: 'var(--cc-li, 2px) 0' }} />,
-    h1: ({ node, ...props }) => <h1 {...props} style={{ fontSize: '17px', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
-    h2: ({ node, ...props }) => <h2 {...props} style={{ fontSize: '16px', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
-    h3: ({ node, ...props }) => <h3 {...props} style={{ fontSize: '15px', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
-    h4: ({ node, ...props }) => <h4 {...props} style={{ fontSize: '14px', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
+    h1: ({ node, ...props }) => <h1 {...props} style={{ fontSize: '1.2em', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
+    h2: ({ node, ...props }) => <h2 {...props} style={{ fontSize: '1.13em', fontWeight: 600, margin: '8px 0 4px 0', lineHeight: 1.3 }} />,
+    h3: ({ node, ...props }) => <h3 {...props} style={{ fontSize: '1.06em', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
+    h4: ({ node, ...props }) => <h4 {...props} style={{ fontSize: '1em', fontWeight: 600, margin: '6px 0 3px 0', lineHeight: 1.3 }} />,
     blockquote: ({ node, ...props }) => <blockquote {...props} style={{ margin: '4px 0 var(--cc-gap, 6px) 0', padding: '0 0 0 10px', borderLeft: `2px solid ${C.line}`, color: C.dim }} />,
     // react-markdown 9 no longer passes `inline`; a code block arrives wrapped in <pre>,
     // so the block look lives on pre and every <code> stays inline (observed 2026-09-20:
@@ -165,7 +165,7 @@ function mdComponents(base) {
     // every code block carries its own copy button (2026-09-29: "we need things to have a copyable button")
     pre: ({ node, ...props }) => (
       <div style={{ position: 'relative', margin: '4px 0 var(--cc-gap, 6px) 0' }}>
-        <pre {...props} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
+        <pre {...props} style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, color: C.codeFg, padding: '8px 52px 8px 10px', borderRadius: '6px', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }} />
         <CopyLink text={hastText(node)} style={{ position: 'absolute', top: '6px', right: '8px' }} />
       </div>
     ),
@@ -179,11 +179,11 @@ function mdComponents(base) {
       if (isAbs || isFile) {
         const rel = s.trim()
         const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
-        return <PathLink path={target} style={{ ...mono, fontSize: '12.5px', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
+        return <PathLink path={target} style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
       }
       return <InlineCode {...props} />
     },
-    table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '13px', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
+    table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '0.93em', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
     td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
   }
@@ -639,6 +639,12 @@ function CC() {
   // Reading density (2026-10-09): compact (default) or comfortable, a footer link, kept in this browser.
   const [density, setDensity] = useState('compact')
   useEffect(() => { try { if (localStorage.getItem('cc.density') === 'comfortable') setDensity('comfortable') } catch {} }, [])
+  // Text size of the conversation (2026-10-12, memo 10-11 bit 3: "i keep reading it twice ... the ui for this is
+  // too small"): 16 px by default (was 14), 18 or 14 on the footer link, kept in this browser under cc.text.
+  const TEXTS = ['16px', '18px', '14px']
+  const [textSize, setTextSize] = useState('16px')
+  useEffect(() => { try { const t = localStorage.getItem('cc.text'); if (t && TEXTS.includes(t)) setTextSize(t) } catch {} }, [])
+  const cycleText = () => setTextSize(t => { const n = TEXTS[(TEXTS.indexOf(t) + 1) % TEXTS.length]; try { if (n !== '16px') localStorage.setItem('cc.text', n); else localStorage.removeItem('cc.text') } catch {}; return n })
   const toggleDensity = () => setDensity(d => { const n = d === 'compact' ? 'comfortable' : 'compact'; try { if (n === 'comfortable') localStorage.setItem('cc.density', n); else localStorage.removeItem('cc.density') } catch {}; return n })
   // The title block shrinks to one slim line once the thread has more than two messages (more height
   // for the messages). "show title" is an explicit choice (cc.heroShow) and keeps the full title.
@@ -647,7 +653,7 @@ function CC() {
   const setHeroPref = (v) => { setHeroShow(v); try { if (v) localStorage.setItem('cc.heroShow', '1'); else localStorage.removeItem('cc.heroShow') } catch {} }
   const hide = (k, v) => setHidden(h => { const n = { ...h, [k]: v }; if (!v) delete n[k]; try { localStorage.setItem('cc.hidden', JSON.stringify(n)) } catch {}; return n })
   const flipSide = () => setPaneSide(s => { const n = s === 'left' ? 'right' : 'left'; try { localStorage.setItem('cc.paneSide', n) } catch {}; return n })
-  const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); setDensity('compact'); setHeroShow(false); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.density', 'cc.heroShow', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
+  const resetLayout = () => { setHidden({}); setPaneSide('right'); setWidth('860px'); setDensity('compact'); setTextSize('16px'); setHeroShow(false); try { ['cc.hidden', 'cc.paneSide', 'cc.paneW', 'cc.width', 'cc.density', 'cc.text', 'cc.heroShow', 'cc.panes.layout'].forEach(k => localStorage.removeItem(k)) } catch {}; if (pane) { const p = pane; setPane(null); setTimeout(() => setPane(p), 0) } }
   const layoutChanged = Object.keys(hidden).length > 0 || paneSide === 'left'
   // The owner's layout file (2026-10-09), kept on the box by the bridge (GET /cc/layout). A layout the
   // browser has not applied yet is applied once: it is written into the keys above and the states are
@@ -1875,7 +1881,7 @@ function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
 
-        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', ...(density === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
+        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': paneMode ? '15px' : textSize, ...(density === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
           <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
@@ -1891,7 +1897,7 @@ function CC() {
           )}
           {pending.map(p => (
             <div key={p.id} style={{ display: 'flex', justifyContent: 'flex-start', margin: '8px 0' }}>
-              <div style={{ maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: '14px', lineHeight: 1.6 }}>
+              <div style={{ maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 1.6 }}>
                 <span style={{ color: C.dim }}>Still waiting for your decision:</span>
                 <ProposalCard p={p} onDecide={decide} />
               </div>
@@ -1919,12 +1925,12 @@ function CC() {
               <div data-bubble="1" style={{
                 maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
-                color: t.who === 'me' ? C.meText : C.ink, fontSize: '14px', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
+                color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.job && (
                   <div>
                     <p style={{ ...mono, color: t.job.rc === 0 ? C.dim : '#d08a7a', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>job finished · {t.job.rc === 0 ? 'ok' : `exit ${t.job.rc}`} · {Math.round(((t.job.ended || 0) - t.job.started) / 60)} min</p>
-                    <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '14px' }}>{t.job.title}</p>
+                    <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{t.job.title}</p>
                     <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(t.job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>
                     <Btn small onClick={() => send(`Read the log of job ${t.job.id} (${t.job.log}) and tell me the result in a few lines; if it made files, open them beside the chat.`)}>ask the brain about it</Btn>
                   </div>
@@ -1957,7 +1963,7 @@ function CC() {
           )))}
           {srv && srv.queue && srv.queue.map(q => (
             <div key={q.id} style={{ display: 'flex', justifyContent: 'flex-end', margin: paneMode ? '5px 0' : '8px 0' }}>
-              <div style={{ maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: C.me, border: `1px solid ${C.line}`, color: C.meText, fontSize: '14px', lineHeight: 1.6, opacity: 0.55 }}>
+              <div style={{ maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: C.me, border: `1px solid ${C.line}`, color: C.meText, fontSize: 'var(--cc-fs, 16px)', lineHeight: 1.6, opacity: 0.55 }}>
                 <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => cancelQueued(q.id)} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>
                 {q.message}
               </div>
@@ -2087,6 +2093,7 @@ function CC() {
           {showDetails && !paneMode ? <span><a onClick={saveLayout} title="Keep how the console looks now (blocks, pane side and width, column, font, voice) in your layout file on the box" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>save layout</a>{' · '}<a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="Your answers, colours, undo and the shareable pack" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>layout page</a></span> : null}
           {layoutNote ? <span style={{ color: C.gold }}>{layoutNote}</span> : null}
           {!paneMode && hidden.hero ? <span><a onClick={() => { setHeroPref(true); hide('hero', false) }} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
+          {!paneMode ? <span><a onClick={cycleText} title="the size of the conversation's text: 16, 18 or 14 px" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>text {parseInt(textSize, 10)}</a></span> : null}
           {!paneMode ? <span><a onClick={toggleDensity} title="spacing inside messages: compact or comfortable" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{density}</a></span> : null}
           {!pane && !paneMode ? <span><a onClick={cycleWidth} title="the width of the conversation: narrow, wide, full" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{width === '860px' ? 'narrow' : width === '1180px' ? 'wide' : 'full width'}</a></span> : null}
           {!paneMode && auto.length > 0 ? <span><a onClick={() => setShowAuto(s => !s)} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>{auto.length} action{auto.length === 1 ? '' : 's'} run without asking</a></span> : null}
