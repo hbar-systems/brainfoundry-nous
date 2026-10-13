@@ -1,40 +1,20 @@
 #!/usr/bin/env bash
+# ChatGPT or Claude export -> prepared documents -> a selection -> proposals through the gate.
+# The last step, approve, is the person's own yes and is never run from here (docs/IMPORT.md, 2026-10-13).
+# The previous version posted to /documents/upload without a permit, which a current brain refuses.
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <export_dir> [label]"; exit 1
+  echo "usage: $0 <export.zip|dir> [label] [select filters, e.g. --since 2025-01-01 --exclude strike.txt]"; exit 1
 fi
 
-export_dir="$1"
-label="${2:-$(date +%Y-%m-%d)}"
-out_dir="prepared_docs/chatgpt_${label}"
+src="$1"; shift
+label="${1:-$(date +%Y-%m-%d)}"; [ $# -gt 0 ] && shift
+out_dir="prepared_docs/import_${label}"
 
-# 1) prep to text files
-python3 scripts/prep_chatgpt_export.py "$export_dir" "$out_dir"
+python3 scripts/import_chats.py prep "$src" "$out_dir"
+python3 scripts/import_chats.py select "$out_dir" "$@"
+python3 scripts/import_chats.py propose "$out_dir"
 
-# 2) kill macOS ghost files
-find "$out_dir" -type f -name '._*' -delete || true
-find "$out_dir" -name '.DS_Store' -delete || true
-
-# 3) ingest
-python3 scripts/ingest_folder.py "$out_dir"
-
-# 4) link docs to a source/<label> entity
-python3 - <<PY
-from extensions.brain.semantic_db import SemanticDB
-import os, json
-src = "source/chatgpt_${label}"
-db = SemanticDB()
-eid = db.upsert_entity(name=src, type="source", description=f"ChatGPT export {label}")
-for fn in os.listdir("$out_dir"):
-    if fn.startswith("._") or fn.startswith("."): 
-        continue
-    db.link_document(fn, eid, relevance=1.0, context="chatgpt_import")
-print(f"Linked {src} to files in $out_dir")
-PY
-
-echo "✅ Import complete for $export_dir → $out_dir (entity: source/chatgpt_${label})"
-
-
-# Make it executable:
-# chmod +x scripts/import_chatgpt.sh
+echo "Proposed. Read $out_dir/manifest.tsv; the person approves with the id printed above:"
+echo "  python3 scripts/import_chats.py approve $out_dir --yes <manifest_id>"
