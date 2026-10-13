@@ -2364,16 +2364,19 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         elif _lay_err:
             reply = (reply + f"\n\n(The layout was not proposed: {_lay_err})").strip()
         card = _propose(proposal) if proposal else None
+        # the visual this answer opened rides with it into the record (2026-10-13), so the page can show
+        # an "open" chip on the message after a reload; the page strips the marker before rendering
+        rec_reply = reply + (f"\n\n<!--pane:{pane['route']}-->" if pane and pane.get("route") else "")
         try:
             if explicit is None:
                 st = _load_state()
                 if st.get("session_id") == sid or not st.get("session_id"):
                     st["session_id"] = sid
-                    st = _record_turn(st, message, reply, card, _earlier_pieces(run), source=source)
+                    st = _record_turn(st, message, rec_reply, card, _earlier_pieces(run), source=source)
                     _save_state(st)
                 state = st
             else:
-                state = _record_turn(state, message, reply, card, _earlier_pieces(run), source=source)
+                state = _record_turn(state, message, rec_reply, card, _earlier_pieces(run), source=source)
                 cur = _load_state()
                 if cur.get("brain_session_id") == state.get("brain_session_id"):
                     cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH

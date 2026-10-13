@@ -101,15 +101,118 @@ function InlineCode({ node, children, ...props }) {
 }
 // A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
 // there inline), hover on an image shows it small beside the link.
+// Since 2026-10-13 (hbar: "clickable parts with info cards appearing that you could go deeper and get the
+// agents sent off, or even see the visual"): a click opens a small card instead, with a preview and four
+// doors: open beside, full screen, ask about it here, send an agent on it (a thread of its own).
 function openPath(p) { window.dispatchEvent(new CustomEvent('cc-open-path', { detail: p })) }
+const ccEmit = (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail }))
+const fullRoute = (route) => route + (route.includes('?') ? '&' : '?') + 'full=1'
+const TEXTISH = /\.(md|txt|tsv|csv|json|py|js|sh|yaml|yml|toml|log)$/i
+let cardSeq = 0
+function useCard() {
+  const [open, setOpen] = useState(false)
+  const idRef = useRef(null)
+  if (idRef.current === null) idRef.current = ++cardSeq
+  const boxRef = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const other = (e) => { if (e.detail !== idRef.current) setOpen(false) }
+    const away = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('cc-card-open', other); document.addEventListener('mousedown', away); document.addEventListener('keydown', esc)
+    return () => { window.removeEventListener('cc-card-open', other); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc) }
+  }, [open])
+  const toggle = () => setOpen(o => { if (!o) ccEmit('cc-card-open', idRef.current); return !o })
+  return { open, setOpen, toggle, boxRef }
+}
+function CardDoor({ onClick, children, title, accent }) {
+  return <a onClick={(e) => { e.stopPropagation(); onClick() }} title={title}
+    style={{ ...mono, fontSize: '11px', padding: '3px 9px', borderRadius: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
+             border: `1px solid ${accent ? C.gold : C.line}`, color: accent ? C.gold : C.dim }}>{children}</a>
+}
+function InfoCard({ children, boxRef }) {
+  return (
+    <span ref={boxRef} data-nopick="1" onClick={(e) => e.stopPropagation()}
+      style={{ position: 'absolute', left: 0, top: '1.7em', zIndex: 50, width: 'min(420px, 80vw)', display: 'block', backgroundColor: C.card,
+               border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', boxShadow: '0 8px 28px rgba(0,0,0,0.55)', lineHeight: 1.5, whiteSpace: 'normal' }}>
+      {children}
+    </span>
+  )
+}
 function PathLink({ path, children, style }) {
   const [hov, setHov] = useState(false)
+  const [peek, setPeek] = useState(null)
+  const card = useCard()
   const img = isImagePath(path)
+  const name = String(path).split('/').filter(Boolean).pop() || path
+  useEffect(() => {
+    if (!card.open || peek !== null || img || !TEXTISH.test(path)) return
+    fetch(rawUrl(path), { cache: 'no-store' }).then(r => (r.ok ? r.text() : '')).then(t => setPeek((t || '').slice(0, 900))).catch(() => setPeek(''))
+  }, [card.open])
+  const route = '/files?path=' + encodeURIComponent(path)
   return (
     <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
-      <a onClick={(e) => { e.stopPropagation(); openPath(path) }} title={`Open ${path}`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
-      {hov && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
+      <a onClick={(e) => { e.stopPropagation(); setHov(false); card.toggle() }} title={`${path} (click: card with open, full screen, ask, agent)`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
+      {hov && !card.open && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
+      {card.open && (
+        <InfoCard boxRef={card.boxRef}>
+          <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', overflowWrap: 'anywhere' }}>{name}</span>
+          <span style={{ display: 'block', ...mono, color: C.faint, fontSize: '10.5px', overflowWrap: 'anywhere', marginBottom: '6px' }}>{path}</span>
+          {img && <img src={rawUrl(path)} alt="" style={{ display: 'block', maxWidth: '100%', maxHeight: '180px', objectFit: 'contain', borderRadius: '6px', marginBottom: '6px' }} />}
+          {peek ? <span style={{ display: 'block', ...mono, fontSize: '11px', color: C.dim, whiteSpace: 'pre-wrap', maxHeight: '140px', overflow: 'hidden', borderLeft: `2px solid ${C.line}`, paddingLeft: '8px', marginBottom: '8px' }}>{peek}</span> : null}
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <CardDoor accent onClick={() => { card.setOpen(false); openPath(path) }} title="Open it in the pane beside the chat">open beside</CardDoor>
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-open-route', { route: fullRoute(route), title: 'Files' }) }} title="Open it full screen; Escape returns">full screen</CardDoor>
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Tell me about ${path}: what it is, its state, and the next step.`) }} title="Ask about it in this thread">ask about it</CardDoor>
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: 'on ' + name, send: `Take this on: ${path}. Read it, say its state, and do the next step it names if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
+          </span>
+        </InfoCard>
+      )}
     </span>
+  )
+}
+// A highlighted phrase (bold in an answer) is a door too (2026-10-13): go deeper here, or send an agent.
+function Highlight({ children, node }) {
+  const card = useCard()
+  const txt = hastText(node).trim()
+  if (!txt || txt.length > 160) return <strong>{children}</strong>
+  return (
+    <span style={{ position: 'relative', display: 'inline' }}>
+      <strong onClick={(e) => { e.stopPropagation(); card.toggle() }} title="click: go deeper or send an agent"
+        style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
+      {card.open && (
+        <InfoCard boxRef={card.boxRef}>
+          <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>{txt}</span>
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <CardDoor accent onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Go deeper on "${txt}": the evidence, the state, and the next step.`) }} title="Ask in this thread">go deeper</CardDoor>
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `What exactly do you need from me on "${txt}"? Give me the choices.`) }} title="Ask what it needs from you">what do you need from me</CardDoor>
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: txt.slice(0, 60), send: `Take this on: "${txt}" (from my central thread). Find where it lives in the world (ops/, the idea register, NOW.md), say its state, and do the next step if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
+          </span>
+        </InfoCard>
+      )}
+    </span>
+  )
+}
+// The visual a message opened (2026-10-13, hbar: "in each message I should be able to see the visual,
+// open close it; now I closed it and lost it"). The route rides with the message and stays in history.
+const PANE_MARK = /\n*<!--pane:(\S+?)-->\s*$/
+function splitPane(text) {
+  const m = PANE_MARK.exec(text || '')
+  if (!m) return { body: text, route: null }
+  return { body: text.slice(0, m.index), route: m[1] }
+}
+function VisualChip({ route }) {
+  if (!route) return null
+  let label = route.split('?')[0].replace(/^\//, '') || 'pane'
+  const q = route.indexOf('path=')
+  if (q >= 0) { try { label = decodeURIComponent(route.slice(q + 5).split('&')[0]).split('/').filter(Boolean).pop() || label } catch {} }
+  const title = route.startsWith('/files') ? 'Files' : label
+  return (
+    <div data-nopick="1" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+      <span style={{ ...mono, fontSize: '11px', color: C.faint }}>visual</span>
+      <CardDoor accent onClick={() => ccEmit('cc-open-route', { route, title })} title={'Open ' + route + ' beside the chat'}>{label} ▸ open</CardDoor>
+      <CardDoor onClick={() => ccEmit('cc-open-route', { route: fullRoute(route), title })} title="Full screen; Escape returns">full screen</CardDoor>
+    </div>
   )
 }
 // Plain text (the person's own messages) with its paths made into links.
@@ -151,6 +254,7 @@ function mdComponents(base) {
     },
     // Spacing comes from CSS variables set on the conversation (density: compact | comfortable), so
     // changing it does not rebuild any message. `.cc-md li > p` carries no margin (see the style tag).
+    strong: ({ node, ...props }) => <Highlight node={node}>{props.children}</Highlight>,
     p: ({ node, ...props }) => <p {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0' }} />,
     ul: ({ node, ...props }) => <ul {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
     ol: ({ node, ...props }) => <ol {...props} style={{ margin: '0 0 var(--cc-gap, 6px) 0', paddingLeft: '18px' }} />,
@@ -227,9 +331,10 @@ function Choices({ choices, onChoice }) {
     </div>
   )
 }
-function BrainText({ text, live, onChoice }) {
-  const { body, choices } = useMemo(() => splitChoices(text), [text])
-  return <><Md text={body} />{!live && <Choices choices={choices} onChoice={onChoice} />}</>
+function BrainText({ text, live, onChoice, pane }) {
+  const { body, choices, route } = useMemo(() => { const p = splitPane(text); return { ...splitChoices(p.body), route: p.route } }, [text])
+  const r = route || (pane && (pane.route || pane)) || null
+  return <><Md text={body} />{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 function ProposalCard({ p, onDecide }) {
@@ -1187,6 +1292,11 @@ function CC() {
   useEffect(() => {
     const onPath = (e) => { if (e.detail) openPane({ route: '/files?path=' + encodeURIComponent(e.detail), title: 'Files' }) }
     window.addEventListener('cc-open-path', onPath)
+    // the cards' doors (2026-10-13): a route beside or full screen, a question here, an agent of its own
+    const onRoute = (e) => { if (e.detail && e.detail.route) openPane(e.detail) }
+    const onSendText = (e) => { if (typeof e.detail === 'string' && sendRef.current) sendRef.current(e.detail) }
+    const onAgent = (e) => { if (e.detail && e.detail.send && chooseRef.current) chooseRef.current({ mode: 'agent', label: e.detail.label || 'agent', send: e.detail.send }) }
+    window.addEventListener('cc-open-route', onRoute); window.addEventListener('cc-send-text', onSendText); window.addEventListener('cc-agent', onAgent)
     const onMsg = (e) => {
       if (e.origin !== window.location.origin) return
       if (e.data && e.data.type === 'cc-ask' && typeof e.data.text === 'string') {
@@ -1214,7 +1324,7 @@ function CC() {
       if (e.key === 'cc.handsfree') setHandsfree(e.newValue === '1')
     }
     window.addEventListener('storage', onStore)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath); window.removeEventListener('storage', onStore) }
+    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath); window.removeEventListener('cc-open-route', onRoute); window.removeEventListener('cc-send-text', onSendText); window.removeEventListener('cc-agent', onAgent); window.removeEventListener('storage', onStore) }
   }, [])
 
   // the whole conversation as markdown: copied, and downloaded as a file (the header's button, or the pane's menu)
@@ -1355,7 +1465,7 @@ function CC() {
           }
         }
         const text = data.stopped && cur.text ? (cur.text + '\n\n(stopped by you)').trim() : reply
-        c[i] = { ...cur, ...fin, text }
+        c[i] = { ...cur, ...fin, text, pane: data.pane || cur.pane || null }
         return c
       })
       if (speak && health && health.voice && !data.error) { if (spokenRef.current > 0) speakProgress(reply, true); else say(reply) }
@@ -1832,7 +1942,7 @@ function CC() {
           }
         }
         const reply = data.reply || (r.ok ? '(no answer)' : `The bridge answered ${r.status}.`)
-        if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null }])
+        if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: reply, ms: data.ms, error: !!data.error, proposal: data.proposal || null, meta: data.meta || null, pane: data.pane || null }])
         if (data.pane && curRef.current === key) openPane(data.pane)
       }
       if (isNew && data && data.thread) {
@@ -2098,7 +2208,7 @@ function CC() {
                   </div>
                 )}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
-                {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
+                {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} pane={t.pane} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
                 {t.voices && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
                     {t.voices.map(v => (
