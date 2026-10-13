@@ -57,6 +57,26 @@ hbar: "a small line where tools are represented, and those tools can in real tim
 - A new conversation that has no thread id yet keeps its look in the page only, until its first answer; then the next touch saves it.
 - Nothing here needs a push or a rebuild: it is data on the box, read by the page.
 
+## Learning mode (2026-10-13)
+
+hbar: "a system of learning cards: if something is technical, behind the card a mini lesson, learning mode; copy a bit the interview pack's recall, but improvising off whatever the AI's response is in any conversation".
+
+- "learn off / on" is a chip on the tool line. It is part of the thread's look (`style.learn`), so it is per conversation and kept on the box.
+- When it is on, every bold phrase and every short inline-code term in an answer carries a small "learn" door.
+- Pressing the door opens a lesson card. The bridge makes the lesson on demand from the term and the paragraph around it (`POST /cc/learn {term, context}`).
+  - The card asks a guess-first question (the estimate-question rule): type a guess or skip, then "reveal".
+  - Then it shows the answer (two to four sentences) and one example, with "save to deck" and "go deeper". "go deeper" asks in the thread.
+- How the lesson is made: one side call to the reasoner CLI (`claude -p`) on the small model (`CC_LEARN_MODEL`, default `haiku`). The call has no tools, no MCP servers, no memory and no session to resume, and runs in an empty directory (`~/.cc-bridge/learn`). Nothing is posted into any thread.
+  - The brain api's `/chat/completions` was not used: it requires a NodeOS loop permit per call.
+  - Cost: on a subscription sign-in it draws on the plan, with no per-call charge. On an API key it is a few thousand input tokens (the CLI's own system prompt) plus about 200 output on Haiku 4.5, which is on the order of USD 0.005 per lesson; that estimate is read from the token counts, not measured. The bridge log prints the CLI's `total_cost_usd` per lesson as `learn: ... cost_usd=...`, so the real number is in `journalctl` after the first use.
+- The deck: `POST /cc/learn/save` appends one line to `<world>/learning/deck.tsv`. Columns: date, term, question, answer (with the example), source_thread. The file is created with its header on the first save.
+- Recall: the "recall N" chip on the tool line shows the cards due today (`GET /cc/learn/due`), one at a time: reveal, then "got it" or "again".
+  - Each answer is one line in `<world>/learning/reviews.tsv` (date, term, ok or again).
+  - A card is due 1, 3, 7, then 21 days after its last recall (or after it was saved), stepping on each "got it" in a row. "again" starts it over at 1 day.
+  - The chip shows only once the deck has at least one card.
+- Needs `CC_WORLD_DIR` on the bridge (the deck lives in the world folder). Without it, saving says so and nothing is written.
+- The deck is a plain file in the world. It is not committed by the bridge; world-keep or a thread commits it like any other file.
+
 ## What is next
 
 - **The map as the scenery layer.** One surface where people, boxes and modules are nodes and each node is a button:

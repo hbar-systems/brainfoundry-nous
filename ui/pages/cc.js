@@ -92,12 +92,107 @@ function CopyLink({ text, label, style }) {
   const [done, setDone] = useState(false)
   return <a data-nopick="1" onClick={(e) => { e.stopPropagation(); copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="copy" style={{ ...mono, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: done ? C.gold : C.faint, cursor: 'pointer', textDecoration: 'underline', ...(style || {}) }}>{done ? 'copied' : (label || 'copy')}</a>
 }
+// Learning mode (2026-10-13): when the tool line's "learn" is on, bold phrases and inline-code terms carry
+// a small "learn" door. It opens a mini lesson made on demand by the bridge (POST /cc/learn: the reasoner on
+// the small model, outside any thread), guess first, then the answer, and "save to deck" (learning/deck.tsv).
+const LearnCtx = React.createContext({ on: false, thread: null })
+function LearnDoor({ term }) {
+  const learn = React.useContext(LearnCtx)
+  const card = useCard()
+  const [st, setSt] = useState(null)   // null | 'busy' | {question, answer, example, ...} | {error}
+  const [shown, setShown] = useState(false)
+  const [guess, setGuess] = useState('')
+  const [saved, setSaved] = useState('')
+  const ctxRef = useRef('')
+  if (!learn.on) return null
+  const openIt = (e) => {
+    e.stopPropagation()
+    const blk = e.currentTarget.closest('p, li, td, blockquote, h1, h2, h3, h4')
+    ctxRef.current = blk ? blk.textContent.slice(0, 1500) : ''
+    card.toggle()
+    if (st === null || (st && st.error)) {
+      setSt('busy')
+      fetch('/cc/learn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ term, context: ctxRef.current }) })
+        .then(r => r.json()).then(d => setSt(d.ok ? d : { error: d.error || 'no lesson' })).catch(() => setSt({ error: 'the bridge did not answer' }))
+    }
+  }
+  const save = () => fetch('/cc/learn/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ term, question: st.question, answer: st.answer + (st.example ? ' Example: ' + st.example : ''), thread: learn.thread || '' }) })
+    .then(r => r.json()).then(d => { setSaved(d.ok ? 'saved' : (d.error || 'not saved')); if (d.ok) ccEmit('cc-deck-changed') }).catch(() => setSaved('not saved'))
+  const line = { display: 'block', fontSize: '13px', color: C.ink, marginBottom: '6px' }
+  return (
+    <span style={{ position: 'relative', display: 'inline' }}>
+      <a data-nopick="1" onClick={openIt} title={'a mini lesson on ' + term}
+        style={{ ...mono, fontSize: '9.5px', letterSpacing: '0.06em', marginLeft: '3px', padding: '0 4px', borderRadius: '6px', cursor: 'pointer', verticalAlign: 'super',
+                 border: `1px solid ${card.open ? C.gold : C.line}`, color: C.gold }}>learn</a>
+      {card.open && (
+        <InfoCard boxRef={card.boxRef}>
+          <span style={{ ...line, fontWeight: 600 }}>{term}</span>
+          {st === 'busy' && <span style={{ ...line, color: C.dim }}>making the lesson...</span>}
+          {st && st.error && <span style={{ ...line, color: C.dim }}>{st.error}</span>}
+          {st && st.question && <>
+            <span style={line}>{st.question}</span>
+            {!shown ? (
+              <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <input value={guess} onChange={e => setGuess(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') setShown(true) }} placeholder="your guess"
+                  style={{ flex: 1, minWidth: 0, backgroundColor: C.brain, color: C.ink, border: `1px solid ${C.line}`, borderRadius: '6px', padding: '3px 7px', fontSize: '12px', outline: 'none', fontFamily: 'inherit' }} />
+                <CardDoor accent onClick={() => setShown(true)} title="show the answer">reveal</CardDoor>
+              </span>
+            ) : <>
+              {guess.trim() && <span style={{ ...line, color: C.dim }}>you guessed: {guess}</span>}
+              <span style={{ ...line, borderLeft: `2px solid ${C.gold}`, paddingLeft: '8px' }}>{st.answer}</span>
+              {st.example && <span style={{ ...line, ...mono, fontSize: '11.5px', color: C.dim }}>{st.example}</span>}
+              <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                {saved ? <span style={{ ...mono, fontSize: '11px', color: C.dim }}>{saved}</span>
+                  : <CardDoor accent onClick={save} title="append this card to learning/deck.tsv in the world folder">save to deck</CardDoor>}
+                <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Teach me "${term}" properly, from what this conversation already says.`) }} title="ask in this thread">go deeper</CardDoor>
+              </span>
+            </>}
+          </>}
+        </InfoCard>
+      )}
+    </span>
+  )
+}
+// The recall chip (tool line): the deck's due cards, one at a time, guess, reveal, then got it or again.
+function Recall() {
+  const [due, setDue] = useState(null)
+  const [open, setOpen] = useState(false)
+  const [shown, setShown] = useState(false)
+  const load = () => fetch('/cc/learn/due', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setDue(d)).catch(() => {})
+  useEffect(() => { load(); const f = () => load(); window.addEventListener('cc-deck-changed', f); return () => window.removeEventListener('cc-deck-changed', f) }, [])
+  if (!due || !due.total) return null
+  const c = (due.due || [])[0]
+  const answer = (ok) => fetch('/cc/learn/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ term: c.term, ok }) })
+    .then(() => { setShown(false); setDue(d => ({ ...d, due: d.due.slice(1) })) }).catch(() => {})
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex' }}>
+      <Chip on={open} onClick={() => setOpen(o => !o)} title="cards from learning/deck.tsv due today (again after 1, 3, 7, 21 days)">recall {(due.due || []).length}</Chip>
+      {open && (
+        <span data-nopick="1" style={{ position: 'absolute', left: 0, top: '1.9em', zIndex: 50, width: 'min(380px, 80vw)', backgroundColor: C.card, border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', boxShadow: '0 8px 28px rgba(0,0,0,0.55)', fontSize: '13px', lineHeight: 1.5 }}>
+          {!c ? <span style={{ color: C.dim }}>Nothing due. {due.total} card{due.total === 1 ? '' : 's'} in the deck.</span> : <>
+            <span style={{ display: 'block', fontWeight: 600, color: C.ink }}>{c.term}</span>
+            <span style={{ display: 'block', color: C.ink, margin: '4px 0 8px' }}>{c.question}</span>
+            {!shown ? <CardDoor accent onClick={() => setShown(true)} title="guess first, then show the answer">reveal</CardDoor> : <>
+              <span style={{ display: 'block', color: C.ink, borderLeft: `2px solid ${C.gold}`, paddingLeft: '8px', marginBottom: '8px' }}>{c.answer}</span>
+              <span style={{ display: 'flex', gap: '6px' }}>
+                <CardDoor accent onClick={() => answer(true)} title="next time further out">got it</CardDoor>
+                <CardDoor onClick={() => answer(false)} title="back to tomorrow">again</CardDoor>
+              </span>
+            </>}
+          </>}
+        </span>
+      )}
+    </span>
+  )
+}
 function InlineCode({ node, children, ...props }) {
   const [done, setDone] = useState(false)
   const txt = (Array.isArray(children) ? children.join('') : String(children == null ? '' : children))
-  return <code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
+  return <><code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
     onClick={(e) => { e.stopPropagation(); copyText(txt); setDone(true); setTimeout(() => setDone(false), 1200) }}
     style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
+    {txt.length >= 2 && txt.length <= 80 && !txt.includes('\n') && !props.className && <LearnDoor term={txt} />}</>
 }
 // A path on the box in a message is a link (2026-10-09): click opens the Files pane (images shown
 // there inline), hover on an image shows it small beside the link.
@@ -180,6 +275,7 @@ function Highlight({ children, node }) {
     <span style={{ position: 'relative', display: 'inline' }}>
       <strong onClick={(e) => { e.stopPropagation(); card.toggle() }} title="click: go deeper or send an agent"
         style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
+      {txt.length <= 80 && <LearnDoor term={txt} />}
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
           <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>{txt}</span>
@@ -1295,6 +1391,7 @@ function CC() {
     const root = document.documentElement
     root.dataset.theme = look.skin || (() => { try { return localStorage.getItem('bf-theme') || 'gold' } catch { return 'gold' } })()
   }, [look.skin])
+  const learnCtx = useMemo(() => ({ on: !!look.learn, thread: cur }), [look.learn, cur])
   const lookText = look.text || textSize
   const lookDensity = look.density || density
   const setPosture = (p) => fetch('/cc/posture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture: p }) })
@@ -2143,7 +2240,7 @@ function CC() {
 
   const slimHero = !paneMode && !hidden.hero && !heroShow && turns.length > 2
   return (
-    <>
+    <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
       <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
       <div style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
@@ -2260,7 +2357,12 @@ function CC() {
         {loggedIn && (
           <div style={look.accent ? { '--accent': look.accent } : undefined}>
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
-              posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture} />
+              posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
+              extra={<span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', marginLeft: 'auto' }}>
+                <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
+                  title="learning mode: bold phrases and code terms get a 'learn' door with a mini lesson (one small side call each, nothing posted here)">learn {look.learn ? 'on' : 'off'}</Chip>
+                <Recall />
+              </span>} />
           </div>
         )}
 
@@ -2507,7 +2609,7 @@ function CC() {
       </div>
       {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onClose={() => { setPane(null); loadHealth() }} />}
       </div>
-    </>
+    </LearnCtx.Provider>
   )
 }
 

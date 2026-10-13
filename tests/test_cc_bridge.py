@@ -441,6 +441,28 @@ def test_thread_style_is_checked_and_kept_on_the_thread(monkeypatch, tmp_path):
     assert "style" not in m._threads_update("b1", style={})
 
 
+def test_learning_deck_spaced_recall(monkeypatch, tmp_path):
+    # 2026-10-13, learning mode: saved cards come due after 1, 3, 7, 21 days; a miss starts over.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m.WORLD_DIR = str(tmp_path / "world")
+    assert m._learn_save("HMAC", "Guess: how long is an HMAC-SHA256 tag?", "32\tbytes", "b1")["ok"]
+    rows = (tmp_path / "world" / "learning" / "deck.tsv").read_text().splitlines()
+    assert rows[0].split("\t") == ["date", "term", "question", "answer", "source_thread"]
+    assert rows[1].split("\t")[3] == "32 bytes"
+    saved = rows[1].split("\t")[0]
+    import datetime as dt
+    day = lambda n: (dt.date.fromisoformat(saved) + dt.timedelta(days=n)).isoformat()  # noqa: E731
+    assert m._learn_due(saved)["due"] == [] and m._learn_due(saved)["total"] == 1
+    assert [c["term"] for c in m._learn_due(day(1))["due"]] == ["HMAC"]
+    rev = tmp_path / "world" / "learning" / "reviews.tsv"
+    rev.write_text(f"date\tterm\tresult\n{day(1)}\tHMAC\tok\n")
+    assert m._learn_due(day(3))["due"] == [] and len(m._learn_due(day(4))["due"]) == 1
+    rev.write_text(f"date\tterm\tresult\n{day(1)}\tHMAC\tok\n{day(4)}\tHMAC\tagain\n")
+    assert len(m._learn_due(day(5))["due"]) == 1
+    m.WORLD_DIR = ""
+    assert m._learn_save("x", "q", "a", "")["ok"] is False
+
+
 def test_telegram_token_shape_and_disconnect(monkeypatch, tmp_path):
     """2026-09-30: the page connects the lane with a token; a wrong shape is refused before Telegram
     is asked; disconnect forgets the token and the pinned owner."""

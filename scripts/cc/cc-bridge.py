@@ -1544,6 +1544,128 @@ def _threads_update(brain: str, title=None, pinned=None, archived=None, style=No
     return dict(th)
 
 
+# Learning mode (2026-10-13, hbar: "a system of learning cards: if something is technical, behind the card a
+# mini lesson ... improvising off whatever the AI's response is in any conversation"). A lesson is one side
+# call to the reasoner on the small model, with no tools, no MCP, no memory and no thread: nothing is posted
+# into any conversation. Saved cards go to <world>/learning/deck.tsv; each recall answer to reviews.tsv.
+LEARN_MODEL = os.environ.get("CC_LEARN_MODEL", "haiku").strip() or "haiku"
+LEARN_STEPS = (1, 3, 7, 21)   # days until a card is due again, by how many recalls in a row it got right
+_LEARN_PROMPT = (
+    "You write one flash card for a person reading a technical conversation. The term: {term!r}. "
+    "The paragraph it appeared in: {context!r}.\n"
+    "Answer with JSON only, no prose around it: {{\"question\": ..., \"answer\": ..., \"example\": ...}}.\n"
+    "question: one line that asks the person to GUESS or estimate something about the term (what it does, "
+    "roughly how big, which of two), never 'is it true that'. answer: two to four short plain sentences, "
+    "exact, no filler. example: one concrete line, from this paragraph's setting where it fits. No emoji."
+)
+
+
+def _learn_dir() -> Path | None:
+    return Path(WORLD_DIR) / "learning" if WORLD_DIR else None
+
+
+def _tsv_cell(s, limit: int = 600) -> str:
+    return " ".join(str(s or "").replace("\t", " ").split())[:limit]
+
+
+def _learn_lesson(term: str, context: str) -> dict:
+    """One mini lesson for a term, made by the reasoner on LEARN_MODEL outside any thread."""
+    prompt = _LEARN_PROMPT.format(term=term[:160], context=context[:1500])
+    work = STATE_DIR / "learn"
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)   # an empty directory: no CLAUDE.md, no project files
+    base = [REASONER, "-p", "--output-format", "json", "--model", LEARN_MODEL, "--max-turns", "1",
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}']
+    out = None
+    for cmd in (base + ["--tools", ""], base):   # older reasoners lack --tools; then it runs with no allowed tools
+        try:
+            out = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=90, env=_env(), cwd=str(work))
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"the lesson call failed ({type(e).__name__})"}
+        if out.returncode == 0:
+            break
+    if out is None or out.returncode != 0:
+        print(f"learn failed rc={out.returncode if out else '?'}: {(out.stderr if out else '')[-200:]}", flush=True)
+        return {"ok": False, "error": "the reasoner did not answer the lesson"}
+    try:
+        d = json.loads(out.stdout or "{}")
+        text = str(d.get("result") or "")
+        m = re.search(r"\{.*\}", text, re.S)
+        card = json.loads(m.group(0)) if m else {}
+    except Exception:
+        return {"ok": False, "error": "the lesson came back in an unexpected shape"}
+    q, a = _tsv_cell(card.get("question"), 300), _tsv_cell(card.get("answer"), 900)
+    if not q or not a:
+        return {"ok": False, "error": "the lesson came back empty"}
+    cost = d.get("total_cost_usd")
+    print(f"learn: {term[:40]!r} model={LEARN_MODEL} cost_usd={cost}", flush=True)
+    return {"ok": True, "term": term[:160], "question": q, "answer": a, "example": _tsv_cell(card.get("example"), 300),
+            "cost_usd": cost, "model": LEARN_MODEL}
+
+
+def _learn_save(term: str, question: str, answer: str, thread: str) -> dict:
+    d = _learn_dir()
+    if d is None:
+        return {"ok": False, "error": "no world folder on this bridge (CC_WORLD_DIR), so no deck"}
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "deck.tsv"
+    new = not f.exists()
+    with f.open("a") as fh:
+        if new:
+            fh.write("date\tterm\tquestion\tanswer\tsource_thread\n")
+        fh.write("\t".join([time.strftime("%Y-%m-%d"), _tsv_cell(term, 160), _tsv_cell(question, 300),
+                            _tsv_cell(answer, 900), _tsv_cell(thread, 80)]) + "\n")
+    return {"ok": True, "path": str(f)}
+
+
+def _learn_rows(name: str) -> list:
+    d = _learn_dir()
+    try:
+        lines = (d / name).read_text().splitlines() if d else []
+    except OSError:
+        return []
+    return [ln.split("\t") for ln in lines[1:] if ln.strip()]
+
+
+def _learn_due(today: str | None = None) -> dict:
+    """The cards due today. A card's step is how many recalls in a row it got right since the last
+    miss; it is due LEARN_STEPS[step] days after its last recall (or after it was saved)."""
+    import datetime as _dt
+    today_d = _dt.date.fromisoformat(today or time.strftime("%Y-%m-%d"))
+    cards = {}
+    for r in _learn_rows("deck.tsv"):
+        if len(r) >= 4:
+            cards[r[1]] = {"date": r[0], "term": r[1], "question": r[2], "answer": r[3], "thread": r[4] if len(r) > 4 else ""}
+    state = {}
+    for r in _learn_rows("reviews.tsv"):
+        if len(r) >= 3 and r[1] in cards:
+            step = state.get(r[1], (0, ""))[0]
+            state[r[1]] = (step + 1 if r[2] == "ok" else 0, r[0])
+    due = []
+    for term, c in cards.items():
+        step, last = state.get(term, (0, ""))
+        try:
+            anchor = _dt.date.fromisoformat(last or c["date"])
+        except ValueError:
+            anchor = today_d
+        if anchor + _dt.timedelta(days=LEARN_STEPS[min(step, len(LEARN_STEPS) - 1)]) <= today_d:
+            due.append(c)
+    return {"due": due, "total": len(cards)}
+
+
+def _learn_review(term: str, ok: bool) -> dict:
+    d = _learn_dir()
+    if d is None:
+        return {"ok": False, "error": "no world folder on this bridge (CC_WORLD_DIR), so no deck"}
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "reviews.tsv"
+    new = not f.exists()
+    with f.open("a") as fh:
+        if new:
+            fh.write("date\tterm\tresult\n")
+        fh.write(f"{time.strftime('%Y-%m-%d')}\t{_tsv_cell(term, 160)}\t{'ok' if ok else 'again'}\n")
+    return {"ok": True}
+
+
 def _brain_api(method: str, path: str, body: dict | None = None):
     """Call the brain's api with its own key. Returns parsed JSON or None; never raises."""
     if not BRAIN_API_KEY:
@@ -2878,6 +3000,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.startswith("/jobs") and not self._operator_ok() and not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
             self._send(403, {"error": "not the operator, not the reasoner"})
             return
+        if route == "/learn/due":
+            self._send(200, _learn_due())
+            return
         if route == "/health":
             _st = _load_state()
             self._send(200, {"ok": True, "session": bool(_st.get("session_id")),
@@ -3237,6 +3362,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"ok": False, "error": "no such thread"})
                 return
             self._send(200, {"ok": True, "thread": th})
+            return
+        if route == "/learn":
+            term = " ".join(str(req.get("term") or "").split())
+            if not term or len(term) > 160:
+                self._send(400, {"ok": False, "error": "a term of 1 to 160 characters"})
+                return
+            out = _learn_lesson(term, str(req.get("context") or ""))
+            self._send(200 if out.get("ok") else 502, out)
+            return
+        if route == "/learn/save":
+            if not str(req.get("term") or "").strip() or not str(req.get("question") or "").strip():
+                self._send(400, {"ok": False, "error": "term and question needed"})
+                return
+            out = _learn_save(str(req["term"]), str(req["question"]), str(req.get("answer") or ""), str(req.get("thread") or ""))
+            self._send(200 if out.get("ok") else 409, out)
+            return
+        if route == "/learn/review":
+            out = _learn_review(str(req.get("term") or ""), bool(req.get("ok")))
+            self._send(200 if out.get("ok") else 409, out)
             return
         if route == "/threads/switch":
             want = str(req.get("brain", "")).strip()
