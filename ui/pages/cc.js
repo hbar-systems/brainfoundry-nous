@@ -780,6 +780,7 @@ function CC() {
   }, [])
   const queueRef = useRef([])                      // messages typed while a NEW thread's first turn runs (it has no id to queue on yet): [{ qid, text }]
   const sendRef = useRef(null)
+  const chooseRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
   const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
@@ -1194,6 +1195,10 @@ function CC() {
       }
       if (e.data && e.data.type === 'cc-send' && typeof e.data.text === 'string' && sendRef.current) {
         sendRef.current(e.data.text)
+      }
+      // A visual page (hbar.visual task sky) starts a cheap thread of its own (2026-10-13)
+      if (e.data && e.data.type === 'cc-thread' && typeof e.data.text === 'string' && chooseRef.current) {
+        chooseRef.current({ mode: 'agent', label: String(e.data.label || e.data.text).slice(0, 80), send: e.data.text })
       }
       // the pane's own menu on /panes (2026-10-06)
       if (e.data && e.data.type === 'cc-pane-cmd') {
@@ -1842,6 +1847,7 @@ function CC() {
   }
 
   sendRef.current = send
+  chooseRef.current = choose
   // Stop and interrupt (2026-10-06). Esc or "stop" ends the answer in progress; the thread keeps
   // what was said and every finished step, and the next message resumes it. "send now" (or
   // Cmd/Ctrl+Enter while it answers) queues the message and stops the turn, so the message goes
