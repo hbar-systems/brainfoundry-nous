@@ -1442,6 +1442,22 @@ function CC() {
     }
   }, [turns])
 
+  // Cards follow (2026-10-13, hbar: "messages appear and those aren't the last messages I see, I have to
+  // scroll down"). A card arrives inside the running answer, so the turn count above does not move. When
+  // the number of cards grows, bring the newest into view, unless you have scrolled well up to read.
+  const askCountRef = useRef(0)
+  useEffect(() => {
+    const el = convRef.current
+    const n = turns.reduce((k, t) => k + ((t.asks && t.asks.length) || 0) + (t.proposal ? 1 : 0), 0)
+    const grew = n > askCountRef.current
+    askCountRef.current = n
+    if (!el || !grew) return
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (fromBottom > 900) return
+    const end = () => { if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }
+    requestAnimationFrame(end)
+  }, [turns])
+
   const loggedIn = !!(health && health.auth && health.auth.loggedIn)
   // A pane tells the page that holds it what it is doing, for the one-line title bar (2026-10-06).
   useEffect(() => {
@@ -1726,10 +1742,37 @@ function CC() {
     return false
   }
 
+  // The brain-fix drop box (2026-10-13, hbar: "drop in screenshots and say fix it, in parallel, so we
+  // don't get steered away from other systems"). Text and attachments go to a thread of their own whose
+  // only scope is the brain's engine and console; this thread carries on untouched.
+  async function sendFix(forcedText) {
+    let text = (typeof forcedText === 'string' ? forcedText : draft).trim()
+    if (!text && files.length === 0) return
+    let saved = []
+    if (files.length > 0) {
+      const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
+      try {
+        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok || !d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
+        saved = d.files || []
+      } catch { setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
+      setFiles([])
+    }
+    setDraft('')
+    const ask = (text || 'Fix what the screenshot shows.') + (saved.length ? '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ') : '')
+    const brief = 'Brain fix, a thread of its own. Scope: only this brain\'s engine and console (the brainfoundry-nous repository); never another system\'s repository and never another thread\'s work. ' +
+      'Read any attached screenshot carefully first. Bring the repository up to date with scripts/cc/safe-pull.sh; if it fails, stop and say so. Make the smallest fix that does it, ' +
+      'commit by exact path, never push, and add one line to brain-fixes.tsv at the root of the world folder (date, ask, commit, state). ' +
+      'End with what changed and whether it needs a push and Update; if you need a decision, end with a <choices> block.\n\nThe ask: ' + ask
+    choose({ mode: 'agent', label: 'brain fix: ' + (text || 'screenshot').slice(0, 60), send: brief })
+  }
+
   async function send(forced) {
     let text = (typeof forced === 'string' ? forced : draft).trim()
     const block = typeof forced === 'string' ? '' : notesBlock()
     if (!text && files.length === 0 && !block) return
+    if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
     if (typeof forced !== 'string' && files.length > 0) {
@@ -2154,6 +2197,7 @@ function CC() {
             </Btn>
             {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
             {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
+            <Btn onClick={() => sendFix()} disabled={(!draft.trim() && files.length === 0) || !loggedIn} title="Send this (and any screenshot) as a brain fix: a thread of its own that only touches the brain's engine and console; this conversation carries on (/fix does the same)">fix the brain ↗</Btn>
             <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : 'send'}</Btn>
           </div>
           )}
