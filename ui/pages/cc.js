@@ -6,6 +6,7 @@ import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '..
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { splitChoices, remarkMoney } from '../lib/choices'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -106,7 +107,7 @@ function PathLink({ path, children, style }) {
   const img = isImagePath(path)
   return (
     <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
-      <a onClick={(e) => { e.stopPropagation(); openPath(path) }} title={`Open ${path}`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline dotted', overflowWrap: 'anywhere', ...(style || {}) }}>{children || path}</a>
+      <a onClick={(e) => { e.stopPropagation(); openPath(path) }} title={`Open ${path}`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
       {hov && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
     </span>
   )
@@ -183,6 +184,10 @@ function mdComponents(base) {
       }
       return <InlineCode {...props} />
     },
+    // an amount with a currency (remarkMoney, 2026-10-13): a quiet chip, so the costs in an answer stand out
+    span: ({ node, ...props }) => (props['data-ccmoney']
+      ? <span {...props} style={{ ...mono, fontSize: '0.9em', color: C.gold, border: `1px solid ${C.gold}`, borderRadius: '5px', padding: '0 4px', whiteSpace: 'nowrap' }} />
+      : <span {...props} />),
     table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '0.93em', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
     td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
@@ -198,10 +203,34 @@ const Md = React.memo(function Md({ text }) {
   const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
 })
+
+// An answer that ends in a decision carries its choices as buttons (2026-10-13, ui/lib/choices.js).
+// "reply" sends the text as the next message here; "agent" starts it as a thread of its own.
+function Choices({ choices, onChoice }) {
+  const [used, setUsed] = useState(null)
+  if (!choices || choices.length === 0) return null
+  return (
+    <div data-nopick="1" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+      {choices.map((c, i) => (
+        <button key={i} disabled={used !== null} onClick={() => { setUsed(i); onChoice(c) }}
+          title={(c.mode === 'agent' ? 'starts a new thread beside this one: ' : 'sends: ') + c.send}
+          style={{ ...mono, fontSize: '12px', padding: '5px 12px', borderRadius: '14px', cursor: used === null ? 'pointer' : 'default',
+                   border: `1px solid ${used === i || used === null ? C.gold : C.line}`, backgroundColor: used === i ? C.gold : 'transparent',
+                   color: used === i ? C.onAccent : (used === null ? C.gold : C.faint) }}>
+          {c.label}{c.mode === 'agent' ? ' ↗' : ''}
+        </button>
+      ))}
+    </div>
+  )
+}
+function BrainText({ text, live, onChoice }) {
+  const { body, choices } = useMemo(() => splitChoices(text), [text])
+  return <><Md text={body} />{!live && <Choices choices={choices} onChoice={onChoice} />}</>
+}
 
 function ProposalCard({ p, onDecide }) {
   // One proposed write, waiting for the person. The summary names platform,
@@ -282,10 +311,22 @@ function Pane({ pane, onClose, side, onSide }) {
     const f = () => setNarrow(window.innerWidth < 960)
     f(); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f)
   }, [])
-  const box = (narrow || wide)
+  // Full screen (hbar 2026-10-13: "the actual thing to read, always able to go full screen"): the pane
+  // covers everything, nav included; Escape returns, here or from inside the pane (it posts cc-pane-esc).
+  const [full, setFull] = useState(false)
+  useEffect(() => {
+    if (!full) return undefined
+    const k = (e) => { if (e.key === 'Escape') setFull(false) }
+    const m = (e) => { if (e.origin === window.location.origin && e.data && e.data.type === 'cc-pane-esc') setFull(false) }
+    window.addEventListener('keydown', k); window.addEventListener('message', m)
+    return () => { window.removeEventListener('keydown', k); window.removeEventListener('message', m) }
+  }, [full])
+  const box = full
+    ? { position: 'fixed', inset: 0, zIndex: 1000, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
+    : (narrow || wide)
     ? { position: 'fixed', top: 'calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px))', right: 0, bottom: 0, left: 0, zIndex: 150, backgroundColor: C.brain, display: 'flex', flexDirection: 'column' }
     : { width: w ? `${w}px` : 'min(48vw, 760px)', flexShrink: 0, backgroundColor: C.brain, display: 'flex', flexDirection: 'column', position: 'relative' }
-  const inline = !(narrow || wide)
+  const inline = !(narrow || wide || full)
   return (
     <div style={box}>
       {inline && <div onPointerDown={startDrag} onDoubleClick={() => { setW(null); try { localStorage.removeItem('cc.paneW') } catch {} }} title="Drag to resize; double-click to reset"
@@ -296,7 +337,8 @@ function Pane({ pane, onClose, side, onSide }) {
         <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>
         <span style={{ display: 'flex', gap: '8px' }}>
           {inline && <Btn small onClick={onSide} title="Put it on the other side of the conversation">{side === 'left' ? 'to right' : 'to left'}</Btn>}
-          {!narrow && <Btn small onClick={() => setWide(x => !x)} title={wide ? 'Back beside the conversation' : 'Cover the whole console'}>{wide ? 'beside' : 'wide'}</Btn>}
+          <Btn small onClick={() => { try { document.activeElement && document.activeElement.blur() } catch {}; setFull(x => !x) }} title={full ? 'Back (Escape)' : 'The pane alone, the whole screen; Escape comes back'}>{full ? 'exit full' : 'full screen'}</Btn>
+          {!narrow && !full && <Btn small onClick={() => setWide(x => !x)} title={wide ? 'Back beside the conversation' : 'Cover the whole console'}>{wide ? 'beside' : 'wide'}</Btn>}
           <Btn small onClick={onClose} title="Put it away">close</Btn>
         </span>
       </div>
@@ -1762,6 +1804,18 @@ function CC() {
     }
   }
 
+  // A choice button (2026-10-13). "reply" is the next message in this thread. "agent" starts a thread
+  // of its own on the bridge, which answers beside this one and shows in the thread list; this page
+  // stays where it is and notes the start.
+  function choose(c) {
+    if (c.mode !== 'agent') { send(c.send); return }
+    setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one; open it from the thread list.` }])
+    fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: c.send, new: true, thread: null, stream: false }) })
+      .then(r => r.json()).then(d => { if (d && d.error && d.reply) setTurns(t => [...t, { who: 'brain', text: d.reply, error: true }]) })
+      .catch(() => {}).finally(() => loadThreads())
+    setTimeout(() => loadThreads(), 1500)
+  }
+
   async function fresh() {
     // Allowed while a thread answers: it goes on by itself; this page turns to a blank one.
     freshRef.current = true
@@ -1995,7 +2049,7 @@ function CC() {
                   </div>
                 )}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
-                {t.who === 'brain' ? (t.text ? <Md text={t.text} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
+                {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
                 {t.voices && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
                     {t.voices.map(v => (

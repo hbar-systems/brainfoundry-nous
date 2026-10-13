@@ -226,6 +226,13 @@ def test_speakable_flattens_markdown_and_caps(monkeypatch, tmp_path):
     assert m._speakable("") == ""
 
 
+def test_choices_block_is_taught_and_never_spoken(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert "<choices>" in m.SYSTEM and "never more" in m.SYSTEM
+    s = m._speakable('Pick one.\n<choices>[{"label": "A", "send": "do a", "mode": "agent"}]</choices>')
+    assert "choices" not in s and "label" not in s and "Pick one" in s
+
+
 def test_speak_parts_split_on_sentences_and_paragraphs(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=False)
     monkeypatch.setattr(m, "VOICE_PART_CHARS", 60)
@@ -706,6 +713,27 @@ console.log(JSON.stringify({
     assert d["hrefs"] == ["ops/a.md", None, None, None, None, "/home/hands/in/x.png", "ops/a b.md"]
     assert d["raw"] == "/cc/files/raw/home/hands/in/a%20b.png"
     assert d["file"] == [True, True, True, False, False]
+
+
+def test_ui_choices_and_money_chips():
+    import json
+    out = _node(r"""
+const L = require('./choices')
+const five = JSON.stringify([1, 2, 3, 4, 5].map(i => ({ label: 'c' + i, send: 's' + i })))
+console.log(JSON.stringify({
+  ok: L.splitChoices('Pick.\n\n<choices>[{"label":"A","send":"do a","mode":"agent"},{"label":"B"},{"send":"no label"}]</choices>'),
+  streaming: L.splitChoices('Pick.\n\n<choices>[{"label":"A"'),
+  broken: L.splitChoices('Pick.\n<choices>not json</choices>'),
+  mid: L.splitChoices('a <choices>[]</choices> b'),
+  capped: L.splitChoices('x <choices>' + five + '</choices>').choices.length,
+  money: L.splitMoney('EUR 34 today, €27-31/mo, $0.39/h, 1,200 USD, not 2026-10-13 or v0.9.0, £5.').filter(p => p.t === 'money').map(p => p.v),
+}))""")
+    d = json.loads(out)
+    assert d["ok"] == {"body": "Pick.", "choices": [{"label": "A", "send": "do a", "mode": "agent"}, {"label": "B", "send": "B", "mode": "reply"}]}
+    assert d["streaming"] == {"body": "Pick.", "choices": []}
+    assert d["broken"] == {"body": "Pick.", "choices": []}
+    assert d["mid"]["choices"] == [] and d["capped"] == 4
+    assert d["money"] == ["EUR 34", "€27-31", "$0.39", "1,200 USD", "£5"]
 
 
 def test_ui_markdown_view_structure():

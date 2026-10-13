@@ -269,6 +269,13 @@ SYSTEM += (
     "is its <pane>/route</pane>. If the thing has no address yet (not uploaded, not deployed, not built), say "
     "that in those words and give the nearest address that does exist. The person never goes searching."
 )
+# Choices (the visual layer, 2026-10-13; ui/lib/choices.js): the page draws the block as buttons.
+SYSTEM += (
+    " Choices: when an answer ends in a decision for the person, end it with one block "
+    "<choices>[{\"label\": \"...\", \"send\": \"...\", \"mode\": \"reply\"}]</choices>, a JSON list the page shows as buttons: "
+    "\"reply\" sends `send` as their next message here, \"agent\" starts `send` as a new thread of its own beside this one "
+    "(for work that should run separately). Offer 2 to 4 choices when the answer ends in a decision, never more."
+)
 SYSTEM += (
     " Personalizing the console: when the person asks to set up, personalize or rearrange the console, or "
     "says they have not yet and wants to, read docs/personalize-interview.md in the brain repository and follow "
@@ -986,7 +993,7 @@ _SPEAK_CODE = re.compile(r"```.*?```", re.S)
 _SPEAK_INLINE = re.compile(r"`([^`]*)`")
 _SPEAK_URL = re.compile(r"https?://\S+")
 _SPEAK_MARKS = re.compile(r"[*_#>|]+")
-_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>", re.S)
+_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>|<choices>.*?</choices>", re.S)
 
 
 def _speakable(text: str) -> str:
