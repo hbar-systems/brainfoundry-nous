@@ -33,14 +33,27 @@ export default function Files() {
   const embedded = typeof window !== 'undefined' && window.self !== window.top
   // Full screen (hbar 2026-10-13): a visual fills the whole screen, no list, no toolbar; files?path=..&full=1 opens it so.
   const [full, setFull] = useState(false)
-  const fullable = (s) => s && (s.kind === 'html' || (isMdPath(s.path) && s.view))
+  // A hand-made visual goes full screen alone; every other file view (2026-10-13) goes full screen with its toolbar.
+  const visualOnly = (s) => s && (s.kind === 'html' || (isMdPath(s.path) && s.view && mode === 'view' && !editing))
+  // In a narrow pane the list and the open file do not fit side by side (hbar's screenshot 2026-10-13:
+  // the file's title squeezed to one letter a line, the body pushed out of sight): the file takes the pane.
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const f = () => setNarrow(window.innerWidth < 760)
+    f(); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f)
+  }, [])
   function goFull(on) {
     setFull(on)
     try { const u = new URL(window.location.href); if (on) u.searchParams.set('full', '1'); else u.searchParams.delete('full'); window.history.replaceState(null, '', u.toString()) } catch {}
     try { if (on && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen() } catch {}
   }
   useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape' && full) goFull(false) }
+    // Escape leaves this page's full screen first, then the pane's (the console listens for cc-pane-esc)
+    const k = (e) => {
+      if (e.key !== 'Escape') return
+      if (full) goFull(false)
+      else if (embedded) { try { window.parent.postMessage({ type: 'cc-pane-esc' }, window.location.origin) } catch {} }
+    }
     window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k)
   }, [full])
 
@@ -118,7 +131,7 @@ export default function Files() {
     <>
       <Head><title>Files · BrainFoundry</title></Head>
       <div style={{ display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
-        <div style={{ width: sel ? '42%' : '100%', minWidth: '280px', borderRight: sel ? `1px solid ${T.line}` : 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ width: sel ? '42%' : '100%', minWidth: '280px', borderRight: sel ? `1px solid ${T.line}` : 0, display: sel && narrow ? 'none' : 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <a onClick={() => { setData(d => ({ ...(d || {}), path: null, entries: [] })); fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {}) }} style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, cursor: 'pointer' }}>Files</a>
             <a onClick={() => { setData(d => ({ ...(d || {}), path: null, entries: [] })) }} style={{ ...mono, fontSize: '12px', color: data && !data.path ? T.ink : T.dim, cursor: 'pointer', textDecoration: 'underline' }}>newest</a>
@@ -170,9 +183,10 @@ export default function Files() {
           </div>
         </div>
         {sel && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '14px', color: T.ink, wordBreak: 'break-all', flex: 1 }}>{sel.path.split('/').pop()}</span>
+          <div style={full && !visualOnly(sel) ? { position: 'fixed', inset: 0, zIndex: 1000, backgroundColor: 'var(--bg)', display: 'flex', flexDirection: 'column' } : { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '6px 12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              {narrow && !full && <a onClick={() => setSel(null)} title="back to the list" style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline', cursor: 'pointer' }}>list</a>}
+              <span style={{ fontSize: '14px', color: T.ink, overflowWrap: 'anywhere', flex: '1 1 220px', minWidth: 0 }}>{sel.path.split('/').pop()}</span>
               <span style={{ ...mono, fontSize: '11px', color: T.faint }}>{fmtSize(sel.size)}</span>
               {isMdPath(sel.path) && sel.kind === 'text' && !editing && (
                 <span style={{ ...mono, fontSize: '12px', display: 'inline-flex', gap: '8px', alignItems: 'baseline' }} title="the md is the input; the view is the output">
@@ -180,7 +194,7 @@ export default function Files() {
                   <a onClick={() => setMode('source')} style={{ color: mode === 'source' ? T.gold : T.dim, textDecoration: mode === 'source' ? 'none' : 'underline', cursor: 'pointer', borderBottom: mode === 'source' ? `1px solid ${T.gold}` : 0 }}>source</a>
                 </span>
               )}
-              {fullable(sel) && <a onClick={() => goFull(true)} title="the visual alone, the whole screen; Escape comes back" style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>full screen</a>}
+              <a onClick={() => goFull(!full)} title={full ? 'back (Escape)' : 'the whole screen; Escape comes back'} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>{full ? 'exit full screen' : 'full screen'}</a>
               <a href={raw(sel.path)} download style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download</a>
               <a onClick={() => ask(sel.path)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>ask the brain</a>
               {sel.kind === 'text' && text !== null && editable(sel.path) && !editing && <a onClick={startEdit} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>edit</a>}
@@ -190,7 +204,7 @@ export default function Files() {
               {onDesk(sel.path) && <a onClick={() => fileThis(sel.path)} title="move it into the world where it belongs and commit" style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>file this</a>}
               <a onClick={() => setSel(null)} style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline', cursor: 'pointer' }}>close</a>
             </div>
-            <div style={{ flex: 1, overflow: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ flex: 1, overflow: 'auto', padding: full ? '24px max(24px, calc((100% - 1100px) / 2))' : '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {sel.kind === 'audio' && <audio controls preload="metadata" src={raw(sel.path)} style={{ width: '100%' }} />}
               {sel.kind === 'video' && <video controls preload="metadata" src={raw(sel.path)} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000' }} />}
               {sel.kind === 'image' && <img src={raw(sel.path)} alt={sel.path} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />}
@@ -209,7 +223,7 @@ export default function Files() {
           </div>
         )}
       </div>
-      {full && fullable(sel) && (
+      {full && visualOnly(sel) && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, backgroundColor: '#000' }}>
           <iframe src={raw(sel.kind === 'html' ? sel.path : sel.view)} title={sel.path} sandbox={VIEW_SANDBOX} allow="fullscreen" allowFullScreen style={{ width: '100%', height: '100%', border: 0, display: 'block' }} />
           <a onClick={() => goFull(false)} title="back to the files (Escape)" style={{ ...mono, position: 'fixed', top: '10px', right: '12px', fontSize: '11px', letterSpacing: '0.12em', color: 'rgba(255,255,255,0.45)', backgroundColor: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '12px', padding: '3px 10px', cursor: 'pointer' }}>exit</a>
