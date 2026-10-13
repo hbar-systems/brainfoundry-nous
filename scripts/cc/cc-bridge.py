@@ -315,8 +315,10 @@ if WORLD_DIR and SAME_ROOT:
         "separate command is a round trip the person waits through. Give the one-line answer from memory first when you "
         "have one, then the verified version; "
         "memory tells you what mattered, the world tells you what is true now. Build there: edit, run tests, "
-        "commit with clear messages, push only when the person says push; `git pull --ff-only` before editing "
-        "and stop if it fails. Never commit secrets or files under .env."
+        "commit with clear messages, push only when the person says push. Before editing, bring the repository "
+        f"up to date with `bash {Path(__file__).resolve().parent}/safe-pull.sh <repo>` (other threads share this "
+        "checkout: it never rebases, resets or stashes; own unpushed commits are fine); if it fails, say so and stop. "
+        "Never `git rebase`, `git reset --hard` or `git stash` in a shared checkout. Never commit secrets or files under .env."
     )
 elif WORLD_DIR:
     SYSTEM += (
@@ -337,8 +339,8 @@ if WORK_DIR and BOX_ENABLED and not SAME_ROOT:
     SYSTEM += (
         f" The person's working copies of their repositories live at {WORK_DIR}, one folder per repository, "
         "writable, with their own git identity and push access. Build there: edit, run tests, commit with clear "
-        "messages, and push only when the person says push. Before editing, `git pull --ff-only`; if the pull "
-        "fails, say so and stop. Never commit secrets or files under .env."
+        "messages, and push only when the person says push. Before editing, "
+        f"`bash {Path(__file__).resolve().parent}/safe-pull.sh <repo>`; if it fails, say so and stop. Never commit secrets or files under .env."
     )
 
 # Files, jobs and uploads (scripts/cc/cc_extras.py). The reasoner's outputs go under

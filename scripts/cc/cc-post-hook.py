@@ -31,6 +31,17 @@ def main() -> None:
             os.chmod(d, (ds.st_mode & 0o777) | 0o2070)   # group may write; new files inherit the group
     except OSError:
         pass
+    # The edit log (2026-10-13): one line per file this thread touched, read by the world's pre-commit
+    # sweep guard (scripts/hooks/owners-check.py), so a commit cannot carry another thread's files.
+    key = os.environ.get("CC_THREAD_ID") or os.environ.get("CC_RUN_ID") or ""
+    if key and "/" not in key:
+        try:
+            d = os.environ.get("CC_EDITS_DIR") or os.path.expanduser("~/.cache/cc-edits")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, key + ".paths"), "a", encoding="utf-8") as f:
+                f.write(os.path.abspath(path) + "\n")
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
