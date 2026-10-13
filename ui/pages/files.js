@@ -31,6 +31,18 @@ export default function Files() {
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState(null)   // {ok, text}
   const embedded = typeof window !== 'undefined' && window.self !== window.top
+  // Full screen (hbar 2026-10-13): a visual fills the whole screen, no list, no toolbar; files?path=..&full=1 opens it so.
+  const [full, setFull] = useState(false)
+  const fullable = (s) => s && (s.kind === 'html' || (isMdPath(s.path) && s.view))
+  function goFull(on) {
+    setFull(on)
+    try { const u = new URL(window.location.href); if (on) u.searchParams.set('full', '1'); else u.searchParams.delete('full'); window.history.replaceState(null, '', u.toString()) } catch {}
+    try { if (on && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen() } catch {}
+  }
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape' && full) goFull(false) }
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k)
+  }, [full])
 
   function load(path) {
     setError(null)
@@ -45,7 +57,8 @@ export default function Files() {
       .catch(() => setError('the bridge did not answer'))
   }
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get('path')
+    const sp = new URLSearchParams(window.location.search), q = sp.get('path')
+    if (sp.get('full') === '1') setFull(true)
     load(q || null)
     fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {})
   }, [])
@@ -167,6 +180,7 @@ export default function Files() {
                   <a onClick={() => setMode('source')} style={{ color: mode === 'source' ? T.gold : T.dim, textDecoration: mode === 'source' ? 'none' : 'underline', cursor: 'pointer', borderBottom: mode === 'source' ? `1px solid ${T.gold}` : 0 }}>source</a>
                 </span>
               )}
+              {fullable(sel) && <a onClick={() => goFull(true)} title="the visual alone, the whole screen; Escape comes back" style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>full screen</a>}
               <a href={raw(sel.path)} download style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download</a>
               <a onClick={() => ask(sel.path)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>ask the brain</a>
               {sel.kind === 'text' && text !== null && editable(sel.path) && !editing && <a onClick={startEdit} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>edit</a>}
@@ -195,6 +209,12 @@ export default function Files() {
           </div>
         )}
       </div>
+      {full && fullable(sel) && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, backgroundColor: '#000' }}>
+          <iframe src={raw(sel.kind === 'html' ? sel.path : sel.view)} title={sel.path} sandbox={VIEW_SANDBOX} allow="fullscreen" allowFullScreen style={{ width: '100%', height: '100%', border: 0, display: 'block' }} />
+          <a onClick={() => goFull(false)} title="back to the files (Escape)" style={{ ...mono, position: 'fixed', top: '10px', right: '12px', fontSize: '11px', letterSpacing: '0.12em', color: 'rgba(255,255,255,0.45)', backgroundColor: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '12px', padding: '3px 10px', cursor: 'pointer' }}>exit</a>
+        </div>
+      )}
     </>
   )
 }
