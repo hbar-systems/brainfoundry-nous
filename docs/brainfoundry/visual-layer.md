@@ -42,6 +42,21 @@ The reasoner may end an answer with one block:
   - The title now wraps as a whole, with a 220 px basis.
   - Under 760 px, the open file takes the whole pane, and a "list" link goes back to the list.
 
+## The tool line (2026-10-13)
+
+hbar: "a small line where tools are represented, and those tools can in real time change the brain's look, not via GitHub pushes; and a circular colour wheel so the person can tweak the look of different conversations live".
+
+- A slim strip above the conversation, folded to one line ("tools ▸" with a dot in the current accent). Open or folded is remembered in the browser (`cc.toolline`).
+- Open, it holds:
+  - A colour wheel, drawn by the page (no browser colour input): hue round the circle, strength from the centre out. It sets this conversation's accent (`--accent` on the conversation, so chips, links and cards follow).
+  - Tint 0, 6, 12, 20: how much of the accent washes the conversation's background. "reset" goes back to the skin's own accent.
+  - Text 14, 16, 18 and compact or comfortable, for this conversation. The footer links still set the default for conversations without their own.
+  - The nine skins (gold, paper, sapphire, forest, crimson, mono, fox, octopus, owl) as chips. A skin chosen here applies while this conversation is open; tapping it again goes back to the console skin (Settings, `bf-theme`).
+  - Posture (cards, auto, judged), only where the box lane is on. Posture is the box's, not the thread's: it applies to every conversation from the next turn, as `/posture` does.
+- Where it is kept: on the box, in the thread record (`~/.cc-bridge/threads.json`), field `style`, through `POST /cc/threads/update {brain, style}`. The bridge keeps only known keys with checked values (`_thread_style`: accent `#rrggbb`, tint 0 to 30, text, density, skin, learn); `style: {}` clears it. The page writes half a second after the last touch, so a drag round the wheel is one write. Another device opening the same thread gets the same look.
+- A new conversation that has no thread id yet keeps its look in the page only, until its first answer; then the next touch saves it.
+- Nothing here needs a push or a rebuild: it is data on the box, read by the page.
+
 ## What is next
 
 - **The map as the scenery layer.** One surface where people, boxes and modules are nodes and each node is a button:

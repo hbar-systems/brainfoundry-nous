@@ -1488,13 +1488,45 @@ def _threads_order(items: list) -> list:
     return sorted(by_last, key=lambda x: not x.get("pinned"))
 
 
-def _threads_update(brain: str, title=None, pinned=None, archived=None) -> dict | None:
+_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl")
+_STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _thread_style(raw) -> dict | None:
+    """The look of one thread (2026-10-13, the tool line): accent colour, tint strength, text
+    size, density, skin, learning mode. Unknown keys and bad values are dropped, never stored;
+    an empty dict clears the look. None when the value is not a dict at all."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    if isinstance(raw.get("accent"), str) and _STYLE_HEX.match(raw["accent"]):
+        out["accent"] = raw["accent"].lower()
+    if isinstance(raw.get("tint"), (int, float)) and not isinstance(raw.get("tint"), bool):
+        out["tint"] = max(0, min(30, int(raw["tint"])))
+    if raw.get("text") in ("14px", "16px", "18px"):
+        out["text"] = raw["text"]
+    if raw.get("density") in ("compact", "comfortable"):
+        out["density"] = raw["density"]
+    if raw.get("skin") in _STYLE_SKINS:
+        out["skin"] = raw["skin"]
+    if raw.get("learn") is True:
+        out["learn"] = True
+    return out
+
+
+def _threads_update(brain: str, title=None, pinned=None, archived=None, style=None) -> dict | None:
     """Rename, pin or archive one thread (2026-09-30). Title up to 80 characters; the brain's own
-    chat session gets the new title too, best effort. Returns the entry, or None when unknown."""
+    chat session gets the new title too, best effort. Returns the entry, or None when unknown.
+    `style` (2026-10-13) replaces the thread's look as a whole (see _thread_style)."""
     threads = _threads_load()
     th = next((x for x in threads if x.get("brain") == brain), None)
     if not th:
         return None
+    if style is not None:
+        if style:
+            th["style"] = style
+        else:
+            th.pop("style", None)
     if title is not None:
         t = " ".join(str(title).split())[:80]
         if t:
@@ -3194,7 +3226,13 @@ class Handler(BaseHTTPRequestHandler):
             if "title" in req and not isinstance(req.get("title"), str):
                 self._send(400, {"ok": False, "error": "title must be a string"})
                 return
-            th = _threads_update(want, title=req.get("title"), pinned=req.get("pinned"), archived=req.get("archived"))
+            style = None
+            if "style" in req:
+                style = _thread_style(req.get("style"))
+                if style is None:
+                    self._send(400, {"ok": False, "error": "style must be an object"})
+                    return
+            th = _threads_update(want, title=req.get("title"), pinned=req.get("pinned"), archived=req.get("archived"), style=style)
             if not th:
                 self._send(404, {"ok": False, "error": "no such thread"})
                 return

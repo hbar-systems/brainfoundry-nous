@@ -193,6 +193,85 @@ function Highlight({ children, node }) {
     </span>
   )
 }
+// The tool line (2026-10-13, hbar: "a small line where tools are represented, and those tools can in real
+// time change the brain's look, not via GitHub pushes; and a circular colour wheel so the person can tweak
+// the look of different conversations live"). One slim strip above the conversation, folded to one line.
+// The look belongs to the thread and is kept on the box (/cc/threads/update, field `style`), so another
+// device opens the same thread in the same colours. Nothing here needs a push or a rebuild.
+const SKINS = ['gold', 'paper', 'sapphire', 'forest', 'crimson', 'mono', 'fox', 'octopus', 'owl']
+const TINTS = [0, 6, 12, 20]
+function hslHex(h, s, l) {
+  s /= 100; l /= 100
+  const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l)
+  const f = n => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))).toString(16).padStart(2, '0')
+  return '#' + f(0) + f(8) + f(4)
+}
+// Drawn here, never the browser's colour input: hue round the circle, saturation from the centre out.
+function ColourWheel({ value, onPick, size = 56 }) {
+  const ref = useRef(null)
+  const pickAt = (e) => {
+    const r = ref.current.getBoundingClientRect()
+    const x = e.clientX - r.left - r.width / 2, y = e.clientY - r.top - r.height / 2
+    const hue = (Math.atan2(y, x) * 180 / Math.PI + 450) % 360
+    const sat = Math.min(1, Math.hypot(x, y) / (r.width / 2))
+    onPick(hslHex(hue, Math.round(sat * 85), 58))
+  }
+  return (
+    <span ref={ref} title="accent of this conversation: hue round the circle, strength from the centre out"
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); pickAt(e) }}
+      onPointerMove={(e) => { if (e.buttons) pickAt(e) }}
+      style={{ width: size + 'px', height: size + 'px', borderRadius: '50%', flex: '0 0 auto', cursor: 'crosshair', touchAction: 'none', display: 'inline-block',
+               border: `2px solid ${value || C.line}`, background: 'radial-gradient(circle, #9a9a9a 0%, rgba(154,154,154,0) 70%), conic-gradient(from 0deg, hsl(0,85%,58%), hsl(60,85%,58%), hsl(120,85%,58%), hsl(180,85%,58%), hsl(240,85%,58%), hsl(300,85%,58%), hsl(360,85%,58%))' }} />
+  )
+}
+function Chip({ on, onClick, title, children }) {
+  return <a onClick={onClick} title={title}
+    style={{ ...mono, fontSize: '11px', padding: '2px 8px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
+             border: `1px solid ${on ? C.gold : C.line}`, color: on ? C.gold : C.dim, backgroundColor: on ? C.card : 'transparent' }}>{children}</a>
+}
+function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
+  const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
+  const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
+  const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
+  return (
+    <div data-nopick="1" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', padding: open ? '6px 8px' : '2px 8px', marginBottom: '6px',
+                                  border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', minHeight: '22px' }}>
+      <a onClick={flip} title="the tool line: this conversation's look, live" style={{ ...lbl, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: look.accent || C.gold, display: 'inline-block' }} />
+        tools {open ? '▾' : '▸'}
+      </a>
+      {open && <>
+        <ColourWheel value={look.accent} onPick={(hex) => put('accent', hex)} />
+        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+            <span style={lbl}>tint</span>
+            {TINTS.map(t => <Chip key={t} on={(look.tint || 0) === t} onClick={() => put('tint', t || null)} title="how much of the accent washes the background">{t}</Chip>)}
+            {look.accent && <Chip onClick={() => { const n = { ...look }; delete n.accent; delete n.tint; setLook(n) }} title="back to the skin's own accent">reset</Chip>}
+          </span>
+          <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+            <span style={lbl}>text</span>
+            {['14px', '16px', '18px'].map(t => <Chip key={t} on={text === t} onClick={() => put('text', t)} title="text size in this conversation">{parseInt(t, 10)}</Chip>)}
+            {['compact', 'comfortable'].map(d => <Chip key={d} on={density === d} onClick={() => put('density', d)} title="spacing inside messages">{d}</Chip>)}
+          </span>
+        </span>
+        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={lbl}>skin</span>
+          {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
+        </span>
+        {posture ? (
+          <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+            <span style={lbl}>posture</span>
+            {['cards', 'auto', 'judged'].map(p => <Chip key={p} on={posture === p} onClick={() => setPosture(p)} title="how much your own box asks (all conversations, from the next turn)">{p}</Chip>)}
+          </span>
+        ) : null}
+      </>}
+      {extra}
+    </div>
+  )
+}
+
 // The visual a message opened (2026-10-13, hbar: "in each message I should be able to see the visual,
 // open close it; now I closed it and lost it"). The route rides with the message and stays in history.
 const PANE_MARK = /\n*<!--pane:(\S+?)-->\s*$/
@@ -1195,6 +1274,31 @@ function CC() {
   const startRename = (key, current) => { setRenaming(key); setRenameVal(current || '') }
   const finishRename = (brain) => { const t = renameVal.trim(); setRenaming(null); if (t) updateThread(brain, { title: t }) }
   const curThread = threads.find(t => t.brain === cur) || null
+  // The thread's look (the tool line, 2026-10-13): read from the thread record on the box, changed here
+  // at once, written back a moment after the last touch so a drag round the wheel is one write.
+  const [look, setLookState] = useState({})
+  const lookSave = useRef(null)
+  const curStyle = JSON.stringify((curThread && curThread.style) || {})
+  useEffect(() => { if (!lookSave.current) setLookState(JSON.parse(curStyle)) }, [cur, curStyle])
+  const setLook = (n) => {
+    setLookState(n)
+    if (!cur) return
+    const brain = cur
+    clearTimeout(lookSave.current)
+    lookSave.current = setTimeout(() => {
+      lookSave.current = null
+      fetch('/cc/threads/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain, style: n }) })
+        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.thread) setThreads(ts => ts.map(t => (t.brain === brain ? { ...t, style: d.thread.style } : t))) }).catch(() => {})
+    }, 500)
+  }
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.theme = look.skin || (() => { try { return localStorage.getItem('bf-theme') || 'gold' } catch { return 'gold' } })()
+  }, [look.skin])
+  const lookText = look.text || textSize
+  const lookDensity = look.density || density
+  const setPosture = (p) => fetch('/cc/posture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture: p }) })
+    .then(r => r.json()).then(d => { if (!d.ok) setTurns(t => [...t, { who: 'brain', text: d.error || 'posture not changed' }]); loadHealth() }).catch(() => {})
   // day groups for the dropdown: pinned first, then today, yesterday, then the date
   const dayLabel = (ts) => {
     if (!ts) return 'earlier'
@@ -2153,7 +2257,16 @@ function CC() {
           </div>
         )}
 
-        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': paneMode ? '15px' : textSize, ...(density === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
+        {loggedIn && (
+          <div style={look.accent ? { '--accent': look.accent } : undefined}>
+            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
+              posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture} />
+          </div>
+        )}
+
+        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
+          ...(look.accent ? { '--accent': look.accent, borderRadius: '8px', backgroundColor: look.tint ? `color-mix(in srgb, ${look.accent} ${look.tint}%, transparent)` : undefined } : {}),
+          ...(lookDensity === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
           <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>

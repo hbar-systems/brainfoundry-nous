@@ -427,6 +427,20 @@ def test_threads_view_sorts_pinned_first_and_hides_archived(monkeypatch, tmp_pat
     assert m._threads_view()["archived_count"] == 2
 
 
+def test_thread_style_is_checked_and_kept_on_the_thread(monkeypatch, tmp_path):
+    # 2026-10-13, the tool line: a thread's look lives in its record; bad values never land.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m._threads_save([{"claude": "c1", "brain": "b1", "title": "t", "started": "2026-10-13T10:00:00Z"}])
+    s = m._thread_style({"accent": "#A1B2C3", "tint": 99, "text": "18px", "density": "loose", "skin": "owl",
+                         "learn": True, "evil": "x", "font": "url(javascript:1)"})
+    assert s == {"accent": "#a1b2c3", "tint": 30, "text": "18px", "skin": "owl", "learn": True}
+    assert m._thread_style({"accent": "red; background:url(x)"}) == {}
+    assert m._thread_style("no") is None
+    assert m._threads_update("b1", style=s)["style"]["accent"] == "#a1b2c3"
+    assert m._threads_view()["threads"][0]["style"]["skin"] == "owl"
+    assert "style" not in m._threads_update("b1", style={})
+
+
 def test_telegram_token_shape_and_disconnect(monkeypatch, tmp_path):
     """2026-09-30: the page connects the lane with a token; a wrong shape is refused before Telegram
     is asked; disconnect forgets the token and the pinned owner."""
