@@ -64,6 +64,9 @@ export default function Upload() {
   const [results, setResults] = useState([]);
   const [layers, setLayers] = useState([]);
   const [layer, setLayer] = useState("");
+  // Privacy for the next upload (api/privacy.py): "open" = any reasoner may
+  // read it; "local-only" = only the box's Ollama or a tailnet spoke.
+  const [privacy, setPrivacy] = useState("open");
   const [stats, setStats] = useState(null);
   const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
   const [layerFilter, setLayerFilter] = useState(null); // null = no filter; click a badge to set, click again to clear
@@ -137,6 +140,59 @@ export default function Upload() {
 
   const toggleLayerFilter = (l) => setLayerFilter(prev => prev === l ? null : l);
 
+  // Privacy chip: same pill shape as LayerBadge. Used as the two-way choice on
+  // upload and as the per-document toggle in Browse.
+  const PrivacyChip = ({ level, active, onClick, title, busy }) => {
+    const local = level === "local-only";
+    const color = local ? ACCENT : MUTED;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={busy}
+        title={title || (local ? "local-only: hosted models never see this" : "open: any reasoner may read this")}
+        style={{
+          background: active ? `${color}22` : "transparent",
+          border: `1px solid ${active ? color : BORDER}`,
+          color: active ? color : MUTED,
+          borderRadius: 999,
+          padding: "2px 9px",
+          fontSize: 11,
+          fontFamily: "DM Mono, monospace",
+          cursor: busy ? "wait" : "pointer",
+          lineHeight: 1.5,
+        }}
+      >
+        {level}
+      </button>
+    );
+  };
+
+  // Flip a stored document between open and local-only (all its chunks).
+  const [privacyBusy, setPrivacyBusy] = useState(null);
+  const setDocPrivacy = async (name, level) => {
+    setPrivacyBusy(name);
+    try {
+      const r = await fetch(`${API_BASE}/documents/${encodeURIComponent(name)}/privacy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ privacy: level }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        pushLog(`PRIVACY ${name}: ${j.privacy} (${j.chunks_updated} chunk(s))`);
+        setAllDocs(prev => prev.map(d => d.name === name ? { ...d, privacy: j.privacy } : d));
+      } else {
+        const body = await r.text();
+        pushLog(`FAIL privacy ${name}: ${r.status} — ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      pushLog(`FAIL privacy ${name}: ${err.message}`);
+    } finally {
+      setPrivacyBusy(null);
+    }
+  };
+
   // Set the folder-mode attributes via DOM after mount — React strips unknown
   // HTML attributes like `webkitdirectory` in some versions.
   useEffect(() => {
@@ -164,6 +220,7 @@ export default function Upload() {
             proposal_id: p.proposal_id,
             filename: p.source_refs?.filename || "(unnamed)",
             layer: p.source_refs?.layer || "",
+            privacy: p.source_refs?.privacy || "",
             deciding: false,
           }));
         if (docs.length === 0) return;
@@ -354,12 +411,13 @@ export default function Upload() {
         fd.append("file", file);
         fd.append("permit_id", permit_id);
         if (layer) fd.append("layer", layer);
+        if (privacy === "local-only") fd.append("privacy", "local-only");
         try {
           const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
           const body = await r.text();
           if (r.status === 202) {
             const j = JSON.parse(body);
-            newPending.push({ proposal_id: j.proposal_id, file, layer, filename: file.name, injectionScan: j.injection_scan || null });
+            newPending.push({ proposal_id: j.proposal_id, file, layer, privacy: privacy === "local-only" ? "local-only" : "", filename: file.name, injectionScan: j.injection_scan || null });
             pushLog(`PROPOSED ${file.name} → awaiting your approval below`);
             const sc = j.injection_scan;
             if (sc && (sc.risk === "high" || sc.risk === "medium")) {
@@ -407,6 +465,7 @@ export default function Upload() {
         const fd = new FormData();
         fd.append("proposal_id", prop.proposal_id);
         if (prop.layer) fd.append("layer", prop.layer);
+        if (prop.privacy) fd.append("privacy", prop.privacy);
         const r = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: fd });
 
         if (!r.ok) {
@@ -538,7 +597,9 @@ export default function Upload() {
 
   const runSearch = async () => {
     setResults([]);
-    const body = { query, limit: 20 };
+    // The owner's own search shows local-only chunks too; nothing here goes
+    // to a model.
+    const body = { query, limit: 20, include_local_only: true };
     if (layerFilter) body.layers = [layerFilter];
     const r = await fetch(`${API_BASE}/documents/search`, {
       method: "POST",
@@ -663,6 +724,11 @@ export default function Upload() {
               ...layers.map(l => ({ value: l.name, label: l.name })),
             ]}
           />
+          <label style={{ fontSize: 13, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>Privacy:</label>
+          {["open", "local-only"].map(v => (
+            <PrivacyChip key={v} level={v} active={privacy === v} onClick={() => setPrivacy(v)}
+              title={v === "open" ? "Any reasoner may read it, including hosted models" : "Only reasoners on your own hardware (the box's Ollama or a tailnet spoke) may read it"} />
+          ))}
           {(() => {
             const disabled = busy || !files.length;
             return (
@@ -732,7 +798,7 @@ export default function Upload() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: TEXT, fontFamily: "DM Mono, monospace", fontSize: 13, wordBreak: "break-all" }}>{p.filename}</div>
                   <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>
-                    layer: {p.layer || "(unscoped)"} · proposal: {p.proposal_id.slice(0, 8)}…
+                    layer: {p.layer || "(unscoped)"}{p.privacy === "local-only" ? " · local-only" : ""} · proposal: {p.proposal_id.slice(0, 8)}…
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -997,6 +1063,15 @@ export default function Upload() {
                             {(d.layers || []).filter(l => l !== layerName).map(l => (
                               <LayerBadge key={l} layer={l} active={layerFilter === l} onClick={() => toggleLayerFilter(l)} />
                             ))}
+                            <PrivacyChip
+                              level={d.privacy === "local-only" ? "local-only" : "open"}
+                              active={d.privacy === "local-only"}
+                              busy={privacyBusy === d.name}
+                              onClick={() => setDocPrivacy(d.name, d.privacy === "local-only" ? "open" : "local-only")}
+                              title={d.privacy === "local-only"
+                                ? "local-only: only your own hardware's models read this. Click to make it open."
+                                : "open: any reasoner may read this. Click to make it local-only."}
+                            />
                             <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
                             <button
                               onClick={() => forgetDoc(d.name)}

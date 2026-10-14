@@ -4032,11 +4032,13 @@ PROPOSAL_TEXT_DIR = RUNTIME_DIR / "proposal_texts"
 PROPOSAL_TEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _save_proposal_text(proposal_id: str, text: str, *, filename: str, content_type: str, size: int, scan: Optional[dict] = None) -> None:
+def _save_proposal_text(proposal_id: str, text: str, *, filename: str, content_type: str, size: int, scan: Optional[dict] = None, privacy: Optional[str] = None) -> None:
     (PROPOSAL_TEXT_DIR / f"{proposal_id}.txt").write_text(text, encoding="utf-8")
     meta = {"filename": filename, "content_type": content_type, "size": size}
     if scan is not None:
         meta["injection_scan"] = scan
+    if privacy:
+        meta["privacy"] = privacy
     (PROPOSAL_TEXT_DIR / f"{proposal_id}.meta.json").write_text(
         json.dumps(meta), encoding="utf-8",
     )
@@ -4078,6 +4080,7 @@ def _stream_ingest_path_b(
     proposal_id: str,
     layer: Optional[str],
     injection_risk: Optional[str] = None,
+    privacy: Optional[str] = None,
 ):
     def sse(event: str, payload: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
@@ -4090,6 +4093,7 @@ def _stream_ingest_path_b(
     # retrieval, making the gap-#3 defense structural. The content_hash is the
     # join key to the signed artifact_attestations ledger written below.
     from api import memory_type as _memtype
+    from api import privacy as _privacy
     from api import substrate as _substrate
     content_hash = _substrate.content_hash_of(text)
     mem_type = _memtype.classify_upload(injection_risk)
@@ -4122,10 +4126,18 @@ def _stream_ingest_path_b(
         # Chunk-level update (2026-09-27): rows of this name whose text is unchanged are kept
         # (fresh created_at, so a later "retire older chunks" leaves them), only new text is
         # embedded, rows whose text disappeared are deleted at the end.
-        cursor.execute("SELECT id, content FROM document_embeddings WHERE document_name = %s", (filename,))
+        cursor.execute("SELECT id, content, metadata FROM document_embeddings WHERE document_name = %s", (filename,))
         existing: dict = {}
-        for rid, content in cursor.fetchall():
+        _existing_levels = []
+        for rid, content, _md in cursor.fetchall():
             existing.setdefault(chunk_hash(content or ""), []).append(rid)
+            _existing_levels.append(_privacy.level_of(_md))
+        # Privacy level for every chunk of this document: the explicit choice
+        # if one was made, else inherit (a re-upload of a local-only document
+        # without a choice stays local-only, never silently opens), else open.
+        if privacy is None:
+            privacy = _privacy.stricter(*_existing_levels) or _privacy.OPEN
+        provenance["privacy"] = privacy
         to_embed, reused, stale = plan_update(chunks, existing)
         now_iso = datetime.utcnow().isoformat()
         for idx, rid in reused:
@@ -4136,7 +4148,7 @@ def _stream_ingest_path_b(
                     metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
                 WHERE id = %s
                 """,
-                (json.dumps({"chunk_index": idx, "ingested_at": now_iso, "proposal_id": proposal_id, "layer": layer, "reused": True}), rid),
+                (json.dumps({"chunk_index": idx, "ingested_at": now_iso, "proposal_id": proposal_id, "layer": layer, "reused": True, "privacy": privacy}), rid),
             )
         reused_chunks = len(reused)
         conn.commit()
@@ -4217,6 +4229,7 @@ def _stream_ingest_path_b(
         "chunks_retired": stale_rows,
         "proposal_id": proposal_id,
         "layer": layer,
+        "privacy": privacy,
         "total_seconds": total_seconds,
         "status": "success",
     })
@@ -4305,9 +4318,16 @@ async def upload_document(
     proposal_id: Optional[str] = Form(None),
     permit_id: Optional[str] = Form(None),
     layer: Optional[str] = Form(None),
+    privacy: Optional[str] = Form(None),
     api_key: str = Depends(get_api_key),
 ):
     """Upload and process document for embeddings and RAG.
+
+    Privacy (api/privacy.py): optional `privacy` field, `open` (default) or
+    `local-only` (only reasoners on owner hardware may read the chunks). It may
+    be sent on the proposal (Path A, remembered with the proposal) or on the
+    approval (Path B); if both are sent the stricter wins. With neither, a
+    re-upload keeps the document's existing level; a new document is open.
 
     Memory governance (deny-by-default):
     - Without proposal_id: requires a file. Extracts text, saves it under the
@@ -4322,6 +4342,12 @@ async def upload_document(
     - Layer must be one defined in Settings → Memory layers (validated against settings_store).
     - Omitted/empty = unscoped (legacy behavior; chunks have no layer tag).
     """
+    from api import privacy as _privacy
+    try:
+        privacy = _privacy.normalize_level(privacy, default=None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    saved_privacy: Optional[str] = None
     if layer:
         valid_layers = settings_store.get_layer_names()
         if layer not in valid_layers:
@@ -4369,6 +4395,7 @@ async def upload_document(
                 content_type = saved["content_type"]
                 size = saved["size"]
                 injection_risk = (saved.get("injection_scan") or {}).get("risk")
+                saved_privacy = saved.get("privacy")
                 print(f"[upload] approve path: loaded persisted text for proposal={proposal_id} filename={filename} text_len={len(text)} injection_risk={injection_risk or 'n/a'}", flush=True)
             elif file is not None:
                 content = await file.read()
@@ -4408,11 +4435,13 @@ async def upload_document(
                            "Obtain a loop permit from NodeOS first (POST /v1/loops/request)."
                 )
             layer_suffix = f" [layer={layer}]" if layer else ""
+            if privacy:
+                layer_suffix += f" [privacy={privacy}]"
             proposal = _nodeos_propose_memory(
                 memory_type="document_embedding",
                 content=f"Document upload: {filename} ({len(text)} chars, {content_type}){layer_suffix}",
                 permit_id=permit_id,
-                source_refs={"filename": filename, "content_type": content_type, "size": size, "layer": layer},
+                source_refs={"filename": filename, "content_type": content_type, "size": size, "layer": layer, "privacy": privacy},
             )
             # Prompt-injection scan — surfaced to the operator at approval time,
             # never auto-blocked. A poisoned doc is visible before it lands in
@@ -4422,7 +4451,7 @@ async def upload_document(
                 scan = injection_scan.scan_text(text)
             except Exception as _scan_err:
                 scan = None
-            _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size, scan=scan)
+            _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size, scan=scan, privacy=privacy)
             print(f"[upload] proposed proposal_id={proposal['proposal_id']} (text persisted, injection_risk={scan.get('risk') if scan else 'n/a'})", flush=True)
             return JSONResponse(
                 status_code=202,
@@ -4432,6 +4461,7 @@ async def upload_document(
                     "proposal_id": proposal["proposal_id"],
                     "message": "Memory proposal submitted to NodeOS. Approve the proposal — no file re-upload needed.",
                     "injection_scan": scan,
+                    "privacy": privacy,  # None: inherit the existing level, else open
                 },
             )
 
@@ -4454,6 +4484,7 @@ async def upload_document(
                 proposal_id=proposal_id,
                 layer=layer,
                 injection_risk=injection_risk,
+                privacy=_privacy.stricter(privacy, saved_privacy),
             ),
             media_type="text/event-stream",
             headers={"x-accel-buffering": "no", "cache-control": "no-cache, no-transform"},
@@ -4566,6 +4597,61 @@ def restore_document(document_name: str, api_key: str = Depends(get_api_key)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
+
+
+def _set_document_privacy(document_name: str, level: str, conn=None) -> int:
+    """Stamp `metadata.privacy = level` on every chunk of a document (trashed
+    chunks included, so a restore cannot bring back a stale level). Returns
+    the number of chunks updated. `conn` is injectable for tests."""
+    owns = conn is None
+    if owns:
+        conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE document_embeddings
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('privacy', %s::text)
+            WHERE document_name = %s
+            """,
+            (level, document_name),
+        )
+        n = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        return n
+    finally:
+        if owns:
+            conn.close()
+
+
+@app.post("/documents/{document_name:path}/privacy")
+def set_document_privacy(document_name: str, request: dict, api_key: str = Depends(get_api_key)):
+    """Change the privacy level of an existing document (api/privacy.py).
+
+    Body: {"privacy": "open" | "local-only"}. Applies to every chunk of the
+    document. `local-only` chunks are read only by reasoners on owner hardware
+    (the box's Ollama or a tailnet spoke); every hosted model, the public chat,
+    federation, Telegram and brain apps get the open view only.
+    """
+    from api import privacy as _privacy
+    if not document_name.strip():
+        raise HTTPException(status_code=400, detail="document_name is required")
+    try:
+        level = _privacy.normalize_level((request or {}).get("privacy"), default=None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if level is None:
+        raise HTTPException(status_code=400, detail="privacy is required (open or local-only)")
+    try:
+        n = _set_document_privacy(document_name, level)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Privacy update failed: {str(e)}")
+    if n == 0:
+        raise HTTPException(status_code=404, detail=f"No chunks found for document: {document_name}")
+    return {"document_name": document_name, "privacy": level, "chunks_updated": n}
 
 
 @app.post("/documents/{document_name:path}/release")
@@ -4917,6 +5003,9 @@ def list_documents(
                        FILTER (WHERE metadata->>'layer' IS NOT NULL
                                AND metadata->>'layer' <> '') AS layers,
                    MAX(metadata->>'source') AS source,
+                   -- Doc-level privacy: local-only if ANY chunk is not open
+                   -- (fail closed, same rule as retrieval).
+                   bool_or(COALESCE(metadata->>'privacy', 'open') <> 'open') AS local_only,
                    -- First chunk's content, in ingest order, as the doc synopsis.
                    -- Cheap, no LLM call. The UI truncates to ~150 chars; we
                    -- return up to 400 so the client has room to play with.
@@ -4959,7 +5048,8 @@ def list_documents(
                     "last_updated": r[2].isoformat() if r[2] else None,
                     "layers": r[3] or [],
                     "source": r[4],
-                    "synopsis": r[5],
+                    "privacy": "local-only" if r[5] else "open",
+                    "synopsis": r[6],
                 }
                 for r in rows
             ],
@@ -7183,6 +7273,8 @@ class MemoryStoreRequest(BaseModel):
     final_layer: Optional[str] = None
     final_path: Optional[str] = None
     reject_reason: Optional[str] = None
+    # Privacy level (api/privacy.py): "open" (default) or "local-only".
+    privacy: Optional[str] = None
 
 
 class MemoryStoreProposeRequest(BaseModel):
@@ -7392,7 +7484,13 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         content_hash=_content_hash,
     )
 
+    from api import privacy as _privacy
+    try:
+        _store_privacy = _privacy.normalize_level(req.privacy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     metadata_base: dict = {
+        "privacy": _store_privacy,
         "layer": layer,
         "source": req.source or "chat-store-button",
         "stored_at": datetime.utcnow().isoformat(),
