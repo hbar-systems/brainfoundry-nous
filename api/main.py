@@ -1709,6 +1709,9 @@ def _ensure_runtime_indexes() -> None:
                 "ON document_embeddings ((metadata->>'content_hash')) "
                 "WHERE metadata->>'content_hash' IS NOT NULL"
             )
+            # 2026-10-14: memory privacy gate (api/privacy.py).
+            from api import privacy as _privacy
+            cur.execute(_privacy.INDEX_SQL)
         conn.close()
     except Exception as e:
         print(f"[startup] layer index ensure skipped: {e}", flush=True)

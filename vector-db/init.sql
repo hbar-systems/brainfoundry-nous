@@ -37,6 +37,16 @@ CREATE INDEX IF NOT EXISTS document_embeddings_content_hash_idx
 ON document_embeddings ((metadata->>'content_hash'))
 WHERE metadata->>'content_hash' IS NOT NULL;
 
+-- 2026-10-14: memory privacy gate. `privacy` is 'open' (default; any reasoner)
+-- or 'local-only' (only reasoners on owner hardware: the box's Ollama or a
+-- tailnet spoke). A chunk without the key is open, so no backfill is needed.
+-- Retrieval for a closed reasoner keeps COALESCE(privacy,'open') = 'open'.
+-- See api/privacy.py. Existing brains: scripts/migrate_privacy.py (idempotent;
+-- the API startup hook also ensures this index on boot).
+CREATE INDEX IF NOT EXISTS document_embeddings_privacy_idx
+ON document_embeddings ((metadata->>'privacy'))
+WHERE metadata->>'privacy' IS NOT NULL;
+
 -- Create a table for chat sessions
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
