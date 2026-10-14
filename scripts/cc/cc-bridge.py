@@ -49,6 +49,7 @@ import re
 import select
 import signal
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -1571,14 +1572,21 @@ def _tsv_cell(s, limit: int = 600) -> str:
 def _learn_lesson(term: str, context: str) -> dict:
     """One mini lesson for a term, made by the reasoner on LEARN_MODEL outside any thread."""
     prompt = _LEARN_PROMPT.format(term=term[:160], context=context[:1500])
-    work = STATE_DIR / "learn"
-    work.mkdir(mode=0o700, parents=True, exist_ok=True)   # an empty directory: no CLAUDE.md, no project files
+    # an empty directory: no CLAUDE.md, no project files. On a split box the reasoner runs as the hands user
+    # (only it holds the sign-in; 2026-10-14 the first lesson failed because this ran as the bridge user),
+    # so the directory must be one both users can enter.
+    if HANDS_USER:
+        work = Path(tempfile.gettempdir()) / "cc-learn"
+        work.mkdir(mode=0o755, parents=True, exist_ok=True)
+    else:
+        work = STATE_DIR / "learn"
+        work.mkdir(mode=0o700, parents=True, exist_ok=True)
     base = [REASONER, "-p", "--output-format", "json", "--model", LEARN_MODEL, "--max-turns", "1",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}']
     out = None
     for cmd in (base + ["--tools", ""], base):   # older reasoners lack --tools; then it runs with no allowed tools
         try:
-            out = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=90, env=_env(), cwd=str(work))
+            out = subprocess.run(_as_hands(cmd), input=prompt, capture_output=True, text=True, timeout=90, env=_env() if not HANDS_USER else None, cwd=str(work))
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"the lesson call failed ({type(e).__name__})"}
         if out.returncode == 0:
