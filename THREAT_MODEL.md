@@ -59,6 +59,75 @@ The autonomous agentic loop always dispatches with `admin=False`, so a poisoned
 document that smuggles "call delete_memory" past the model still dies at the gate.
 RED-tier tools remain blocked wholesale until a per-call approval flow exists.
 
+## 4a. Memory privacy: `local-only` (added 2026-10-14)
+
+Every memory chunk carries a privacy level in `metadata.privacy`
+(`api/privacy.py`):
+
+- `open` (default; also any chunk with no level): any reasoner may read it.
+- `local-only`: only a reasoner on hardware the owner controls may read it:
+  the box's own Ollama (`OLLAMA_URL`) or an Ollama on a tailnet spoke
+  (`OLLAMA_SPOKE_URL`).
+
+How the owner sets it: the Privacy chips (open / local-only) next to "Memory
+layer" on the Knowledge tab before uploading; the per-document chip in
+Knowledge → Browse to flip an existing document; or the API:
+`POST /documents/upload` with form field `privacy=local-only`,
+`POST /documents/{name}/privacy {"privacy": "local-only" | "open"}` (API key),
+`POST /memory/store {"privacy": "local-only", ...}`. A re-upload of a
+local-only document without a choice stays local-only.
+
+**What it guarantees.** When a turn is answered by a closed provider
+(Anthropic, OpenAI, Gemini, xAI, Groq, OpenRouter, Together, Mistral, an Ollama
+`:cloud` model, or an Ollama endpoint on a public host), local-only chunks are
+filtered out in the SQL query itself, filtered again in Python, and so are
+never retrieved, never put in the prompt, and never sent to that provider.
+This holds on every path that feeds memory to a model: `/chat/rag` (all three
+retrieval architectures, the corroboration pass, the agentic `search_memory`
+tool), brain-app `llm.complete`, Telegram, `/v1/public/chat`,
+`/v1/federation/query`, the harmonics receiver context, the layer-scheme
+proposal, and `/documents/search` (which the CC bridge uses to give Claude Code
+memory; it returns local-only chunks only when the caller sends
+`include_local_only: true`, which only the Knowledge tab does).
+
+It fails closed: a model whose route cannot be resolved, a model name the
+provider layer does not know, an unparseable or public Ollama URL, or a stored
+level other than exactly `open` all count as closed / local-only. A retrieval
+call that does not say who reads the result gets the closed view.
+
+Local-only chunks are included only when the reasoner is local **and** the
+answer returns to the owner on the console. They are withheld, even on a local
+model, from: brain apps (the reply goes into third-party app code), Telegram
+(the reply crosses Telegram's servers), public chat and federation (the reader
+is not the owner), and the autonomy tick. Once a local turn holds local-only
+memory, only GREEN tools (own memory, own task list) can be called; web search,
+fetch, brain_call, mail, Drive, calendar and MCP tools are refused for the rest
+of the turn, since their arguments leave the box. The "your mind" fact
+extraction is skipped for that turn if its model is closed.
+
+**What it does not guarantee.**
+
+- It covers memory chunks, not files. The Claude Code CC tab reads files on
+  the box's disk directly (the world checkout, `in/`, `out/`); a document that
+  is also a file there is readable by Claude Code whatever its memory level.
+  Keep local-only material out of the paths the CC reasoner can read.
+- Derived text is not tracked. A local model's answer that quotes a local-only
+  chunk is stored in chat history as ordinary text. If the owner later
+  continues that session on a closed model, or consolidates it with a closed
+  model ("Save to memory" with a frontier model), that history goes with it.
+  Switch sessions before switching to a hosted model.
+- It does not encrypt anything. A local-only chunk is plaintext in Postgres,
+  in exports and in backups, like every other chunk; the gate controls which
+  reasoner reads it, not who can read the database.
+- Owner-controlled is judged from the address: a docker service name,
+  localhost, private, link-local or Tailscale (100.64.0.0/10) addresses,
+  `*.ts.net` / `*.local` / `*.internal` names, or hosts listed in
+  `PRIVACY_LOCAL_HOSTS`. Pointing `OLLAMA_URL` at a private address you do not
+  control defeats it.
+- Embeddings are computed on the box (or on the embed spoke) for every chunk,
+  whatever its level. If the embed spoke is not owner hardware, local-only
+  text reaches it at ingest.
+
 ## 5. Key handling (BYOK)
 
 The provider key lives in the environment (`.env`, never committed; see

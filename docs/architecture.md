@@ -75,6 +75,8 @@ graph LR
 
 The query is embedded in the same vector space as the documents. Cosine similarity ranks the top-k matches. Operator chat passes layers explicitly; public chat is locked to `["public"]`.
 
+Privacy (2026-10-14): each chunk is `open` (default) or `local-only`. Retrieval is filtered per reasoner: a hosted model (Anthropic, OpenAI, Groq, any API) never retrieves a local-only chunk; the box's Ollama or a tailnet spoke does, when the answer returns to the owner. Unknown locality counts as hosted. Details, and what it does not cover (the CC tab reads files, not chunks): THREAT_MODEL.md section 4a.
+
 ### Generation
 
 The prompt the model sees is assembled in this order:
