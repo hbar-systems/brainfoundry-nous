@@ -803,6 +803,9 @@ console.log(JSON.stringify({
   hrefs: ['ops/a.md#x', 'https://a.b/c.md', '/cc/files', '#top', 'mailto:a@b.c', 'file:///home/hands/in/x.png', 'ops/a%20b.md'].map(L.hrefToPath),
   raw: L.rawUrl('/home/hands/in/a b.png'),
   file: ['ops/x.md', 'x.MD', '/home/hands/out/a b.png', 'not a file', '../x.md'].map(L.looksLikeFile),
+  md: ['https://console.x.ai/cc/files/raw/home/hands/world/ops/a%20b.md', '/cc/files/raw/home/x.MD#top', '/cc/files/raw/home/x.png', 'ops/x.md', '/cc/files/raw/home/../etc/x.md'].map(L.rawHrefToMdPath),
+  att: L.splitAttached('Look.\n\nAttached on the box: /home/hands/in/d/Screenshot 10.12.34 AM.png, /home/hands/in/d/b.md'),
+  noatt: L.splitAttached('Attached on the box: not a path'),
 }))""")
     d = json.loads(out)
     assert d["paths"] == ["/home/hands/in/2026-10-09/Screenshot 2026-10-09 at 10.12.34 AM.png",
@@ -811,6 +814,9 @@ console.log(JSON.stringify({
     assert d["hrefs"] == ["ops/a.md", None, None, None, None, "/home/hands/in/x.png", "ops/a b.md"]
     assert d["raw"] == "/cc/files/raw/home/hands/in/a%20b.png"
     assert d["file"] == [True, True, True, False, False]
+    assert d["md"] == ["/home/hands/world/ops/a b.md", "/home/x.MD", None, None, None]
+    assert d["att"] == {"text": "Look.", "files": ["/home/hands/in/d/Screenshot 10.12.34 AM.png", "/home/hands/in/d/b.md"]}
+    assert d["noatt"]["files"] == []
 
 
 def test_ui_choices_and_money_chips():

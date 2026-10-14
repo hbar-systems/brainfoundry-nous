@@ -80,4 +80,30 @@ function looksLikeFile(s) {
   return /^[\w][\w.\/ -]{0,200}\.[A-Za-z][A-Za-z0-9]{0,4}$/.test(t)
 }
 
-module.exports = { looksLikeFile, splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks, tidy }
+// Markdown files open as a pop-up card with the text rendered (2026-10-14, hbar: "any .md named in an
+// answer opens as a pop-up card, never through Files").
+const MD_RE = /\.(md|markdown)$/i
+function isMdPath(p) { return MD_RE.test(tidy(p)) }
+
+// A console link to a markdown file's raw bytes (https://console.../cc/files/raw/home/...x.md) is that
+// file's path, so it opens as the card instead of downloading. null for anything else.
+function rawHrefToMdPath(href) {
+  const m = String(href || '').trim().match(/^(?:https?:\/\/[^/]+)?\/cc\/files\/raw(\/[^?#]+)/i)
+  if (!m) return null
+  let p = m[1]
+  try { p = decodeURIComponent(p) } catch (e) {}
+  return isMdPath(p) && !p.includes('/../') ? p : null
+}
+
+// The page's own attachment line ("...\n\nAttached on the box: /a.png, /b.md", cc.js send and the
+// Telegram lane) split off a person's message, so the files show as chips that open again on click.
+// Upload names never carry a comma (Uploads._safe_name), so ", /" separates them.
+function splitAttached(text) {
+  const s = String(text == null ? '' : text)
+  const m = s.match(/(?:^|\n)Attached on the box: ([^\n]+)\s*$/)
+  if (!m) return { text: s, files: [] }
+  const files = m[1].split(/,\s*(?=\/)/).map(x => x.trim()).filter(x => x.startsWith('/'))
+  return files.length ? { text: s.slice(0, m.index).replace(/\s+$/, ''), files } : { text: s, files: [] }
+}
+
+module.exports = { looksLikeFile, splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, tidy }

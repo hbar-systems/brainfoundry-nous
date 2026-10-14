@@ -2,7 +2,7 @@ import Head from 'next/head'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { splitPaths, isImagePath, rawUrl, hrefToPath, remarkPathLinks } from '../lib/pathlinks'
+import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
@@ -200,6 +200,8 @@ function InlineCode({ node, children, ...props }) {
 // agents sent off, or even see the visual"): a click opens a small card instead, with a preview and four
 // doors: open beside, full screen, ask about it here, send an agent on it (a thread of its own).
 function openPath(p) { window.dispatchEvent(new CustomEvent('cc-open-path', { detail: p })) }
+// a markdown file opens as a pop-up card with its text rendered (MdPopup, 2026-10-14), never through Files
+function openMd(p) { window.dispatchEvent(new CustomEvent('cc-open-md', { detail: p })) }
 const ccEmit = (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail }))
 const fullRoute = (route) => route + (route.includes('?') ? '&' : '?') + 'full=1'
 const TEXTISH = /\.(md|txt|tsv|csv|json|py|js|sh|yaml|yml|toml|log)$/i
@@ -252,7 +254,7 @@ function PathLink({ path, children, style, copy }) {
   const route = '/files?path=' + encodeURIComponent(path)
   return (
     <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
-      <a onClick={(e) => { e.stopPropagation(); setHov(false); card.toggle() }} title={`${path} (click: card with open, full screen, ask, agent)`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
+      <a onClick={(e) => { e.stopPropagation(); setHov(false); if (isMdPath(path)) { card.setOpen(false); openMd(path) } else card.toggle() }} title={isMdPath(path) ? `${path} (click: read it in a card)` : `${path} (click: card with open, full screen, ask, agent)`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
       {hov && !card.open && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
@@ -399,9 +401,28 @@ function VisualChip({ route }) {
 }
 // Plain text (the person's own messages) with its paths made into links.
 function LinkedText({ text }) {
-  const parts = useMemo(() => splitPaths(text), [text])
-  if (parts.length === 1 && parts[0].t === 'text') return <>{text}</>
-  return <>{parts.map((p, i) => (p.t === 'path' ? <PathLink key={i} path={p.v} /> : <React.Fragment key={i}>{p.v}</React.Fragment>))}</>
+  const att = useMemo(() => splitAttached(text), [text])
+  const parts = useMemo(() => splitPaths(att.text), [att.text])
+  const body = parts.length === 1 && parts[0].t === 'text' ? att.text
+    : parts.map((p, i) => (p.t === 'path' ? <PathLink key={i} path={p.v} /> : <React.Fragment key={i}>{p.v}</React.Fragment>))
+  if (!att.files.length) return <>{body}</>
+  return <>{body}<span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: att.text ? '8px' : 0, whiteSpace: 'normal' }}>{att.files.map(f => <AttachChip key={f} path={f} />)}</span></>
+}
+// An attachment of a sent message (2026-10-14, hbar: "a dropped screenshot can't be seen again"): a chip
+// with a thumbnail for images; a click opens it again, an image full size in the pane beside, a .md as
+// the pop-up card, anything else in the Files pane.
+function AttachChip({ path }) {
+  const name = String(path).split('/').filter(Boolean).pop() || path
+  const img = isImagePath(path)
+  const open = (e) => { e.stopPropagation(); if (isMdPath(path)) openMd(path); else openPath(path) }
+  return (
+    <a onClick={open} data-nopick="1" title={`${path} (click: open it again)`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', maxWidth: '100%', padding: img ? '3px 8px 3px 3px' : '3px 8px', borderRadius: '8px', cursor: 'pointer',
+               border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.gold, ...mono, fontSize: '11px', textDecoration: 'none' }}>
+      {img && <img src={rawUrl(path)} alt="" loading="lazy" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '5px', backgroundColor: '#000', flexShrink: 0 }} />}
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+    </a>
+  )
 }
 // A thumbnail for a file chosen in the composer (images only), made from the file itself, freed on removal.
 function ChipThumb({ file }) {
@@ -427,7 +448,7 @@ function mdComponents(base) {
       // a path on the box (found in the text by remarkPathLinks, or written as a markdown link to a file)
       // opens in the Files pane; a web address opens in a new tab
       const cc = props['data-ccpath']
-      const fp = cc || hrefToPath(props.href)
+      const fp = cc || hrefToPath(props.href) || rawHrefToMdPath(props.href)
       if (fp) {
         const target = fp.startsWith('/') ? fp : (base && !fp.includes('/') ? `${base}/${fp}` : fp)
         return <PathLink path={target}>{props.children}</PathLink>
@@ -493,6 +514,59 @@ const Md = React.memo(function Md({ text }) {
     </div>
   )
 })
+
+// The markdown card (2026-10-14): any .md named in a message, attached, or linked as the console's raw
+// address opens here, rendered, over the conversation; Escape or a click outside closes it. Doors as on
+// the path card; "open beside" is still there for editing in the Files pane.
+const MD_CARD_MAX = 400000
+function MdPopup() {
+  const [path, setPath] = useState(null)
+  const [doc, setDoc] = useState(null)        // null: reading; { text } or { error }
+  useEffect(() => {
+    const on = (e) => { if (e.detail) { setPath(e.detail); setDoc(null) } }
+    window.addEventListener('cc-open-md', on)
+    return () => window.removeEventListener('cc-open-md', on)
+  }, [])
+  useEffect(() => {
+    if (!path) return undefined
+    let live = true
+    fetch(rawUrl(path), { cache: 'no-store' })
+      .then(r => (r.ok ? r.text() : Promise.reject(r.status === 404 ? 'file not found' : `the bridge answered ${r.status}`)))
+      .then(t => { if (live) setDoc({ text: t.length > MD_CARD_MAX ? t.slice(0, MD_CARD_MAX) + '\n\n(cut here; open beside for the rest)' : t }) })
+      .catch(e => { if (live) setDoc({ error: typeof e === 'string' ? e : 'the bridge did not answer' }) })
+    const esc = (e) => { if (e.key === 'Escape') setPath(null) }
+    document.addEventListener('keydown', esc)
+    return () => { live = false; document.removeEventListener('keydown', esc) }
+  }, [path])
+  if (!path) return null
+  const name = String(path).split('/').filter(Boolean).pop() || path
+  const close = () => setPath(null)
+  return (
+    <div data-nopick="1" onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 200, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '6vh 16px', boxSizing: 'border-box' }}>
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label={name}
+        style={{ width: 'min(760px, 100%)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', backgroundColor: C.card, border: `1px solid ${C.gold}`, borderRadius: '12px', boxShadow: '0 12px 40px rgba(0,0,0,0.6)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 16px 8px', borderBottom: `1px solid ${C.line}` }}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '14px', overflowWrap: 'anywhere' }}>{name}</span>
+            <span style={{ display: 'block', ...mono, color: C.faint, fontSize: '10.5px', overflowWrap: 'anywhere' }}>{path}</span>
+          </span>
+          <a onClick={close} title="Close (Escape)" aria-label="close" style={{ ...mono, fontSize: '16px', lineHeight: 1, color: C.dim, cursor: 'pointer', padding: '2px 4px' }}>×</a>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', fontSize: '14px', lineHeight: 1.55, color: C.ink }}>
+          {doc === null ? <span style={{ color: C.dim, fontStyle: 'italic' }}>reading…</span>
+            : doc.error ? <span style={{ color: '#d08a7a' }}>Could not read it: {doc.error}.</span>
+            : <Md text={doc.text} />}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 16px 12px', borderTop: `1px solid ${C.line}` }}>
+          <CardDoor accent onClick={() => { close(); openPath(path) }} title="Open it in the Files pane beside the chat, to edit">open beside</CardDoor>
+          <CopyDoor text={path} />
+          <CardDoor onClick={() => { close(); ccEmit('cc-send-text', `Tell me about ${path}: what it is, its state, and the next step.`) }} title="Ask about it in this thread">ask about it</CardDoor>
+          <CardDoor onClick={() => { close(); ccEmit('cc-agent', { label: 'on ' + name, send: `Take this on: ${path}. Read it, say its state, and do the next step it names if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // An answer that ends in a decision carries its choices as buttons (2026-10-13, ui/lib/choices.js).
 // "reply" sends the text as the next message here; "agent" starts it as a thread of its own.
@@ -2249,6 +2323,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
+      <MdPopup />
       <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
       <div style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
