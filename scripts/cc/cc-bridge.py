@@ -2211,6 +2211,7 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
     threading.Thread(target=_watch, daemon=True).start()
     run.allowed = set()
     result = None
+    init_model = None   # the model the reasoner started this turn on (the init event names it)
     seen_text = False
     try:
         for line in proc.stdout:
@@ -2226,6 +2227,7 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
             in_tool[0] = False
             if kind == "system" and ev.get("subtype") == "init":
                 run.claude_sid = ev.get("session_id") or run.claude_sid
+                init_model = ev.get("model") or init_model
                 on_event("start", {"model": ev.get("model"), "session_id": ev.get("session_id")})
             elif kind == "stream_event":
                 e = ev.get("event") or {}
@@ -2256,6 +2258,8 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
         stop.set()
     proc.wait()
     err = (proc.stderr.read() or "").strip()[-600:]
+    if result is not None and init_model:
+        result = {**result, "_init_model": init_model}
     return result, err, proc.returncode
 
 
@@ -2347,15 +2351,20 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
         try:
             data = json.loads(out)
             if isinstance(data, list):
+                _init = next((d.get("model") for d in data if d.get("type") == "system" and d.get("subtype") == "init"), None)
                 data = next((d for d in reversed(data) if d.get("type") == "result"), data[-1])
+                if _init and isinstance(data, dict):
+                    data = {**data, "_init_model": _init}
         except json.JSONDecodeError:
             return out[-4000:], session_id, False
     usage = data.get("usage") or {}
     mu = data.get("modelUsage") or {}
-    # The main model is the one that wrote the most; the first key can be a helper model (2026-10-12:
-    # the footer read sonnet on Opus turns).
+    # The footer names the model the turn ran on: the one the reasoner's init event announced. The
+    # usage table also lists helper and subagent models (2026-10-12: the footer read sonnet on Opus
+    # turns), and a subagent can out-write the main model (2026-10-14), so the most-output guess is
+    # only the fallback when no init event was seen.
     models = sorted(mu, key=lambda k: -int((mu.get(k) or {}).get("outputTokens") or 0)) if isinstance(mu, dict) else []
-    META.update({"model": models[0] if models else (_model_current() or None),
+    META.update({"model": data.get("_init_model") or (models[0] if models else (_model_current() or None)),
                  "in_fresh": int(usage.get("input_tokens") or 0),
                  "cache_write": int(usage.get("cache_creation_input_tokens") or 0),
                  # "in" is what was newly read this turn; "cached" is the thread and instructions

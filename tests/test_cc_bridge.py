@@ -122,6 +122,25 @@ p({"type": "result", "result": "hello", "session_id": "s1", "is_error": False, "
     assert m.META["model"] == "claude-x" and m.META["in"] == 5 and m.META["cached"] == 100 and m.META["out"] == 7 and m.META["steps"] == 2
 
 
+def test_footer_model_is_the_turns_model_not_the_biggest_writer(monkeypatch, tmp_path):
+    """The footer names the model the turn ran on (the init event), even when a subagent on
+    another model wrote more output (2026-10-12: the footer read sonnet on Opus turns)."""
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json, sys
+def p(o): print(json.dumps(o), flush=True)
+p({"type": "system", "subtype": "init", "model": "claude-opus-5-5", "session_id": "s2"})
+p({"type": "result", "result": "ok", "session_id": "s2", "is_error": False, "num_turns": 3, "usage": {},
+   "modelUsage": {"claude-sonnet-5-5": {"outputTokens": 9000}, "claude-opus-5-5": {"outputTokens": 400}}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._run_turn("hi", None, on_event=lambda k, p: None)
+    assert m.META["model"] == "claude-opus-5-5"
+
+
 def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("CC_MCP_CONFIG", raising=False)   # the live box sets it; the test wants none
     m = _load(monkeypatch, tmp_path, with_key=False)
