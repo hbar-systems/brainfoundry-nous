@@ -2421,6 +2421,33 @@ def _drain_async(thread: str | None) -> None:
         threading.Thread(target=_drain, args=(thread,), daemon=True).start()
 
 
+# The box's wait line (2026-10-14, hbar: "it says conversations already answering, so I couldn't send out
+# more agents?"). At MAX_RUNS a new thread or a queued message no longer bounces with "wait for one to
+# finish" and is lost: it waits here, and each turn that ends starts the head of the line.
+BOX_WAIT: list = []   # {"kind": "new", "message", "source", "at"} | {"kind": "thread", "thread", "at"}
+
+
+def _box_wait_add(item: dict, front: bool = False) -> int:
+    """Under RUNS_LOCK. A thread waits once; returns the line's length."""
+    if item["kind"] == "thread" and any(x.get("thread") == item["thread"] for x in BOX_WAIT):
+        return len(BOX_WAIT)
+    BOX_WAIT.insert(0, item) if front else BOX_WAIT.append(item)
+    return len(BOX_WAIT)
+
+
+def _box_wait_next() -> None:
+    """A slot freed: start the head of the line. If it meets the cap again, it goes back to the front."""
+    with RUNS_LOCK:
+        if not BOX_WAIT or len(_runs_active()) >= MAX_RUNS:
+            return
+        item = BOX_WAIT.pop(0)
+    if item["kind"] == "thread":
+        threading.Thread(target=_drain, args=(item["thread"],), daemon=True).start()
+    else:
+        threading.Thread(target=_turn, args=(item["message"],), daemon=True,
+                         kwargs={"thread": None, "new": True, "source": item["source"], "waited": True}).start()
+
+
 def _drain(thread: str) -> None:
     """Start the thread's next queued message as a turn, if the thread is idle. A head that was
     cancelled between the peek and the start is skipped on the next pass."""
@@ -2448,15 +2475,16 @@ def _state(thread: str | None) -> dict:
             "others": sum(1 for x in _runs_active() if x is not r), "now": time.time()}
 
 
-def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None) -> tuple[int, dict]:
-    """A turn, then the thread's next queued message (if any) is started."""
-    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue)
+def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False) -> tuple[int, dict]:
+    """A turn, then the thread's next queued message (if any) is started, then the box's wait line."""
+    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited)
     if status in (200, 500):
         _drain_async(payload.get("thread"))
+        _box_wait_next()
     return status, payload
 
 
-def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None) -> tuple[int, dict]:
+def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False) -> tuple[int, dict]:
     """One turn, for the page and for Telegram (2026-09-29). Picks the conversation (an explicit
     thread, a new one, or the box's current one), registers the Run, runs the reasoner, records
     the turn in the brain, emits "done" to every sink, and returns (status, payload). on_run(run)
@@ -2490,6 +2518,10 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 return 409, {"error": "gone", "reply": ""}
             if _run_for_thread(key):
                 return 409, {"error": "busy", "reply": ""}
+            if len(_runs_active()) >= MAX_RUNS:
+                # the box is full: the message stays at the head, the thread waits in the box's line
+                _box_wait_add({"kind": "thread", "thread": key, "at": time.time()})
+                return 409, {"error": "busy", "reply": ""}
             q.pop(0)
             if not q:
                 QUEUES.pop(key, None)
@@ -2499,7 +2531,18 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         if key and _run_for_thread(key):
             return 409, {"error": "busy", "reply": "This conversation is still answering. Wait for it, or start another."}
         active = _runs_active()
-        if len(active) >= MAX_RUNS:
+        if len(active) >= MAX_RUNS and not from_queue:
+            if new:
+                n = _box_wait_add({"kind": "new", "message": message, "source": source, "at": time.time()}, front=waited)
+                return 202, {"waiting": n, "reply": f"{len(active)} conversations are answering; this one waits in line "
+                                                    f"({n} in line) and starts by itself when one finishes."}
+            if key:
+                status, payload = _queue_push(key, message, source)
+                if status == 202:
+                    n = _box_wait_add({"kind": "thread", "thread": key, "at": time.time()})
+                    payload["reply"] = (f"{len(active)} conversations are answering; this message waits in line "
+                                        f"({n} in line) and goes in by itself when one finishes.")
+                return status, payload
             return 409, {"error": "busy", "reply": f"{len(active)} conversations are answering already; wait for one to finish."}
         run = Run(key, message, title=state.get("title"))
         RUNS[run.id] = run

@@ -389,6 +389,49 @@ p({"type": "result", "result": "ok", "session_id": "s9", "is_error": False, "num
     assert said == ["first", "third"]
 
 
+def test_box_full_waits_in_line_and_starts_itself(monkeypatch, tmp_path):
+    """2026-10-14: at MAX_RUNS a new thread (an agent choice) and a message to an idle thread wait in
+    the box's line (202) instead of bouncing with "wait for one to finish"; each turn that ends starts
+    the head of the line."""
+    import time
+    fake = tmp_path / "fake-claude"
+    fake.write_text('''#!/usr/bin/env python3
+import json
+def p(o): print(json.dumps(o), flush=True)
+p({"type": "system", "subtype": "init", "model": "claude-x", "session_id": "s7"})
+p({"type": "result", "result": "ok", "session_id": "s7", "is_error": False, "num_turns": 1, "usage": {}, "modelUsage": {}})
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("CC_BIN", str(fake))
+    monkeypatch.setenv("CC_MAX_RUNS", "2")
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._threads_save([{"claude": "s7", "brain": "brain-w", "title": "w"}])
+    full = [m.Run("brain-a", "a"), m.Run("brain-b", "b")]
+    for r in full:
+        m.RUNS[r.id] = r
+    c1, p1 = m._turn("agent one", thread=None, new=True)
+    c2, p2 = m._turn("to w", thread="brain-w", new=False)
+    assert (c1, c2) == (202, 202) and "in line" in p1["reply"] and "in line" in p2["reply"]
+    assert [x["kind"] for x in m.BOX_WAIT] == ["new", "thread"]
+    # one slot frees: the head of the line starts by itself
+    full[0].emit("done", {})
+    m._box_wait_next()
+    deadline = time.time() + 10
+    while time.time() < deadline and not any(r.message == "agent one" for r in m.RUNS.values()):
+        time.sleep(0.05)
+    assert [x["kind"] for x in m.BOX_WAIT] == ["thread"]
+    started = [r.message for r in m.RUNS.values() if r.id not in (full[0].id, full[1].id)]
+    assert "agent one" in started
+    # the other slot frees: the waiting thread's message goes in
+    full[1].emit("done", {})
+    m._box_wait_next()
+    while time.time() < deadline and (m.BOX_WAIT or m.QUEUES.get("brain-w") or m._runs_active()):
+        time.sleep(0.05)
+    started = [r.message for r in m.RUNS.values() if r.id not in (full[0].id, full[1].id)]
+    assert "to w" in started and not m.BOX_WAIT
+
+
 def test_hook_runs_with_system_python_when_split(monkeypatch, tmp_path):
     """After the split the hook must not use the bridge's venv (closed to the hands); hbar 2026-09-29."""
     monkeypatch.setenv("CC_HANDS_USER", "hands"); monkeypatch.setenv("CC_HANDS_HOME", str(tmp_path / "hands"))
