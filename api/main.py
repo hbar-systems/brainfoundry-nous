@@ -1388,6 +1388,14 @@ async def propose_layer_scheme(api_key: str = Depends(get_api_key)) -> dict:
     """
     # Sample the corpus — most-recent first, one row per document with
     # a content snippet so the model has signal beyond filenames alone.
+    # Privacy gate: previews go to the default model, so local-only documents
+    # are sampled only when that model runs on owner hardware.
+    from api import privacy as _privacy
+    model = _providers.default_model()
+    _scheme_privacy_sql = (
+        "" if _privacy.reasoner_is_local(model)
+        else " AND document_name NOT IN (SELECT document_name FROM document_embeddings"
+             " WHERE COALESCE(metadata->>'privacy', 'open') <> 'open')")
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1398,6 +1406,7 @@ async def propose_layer_scheme(api_key: str = Depends(get_api_key)) -> dict:
                    MAX(created_at) AS last_updated
             FROM document_embeddings
             WHERE metadata->>'deleted_at' IS NULL
+            """ + _scheme_privacy_sql + """
             GROUP BY document_name
             ORDER BY MAX(created_at) DESC
             LIMIT 30
@@ -1449,7 +1458,7 @@ Return ONLY a single JSON object — no prose before or after, no code fences:
     # Guarded resolver (BYOK fallback + drops an uninstalled-ollama stale pin) —
     # same fix as /memory/store/propose; the raw get_active_model() chain 502'd
     # this classify call on a stale model pin. (NOUS item 10 finding, fixed.)
-    model = _providers.default_model()
+    # `model` was resolved above, before the privacy-gated corpus sample.
     try:
         raw = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=4096)
     except Exception as e:
@@ -2009,8 +2018,15 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 
 def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None,
                               architecture: Optional[str] = None,
-                              scope: Optional[str] = None) -> List[Dict[str, Any]]:
+                              scope: Optional[str] = None,
+                              allow_local_only: bool = False) -> List[Dict[str, Any]]:
     """Search for similar documents.
+
+    Privacy gate (api/privacy.py, 2026-10-14): `allow_local_only` says whether
+    the reader of the result may see `local-only` chunks. It defaults to False
+    (the closed view), so any caller that does not state its reader gets only
+    open chunks. Pass True only when the result goes to a reasoner on owner
+    hardware (api.privacy.reasoner_is_local) and back to the owner.
 
     Retrieval modes (Track C3 — "Mind Architecture"):
     - **Flat similarity:** `architecture='flat'` — one cosine-similarity sweep
@@ -2068,6 +2084,10 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         if scope:
             scope_sql = " AND metadata->>'scope' = %s"
             scope_params = [scope]
+        # Privacy gate: a closed reader never retrieves a local-only chunk —
+        # filtered in SQL, so the text is not even read out of the database.
+        from api import privacy as _privacy
+        privacy_sql = _privacy.sql_clause(allow_local_only)
 
         if architecture == "flat":
             cursor.execute(
@@ -2077,7 +2097,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 FROM document_embeddings
                 WHERE embedding IS NOT NULL
                   AND (metadata->>'deleted_at' IS NULL)
-                  {scope_sql}
+                  {scope_sql}{privacy_sql}
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -2095,7 +2115,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
-            return _memtype.rerank(results, limit)
+            return _memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit)
 
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
@@ -2106,7 +2126,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 FROM document_embeddings
                 WHERE metadata->>'layer' = ANY(%s)
                   AND (metadata->>'deleted_at' IS NULL)
-                  {scope_sql}
+                  {scope_sql}{privacy_sql}
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -2124,16 +2144,17 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
-            return _memtype.rerank(results, limit)
+            return _memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit)
 
         def fetch_tier(pattern, n):
             cursor.execute(
-                """
+                f"""
                 SELECT document_name, content, metadata,
                        embedding <-> %s::vector as distance
                 FROM document_embeddings
                 WHERE document_name LIKE %s
                   AND (metadata->>'deleted_at' IS NULL)
+                  {privacy_sql}
                 ORDER BY embedding <-> %s::vector
                 LIMIT %s
                 """,
@@ -2148,7 +2169,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
 
         # Tier 3: similarity search excluding tiered folders
         cursor.execute(
-            """
+            f"""
             SELECT document_name, content, metadata,
                    embedding <-> %s::vector as distance
             FROM document_embeddings
@@ -2157,6 +2178,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
               AND document_name NOT LIKE %s
               AND document_name NOT LIKE %s
               AND (metadata->>'deleted_at' IS NULL)
+              {privacy_sql}
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
@@ -2181,8 +2203,10 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         # composition. Tier 3 is a pure similarity sweep (like the flat path), so
         # it gets the same memory-type rerank: untrusted demoted, ephemeral
         # dropped, then truncated back to `limit`.
-        tier3_ranked = _memtype.rerank(_to_dicts(tier3), limit)
-        return _to_dicts(tier1 + tier2a + tier2b + tier2c) + tier3_ranked
+        tier3_ranked = _memtype.rerank(
+            _privacy.filter_docs(_to_dicts(tier3), allow_local_only), limit)
+        return _privacy.filter_docs(
+            _to_dicts(tier1 + tier2a + tier2b + tier2c), allow_local_only) + tier3_ranked
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
@@ -2638,8 +2662,14 @@ def _apply_rag_budget(docs: List[Dict[str, Any]], model: str):
 
 
 def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int,
-                      web_context: str = "", model: str = ""):
+                      web_context: str = "", model: str = "",
+                      allow_local_only: Optional[bool] = None):
     """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs).
+
+    Privacy gate: `local-only` chunks are retrieved only when the prompt goes
+    to a reasoner on owner hardware. `allow_local_only=None` decides from
+    `model` (api.privacy.reasoner_is_local, fail closed); a caller whose answer
+    leaves the owner's surface (Telegram, a brain app) passes False.
 
     Track C3: the retrieval architecture is a persisted brain setting (the
     "Mind Architecture"). The legacy `layers` argument is retained for API
@@ -2653,9 +2683,14 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     Retrieved docs pass through `_apply_rag_budget` before assembly so the
     prompt cannot overflow a small local model's context window.
     """
+    from api import privacy as _privacy
+    if allow_local_only is None:
+        allow_local_only = _privacy.reasoner_is_local(model)
+    allow_local_only = bool(allow_local_only)
     arch = settings_store.get_retrieval_architecture()
     if arch == "flat":
-        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
+        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat",
+                                                 allow_local_only=allow_local_only)
     elif arch == "layer_scoped":
         # Restrict to the configured layer subset; an empty subset means
         # "all declared layers". With no declared layers at all, there is
@@ -2663,11 +2698,17 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
         scope = settings_store.get_layer_scope() or settings_store.get_layer_names()
         if scope:
             relevant_docs = search_similar_documents(
-                user_query, limit=search_limit, layers=scope, architecture="layer_scoped")
+                user_query, limit=search_limit, layers=scope, architecture="layer_scoped",
+                allow_local_only=allow_local_only)
         else:
-            relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat")
+            relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat",
+                                                     allow_local_only=allow_local_only)
     else:  # 'tiered' — the default folder-weighted retrieval
-        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered")
+        relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="tiered",
+                                                 allow_local_only=allow_local_only)
+    # Belt and braces: whatever retrieval returned, a closed reader's prompt
+    # never carries a local-only chunk.
+    relevant_docs = _privacy.filter_docs(relevant_docs, allow_local_only)
     # Bound the retrieved set before it enters the prompt (model-aware context
     # budget). Cloud/BYOK keeps full document bodies (count cap only); the local
     # tiny model gets the hard fit-budget. This also caps the citation/source
@@ -2777,12 +2818,22 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
     try:
         permit_id = request.get("permit_id")
         permit_token = request.get("permit_token")
+        _permit_agent = ""
         if permit_id or permit_token:
             # Caller chose to use a permit (UI flow) — verify it.
-            _verify_loop_permit(permit_id, permit_token)
+            _permit = _verify_loop_permit(permit_id, permit_token)
+            _permit_agent = str((_permit or {}).get("agent_id") or "") if isinstance(_permit, dict) else ""
         # else: X-API-Key auth (validated by Depends(get_api_key)) is enough
         # for this read-only operation.
         model = request.get("model") or _providers.default_model()
+        # Privacy gate (api/privacy.py): local-only memory reaches this turn only
+        # when the reasoner runs on owner hardware AND the answer comes back to
+        # the owner. A brain app's llm.complete (permit agent "app:<id>") gets
+        # the open view even on a local model: its reply goes into third-party
+        # app code.
+        from api import privacy as _privacy
+        _allow_local_only = (_privacy.reasoner_is_local(model)
+                             and not _permit_agent.startswith("app:"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
@@ -2939,8 +2990,14 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                 web_meta["error"] = "web search is not enabled in Settings"
 
         prompt, relevant_docs = _build_rag_prompt(
-            messages, user_query, layers, search_limit, web_context=web_context, model=model)
+            messages, user_query, layers, search_limit, web_context=web_context, model=model,
+            allow_local_only=_allow_local_only)
         sources = [d["document_name"] for d in relevant_docs]
+        # Did local-only memory reach this turn? Retrieved docs say so directly;
+        # an agentic turn may also pull it in through search_memory, which the
+        # dispatch wrapper below records here. Once set, nothing from this turn
+        # goes to a tool that sends data off the box or to a closed model.
+        _lo_seen = {"v": _privacy.has_local_only(relevant_docs)}
 
         # Corroboration over the brain's OWN documents (cognitive-OS gap #2/#4/#5
         # payoff). Measures how independent / mutually-agreeing / trusted the
@@ -2951,7 +3008,9 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
             if len(relevant_docs) >= 2:
                 from api import factcheck
                 _rag_texts = [(d.get("content") or "")[:600] for d in relevant_docs]
-                _rag_stances = await factcheck.classify_stances(user_query, _rag_texts)
+                # Same reasoner as the turn: the chunks were gated for `model`,
+                # so they must not be sent to a different (default) one.
+                _rag_stances = await factcheck.classify_stances(user_query, _rag_texts, model=model)
                 rag_corroboration = factcheck.score_rag_corroboration(
                     relevant_docs,
                     claim=user_query if _rag_stances is not None else None,
@@ -2996,6 +3055,12 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
             _tools_spec += _mcp.agentic_tool_specs()
         except Exception:
             pass
+        # Privacy gate: a turn that already holds local-only memory offers only
+        # GREEN tools (own memory, own task list). Every YELLOW/RED/MCP tool puts
+        # its arguments on an outside wire, and the model could write the
+        # local-only text into them.
+        if _lo_seen["v"]:
+            _tools_spec = [_t for _t in _tools_spec if _t.get("tier") == _agentic_tools.GREEN]
 
         # RED proposals raised during this agentic turn. The /chat surface has a
         # live operator who can see an Approve/Reject card, so RED dispatch is
@@ -3004,14 +3069,35 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # here and surfaced in rag_metadata so the UI can render the card.
         _pending_approvals: list = []
 
+        def _egress_tool(name) -> bool:
+            if not isinstance(name, str) or name.startswith("mcp__"):
+                return True
+            _t = _agentic_tools.get(name)
+            return _t is None or _t.tier != _agentic_tools.GREEN
+
         async def _agentic_dispatch(name, args):
+            # Privacy gate: after local-only memory entered the turn, refuse any
+            # tool that sends data off the box (the spec was already narrowed if
+            # it entered before the first call; this covers search_memory mid-turn).
+            if _lo_seen["v"] and _egress_tool(name):
+                return _agentic_tools.ToolResult(
+                    ok=False,
+                    error=(f"{name}: refused — this turn holds local-only memory, "
+                           "which may not leave the box; answer from memory instead."))
             # MCP tools route to the connected server (operator granted them by
             # connecting it); everything else goes through the tier-gated dispatch.
             if isinstance(name, str) and name.startswith("mcp__"):
                 from api.integrations import mcp_client as _mcp
                 return await _mcp.call(name, args)
-            res = await _agentic_tools.dispatch(
-                name, args, operator_authorized=_web_ok, approvals_available=True)
+            # search_memory inside this turn reads with the same privacy view.
+            _ptok = _privacy.set_turn_allows_local_only(_allow_local_only)
+            try:
+                res = await _agentic_tools.dispatch(
+                    name, args, operator_authorized=_web_ok, approvals_available=True)
+            finally:
+                _privacy.reset_turn(_ptok)
+            if _privacy.has_local_only((getattr(res, "meta", None) or {}).get("results") or []):
+                _lo_seen["v"] = True
             ap = (getattr(res, "meta", None) or {}).get("approval")
             if ap:
                 _pending_approvals.append(ap)
@@ -3060,7 +3146,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                     yield f"data: {json.dumps(_meta_frame(ev), ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps(_chunk(reply_text), ensure_ascii=False)}\n\n"
                     _persist_chat_turn(session_id, messages, reply_text)
-                    mind_frame = await _maybe_extract_mind_facts(user_query, reply_text)
+                    mind_frame = await _maybe_extract_mind_facts(user_query, reply_text, used_local_only=_lo_seen["v"])
                     if mind_frame:
                         yield f"data: {json.dumps(mind_frame, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
@@ -3082,7 +3168,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                 _persist_chat_turn(session_id, messages, full_reply)
                 # Persistent "your mind" panel: extract + store facts from this
                 # turn when the panel is shown (no-op cost otherwise).
-                mind_frame = await _maybe_extract_mind_facts(user_query, full_reply)
+                mind_frame = await _maybe_extract_mind_facts(user_query, full_reply, used_local_only=_lo_seen["v"])
                 if mind_frame:
                     yield f"data: {json.dumps(mind_frame, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
@@ -3102,7 +3188,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         else:
             reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
         _persist_chat_turn(session_id, messages, reply)
-        mind_frame = await _maybe_extract_mind_facts(user_query, reply)
+        mind_frame = await _maybe_extract_mind_facts(user_query, reply, used_local_only=_lo_seen["v"])
         return {
             "id": f"chatcmpl-rag-{uuid.uuid4()}",
             "object": "chat.completion",
@@ -3548,11 +3634,14 @@ async def public_chat(request: dict, http_request: Request):
     _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
     _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
     try:
+        # Privacy gate: the public surface answers strangers, so local-only
+        # memory is never retrieved here, whatever model serves it.
         relevant_docs = search_similar_documents(
             message,
             limit=_PUBLIC_SEARCH_LIMIT,
             layers=_public_layers,
             scope=_public_scope,
+            allow_local_only=False,
         )
     except Exception as e:
         # RAG failure is non-fatal — answer without context rather than 500.
@@ -3632,8 +3721,10 @@ async def federation_query(request: dict, http_request: Request):
     _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
     _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
     try:
+        # Privacy gate: a peer brain is not the owner — never local-only.
         relevant_docs = search_similar_documents(
-            query, limit=_PUBLIC_SEARCH_LIMIT, layers=_public_layers, scope=_public_scope)
+            query, limit=_PUBLIC_SEARCH_LIMIT, layers=_public_layers, scope=_public_scope,
+            allow_local_only=False)
     except Exception as e:
         print(f"federation_query RAG error: {e}")
         relevant_docs = []
@@ -4750,11 +4841,17 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
         query = request.get("query", "")
         limit = request.get("limit", 5)
         layers = request.get("layers")  # optional list[str]
+        # Privacy gate: results of this endpoint are often fed to a hosted model
+        # by the caller (the CC bridge, scripts/planner.py), so local-only chunks
+        # are returned only when the caller asks for them explicitly — the
+        # Knowledge tab does, to show the owner their own memory.
+        include_local_only = request.get("include_local_only") is True
 
         if not query.strip():
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-        results = search_similar_documents(query, limit, layers=layers if layers else None)
+        results = search_similar_documents(query, limit, layers=layers if layers else None,
+                                           allow_local_only=include_local_only)
 
         return {
             "query": query,
@@ -7560,7 +7657,8 @@ def _providers_extraction_reasoner():
     return _r
 
 
-async def _maybe_extract_mind_facts(user_query: str, reply: str) -> Optional[dict]:
+async def _maybe_extract_mind_facts(user_query: str, reply: str,
+                                    used_local_only: bool = False) -> Optional[dict]:
     """Persistent "your mind" panel on the NORMAL chat path: when the panel is
     shown, extract durable facts about the owner from this turn and store them
     via the SAME hardened write path the onboarding panel uses (operator-direct
@@ -7574,6 +7672,12 @@ async def _maybe_extract_mind_facts(user_query: str, reply: str) -> Optional[dic
         return None
     if not settings_store.get_mind_panel_shown():
         return None
+    # Privacy gate: a reply grounded in local-only memory may quote it, so it
+    # is never handed to a closed extraction model.
+    if used_local_only:
+        from api import privacy as _privacy
+        if not _privacy.reasoner_is_local(_providers.cheap_extraction_model()):
+            return None
     try:
         from api.onboarding import core as _onb_core
         convo = [{"role": "user", "content": user_query or ""},

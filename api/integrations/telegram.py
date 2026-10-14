@@ -102,8 +102,11 @@ async def answer(query: str) -> str:
     from api import main as _m
     from api import providers as _providers
     model = _providers.default_model()
+    # Privacy gate: the answer travels through Telegram's servers, so this
+    # surface gets the open view even when the reasoner is local.
     prompt, _docs = _m._build_rag_prompt(
-        [{"role": "user", "content": query}], query, [], 5, model=model)
+        [{"role": "user", "content": query}], query, [], 5, model=model,
+        allow_local_only=False)
     try:
         return await _providers.complete(model, [{"role": "user", "content": prompt}])
     except Exception as e:

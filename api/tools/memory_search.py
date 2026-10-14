@@ -40,7 +40,14 @@ def run(query: str, limit: int = _DEFAULT_LIMIT) -> ToolResult:
         return ToolResult(ok=False, error=f"search_memory unavailable: {e}")
 
     try:
-        docs = search_similar_documents(query, limit=limit, architecture="flat")
+        # Privacy gate: read with the view of the model turn this tool serves
+        # (set by /chat/rag; default is the closed view — no local-only chunks).
+        from api import privacy as _privacy
+        _allow = _privacy.turn_allows_local_only()
+        docs = _privacy.filter_docs(
+            search_similar_documents(query, limit=limit, architecture="flat",
+                                     allow_local_only=_allow),
+            _allow)
     except Exception as e:
         return ToolResult(ok=False, error=f"search_memory failed: {e}")
 
