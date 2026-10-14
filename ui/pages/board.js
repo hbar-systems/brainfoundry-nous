@@ -42,7 +42,7 @@ function Btn({ children, onClick, primary, disabled, title }) {
   )
 }
 
-function Tile({ t, now, onDecide, onDismiss, busyCard }) {
+function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
   const st = STATE[t.state] || STATE.done
   const live = t.state === 'answering' || t.state === 'waiting'
   // a live tile's clock moves between two readings of the board
@@ -52,7 +52,7 @@ function Tile({ t, now, onDecide, onDismiss, busyCard }) {
   if (t.kind === 'permit') meta.push('proposed action')
   if (t.steps) meta.push(`${t.steps} step${t.steps === 1 ? '' : 's'}`)
   if (t.agents) meta.push(`${t.agents} subagent${t.agents === 1 ? '' : 's'}`)
-  if (t.cost !== null && t.cost !== undefined) meta.push(`$${Number(t.cost).toFixed(2)} today`)
+  if (t.cost !== null && t.cost !== undefined) meta.push(billing === 'api-key' ? `$${Number(t.cost).toFixed(2)} today` : `about $${Number(t.cost).toFixed(2)} at API prices today`)
   else if (t.tok) meta.push(`${kTok(t.tok)} tokens today`)
   if (t.via && t.via !== 'page') meta.push(`from ${t.via}`)
   const open = () => { if (t.href) window.location.href = t.href }
@@ -153,6 +153,8 @@ export default function Board() {
             </button>
           ))}
           <span style={{ flex: 1 }} />
+          <a href="/talk?thread=new" title="Start a new conversation" aria-label="new conversation"
+             style={{ ...mono, fontSize: '13px', lineHeight: 1, padding: '3px 10px', borderRadius: '6px', border: `1px solid ${C.gold}`, color: C.gold, textDecoration: 'none' }}>+ new</a>
           {board && board.max_runs ? <span style={{ ...mono, fontSize: '11px', color: C.dim }}>up to {board.max_runs} answer at once</span> : null}
           <a href="/panes" style={link}>side by side</a>
           <a href="/gallery" style={link}>gallery</a>
@@ -167,7 +169,7 @@ export default function Board() {
           </p>
         )}
         <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', alignItems: 'start' }}>
-          {shown.map(t => <Tile key={t.key} t={t} now={now} onDecide={decide} onDismiss={dismiss} busyCard={busyCard} />)}
+          {shown.map(t => <Tile key={t.key} t={t} now={now} onDecide={decide} onDismiss={dismiss} busyCard={busyCard} billing={board && board.billing} />)}
         </div>
       </div>
     </>

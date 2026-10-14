@@ -84,6 +84,28 @@ def test_uploads_multipart(tmp_path):
     assert "/in/" in d["files"][0]["path"]
 
 
+def test_uploads_chunked_and_oversized(tmp_path, monkeypatch):
+    """2026-10-14: a chunked body is read; an oversized one is read away before the refusal, so the
+    proxy delivers the answer instead of a 502 on a broken pipe."""
+    up = X.Uploads(tmp_path / "in")
+    boundary = "XYZ"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n"
+            f"Content-Type: image/png\r\n\r\nPNGDATA\r\n--{boundary}--\r\n").encode()
+    chunked = b"".join(b"%x\r\n%s\r\n" % (len(body[i:i + 10]), body[i:i + 10]) for i in range(0, len(body), 10)) + b"0\r\n\r\n"
+    h = FakeHandler({"Transfer-Encoding": "chunked", "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    h.rfile = io.BytesIO(chunked + b"NEXT")
+    d = up.save_multipart(h)
+    assert d["ok"] and pathlib.Path(d["files"][0]["path"]).read_bytes() == b"PNGDATA"
+    assert h.rfile.read() == b"NEXT"
+    monkeypatch.setattr(X, "MAX_UPLOAD", 20)
+    h = FakeHandler({"Content-Length": str(len(body)), "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    h.rfile = io.BytesIO(body + b"NEXT")
+    assert "upload must be" in up.save_multipart(h)["error"] and h.rfile.read() == b"NEXT"
+    h = FakeHandler({"Transfer-Encoding": "chunked", "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    h.rfile = io.BytesIO(chunked + b"NEXT")
+    assert "upload must be" in up.save_multipart(h)["error"] and h.rfile.read() == b"NEXT"
+
+
 def test_recent_and_html_kind(tmp_path):
     out = tmp_path / "out"; (out / "a").mkdir(parents=True); (out / "jobs").mkdir()
     (out / "a" / "index.html").write_text("<p>hi</p>"); (out / "a" / "x.png").write_bytes(b"\x89PNG"); (out / "jobs" / "J1.log").write_text("no")

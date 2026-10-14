@@ -3009,6 +3009,9 @@ def _board() -> dict:
     out = cc_extras.board_tiles(runs, lines, jobs, _threads_load(), pend, _board_dismissed(), time.time(),
                                 result_fn=_board_result, roots=(str(OUT_DIR), WORLD_DIR, str(IN_DIR)))
     out["max_runs"] = MAX_RUNS
+    # an API key pays the reasoner's cost figure; on a subscription it is only what the same
+    # work would cost at API prices, so the board labels it that way (2026-10-14)
+    out["billing"] = "api-key" if _auth_status().get("method") == "api-key" else "subscription"
     return out
 
 

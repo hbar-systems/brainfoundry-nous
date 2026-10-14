@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 MAX_UPLOAD = 50 * 1024 * 1024
+DRAIN_MAX = 256 * 1024 * 1024    # an oversized upload is read away up to this, so the refusal reaches the page
 TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg"}
 KIND_BY_SUFFIX = {
     **{s: "audio" for s in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")},
@@ -560,6 +561,46 @@ class Jobs:
         return had
 
 
+def read_body(handler, limit: int) -> bytes | None:
+    """A request body, by Content-Length or chunked (2026-10-14). Over the limit it returns None
+    after reading the rest away: answering a body we never read made the bridge close a socket
+    the proxy was still writing to, and Caddy turned the answer into a bare 502 ("Could not
+    attach: 502", 2026-10-09). A body beyond DRAIN_MAX is left unread; the proxy says 502 then."""
+    rf = handler.rfile
+    if "chunked" in (handler.headers.get("Transfer-Encoding") or "").lower():
+        buf, over, seen = bytearray(), False, 0
+        while True:
+            size = int((rf.readline(1024).split(b";")[0].strip() or b"0"), 16)
+            if size == 0:
+                while rf.readline(1024) not in (b"\r\n", b"\n", b""):
+                    pass                                    # trailers
+                return None if over else bytes(buf)
+            seen += size
+            if seen > DRAIN_MAX:
+                return None
+            left = size
+            while left > 0:
+                piece = rf.read(min(left, 1 << 20))
+                if not piece:
+                    return None
+                left -= len(piece)
+                if not over:
+                    buf += piece
+                    if len(buf) > limit:
+                        over, buf = True, bytearray()
+            rf.readline(1024)                               # the CRLF after each chunk
+    n = int(handler.headers.get("Content-Length") or 0)
+    if n <= limit:
+        return rf.read(n) if n > 0 else b""
+    left = n if n <= DRAIN_MAX else 0
+    while left > 0:
+        piece = rf.read(min(left, 1 << 20))
+        if not piece:
+            break
+        left -= len(piece)
+    return None
+
+
 class Uploads:
     def __init__(self, in_dir: Path):
         self.dir = in_dir
@@ -571,13 +612,12 @@ class Uploads:
         return name
 
     def save_multipart(self, handler) -> dict:
-        n = int(handler.headers.get("Content-Length") or 0)
         ctype = handler.headers.get("Content-Type", "")
-        if n <= 0 or n > MAX_UPLOAD:
+        raw = read_body(handler, MAX_UPLOAD)
+        if not raw:
             return {"error": f"upload must be between 1 byte and {MAX_UPLOAD // (1024 * 1024)} MB"}
         if not ctype.startswith("multipart/form-data"):
             return {"error": "expected multipart/form-data"}
-        raw = handler.rfile.read(n)
         msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
             b"Content-Type: " + ctype.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw)
         day = time.strftime("%Y-%m-%d", time.gmtime())
