@@ -570,19 +570,28 @@ function MdPopup() {
 
 // An answer that ends in a decision carries its choices as buttons (2026-10-13, ui/lib/choices.js).
 // "reply" sends the text as the next message here; "agent" starts it as a thread of its own.
+// Every choice stays live after a click (2026-10-14, hbar: "why keep only one available"): a used one
+// is filled, the rest stay pressable, and each reply choice has a small ↗ that sends an agent on it instead.
 function Choices({ choices, onChoice }) {
-  const [used, setUsed] = useState(null)
+  const [used, setUsed] = useState(() => new Set())
   if (!choices || choices.length === 0) return null
+  const mark = i => setUsed(u => new Set(u).add(i))
+  const pill = { ...mono, fontSize: '12px', padding: '5px 12px', borderRadius: '14px', cursor: 'pointer', border: `1px solid ${C.gold}` }
   return (
     <div data-nopick="1" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
       {choices.map((c, i) => (
-        <button key={i} disabled={used !== null} onClick={() => { setUsed(i); onChoice(c) }}
-          title={(c.mode === 'agent' ? 'starts a new thread beside this one: ' : 'sends: ') + c.send}
-          style={{ ...mono, fontSize: '12px', padding: '5px 12px', borderRadius: '14px', cursor: used === null ? 'pointer' : 'default',
-                   border: `1px solid ${used === i || used === null ? C.gold : C.line}`, backgroundColor: used === i ? C.gold : 'transparent',
-                   color: used === i ? C.onAccent : (used === null ? C.gold : C.faint) }}>
-          {c.label}{c.mode === 'agent' ? ' ↗' : ''}
-        </button>
+        <span key={i} style={{ display: 'inline-flex', gap: '2px' }}>
+          <button onClick={() => { mark(i); onChoice(c) }}
+            title={(c.mode === 'agent' ? 'starts a new thread beside this one: ' : 'sends: ') + c.send}
+            style={{ ...pill, backgroundColor: used.has(i) ? C.gold : 'transparent', color: used.has(i) ? C.onAccent : C.gold }}>
+            {c.label}{c.mode === 'agent' ? ' ↗' : ''}
+          </button>
+          {c.mode !== 'agent' && (
+            <button onClick={() => { mark(i); onChoice({ ...c, mode: 'agent' }) }}
+              title={'send an agent on this, in a thread of its own: ' + c.send}
+              style={{ ...pill, padding: '5px 8px', backgroundColor: 'transparent', color: C.gold }}>↗</button>
+          )}
+        </span>
       ))}
     </div>
   )
