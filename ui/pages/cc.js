@@ -225,6 +225,11 @@ function CardDoor({ onClick, children, title, accent }) {
     style={{ ...mono, fontSize: '11px', padding: '3px 9px', borderRadius: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
              border: `1px solid ${accent ? C.gold : C.line}`, color: accent ? C.gold : C.dim }}>{children}</a>
 }
+// copy (2026-10-14, hbar: "would be nice if there was 'copy' button too"): the exact text, then "copied" for a beat.
+function CopyDoor({ text }) {
+  const [done, setDone] = useState(false)
+  return <CardDoor onClick={() => { copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="Copy the exact text">{done ? 'copied' : 'copy'}</CardDoor>
+}
 function InfoCard({ children, boxRef }) {
   return (
     <span ref={boxRef} data-nopick="1" onClick={(e) => e.stopPropagation()}
@@ -234,7 +239,7 @@ function InfoCard({ children, boxRef }) {
     </span>
   )
 }
-function PathLink({ path, children, style }) {
+function PathLink({ path, children, style, copy }) {
   const [hov, setHov] = useState(false)
   const [peek, setPeek] = useState(null)
   const card = useCard()
@@ -257,6 +262,7 @@ function PathLink({ path, children, style }) {
           {peek ? <span style={{ display: 'block', ...mono, fontSize: '11px', color: C.dim, whiteSpace: 'pre-wrap', maxHeight: '140px', overflow: 'hidden', borderLeft: `2px solid ${C.line}`, paddingLeft: '8px', marginBottom: '8px' }}>{peek}</span> : null}
           <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             <CardDoor accent onClick={() => { card.setOpen(false); openPath(path) }} title="Open it in the pane beside the chat">open beside</CardDoor>
+            <CopyDoor text={copy || path} />
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-open-route', { route: fullRoute(route), title: 'Files' }) }} title="Open it full screen; Escape returns">full screen</CardDoor>
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Tell me about ${path}: what it is, its state, and the next step.`) }} title="Ask about it in this thread">ask about it</CardDoor>
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: 'on ' + name, send: `Take this on: ${path}. Read it, say its state, and do the next step it names if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
@@ -281,6 +287,7 @@ function Highlight({ children, node }) {
           <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>{txt}</span>
           <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             <CardDoor accent onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Go deeper on "${txt}": the evidence, the state, and the next step.`) }} title="Ask in this thread">go deeper</CardDoor>
+            <CopyDoor text={txt} />
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `What exactly do you need from me on "${txt}"? Give me the choices.`) }} title="Ask what it needs from you">what do you need from me</CardDoor>
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: txt.slice(0, 60), send: `Take this on: "${txt}" (from my central thread). Find where it lives in the world (ops/, the idea register, NOW.md), say its state, and do the next step if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
           </span>
@@ -459,7 +466,7 @@ function mdComponents(base) {
       if (isAbs || isFile) {
         const rel = s.trim()
         const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
-        return <PathLink path={target} style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
+        return <PathLink path={target} copy={s.trim()} style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
       }
       return <InlineCode {...props} />
     },
