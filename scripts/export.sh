@@ -9,6 +9,8 @@
 # USAGE (on the brain host)
 #   scripts/export.sh                  # -> ./brain-export-<id>-<UTC>.tar.gz
 #   scripts/export.sh /path/to/dir     # -> archive in that directory
+#   INCLUDE_VAULT=1 scripts/export.sh  # also the private vault's documents
+#                                      # (left out by default; api/vault.py)
 #
 # Restore: docs/EXPORT.md (db + persona via scripts/import_brain.py; apps
 # re-installed from apps/installed.json; md copied back).
@@ -20,5 +22,7 @@ cd "$BRAIN_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BRAIN_ID="$(grep -E '^BRAIN_ID=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -c 'a-z0-9._-\n' '-')"
 OUT="$DEST/brain-export-${BRAIN_ID:-brain}-${STAMP}.tar.gz"
-docker compose exec -T api python -m api.export --stdout > "$OUT"
+EXTRA=()
+[ "${INCLUDE_VAULT:-0}" = "1" ] && EXTRA+=(--include-vault)
+docker compose exec -T api python -m api.export --stdout ${EXTRA[@]+"${EXTRA[@]}"} > "$OUT"
 echo "export: $OUT ($(wc -c < "$OUT" | tr -d ' ') bytes)"

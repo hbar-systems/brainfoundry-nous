@@ -24,6 +24,11 @@ that scripts/export_brain.py produces, so scripts/import_brain.py restores the
 db/ and persona/ parts unchanged. Restore of the rest is documented in
 docs/EXPORT.md.
 
+VAULT DOCUMENTS (api/vault.py, 2026-10-15) are left out by default: chunks
+whose source is vault:<path> (named vault/<path>) stay in the brain. The owner
+includes them on purpose with --include-vault / POST /export?include_vault=true;
+the manifest records how many were left out or put in.
+
 DELIBERATELY EXCLUDED, so the archive is safe to hand to anyone:
   .env, API keys, the settings sidecar (settings.json holds operator secrets,
   encrypted with BRAIN_IDENTITY_SECRET), NodeOS secrets, the brain private key,
@@ -133,8 +138,21 @@ def _persona_path() -> Optional[Path]:
 
 # ── the build ────────────────────────────────────────────────────────────────
 
+def _is_vault_row(r: dict) -> bool:
+    from api import privacy as _privacy
+    md = r.get("metadata")
+    if isinstance(md, str):
+        try:
+            md = json.loads(md)
+        except Exception:
+            md = {}
+    return _privacy.is_vault_name(r.get("document_name")) or _privacy.is_vault_metadata(
+        md if isinstance(md, dict) else {})
+
+
 def build_export(out_dir: Path, *, rows: Optional[Callable[[str], Iterable[dict]]] = None,
-                 probe: Optional[Callable[[], dict]] = None, name: Optional[str] = None) -> Path:
+                 probe: Optional[Callable[[], dict]] = None, name: Optional[str] = None,
+                 include_vault: bool = False) -> Path:
     """Build one archive under out_dir and return its path. Pure function of
     its data sources; the router and the CLI both call it. Data sources
     resolve at call time so tests can stub the module attributes."""
@@ -156,10 +174,15 @@ def build_export(out_dir: Path, *, rows: Optional[Callable[[str], Iterable[dict]
 
         # 1. memory + chats
         counts = {}
+        vault_rows = 0
         for table in PG_TABLES:
             n = 0
             with (stage / "db" / f"{table}.jsonl").open("w", encoding="utf-8") as fh:
                 for r in rows(table):
+                    if table == "document_embeddings" and _is_vault_row(r):
+                        vault_rows += 1
+                        if not include_vault:
+                            continue
                     fh.write(json.dumps(r, default=str) + "\n")
                     n += 1
             counts[table] = n
@@ -211,9 +234,11 @@ def build_export(out_dir: Path, *, rows: Optional[Callable[[str], Iterable[dict]
             "embedding": {"model": os.environ.get("EMBEDDING_MODEL_NAME", "BAAI/bge-large-en-v1.5"),
                           "dimension": dim},
             "contents": {"persona": has_persona, "tables": counts, "md": md_files,
-                         "apps": apps_count, "peers": has_peers},
+                         "apps": apps_count, "peers": has_peers,
+                         "vault": {"included": bool(include_vault), "chunks": vault_rows}},
             "excludes_secrets": True,
             "excludes": ["env", "settings.json", "private keys", "audit logs",
+                         *([] if include_vault else ["vault documents (--include-vault)"]),
                          "memory_proposals (nodeos sqlite; use scripts/export_brain.py)"],
             "built_by": "api/export.py",
         }
@@ -264,9 +289,9 @@ def export_list() -> dict:
 
 
 @router.post("")
-def export_build() -> dict:
+def export_build(include_vault: bool = False) -> dict:
     try:
-        path = build_export(EXPORTS_DIR)
+        path = build_export(EXPORTS_DIR, include_vault=include_vault)
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": "export_failed", "message": str(e)[:400]})
     m = _manifest_of(path)
@@ -302,15 +327,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Export this brain to one .tar.gz (no secrets).")
     ap.add_argument("--out", default=str(EXPORTS_DIR), help="directory for the archive")
     ap.add_argument("--stdout", action="store_true", help="write the archive bytes to stdout instead")
+    ap.add_argument("--include-vault", action="store_true",
+                    help="also export documents ingested from the private vault (left out by default)")
     args = ap.parse_args(argv)
     if args.stdout:
         with tempfile.TemporaryDirectory(prefix="brain-export-cli-") as tmp:
-            path = build_export(Path(tmp))
+            path = build_export(Path(tmp), include_vault=args.include_vault)
             with path.open("rb") as fh:
                 shutil.copyfileobj(fh, sys.stdout.buffer)
             sys.stderr.write(f"export: {path.name} ({path.stat().st_size} bytes) -> stdout\n")
         return 0
-    path = build_export(Path(args.out))
+    path = build_export(Path(args.out), include_vault=args.include_vault)
     m = _manifest_of(path)
     print(f"export: {path} ({path.stat().st_size} bytes)")
     print(f"  rows: {m.get('contents', {}).get('tables')}  persona: {m.get('contents', {}).get('persona')}"
