@@ -172,6 +172,18 @@ def reasoner_is_local(model: Optional[str], *, resolve=None,
     return all(is_owner_host(u) for u in urls)
 
 
+def model_is_local_at(model: Optional[str], url: Optional[str]) -> bool:
+    """Locality of a model served by an Ollama endpoint the brain does NOT route
+    chat to (a box the owner declares in the box map). Same rule as above for one
+    endpoint: owner-controlled network space and not an Ollama cloud model.
+    Any doubt -> False."""
+    if not model or not isinstance(model, str) or not url:
+        return False
+    if _is_ollama_cloud_model(model):
+        return False
+    return is_owner_host(url)
+
+
 # ── per-turn reader for tools ───────────────────────────────────────────────
 # The agentic search_memory tool runs inside a model turn but does not know
 # which model it serves. /chat/rag sets this for the duration of the turn; the

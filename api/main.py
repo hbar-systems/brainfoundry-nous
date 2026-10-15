@@ -2334,6 +2334,32 @@ def list_models(api_key: str = Depends(get_api_key)):
     return {"models": _providers.get_available_models()}
 
 
+# ── Compute view: which models live on which machine (2026-10-15) ──────────
+# Live read of every Ollama endpoint the brain knows (box, spoke, and any the
+# owner declares per box in the box map, passed in by the bridge) plus the
+# hosted models the configured keys unlock, names only. Each model is marked
+# local or closed with api/privacy.py's rule. Cached briefly (api/compute.py).
+class ComputeEndpoint(BaseModel):
+    box: Optional[str] = None
+    url: str
+
+
+class ComputeModelsRequest(BaseModel):
+    endpoints: List[ComputeEndpoint] = []
+
+
+@app.get("/compute/models")
+def compute_models(api_key: str = Depends(get_api_key)):
+    from api import compute as _compute
+    return _compute.snapshot()
+
+
+@app.post("/compute/models")
+def compute_models_with_boxes(req: ComputeModelsRequest, api_key: str = Depends(get_api_key)):
+    from api import compute as _compute
+    return _compute.snapshot([e.model_dump() for e in req.endpoints])
+
+
 @app.post("/chat/completions")
 async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """Chat completion endpoint compatible with OpenAI format - supports streaming"""
