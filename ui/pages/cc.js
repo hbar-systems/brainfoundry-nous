@@ -40,6 +40,7 @@ const SLASH = [
   { c: '/new', d: 'start a new thread' },
   { c: '/stop', d: 'stop the answer in progress; the thread keeps everything up to here (Esc does the same)' },
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
+  { c: '/seat', d: 'who answers this thread: /seat claude (the default; edits pass your Allow) or /seat codex (Codex, read-only: reads and answers, never writes)' },
   { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks), /posture auto (the vendor classifier decides), /posture judged (TypeSafe scores each action; harmless runs, the rest ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
@@ -333,6 +334,37 @@ function Chip({ on, onClick, title, children }) {
   return <a onClick={onClick} title={title}
     style={{ ...mono, fontSize: '11px', padding: '2px 8px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
              border: `1px solid ${on ? C.gold : C.line}`, color: on ? C.gold : C.dim, backgroundColor: on ? C.card : 'transparent' }}>{children}</a>
+}
+// The seat (2026-10-15): who answers this thread. Claude (the default, gated by cards on this box) or
+// Codex, which runs read-only. The Codex door beside it: its status in words (never the CLI's own
+// output) and "Sign in with ChatGPT", which opens the terminal panel into OpenAI's own device-code flow.
+const CODEX_LOGIN = { route: '/claude/?arg=codex-login', title: 'Sign in with ChatGPT' }
+function codexWords(cx) {
+  if (!cx) return 'codex: status unknown'
+  if (!cx.installed) return 'codex: not installed on this box'
+  if (!cx.signedIn) return 'codex: not signed in'
+  return `codex: signed in${cx.method === 'chatgpt' ? ' with ChatGPT' : cx.method === 'api-key' ? ' with an API key' : ''}`
+}
+function SeatLine({ seat, onPick, codex, onOpenPane, onRecheck }) {
+  const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
+  const ready = !!(codex && codex.installed && codex.signedIn)
+  return (
+    <span data-nopick="1" style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={lbl}>seat</span>
+      <Chip on={seat !== 'codex'} onClick={() => onPick('claude')} title="Claude answers; on this box its edits and commands pass your Allow">Claude</Chip>
+      <Chip on={seat === 'codex'} onClick={() => onPick('codex')}
+        title={ready ? 'Codex answers this thread, read-only: it reads files and runs read-only commands, never writes' : codexWords(codex) + '; a turn on this seat is refused until it is'}>
+        {(codex && codex.label) || 'Codex (read-only)'}
+      </Chip>
+      {seat === 'codex' || (codex && codex.installed) ? (
+        <span style={{ ...mono, fontSize: '10px', color: ready ? C.faint : '#d08a7a' }}>
+          {codexWords(codex)}
+          {codex && codex.installed && !codex.signedIn ? <> · <a onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>Sign in with ChatGPT</a></> : null}
+          {' '}· <a onClick={onRecheck} title="read the Codex status again" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>recheck</a>
+        </span>
+      ) : null}
+    </span>
+  )
 }
 function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
@@ -804,7 +836,11 @@ function SignIn({ onDone, health, onOpenPane }) {
             ) : (
               <Btn onClick={() => onOpenPane && onOpenPane({ route: '/claude/?arg=login', title: 'Sign in' })}>Sign in with a Claude subscription</Btn>
             )}
+            <Btn onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} title="the Codex seat, read-only; OpenAI's own device-code sign-in in the terminal panel">Sign in with ChatGPT</Btn>
           </div>
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '8px 0 0 0' }}>
+            {codexWords(health && health.codex)}. ChatGPT signs in the Codex seat, which reads and answers but never writes; Claude stays the default seat.
+          </p>
           {!(health && health.signin_proxy) && (
             <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '10px 0 0 0' }}>
               A subscription signs in through the provider's own flow, in a panel beside this one: open the link it shows, sign in, paste the code where it asks. Nothing about your account passes through this page; when it says done, close the panel and press reconnect.
@@ -1460,6 +1496,15 @@ function CC() {
   const startRename = (key, current) => { setRenaming(key); setRenameVal(current || '') }
   const finishRename = (brain) => { const t = renameVal.trim(); setRenaming(null); if (t) updateThread(brain, { title: t }) }
   const curThread = threads.find(t => t.brain === cur) || null
+  // The seat for this thread: the owner's pick for the thread on screen, else the seat the thread
+  // last answered on (the bridge keeps it), else Claude.
+  const [seatPick, setSeatPick] = useState(null)   // { key, seat }
+  const seatKey = cur || 'new'
+  const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || 'claude')
+  const seatRef = useRef('claude'); seatRef.current = seat
+  const pickSeat = (s) => setSeatPick({ key: seatKey, seat: s === 'codex' ? 'codex' : 'claude' })
+  const recheckCodex = () => fetch('/cc/codex/status?fresh=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+    .then(cx => { if (cx) setHealth(h => (h ? { ...h, codex: cx } : h)) }).catch(() => {})
   // The thread's look (the tool line, 2026-10-13): read from the thread record on the box, changed here
   // at once, written back a moment after the last touch so a drag round the wheel is one write.
   const [look, setLookState] = useState({})
@@ -2084,6 +2129,16 @@ function CC() {
       setTurns(t => [...t, { who: 'brain', text: r.ok ? said : (d.error || 'not set'), error: !r.ok }])
       loadHealth(); return true
     }
+    if (cmd === 'seat') {
+      const s = (arg || '').toLowerCase()
+      if (s !== 'claude' && s !== 'codex') { setTurns(t => [...t, { who: 'brain', text: `Seat: ${seatRef.current === 'codex' ? 'Codex (read-only)' : 'Claude'}. Say /seat claude or /seat codex.` }]); return true }
+      pickSeat(s)
+      const cx = health && health.codex
+      setTurns(t => [...t, { who: 'brain', text: s === 'codex'
+        ? `Seat: Codex (read-only), from the next message in this thread. It reads files and answers; it cannot write, run changing commands or reach the network. ${codexWords(cx)}.`
+        : 'Seat: Claude, from the next message in this thread.' }])
+      return true
+    }
     if (cmd === 'model') {
       const r = await fetch('/cc/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: arg }) })
       const d = await r.json().catch(() => ({}))
@@ -2137,7 +2192,7 @@ function CC() {
       return true
     }
     if (cmd === 'help' || cmd === '') {
-      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /files, /jobs, /talk (speak instead of typing; /talk free on for hands-free), /voice on|off|list, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /seat claude|codex (who answers this thread; Codex is read-only), /files, /jobs, /talk (speak instead of typing; /talk free on for hands-free), /voice on|off|list, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
     }
     return false
@@ -2215,7 +2270,7 @@ function CC() {
     markRunning(key, true)
     try {
       const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ message: text, new: isNew, thread: isNew ? null : key, stream: true }) })
+                            body: JSON.stringify({ message: text, new: isNew, thread: isNew ? null : key, stream: true, reasoner: seatRef.current }) })
       freshRef.current = false
       let data = null
       if (r.ok && (r.headers.get('content-type') || '').includes('text/event-stream') && r.body) {
@@ -2449,7 +2504,8 @@ function CC() {
           <div style={look.accent ? { '--accent': look.accent } : undefined}>
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
-              extra={<span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', marginLeft: 'auto' }}>
+              extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} onOpenPane={openPane} onRecheck={recheckCodex} />
                 <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
                   title="learning mode: bold phrases and code terms get a 'learn' door with a mini lesson (one small side call each, nothing posted here)">learn {look.learn ? 'on' : 'off'}</Chip>
                 <Recall />
