@@ -77,6 +77,24 @@ The query is embedded in the same vector space as the documents. Cosine similari
 
 Privacy (2026-10-14): each chunk is `open` (default) or `local-only`. Retrieval is filtered per reasoner: a hosted model (Anthropic, OpenAI, Groq, any API) never retrieves a local-only chunk; the box's Ollama or a tailnet spoke does, when the answer returns to the owner. Unknown locality counts as hosted. Details, and what it does not cover (the CC tab reads files, not chunks): THREAT_MODEL.md section 4a.
 
+Since 2026-10-15 the owner also keeps an allowlist of the local models that may read local-only memory at all (Knowledge -> Vault, or `BRAIN_LOCAL_READERS`; no list = every local model), every turn that read local-only chunks leaves one audit line (model, endpoint host, session, document names, chunk count, no content), and a chat session in which that happened is marked local-only: hosted models may not continue it, summarise it or classify text from it.
+
+### The private vault (2026-10-15)
+
+A folder on the host that only the brain's owner can read (mode 700; default `/home/<owner>/vault`). The Unix users the closed reasoners run as, `hands` (Claude Code, Codex) and `cc` (the bridge), cannot list it or read a file in it. The api container sees it read-only at `/vault` and ingests its text files (`.md`, `.txt`, `.json`, `.csv`, and similar; no dotfiles, no symlinks, at most 5 MB each, `BRAIN_VAULT_MAX_BYTES`) as documents named `vault/<path>`, source `vault:<path>`, always local-only and locked there. New or changed files are picked up every 10 minutes (`BRAIN_VAULT_SCAN_MINUTES`, 0 = manual only) or with **Scan now** in Knowledge -> Vault; **Scan and forget removed files** also drops the memory of files you took out. `BRAIN_VAULT_LAYER` puts every vault document in one memory layer. The scan keeps only names, hashes and sizes in `runtime/vault_state.json`; it never copies a vault file anywhere, and exports leave vault documents out unless you ask (`INCLUDE_VAULT=1 scripts/export.sh`, `python -m api.export --include-vault`).
+
+A brain without a vault works as before: the mount is optional, it lives in your `docker-compose.override.yml`, and the panel says "no vault on this brain".
+
+**Owner setup, once, on the box, as yourself (not as hands or cc, not from an agent):**
+
+1. Deploy this version (the api must know `/vault`): pull and `docker compose up -d --build api`.
+2. `cd <brain checkout> && scripts/vault-setup.sh` (or `scripts/vault-setup.sh /path/to/vault`). It creates the folder (700, yours), refuses if `hands` or `cc` is in the `docker` group, adds the read-only mount and `BRAIN_VAULT_DIR` to `docker-compose.override.yml` (backup kept; undone if `docker compose config` rejects it), and checks the wall with `sudo -u hands ls` / `sudo -u cc ls` and a probe file. It asks for sudo for those checks.
+3. `docker compose up -d api` to recreate the api with the mount.
+4. Put files in the vault (as yourself), then Knowledge -> Vault -> **Scan now**. The panel shows the path, the file count, the last scan, the local models allowed to read local-only memory, and the recent reads.
+5. Check the wall any time: `scripts/vault-setup.sh --check`.
+
+Keep the brain's API key out of what hands and cc can read: the key can ask the API for local-only chunks (THREAT_MODEL.md 4a, "what it does not guarantee").
+
 ### Generation
 
 The prompt the model sees is assembled in this order:

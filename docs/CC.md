@@ -125,6 +125,8 @@ On some kernels the sandbox cannot start (Ubuntu 24.04 restricts unprivileged us
 
 **Privacy.** Codex is a closed reasoner: what it reads is sent to OpenAI. The memory block is built the same way as for Claude, so chunks the brain keeps local-only (the privacy rule) are not put into its prompt. But Codex reads files on disk as the hands user, like the Claude seat, so anything in a file it can read can reach OpenAI. Unlike Claude Code, whose reads outside the working directories ask first, Codex's read-only sandbox can read anywhere the hands user can, including the hands user's own sign-in files (`~/.claude`, `~/.codex`). Keep secrets out of what the hands user can read, or leave the seat uninstalled.
 
+**The vault (2026-10-15).** For files neither seat may read, use the private vault: a folder only the owner can read, which the hands user (both seats) and the cc user (the bridge) cannot list. The brain reads it through a read-only mount and keeps what it ingests local-only, so it is never in a seat's memory block either. Set it up as the owner with `scripts/vault-setup.sh`; docs/architecture.md, "The private vault", has the steps and THREAT_MODEL.md 4a what it does and does not guarantee.
+
 ## What you see while it works
 
 Text appears as the reasoner writes it. Under the bubble, the last few things it did (a file read, a One lookup, a command) show as they happen. When the answer is complete the footer says how long it took, which model answered, how many tokens went in and out, and how many steps the turn had. Tokens in include the cached prompt; on a subscription this is not a bill, on an API key it is what you pay for.
