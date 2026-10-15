@@ -142,9 +142,9 @@ export default function Upload() {
 
   // Privacy chip: same pill shape as LayerBadge. Used as the two-way choice on
   // upload and as the per-document toggle in Browse.
-  const PrivacyChip = ({ level, active, onClick, title, busy }) => {
-    const local = level === "local-only";
-    const color = local ? ACCENT : MUTED;
+  const PrivacyChip = ({ level, active, onClick, title, busy, color: tint }) => {
+    const local = level === "local-only" || String(level).endsWith("local-only");
+    const color = tint || (local ? ACCENT : MUTED);
     return (
       <button
         type="button"
@@ -166,6 +166,73 @@ export default function Upload() {
         {level}
       </button>
     );
+  };
+
+  // ── The private vault (api/vault.py, 2026-10-15) ──────────────────────
+  // Files in a host folder hands/cc cannot read, ingested local-only and
+  // locked there. The panel shows where it is, what it holds, the last scan,
+  // which local models may read local-only memory at all (the owner's
+  // allowlist), and the recent reads from the audit. Chips and buttons only.
+  const [vault, setVault] = useState(null);
+  const [vaultBusy, setVaultBusy] = useState(false);
+  const [vaultMsg, setVaultMsg] = useState("");
+  const [localModels, setLocalModels] = useState([]);
+  const loadVault = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/vault`);
+      if (r.ok) setVault(await r.json());
+    } catch (e) { /* the panel stays hidden */ }
+    try {
+      const r = await fetch(`${API_BASE}/compute/models`);
+      if (r.ok) {
+        const j = await r.json();
+        const names = [];
+        (j.endpoints || []).filter(e => e.routed).forEach(e =>
+          (e.models || []).forEach(m => { if (m.privacy === "local" && !names.includes(m.name)) names.push(m.name); }));
+        setLocalModels(names);
+      }
+    } catch (e) { /* no model list: chips show the allowlist only */ }
+  };
+  useEffect(() => { loadVault(); }, []);
+  const scanVault = async (opts = {}) => {
+    setVaultBusy(true); setVaultMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/vault/scan`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setVaultMsg(`scan: ${(j.ingested || []).length} ingested, ${j.unchanged || 0} unchanged, ${(j.skipped || []).length} skipped, ${(j.missing || []).length} missing${(j.pruned || []).length ? `, ${j.pruned.length} removed` : ""}${(j.errors || []).length ? `, ${j.errors.length} error(s)` : ""}`);
+        pushLog(`VAULT scan: ${(j.ingested || []).length} file(s) ingested local-only`);
+      } else {
+        setVaultMsg(`scan failed: ${r.status} ${typeof j.detail === "string" ? j.detail : ""}`);
+      }
+    } catch (e) {
+      setVaultMsg(`scan failed: ${e.message}`);
+    } finally {
+      setVaultBusy(false);
+      loadVault();
+    }
+  };
+  const setReaders = async (readers) => {
+    setVaultBusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/vault/readers`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ readers }),
+      });
+      if (!r.ok) setVaultMsg(`allowlist not saved: ${r.status}`);
+    } finally {
+      setVaultBusy(false);
+      loadVault();
+    }
+  };
+  const toggleReader = (name) => {
+    const cur = vault && Array.isArray(vault.readers) ? vault.readers : null;
+    // No list yet = every local model may read. The first click narrows the
+    // list to every local model except the one clicked.
+    const base = cur === null ? localModels.slice() : cur.slice();
+    const next = base.includes(name) ? base.filter(n => n !== name) : [...base, name];
+    setReaders(next);
   };
 
   // Flip a stored document between open and local-only (all its chunks).
@@ -1064,10 +1131,13 @@ export default function Upload() {
                               <LayerBadge key={l} layer={l} active={layerFilter === l} onClick={() => toggleLayerFilter(l)} />
                             ))}
                             <PrivacyChip
-                              level={d.privacy === "local-only" ? "local-only" : "open"}
+                              level={String(d.source || "").startsWith("vault:") ? "vault · local-only" : (d.privacy === "local-only" ? "local-only" : "open")}
                               active={d.privacy === "local-only"}
                               busy={privacyBusy === d.name}
-                              onClick={() => setDocPrivacy(d.name, d.privacy === "local-only" ? "open" : "local-only")}
+                              onClick={() => {
+                                if (String(d.source || "").startsWith("vault:")) { pushLog(`PRIVACY ${d.name}: from the vault, stays local-only`); return; }
+                                setDocPrivacy(d.name, d.privacy === "local-only" ? "open" : "local-only");
+                              }}
                               title={d.privacy === "local-only"
                                 ? "local-only: only your own hardware's models read this. Click to make it open."
                                 : "open: any reasoner may read this. Click to make it local-only."}
@@ -1142,6 +1212,87 @@ export default function Upload() {
               </div>
             </div>
           ))}
+        </section>
+      )}
+
+      {/* The private vault (api/vault.py). Shown once the brain answers /vault. */}
+      {vault && (
+        <section style={{ padding: 20, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <h2 style={{ fontSize: 15, fontFamily: "Lora, Georgia, serif", margin: 0, color: TEXT }}>Vault</h2>
+            <span style={{ fontSize: 11, color: vault.mounted ? APPROVE : MUTED, fontFamily: "DM Mono, monospace" }}>
+              {vault.mounted ? "mounted read-only" : "no vault on this brain"}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.7, fontFamily: "DM Mono, monospace" }}>
+            {vault.mounted ? (
+              <>
+                <div>path: <span style={{ color: TEXT }}>{vault.path || vault.mount}</span></div>
+                <div>files: <span style={{ color: TEXT }}>{vault.files}</span> · in memory: <span style={{ color: TEXT }}>{vault.ingested}</span> · every document local-only, locked</div>
+                <div>last scan: <span style={{ color: TEXT }}>{vault.last_scan ? new Date(vault.last_scan).toLocaleString() : "never"}</span>{vault.scan_minutes > 0 ? ` · scans every ${vault.scan_minutes} min` : " · manual scans only"}</div>
+              </>
+            ) : (
+              <div>
+                A vault is a folder on the box only you can read, whose files the hosted models never see.
+                Set it up on the box, as yourself: <span style={{ color: TEXT }}>scripts/vault-setup.sh</span>, then <span style={{ color: TEXT }}>docker compose up -d api</span>.
+              </div>
+            )}
+          </div>
+          {vault.mounted && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button type="button" disabled={vaultBusy} onClick={() => scanVault({})} style={{ ...BTN, padding: "5px 12px", fontSize: 12, opacity: vaultBusy ? 0.6 : 1 }}>
+                {vaultBusy ? "scanning…" : "Scan now"}
+              </button>
+              <button type="button" disabled={vaultBusy} onClick={() => scanVault({ prune: true })}
+                title="Also forget the documents whose files have left the vault"
+                style={{ background: "transparent", border: `1px solid ${BORDER}`, color: MUTED, borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer" }}>
+                Scan and forget removed files
+              </button>
+            </div>
+          )}
+          {vaultMsg && <div style={{ marginTop: 8, fontSize: 12, color: TEXT, fontFamily: "DM Mono, monospace" }}>{vaultMsg}</div>}
+
+          <div style={{ marginTop: 16, fontSize: 12, color: MUTED }}>
+            Local models that may read local-only memory
+            {vault.readers === null || vault.readers === undefined
+              ? " (no list set: every model on your own hardware may)"
+              : vault.readers.length === 0 ? " (none may; every model gets the open view)" : ""}
+            {vault.readers_source === "env" ? " · set by BRAIN_LOCAL_READERS" : ""}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+            {Array.from(new Set([...(localModels || []), ...((vault.readers || []))])).map(name => {
+              const on = vault.readers === null || vault.readers === undefined || vault.readers.includes(name);
+              return (
+                <PrivacyChip key={name} level={name} active={on} busy={vaultBusy} color={APPROVE}
+                  onClick={() => toggleReader(name)}
+                  title={on ? `${name} may read local-only memory. Click to take it off the list.` : `${name} gets the open view. Click to allow it.`} />
+              );
+            })}
+            {Array.isArray(vault.readers) && (
+              <button type="button" disabled={vaultBusy} onClick={() => setReaders(null)}
+                style={{ background: "transparent", border: `1px solid ${BORDER}`, color: MUTED, borderRadius: 999, padding: "2px 9px", fontSize: 11, cursor: "pointer", fontFamily: "DM Mono, monospace" }}>
+                clear list
+              </button>
+            )}
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: MUTED, lineHeight: 1.6 }}>
+            Rule: {vault.rule}.
+          </div>
+
+          <div style={{ marginTop: 14, fontSize: 12, color: MUTED }}>Recent reads (from the audit, no content)</div>
+          {(vault.recent_reads || []).length === 0 ? (
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>none yet</div>
+          ) : (
+            <div style={{ marginTop: 4 }}>
+              {(vault.recent_reads || []).slice().reverse().map((r, i) => (
+                <div key={i} style={{ fontSize: 11, fontFamily: "DM Mono, monospace", color: TEXT, padding: "3px 0", borderBottom: `1px solid ${BORDER}` }}>
+                  <span style={{ color: MUTED }}>{r.ts ? new Date(r.ts).toLocaleString() : ""}</span>{" "}
+                  {r.model} on {r.endpoint_host} · {r.chunks} chunk(s) · {(r.documents || []).join(", ")}
+                  {r.session_id ? <span style={{ color: MUTED }}> · session {String(r.session_id).slice(0, 8)}</span> : null}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
