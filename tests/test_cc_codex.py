@@ -265,3 +265,21 @@ def test_codex_proposal_raises_no_card(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_recent", lambda msg, fresh: "")
     status, payload = m._turn_inner("do it", thread=None, new=True, reasoner="codex")
     assert payload["proposal"] is None and "raises no cards" in payload["reply"]
+
+
+# ---------------------------------------------------------------- the page ----
+def test_page_has_the_chatgpt_door_and_sends_the_seat():
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    assert "Sign in with ChatGPT" in src and "'/claude/?arg=codex-login'" in src
+    assert "Sign in with a Claude subscription" in src          # the Claude door stays beside it
+    assert "reasoner: seatRef.current" in src and "'/cc/codex/status?fresh=1'" in src
+    assert "Codex (read-only)" in src
+    assert "<select" not in src
+
+
+def test_door_runs_the_device_code_login_as_the_hands():
+    src = (ROOT / "scripts" / "cc" / "install.sh").read_text()
+    assert "codex-login)" in src and "codex login --device-auth" in src
+    inst = (ROOT / "scripts" / "cc" / "install-codex.sh").read_text()
+    assert "CODEX_VERSION=${CODEX_VERSION:-" + cc_codex.PINNED_VERSION + "}" in inst   # one pin, in step with the bridge
+    assert '"@openai/codex@$CODEX_VERSION"' in inst and "--prefix" in inst and "codex login --device-auth" in inst
