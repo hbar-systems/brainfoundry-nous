@@ -184,6 +184,128 @@ def model_is_local_at(model: Optional[str], url: Optional[str]) -> bool:
     return is_owner_host(url)
 
 
+# ── the owner's allowlist of local readers (2026-10-15) ────────────────────
+# Locality says a model CAN be trusted with local-only memory; the allowlist
+# says the owner DOES. Default (nothing set): every model the locality rule
+# accepts. The owner narrows it to named models in the Vault panel (settings
+# entry `local_readers`) or with BRAIN_LOCAL_READERS (comma-separated; the
+# settings entry wins when both are set; "none" = no model reads it). A local
+# model that is not on the list gets the open view, exactly like a closed one.
+
+def _norm_model(name: str) -> str:
+    n = (name or "").strip().lower()
+    return n[:-len(":latest")] if n.endswith(":latest") else n
+
+
+def local_readers() -> Optional[List[str]]:
+    """The allowlist, or None when the owner has not narrowed it."""
+    try:
+        from api import settings_store as _ss
+        v = _ss.get_local_readers()
+        if v is not None:
+            return list(v)
+    except Exception:
+        pass
+    raw = os.getenv("BRAIN_LOCAL_READERS", "").strip()
+    if not raw:
+        return None
+    if raw.lower() == "none":
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def reader_allowed(model: Optional[str], readers: Optional[List[str]] = None) -> bool:
+    """Is `model` on the owner's allowlist? True when there is no list."""
+    names = local_readers() if readers is None else readers
+    if names is None:
+        return True
+    want = _norm_model(model or "")
+    return bool(want) and want in {_norm_model(n) for n in names}
+
+
+def may_read_local_only(model: Optional[str], **kw) -> bool:
+    """The one question every retrieval asks: local hardware AND on the
+    owner's list. `kw` passes through to reasoner_is_local (tests)."""
+    return reasoner_is_local(model, **kw) and reader_allowed(model)
+
+
+# The rule a turn holding local-only memory runs under, in words the owner
+# reads (reply metadata, the chat header chip).
+GREEN_ONLY_RULE = ("local-only memory in this turn: only GREEN tools (own memory, "
+                   "own task list) may run; web, fetch, mail, calendar, Drive, "
+                   "brain_call and MCP are refused; the session is marked local-only")
+
+
+def turn_privacy_meta(model: Optional[str], used_local_only: bool,
+                      allowed: Optional[bool] = None) -> Dict[str, Any]:
+    """The `privacy` block of a reply's rag_metadata."""
+    return {
+        "local_reader": bool(may_read_local_only(model) if allowed is None else allowed),
+        "local_only_used": bool(used_local_only),
+        "rule": GREEN_ONLY_RULE if used_local_only else None,
+    }
+
+
+# ── the read audit (2026-10-15) ─────────────────────────────────────────────
+# One line per turn that put local-only chunks in front of a model: when, which
+# model, which endpoint host, which session, which documents and how many
+# chunks. Never the content. Written to the tool audit (/tools/audit, Trace
+# tab) so the owner sees which model read what next to what tools ran.
+AUDIT_TOOL = "local-only read"
+
+
+def _endpoint_host(model: Optional[str]) -> str:
+    try:
+        from api import providers as _p
+        if _p._resolve(model or "")[0] != "ollama":
+            return "(closed provider)"
+        url = _p.ollama_url()
+        return (urlparse(url).hostname or url or "").lower()
+    except Exception:
+        return "(unknown)"
+
+
+def audit_local_read(model: Optional[str], docs: Iterable[Dict[str, Any]], *,
+                     session_id: Optional[str] = None, surface: str = "chat/rag",
+                     endpoint_host: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Write the audit line for a turn if any of `docs` is local-only. Returns
+    the record (for tests), or None when there was nothing to record. Never
+    raises."""
+    try:
+        lo = [d for d in (docs or []) if level_of(d.get("metadata")) != OPEN]
+        if not lo:
+            return None
+        names = sorted({str(d.get("document_name") or "?") for d in lo})
+        host = endpoint_host if endpoint_host is not None else _endpoint_host(model)
+        rec = {
+            "tool": AUDIT_TOOL,
+            "kind": "local_only_read",
+            "ok": True,
+            "model": model or "",
+            "endpoint_host": host,
+            "session_id": session_id or None,
+            "surface": surface,
+            "documents": names[:50],
+            "chunks": len(lo),
+            "reason": f"{model} on {host}: {len(lo)} chunk(s) from {len(names)} document(s)",
+        }
+        from api.tools import audit as _audit
+        _audit.log(rec)
+        return rec
+    except Exception:
+        return None
+
+
+def recent_reads(n: int = 20) -> List[Dict[str, Any]]:
+    """The newest local-only read lines (newest last)."""
+    try:
+        from api.tools import audit as _audit
+        rows = [r for r in _audit.tail(2000) if r.get("kind") == "local_only_read"]
+        return rows[-n:]
+    except Exception:
+        return []
+
+
 # ── per-turn reader for tools ───────────────────────────────────────────────
 # The agentic search_memory tool runs inside a model turn but does not know
 # which model it serves. /chat/rag sets this for the duration of the turn; the
@@ -220,15 +342,95 @@ INDEX_SQL = (
 )
 
 
+# The session mark (2026-10-15): a chat session in which any turn put a
+# local-only chunk in front of a model is marked; its history holds derived
+# text (quotes, paraphrase) and is never replayed to a closed reasoner. One
+# nullable column, NULL = unmarked, so every existing session is unmarked and
+# the column add rewrites no rows. Same three places as the index.
+SESSION_COLUMN = "local_only_at"
+SESSION_COLUMN_SQL = ("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS "
+                      "local_only_at TIMESTAMP NULL")
+
+SESSION_REFUSAL = ("This session carries local-only memory (a local model quoted it here), "
+                   "so a hosted model may not continue it. Start a fresh session to use "
+                   "this model, or pick a local model to continue.")
+
+
+def _valid_session_id(session_id: Any) -> bool:
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(session_id))
+        return True
+    except Exception:
+        return False
+
+
+def session_is_marked(conn, session_id: Any) -> bool:
+    """Is this chat session marked local-only? No session id, or one that is
+    not a UUID (nothing can be stored under it), is unmarked. A database error
+    counts as marked (fail closed)."""
+    if not session_id or not _valid_session_id(session_id):
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT local_only_at FROM chat_sessions WHERE session_id = %s::uuid",
+                    (str(session_id),))
+        row = cur.fetchone()
+        cur.close()
+        return bool(row and row[0] is not None)
+    except Exception:
+        return True
+
+
+def mark_session(conn, session_id: Any) -> bool:
+    """Mark a session local-only (first mark's time is kept). Best-effort."""
+    if not session_id or not _valid_session_id(session_id):
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE chat_sessions SET local_only_at = COALESCE(local_only_at, NOW()) "
+                    "WHERE session_id = %s::uuid", (str(session_id),))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception:
+        return False
+
+
+# ── the private vault's lock (2026-10-15) ───────────────────────────────────
+# Documents ingested from the vault (api/vault.py) are named vault/<relative
+# path> and carry metadata.source = vault:<relative path>. Their level is
+# forced to local-only on every write and cannot be lowered through the API
+# while the source is in the vault.
+VAULT_DOC_PREFIX = "vault/"
+VAULT_SOURCE_PREFIX = "vault:"
+
+
+def is_vault_name(document_name: Any) -> bool:
+    return isinstance(document_name, str) and document_name.lstrip("/").startswith(VAULT_DOC_PREFIX)
+
+
+def is_vault_metadata(metadata: Optional[Dict[str, Any]]) -> bool:
+    md = metadata or {}
+    src = md.get("source")
+    return bool(md.get("vault")) or (isinstance(src, str) and src.startswith(VAULT_SOURCE_PREFIX))
+
+
 def migrate(conn) -> Dict[str, Any]:
     """Bring an existing brain's schema up to the privacy gate. Idempotent:
-    creates the partial index only if it is missing, rewrites no rows (a chunk
-    without the key is already `open`). Returns what it found and did."""
+    creates the partial index and the session-mark column only if missing,
+    rewrites no rows (a chunk without the key is already `open`, a session
+    with no mark is unmarked). Returns what it found and did."""
     cur = conn.cursor()
     cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", (INDEX_NAME,))
     existed = cur.fetchone() is not None
     if not existed:
         cur.execute(INDEX_SQL)
+    cur.execute("SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'chat_sessions' AND column_name = %s", (SESSION_COLUMN,))
+    col_existed = cur.fetchone() is not None
+    if not col_existed:
+        cur.execute(SESSION_COLUMN_SQL)
     cur.execute(
         "SELECT COUNT(*) FILTER (WHERE metadata->>'privacy' = 'local-only'), "
         "       COUNT(*) FILTER (WHERE metadata->>'privacy' IS NOT NULL "
@@ -239,5 +441,6 @@ def migrate(conn) -> Dict[str, Any]:
     local_only, unknown, total = cur.fetchone()
     conn.commit()
     cur.close()
-    return {"index_created": not existed, "chunks": total,
+    return {"index_created": not existed, "session_column_created": not col_existed,
+            "chunks": total,
             "local_only_chunks": local_only, "unknown_level_chunks": unknown}

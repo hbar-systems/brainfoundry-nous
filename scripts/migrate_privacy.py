@@ -6,7 +6,8 @@ Pairs with vector-db/init.sql and api/privacy.py: each chunk may carry
 so NO ROW IS REWRITTEN; the migration only ensures the partial index
 document_embeddings_privacy_idx and reports how many chunks are local-only
 (and how many carry an unknown level, which retrieval withholds from closed
-reasoners).
+reasoners). Since 2026-10-15 it also adds chat_sessions.local_only_at (the
+session mark; NULL = unmarked, so again no row is rewritten).
 
 The API startup hook creates the same index on every boot, so a brain that has
 been redeployed with this code is already migrated; this script is the explicit,

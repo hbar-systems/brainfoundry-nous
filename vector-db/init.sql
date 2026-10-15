@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 2026-10-15: session mark. A session in which a model read local-only memory
+-- is marked (NULL = unmarked); its history is never replayed to a closed
+-- reasoner. See api/privacy.py. Existing brains: scripts/migrate_privacy.py
+-- (idempotent; the API startup hook also adds the column on boot).
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS local_only_at TIMESTAMP NULL;
+
 -- Create a table for chat messages
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,

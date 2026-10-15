@@ -1393,7 +1393,7 @@ async def propose_layer_scheme(api_key: str = Depends(get_api_key)) -> dict:
     from api import privacy as _privacy
     model = _providers.default_model()
     _scheme_privacy_sql = (
-        "" if _privacy.reasoner_is_local(model)
+        "" if _privacy.may_read_local_only(model)
         else " AND document_name NOT IN (SELECT document_name FROM document_embeddings"
              " WHERE COALESCE(metadata->>'privacy', 'open') <> 'open')")
     try:
@@ -1721,6 +1721,8 @@ def _ensure_runtime_indexes() -> None:
             # 2026-10-14: memory privacy gate (api/privacy.py).
             from api import privacy as _privacy
             cur.execute(_privacy.INDEX_SQL)
+            # 2026-10-15: the session mark (local-only memory read in a session).
+            cur.execute(_privacy.SESSION_COLUMN_SQL)
         conn.close()
     except Exception as e:
         print(f"[startup] layer index ensure skipped: {e}", flush=True)
@@ -2026,7 +2028,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
     the reader of the result may see `local-only` chunks. It defaults to False
     (the closed view), so any caller that does not state its reader gets only
     open chunks. Pass True only when the result goes to a reasoner on owner
-    hardware (api.privacy.reasoner_is_local) and back to the owner.
+    hardware (api.privacy.may_read_local_only: local and on the owner allowlist) and back to the owner.
 
     Retrieval modes (Track C3 — "Mind Architecture"):
     - **Flat similarity:** `architecture='flat'` — one cosine-similarity sweep
@@ -2364,9 +2366,19 @@ def compute_models_with_boxes(req: ComputeModelsRequest, api_key: str = Depends(
 async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
     """Chat completion endpoint compatible with OpenAI format - supports streaming"""
     try:
-        _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
+        _cc_permit = _verify_loop_permit(request.get("permit_id"), request.get("permit_token"))
         model = request.get("model") or _providers.default_model()
         messages = request.get("messages", [])
+        # Session mark (api/privacy.py): a marked session's history is never
+        # replayed to a reader that may not see local-only memory.
+        _cc_sid = request.get("session_id")
+        if _cc_sid and _session_marked(_cc_sid):
+            from api import privacy as _privacy
+            _cc_agent = str((_cc_permit or {}).get("agent_id") or "") if isinstance(_cc_permit, dict) else ""
+            if not _privacy.may_read_local_only(model) or _cc_agent.startswith("app:"):
+                raise HTTPException(status_code=409, detail={
+                    "error": "session_local_only", "message": _privacy.SESSION_REFUSAL,
+                    "session_id": _cc_sid, "model": model, "offer": "new_session"})
 
         # Inject brain persona as system message (if caller didn't provide one)
 
@@ -2499,6 +2511,18 @@ async def consolidate_session(session_id: str, request: dict, api_key: str = Dep
         if len(rows) < 2:
             raise HTTPException(400, "Session too short to consolidate (need at least one user+assistant exchange)")
 
+        # Session mark (api/privacy.py): a session in which a model read
+        # local-only memory is summarised only by a model that may read it, and
+        # the summary itself lands local-only (it is derived from that text).
+        from api import privacy as _privacy
+        _marked = _session_marked(session_id)
+        if _marked and not _privacy.may_read_local_only(model):
+            raise HTTPException(409, {
+                "error": "session_local_only",
+                "message": ("This session carries local-only memory, so only a local model "
+                            "may summarise it. Save it with a local model (the default)."),
+                "session_id": session_id, "model": model})
+
         convo = "\n\n".join(f"{r[0]}: {r[1]}" for r in rows)
 
         # Summarization prompt — produces durable, self-contained bullets
@@ -2566,6 +2590,7 @@ Summary:"""
                     "chunk_index": stored,
                     "layer": layer,
                     **_provenance,
+                    "privacy": _privacy.LOCAL_ONLY if _marked else _privacy.OPEN,
                 }))
             )
             stored += 1
@@ -2589,6 +2614,7 @@ Summary:"""
             "chunks_stored": stored,
             "summary_preview": summary[:300] + ("..." if len(summary) > 300 else ""),
             "layer": layer,
+            "privacy": _privacy.LOCAL_ONLY if _marked else _privacy.OPEN,
         }
     except HTTPException:
         raise
@@ -2618,6 +2644,40 @@ def _persist_chat_turn(session_id: str, messages: list, reply: str):
         conn.close()
     except Exception as db_error:
         print(f"Database save error (rag): {db_error}")
+
+
+def _session_marked(session_id) -> bool:
+    """Is this chat session marked local-only (api/privacy.py)? Fail closed:
+    no database answer counts as marked."""
+    from api import privacy as _privacy
+    if not session_id or not _privacy._valid_session_id(session_id):
+        return False
+    try:
+        conn = get_db_connection()
+    except Exception:
+        return True
+    try:
+        return _privacy.session_is_marked(conn, session_id)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _mark_session_local_only(session_id) -> None:
+    from api import privacy as _privacy
+    try:
+        conn = get_db_connection()
+    except Exception:
+        return
+    try:
+        _privacy.mark_session(conn, session_id)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ── RAG context budget (added 2026-06-08) ───────────────────────────────────
@@ -2694,7 +2754,7 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
 
     Privacy gate: `local-only` chunks are retrieved only when the prompt goes
     to a reasoner on owner hardware. `allow_local_only=None` decides from
-    `model` (api.privacy.reasoner_is_local, fail closed); a caller whose answer
+    `model` (api.privacy.may_read_local_only: local hardware and on the owner allowlist, fail closed); a caller whose answer
     leaves the owner's surface (Telegram, a brain app) passes False.
 
     Track C3: the retrieval architecture is a persisted brain setting (the
@@ -2711,7 +2771,7 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     """
     from api import privacy as _privacy
     if allow_local_only is None:
-        allow_local_only = _privacy.reasoner_is_local(model)
+        allow_local_only = _privacy.may_read_local_only(model)
     allow_local_only = bool(allow_local_only)
     arch = settings_store.get_retrieval_architecture()
     if arch == "flat":
@@ -2858,13 +2918,22 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # the open view even on a local model: its reply goes into third-party
         # app code.
         from api import privacy as _privacy
-        _allow_local_only = (_privacy.reasoner_is_local(model)
+        _allow_local_only = (_privacy.may_read_local_only(model)
                              and not _permit_agent.startswith("app:"))
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
         session_id = request.get("session_id")
         do_stream = request.get("stream", False)
+        # Session mark (api/privacy.py, 2026-10-15): a session in which a model
+        # read local-only memory holds derived text (quotes, paraphrase) in its
+        # history. Only a reader that may see local-only memory may continue it;
+        # a closed reasoner (or a local model off the owner's list, or a brain
+        # app) is refused, with the offer of a fresh session. No fallback.
+        if session_id and not _allow_local_only and _session_marked(session_id):
+            raise HTTPException(status_code=409, detail={
+                "error": "session_local_only", "message": _privacy.SESSION_REFUSAL,
+                "session_id": session_id, "model": model, "offer": "new_session"})
         # Honor an operator/app-supplied output ceiling (mirrors /chat). Falls
         # back to the settings value, already clamped to [256, 65536]. Without
         # this, /chat/rag pinned every answer at 2048 and silently truncated
@@ -3024,6 +3093,24 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # dispatch wrapper below records here. Once set, nothing from this turn
         # goes to a tool that sends data off the box or to a closed model.
         _lo_seen = {"v": _privacy.has_local_only(relevant_docs)}
+        # Every local-only chunk a model saw this turn, for the one audit line
+        # (document names and a count, never content) and the session mark.
+        _lo_docs = [d for d in relevant_docs if _privacy.level_of(d.get("metadata")) != _privacy.OPEN]
+        _lo_done = {"v": False}
+
+        def _record_local_read():
+            # Once per turn: mark the session, write the audit line.
+            if not _lo_seen["v"] or _lo_done["v"]:
+                return
+            _lo_done["v"] = True
+            if session_id:
+                _mark_session_local_only(session_id)
+            _privacy.audit_local_read(model, _lo_docs, session_id=session_id,
+                                      surface="brain-app" if _permit_agent.startswith("app:") else "chat/rag")
+
+        # Mark before the model is called: a turn that dies mid-stream may still
+        # have persisted part of a quote.
+        _record_local_read()
 
         # Corroboration over the brain's OWN documents (cognitive-OS gap #2/#4/#5
         # payoff). Measures how independent / mutually-agreeing / trusted the
@@ -3122,8 +3209,11 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                     name, args, operator_authorized=_web_ok, approvals_available=True)
             finally:
                 _privacy.reset_turn(_ptok)
-            if _privacy.has_local_only((getattr(res, "meta", None) or {}).get("results") or []):
+            _res_docs = (getattr(res, "meta", None) or {}).get("results") or []
+            if _privacy.has_local_only(_res_docs):
                 _lo_seen["v"] = True
+                _lo_docs.extend(d for d in _res_docs
+                                if isinstance(d, dict) and _privacy.level_of(d.get("metadata")) != _privacy.OPEN)
             ap = (getattr(res, "meta", None) or {}).get("approval")
             if ap:
                 _pending_approvals.append(ap)
@@ -3144,6 +3234,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                             "corroboration": rag_corroboration,
                             "tool_events": events,
                             "pending_approvals": _pending_approvals,
+                            "privacy": _privacy.turn_privacy_meta(model, _lo_seen["v"], _allow_local_only),
                         },
                     }
 
@@ -3169,6 +3260,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                         reply_text = await _providers.complete(
                             model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
                         ev = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
+                    _record_local_read()
                     yield f"data: {json.dumps(_meta_frame(ev), ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps(_chunk(reply_text), ensure_ascii=False)}\n\n"
                     _persist_chat_turn(session_id, messages, reply_text)
@@ -3213,6 +3305,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
                 tool_events = [{"tool": "(agentic)", "ok": False, "summary": str(agentic_err), "sources": []}]
         else:
             reply = await _providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=_max_tokens)
+        _record_local_read()
         _persist_chat_turn(session_id, messages, reply)
         mind_frame = await _maybe_extract_mind_facts(user_query, reply, used_local_only=_lo_seen["v"])
         return {
@@ -3221,11 +3314,16 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
             "created": int(datetime.utcnow().timestamp()),
             "model": model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
-            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events, "pending_approvals": _pending_approvals},
+            "rag_metadata": {"documents_used": len(relevant_docs), "search_query": user_query, "sources": sources, "architecture": settings_store.get_retrieval_architecture(), "web_search": web_meta, "corroboration": rag_corroboration, "tool_events": tool_events, "pending_approvals": _pending_approvals, "privacy": _privacy.turn_privacy_meta(model, _lo_seen["v"], _allow_local_only)},
             "onboarding_facts": mind_frame["facts"] if mind_frame else [],
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(reply.split()), "total_tokens": len(prompt.split()) + len(reply.split())}
         }
 
+    except HTTPException as e:
+        # The session-mark refusal (409) must reach the client as itself.
+        if e.status_code == 409:
+            raise
+        raise HTTPException(status_code=500, detail=f"RAG chat completion error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG chat completion error: {str(e)}")
 
@@ -4163,6 +4261,8 @@ def _stream_ingest_path_b(
         # without a choice stays local-only, never silently opens), else open.
         if privacy is None:
             privacy = _privacy.stricter(*_existing_levels) or _privacy.OPEN
+        if _privacy.is_vault_name(filename):
+            privacy = _privacy.LOCAL_ONLY  # the vault namespace is always local-only
         provenance["privacy"] = privacy
         to_embed, reused, stale = plan_update(chunks, existing)
         now_iso = datetime.utcnow().isoformat()
@@ -4629,17 +4729,23 @@ def _set_document_privacy(document_name: str, level: str, conn=None) -> int:
     """Stamp `metadata.privacy = level` on every chunk of a document (trashed
     chunks included, so a restore cannot bring back a stale level). Returns
     the number of chunks updated. `conn` is injectable for tests."""
+    from api import privacy as _privacy
     owns = conn is None
     if owns:
         conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        # Vault chunks (api/vault.py) are never lowered to open, whatever the
+        # caller checked first: the guard rides in the UPDATE itself.
+        vault_guard = (" AND COALESCE(metadata->>'source', '') NOT LIKE 'vault:%%'"
+                       " AND COALESCE(metadata->>'vault', '') <> 'true'"
+                       if level != _privacy.LOCAL_ONLY else "")
         cursor.execute(
             """
             UPDATE document_embeddings
             SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('privacy', %s::text)
             WHERE document_name = %s
-            """,
+            """ + vault_guard,
             (level, document_name),
         )
         n = cursor.rowcount
@@ -4649,6 +4755,34 @@ def _set_document_privacy(document_name: str, level: str, conn=None) -> int:
     finally:
         if owns:
             conn.close()
+
+
+def _document_in_vault(document_name: str) -> bool:
+    """Is this document (by name or by any chunk's source) from the vault?
+    Fail closed: no database answer counts as yes."""
+    from api import privacy as _privacy
+    if _privacy.is_vault_name(document_name):
+        return True
+    try:
+        conn = get_db_connection()
+    except Exception:
+        return True
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM document_embeddings WHERE document_name = %s AND "
+            "(COALESCE(metadata->>'source', '') LIKE 'vault:%%' OR metadata->>'vault' = 'true') LIMIT 1",
+            (document_name,))
+        row = cur.fetchone()
+        cur.close()
+        return row is not None
+    except Exception:
+        return True
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.post("/documents/{document_name:path}/privacy")
@@ -4669,6 +4803,13 @@ def set_document_privacy(document_name: str, request: dict, api_key: str = Depen
         raise HTTPException(status_code=400, detail=str(e))
     if level is None:
         raise HTTPException(status_code=400, detail="privacy is required (open or local-only)")
+    if level != _privacy.LOCAL_ONLY and _document_in_vault(document_name):
+        raise HTTPException(status_code=403, detail={
+            "error": "vault_locked",
+            "message": ("This document comes from the private vault and stays local-only "
+                        "while its source is in the vault. Move the file out of the vault "
+                        "to change that."),
+            "document_name": document_name})
     try:
         n = _set_document_privacy(document_name, level)
     except HTTPException:
@@ -4678,6 +4819,75 @@ def set_document_privacy(document_name: str, request: dict, api_key: str = Depen
     if n == 0:
         raise HTTPException(status_code=404, detail=f"No chunks found for document: {document_name}")
     return {"document_name": document_name, "privacy": level, "chunks_updated": n}
+
+
+# ── the private vault (api/vault.py, 2026-10-15) ────────────────────────────
+# Owner-only (API key). Files in the vault are ingested local-only and locked
+# there; the routes report what is there, scan on demand, and hold the owner's
+# allowlist of local models that may read local-only memory at all.
+
+def _vault_scan(layer=None, prune=False, force=False) -> dict:
+    from api import vault as _vault
+    return _vault.scan(connect=get_db_connection, chunker=chunk_text,
+                       embedder=generate_embeddings, layer=layer, prune=prune, force=force)
+
+
+@app.on_event("startup")
+def _start_vault_ticker() -> None:
+    try:
+        from api import vault as _vault
+        if _vault.start_ticker(connect=get_db_connection, chunker=chunk_text,
+                               embedder=generate_embeddings):
+            print(f"[vault] mounted at {_vault.mount()}, scanning every "
+                  f"{_vault.scan_minutes():g} min", flush=True)
+    except Exception as e:
+        print(f"[startup] vault ticker skipped: {e}", flush=True)
+
+
+@app.get("/vault")
+def vault_status(api_key: str = Depends(get_api_key)):
+    """The vault panel: where it is, how many files, the last scan, the local
+    readers allowlist, and the recent local-only reads from the audit."""
+    from api import privacy as _privacy
+    from api import vault as _vault
+    out = _vault.status()
+    out["readers"] = _privacy.local_readers()
+    out["readers_source"] = ("settings" if settings_store.get_local_readers() is not None
+                             else ("env" if os.getenv("BRAIN_LOCAL_READERS", "").strip() else "default"))
+    out["recent_reads"] = _privacy.recent_reads(20)
+    out["rule"] = _privacy.GREEN_ONLY_RULE
+    return out
+
+
+@app.post("/vault/scan")
+def vault_scan(request: Optional[dict] = None, api_key: str = Depends(get_api_key)):
+    """Ingest new or changed vault files now. Body (all optional):
+    {"layer": "<memory layer>", "prune": false, "force": false}."""
+    body = request or {}
+    layer = body.get("layer")
+    if layer is not None and (not isinstance(layer, str) or len(layer) > 64):
+        raise HTTPException(status_code=400, detail="layer must be a short string")
+    r = _vault_scan(layer=(layer or None), prune=bool(body.get("prune")), force=bool(body.get("force")))
+    if r.get("busy"):
+        raise HTTPException(status_code=409, detail="a vault scan is already running")
+    if r.get("mounted") is False:
+        raise HTTPException(status_code=404, detail=r.get("error") or "no vault mounted")
+    return r
+
+
+@app.post("/vault/readers")
+def vault_set_readers(request: dict, api_key: str = Depends(get_api_key)):
+    """Set the allowlist of local models that may read local-only memory.
+    {"readers": ["llama3.2:3b", ...]} narrows it ([] = none may);
+    {"readers": null} clears it (every local model the rule accepts)."""
+    from api import privacy as _privacy
+    if "readers" not in (request or {}):
+        raise HTTPException(status_code=400, detail="readers is required (a list of model names, or null)")
+    names = request.get("readers")
+    if names is not None and (not isinstance(names, list) or not all(isinstance(n, str) for n in names)):
+        raise HTTPException(status_code=400, detail="readers must be a list of model names, or null")
+    settings_store.set_local_readers(names)
+    return {"readers": _privacy.local_readers()}
 
 
 @app.post("/documents/{document_name:path}/release")
@@ -5213,10 +5423,11 @@ def list_chat_sessions(api_key: str = Depends(get_api_key)):
                 s.title,
                 s.created_at,
                 COUNT(m.id) as message_count,
-                (SELECT content FROM chat_messages WHERE session_id = s.session_id ORDER BY created_at DESC LIMIT 1) as last_message
+                (SELECT content FROM chat_messages WHERE session_id = s.session_id ORDER BY created_at DESC LIMIT 1) as last_message,
+                s.local_only_at
             FROM chat_sessions s
             LEFT JOIN chat_messages m ON s.session_id = m.session_id
-            GROUP BY s.session_id, s.model_name, s.title, s.created_at
+            GROUP BY s.session_id, s.model_name, s.title, s.created_at, s.local_only_at
             ORDER BY s.created_at DESC 
             LIMIT 50
             """
@@ -5233,7 +5444,9 @@ def list_chat_sessions(api_key: str = Depends(get_api_key)):
                     "title": session[2] or "New Chat",
                     "created_at": session[3].isoformat() if session[3] else None,
                     "message_count": session[4],
-                    "last_message": session[5][:100] + "..." if session[5] and len(session[5]) > 100 else session[5]
+                    "last_message": session[5][:100] + "..." if session[5] and len(session[5]) > 100 else session[5],
+                    # Session mark (api/privacy.py): a model read local-only memory here.
+                    "local_only": len(session) > 6 and session[6] is not None,
                 } for session in sessions
             ]
         }
@@ -5417,6 +5630,7 @@ def get_session_messages(session_id: str, api_key: str = Depends(get_api_key)):
         
         return {
             "session_id": session_id,
+            "local_only": _session_marked(session_id),
             "messages": [
                 {
                     "role": msg[0],
@@ -7160,6 +7374,9 @@ class MemoryAppendRequest(BaseModel):
     content: str
     source: Optional[str] = None     # which app wrote this (e.g. "hbar-ink")
     metadata: Optional[dict] = None  # passthrough — stored alongside layer
+    # Privacy level (api/privacy.py, 2026-10-15): "open" (default) or
+    # "local-only". Same validation as /memory/store; stricter wins.
+    privacy: Optional[str] = None
 
 
 @app.post("/memory/append")
@@ -7172,6 +7389,11 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
     content = (req.content or "").strip()
     if not content:
         raise HTTPException(status_code=422, detail={"error": "empty_content"})
+    from api import privacy as _privacy
+    try:
+        _append_privacy = _privacy.normalize_level(req.privacy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     source = (req.source or "unknown").strip() or "unknown"
     source_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", source).strip("-").lower() or "unknown"
@@ -7204,7 +7426,38 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
             flush=True,
         )
 
+    # Privacy, stricter wins (api/privacy.py): the requested level, a level in
+    # the passthrough metadata (it cannot lower the request; an unknown value
+    # counts as local-only), a vault-namespaced source, and any chunk already
+    # stored with the same content (a re-append of local-only text stays
+    # local-only).
+    _levels = [_append_privacy]
+    if isinstance(req.metadata, dict) and "privacy" in req.metadata:
+        _levels.append(_privacy.level_of({"privacy": req.metadata.get("privacy")}))
+    if source.startswith(_privacy.VAULT_SOURCE_PREFIX):
+        _levels.append(_privacy.LOCAL_ONLY)
+    try:
+        _pconn = get_db_connection()
+        try:
+            _pcur = _pconn.cursor()
+            _pcur.execute("SELECT metadata FROM document_embeddings "
+                          "WHERE metadata->>'content_hash' = %s LIMIT 50", (_content_hash,))
+            for (_md,) in (_pcur.fetchall() or []):
+                if isinstance(_md, str):
+                    try:
+                        _md = json.loads(_md)
+                    except Exception:
+                        _md = {"privacy": "unparseable"}
+                _levels.append(_privacy.level_of(_md))
+            _pcur.close()
+        finally:
+            _pconn.close()
+    except Exception as _perr:
+        print(f"[memory/append] existing-level check skipped: {_perr}", flush=True)
+    _append_privacy = _privacy.stricter(*_levels) or _privacy.OPEN
+
     metadata_base = {
+        "privacy": _append_privacy,
         "layer": req.layer,
         "source": source,
         "appended_at": datetime.utcnow().isoformat(),
@@ -7255,6 +7508,7 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
         "chunk_ids": stored_ids,
         "doc_name": doc_name,
         "layer": req.layer,
+        "privacy": _append_privacy,
         "mem_type": provenance.get("mem_type"),
         "quarantined": quarantined,
         "injection_scan": scan,
@@ -7307,6 +7561,9 @@ class MemoryStoreProposeRequest(BaseModel):
     content: str
     context: Optional[str] = None  # surrounding conversation, for the LLM
     model: Optional[str] = None    # which model to use; falls back to active
+    # The chat session the content comes from. A session marked local-only
+    # (api/privacy.py) is classified only by a model that may read it.
+    session_id: Optional[str] = None
 
 
 @app.post("/memory/store/propose")
@@ -7334,6 +7591,14 @@ async def memory_store_propose(req: MemoryStoreProposeRequest, api_key: str = De
     # get_active_model() chain here 404'd the classify call (e.g. an "oss-brain"
     # pin) and 502'd the whole propose. (NOUS item 10 finding, fixed.)
     model = req.model or _providers.default_model()
+    if req.session_id and _session_marked(req.session_id):
+        from api import privacy as _privacy
+        if not _privacy.may_read_local_only(model):
+            raise HTTPException(status_code=409, detail={
+                "error": "session_local_only",
+                "message": ("This session carries local-only memory, so a hosted model may "
+                            "not classify text from it. Use a local model, or store it raw."),
+                "session_id": req.session_id, "model": model})
 
     # The prompt lists the canonical storage layers (E/S/P) plus the
     # operator-facing organizational layer namespace; the model is told to
@@ -7515,6 +7780,10 @@ def memory_store(req: MemoryStoreRequest, api_key: str = Depends(get_api_key)) -
         _store_privacy = _privacy.normalize_level(req.privacy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Stricter wins: text from a session marked local-only, or a document in
+    # the vault namespace, is stored local-only whatever the request says.
+    if _privacy.is_vault_name(doc_name) or (req.session_id and _session_marked(req.session_id)):
+        _store_privacy = _privacy.LOCAL_ONLY
     metadata_base: dict = {
         "privacy": _store_privacy,
         "layer": layer,
@@ -7800,7 +8069,7 @@ async def _maybe_extract_mind_facts(user_query: str, reply: str,
     # is never handed to a closed extraction model.
     if used_local_only:
         from api import privacy as _privacy
-        if not _privacy.reasoner_is_local(_providers.cheap_extraction_model()):
+        if not _privacy.may_read_local_only(_providers.cheap_extraction_model()):
             return None
     try:
         from api.onboarding import core as _onb_core
