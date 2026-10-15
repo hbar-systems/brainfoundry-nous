@@ -3146,6 +3146,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 peers = None
             self._send(200, cc_extras.box_map(facts, peers, self_ip))
+        elif route == "/compute":
+            # Which models live on which machine (2026-10-15): the facts' declared Ollama endpoints go to the
+            # brain api, which reads each live and marks every model local or closed (api/privacy.py).
+            facts = {}
+            try:
+                facts = json.loads((Path(WORLD_DIR or "/nonexistent") / "ops" / "box-map" / "boxes.json").read_text())
+            except Exception:
+                facts = {}
+            res = _brain_api("POST", "/compute/models", {"endpoints": cc_extras.declared_ollama(facts)})
+            self._send(200, cc_extras.compute_view(facts, res))
+        elif route == "/shelf":
+            # The agent shelf (2026-10-15): ready agent kinds from the owner's file, never from the template.
+            fp = os.environ.get("CC_SHELF_FILE", "").strip() or str(Path(WORLD_DIR or "/nonexistent") / cc_extras.SHELF_REL)
+            self._send(200, cc_extras.load_shelf(fp))
         elif route == "/permits/history":
             qy = self._query()
             try:

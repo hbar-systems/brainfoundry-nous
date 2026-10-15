@@ -1,0 +1,42 @@
+{
+  "about": "Example agent shelf (2026-10-15). Copy to <world>/ops/agent-shelf/shelf.json (or set CC_SHELF_FILE in the bridge env) and make it yours. Each agent is a kind you can raise, not a running process. runs_on is a box id from ops/box-map/boxes.json. cost is your own note, free text.",
+  "legions": [
+    {"id": "home", "name": "Home"},
+    {"id": "research", "name": "Research"}
+  ],
+  "agents": [
+    {
+      "id": "summarizer",
+      "name": "Summarizer",
+      "legion": "home",
+      "mission": "Read one document or thread and write a short summary with the open questions.",
+      "tools": ["read files", "search memory"],
+      "model_class": "local-small",
+      "runs_on": "this-box",
+      "permit": "any write outside the out folder",
+      "cost": ""
+    },
+    {
+      "id": "reviewer",
+      "name": "Code reviewer",
+      "legion": "home",
+      "mission": "Review a branch for correctness bugs and report findings with file and line.",
+      "tools": ["read files", "run tests"],
+      "model": "frontier reasoner",
+      "runs_on": "this-box",
+      "permit": "any push, any edit to the reviewed repo",
+      "cost": ""
+    },
+    {
+      "id": "literature",
+      "name": "Literature scout",
+      "legion": "research",
+      "mission": "Find and rank papers on one question; return citations, never full texts.",
+      "tools": ["web search", "read files"],
+      "model_class": "frontier",
+      "runs_on": "this-box",
+      "permit": "any paid search beyond the monthly budget",
+      "cost": ""
+    }
+  ]
+}
