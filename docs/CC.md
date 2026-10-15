@@ -179,6 +179,26 @@ Press "talk" beside "attach", or type `/talk`, and speak. The words appear in th
 
 "System" in the drawer (order beside Update) shows the box in numbers, refreshed every minute: disk, memory, load, uptime, backups and the memory store from the api (`GET /admin/system`, read inside the container through /proc, the bind-mounted brain directory and the Docker socket); containers and images with what is reclaimable; the running and previous commit; local inference and the spokes; and, when CC is on, what only the host can see through the bridge (`GET /cc/system`): the tailnet and its peers, established connections and listening ports, failed services, the bridge's own units, permits and judgments recorded. Each tile carries a level against fixed thresholds (disk 80/90%, memory available 15/7%, load 1.0/2.0 per core, backup age 2/7 days, 5 GB reclaimable), and the first crossed threshold shows as one line in the chat footer, linking here. Nothing on the page changes anything. Added 2026-09-24 after the disk was found at 85% by accident.
 
+## The body map: boxes, models, shelf
+
+Added 2026-10-15. "Boxes" in the drawer (`/boxes`) draws every box and spoke from the owner's facts file, `<world>/ops/box-map/boxes.json`, with online state read live from the tailnet (`GET /cc/boxmap`).
+
+Models per machine (`GET /cc/compute`). The bridge passes each box's declared Ollama endpoint to the brain api (`POST /compute/models`, behind the brain's API key; `GET /compute/models` reads the brain's own endpoints only). A box declares one with `"ollama": "http://<host>:11434"` (or a list) in boxes.json. The api reads the box's own Ollama (`OLLAMA_URL`), the spoke (`OLLAMA_SPOKE_URL`) and every declared endpoint live: `/api/tags` for what is pulled, `/api/ps` for what is loaded, 1.5 seconds each (`COMPUTE_PROBE_SECONDS`), cached 20 seconds (`COMPUTE_CACHE_SECONDS`). An endpoint that does not answer shows as offline. Hosted providers list the model names the configured keys unlock; no key, masked or not, is ever in the answer. Each model is marked with the memory privacy gate's rule (api/privacy.py): `local` (an owner-network Ollama, not a `:cloud` model) may read local-only memory; `closed` (a hosted API, a public host, anything in doubt) reads open memory only. For the box and the spoke the mark is exactly the check a turn passes; a declared endpoint the brain does not route chat to gets the same host rule for that one endpoint. Each box card lists its models (name, size, loaded, local or closed); the Reasoners panel below the map summarises all of them.
+
+The agent shelf (`GET /cc/shelf`). Ready agent kinds come from the owner's file, never from the template: `<world>/ops/agent-shelf/shelf.json`, or the path in `CC_SHELF_FILE` in the bridge env. Format (example: `templates/agent-shelf.example.json`):
+
+```
+{"about": "one paragraph",
+ "legions": [{"id": "home", "name": "Home"}],
+ "agents": [{"id": "summarizer", "name": "Summarizer", "legion": "home",
+             "mission": "one line", "tools": ["read files"],
+             "model": "a model name" | "model_class": "local-small",
+             "runs_on": "<box id from boxes.json>",
+             "permit": "what always asks", "cost": "your own note"}]}
+```
+
+`id` is a lowercase slug, unique; `name`, `legion`, `mission` (one line, at most 200 characters), `runs_on` and `permit` are required; one of `model` or `model_class` is required; `tools` is a list of short names; `cost` is free text in the owner's words (the template carries no prices). A malformed entry is left off the shelf and named under "left off the shelf"; the others still show. The Shelf section filters by legion with chips. With no file the section says where to put it. Nothing on the page starts an agent.
+
 ## The guide, in the console
 
 "Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required.
