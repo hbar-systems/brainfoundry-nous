@@ -31,6 +31,22 @@ function steps(h) {
   ]
 }
 
+// Privacy: short entries pointing to the full chapters in docs/public (2026-10-16).
+const PRIVACY = [
+  { label: 'Two kinds of memory',
+    how: 'Every piece of memory is open (the default: any model may read it) or local-only (only a model on your own hardware, answering you here). Choose with the Privacy chips on the Knowledge tab, before an upload or per document in Browse.' },
+  { label: 'Local or hosted, judged by address',
+    how: 'A model counts as local only when it runs in Ollama at an address on your own network (the box, a private or Tailscale address) and is not a :cloud model. Anything in doubt counts as hosted. Narrow it further with your list of local readers in Knowledge -> Vault.' },
+  { label: 'The session mark',
+    how: 'Once a local model has read local-only memory in a session, the session is marked. A hosted model may not continue it: nothing is sent, and you are offered a fresh session. In that turn only GREEN tools (own memory, own task list) run.' },
+  { label: 'The vault',
+    how: 'A folder on the box only you can read; the Claude and Codex seats cannot. Set it up on the box, as yourself, with scripts/vault-setup.sh. Its text files become local-only memory; every read is listed under Recent reads in Knowledge -> Vault and in the Trace tab.' },
+  { label: 'What is not protected',
+    how: 'Files outside the vault (the seats can read them), memory is not encrypted, backups hold everything, the API key reads local-only memory, embeddings see all text at ingest, and the allowlist matches model names.' },
+  { label: 'Who reads what',
+    how: 'One table: every reader (you, local and hosted models, the seats, brain-apps, Telegram, visitors, other brains, root) against every kind of thing the brain holds.' },
+]
+
 export default function Guide() {
   const [health, setHealth] = useState(null)
   const [md, setMd] = useState(null)
@@ -49,7 +65,7 @@ export default function Guide() {
       <div style={{ maxWidth: '860px', margin: '0 auto', padding: '18px 20px 60px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
         <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, margin: '0 0 6px 0' }}>Guide · how this brain works</p>
         <div style={{ display: 'flex', gap: '14px', margin: '0 0 18px 0', borderBottom: `1px solid ${T.line}` }}>
-          {[['tutorial', `Tutorial (${done} of ${rows.length})`], ['guide', 'The guide']].map(([k, label]) => (
+          {[['tutorial', `Tutorial (${done} of ${rows.length})`], ['guide', 'The guide'], ['privacy', 'Privacy']].map(([k, label]) => (
             <a key={k} onClick={() => setTab(k)} style={{ ...mono, fontSize: '12px', padding: '8px 2px', cursor: 'pointer', color: tab === k ? T.ink : T.dim, borderBottom: tab === k ? `2px solid ${T.gold}` : '2px solid transparent' }}>{label}</a>
           ))}
         </div>
@@ -71,6 +87,19 @@ export default function Guide() {
             <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '16px 0 0 0' }}>
               {embedded ? 'Close this pane to go back to the conversation.' : 'The conversation is the home screen; "everything" at the top right lists every tab.'}
             </p>
+          </div>
+        )}
+        {tab === 'privacy' && (
+          <div>
+            <p style={{ fontSize: '14px', color: T.dim, lineHeight: 1.6, margin: '0 0 16px 0' }}>
+              Who can read what your brain remembers, in six lines. The full text is in your brain's checkout: docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md. Ask the brain to open either one.
+            </p>
+            {PRIVACY.map(s => (
+              <div key={s.label} style={{ padding: '12px 0', borderBottom: `1px solid ${T.line}` }}>
+                <p style={{ margin: '0 0 4px 0', fontSize: '15px', color: T.ink }}>{s.label}</p>
+                <p style={{ margin: 0, fontSize: '13px', color: T.dim, lineHeight: 1.6 }}>{s.how}</p>
+              </div>
+            ))}
           </div>
         )}
         {tab === 'guide' && (

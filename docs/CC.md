@@ -223,7 +223,7 @@ The agent shelf (`GET /cc/shelf`). Ready agent kinds come from the owner's file,
 
 ## The guide, in the console
 
-"Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required.
+"Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required. A third tab, Privacy (2026-10-16), gives six short entries on who reads what, pointing to docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md.
 
 ## The terminal, in the console
 
