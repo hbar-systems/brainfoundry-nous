@@ -1,6 +1,6 @@
 # Who reads what
 
-*Created 2026-10-16. A one-page map. The reasons and the limits are in the previous document, "Privacy and memory".*
+*Created 2026-10-16. A one-page map. The reasons and the limits are in the previous document, "Privacy and memory". Updated 2026-10-16: brain-apps row, after the app lane closed the gap.*
 
 Each row is someone or something that can read part of your brain. Each column is a kind of thing the brain holds.
 
@@ -20,7 +20,7 @@ The "seats" are the Claude Code and Codex reasoners in the CC tab. Both run as t
 | Chat model, hosted | yes | no | no | no; only what was ingested as open memory | the current session, unless it is marked local-only | no; your key pays for the call but is not in the prompt |
 | Claude seat | yes, in its memory block | no | no | yes, all that `hands` can read; reads outside its working folders ask first | its own CC threads | its own sign-in, tool-pack keys, the GitHub push token; not the brain's `.env` or the bridge's settings |
 | Codex seat | yes, in its memory block | no | no | yes, all that `hands` can read, without asking | its own threads, and anything in `hands`' files, which include Claude Code's session files | `hands`' sign-in files (`~/.claude`, `~/.codex`); not the brain's `.env` or the bridge's settings |
-| Brain-apps | only the layers the app asks for, through `llm.complete` | no through `llm.complete`; only with the caveat below | no | no | no through `llm.complete`; only with the caveat below | no |
+| Brain-apps | only the layers the app asks for, through `llm.complete` | no | no | no | no | no |
 | Telegram, the brain's bot | yes | no | no | no | no; each message is answered on its own | no |
 | Public visitors | only the `public` layer | no | no | no | only their own conversation | no |
 | Other brains | only the `public` layer | no | no | no | no | no |
@@ -29,7 +29,7 @@ The "seats" are the Claude Code and Codex reasoners in the CC tab. Both run as t
 
 Notes on three cells:
 
-- **Brain-apps.** In this version an app runs inside the console's own web address, and the console adds your API key to the requests it passes on. An app's code could therefore reach what the API key reaches. Install only apps you trust.
+- **Brain-apps.** Since 2026-10-16 an app runs in a sealed frame with no web address of its own, and the console refuses its requests, so the app cannot use your API key. It reaches the brain only through the console page, which checks what you approved at install; none of that returns local-only memory. Before that date an app could reach what the API key reaches. One exception remains: an app that ships server code (`entries.api`) runs it inside the brain's API with the API's authority. Read that code before installing.
 - **Telegram.** The CC tab has its own Telegram bot, separate from the brain's. A message to that bot is a turn of the Claude seat, so the Claude seat's row applies. Both bots' messages pass through Telegram's servers.
 - **Seats.** What a seat reads is sent to its company: Anthropic for Claude, OpenAI for Codex.
 
@@ -38,5 +38,5 @@ Notes on three cells:
 1. Put the file in the vault, not in the world checkout, `in/` or `out/`, and check the wall with `scripts/vault-setup.sh --check`.
 2. Read it only with a local model on your list, in the console, in a fresh session.
 3. Never switch that session to a hosted model; start a new session for hosted work.
-4. Keep the brain's API key out of reach of `hands`, `cc` and any app you have not read.
+4. Keep the brain's API key out of reach of `hands` and `cc`, and read the server code of any app that ships some (`entries.api`).
 5. Store backups as carefully as the server itself, because a backup holds everything in plain text.

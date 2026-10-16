@@ -1,6 +1,6 @@
 # Privacy and memory
 
-*Created 2026-10-16. Applies to brainfoundry-nous with the privacy gate (2026-10-14) and the private vault (2026-10-15).*
+*Created 2026-10-16. Applies to brainfoundry-nous with the privacy gate (2026-10-14) and the private vault (2026-10-15). Updated 2026-10-16: the brain-app gap is closed (the app lane).*
 
 This document explains who can read what your brain remembers. It says what the brain protects, how it decides, and what it does not protect. The engineering version is section 4a of `THREAT_MODEL.md`; this one is for the person who owns the brain.
 
@@ -189,7 +189,7 @@ These are honest gaps. Each one is something the privacy gate does not do.
 
 **The API key holder.** Whoever holds the brain's API key can ask the API for local-only chunks and for chat history. Keep the key where `hands` and `cc` cannot read it: the brain's `.env` and the bridge's own settings file. If a Claude Code run could read the key, it could call the API itself.
 
-**Brain-apps run inside the console.** In this version an installed app runs in the console's own web address, in a frame that allows its scripts. The console passes requests to the brain with your API key added. So the app's code could, in principle, reach what the key reaches, local-only memory included. The `llm.complete` path keeps local-only memory out, but that only covers apps that use it as intended. Install only apps you trust. (This reading comes from the console's code; it is not yet named in the threat model.)
+**Brain-apps are fenced off from the console (closed 2026-10-16).** Until 2026-10-16 an installed app ran in the console's own web address, and the console passes requests to the brain with your API key added. So an app's code could reach what the key reaches, local-only memory and chat history included, and could even read the key itself. That gap is closed. An app now runs in a sealed frame with no web address of its own: it cannot read the console page, and the console refuses every request that comes from such a frame. The brain's other doors on the console (the permit route, the CLI-info route, the CC bridge and the terminal) refuse it too. An app reaches the brain only by asking the console page, which checks each request against what you approved when you installed the app. None of those requests returns local-only memory. The app's own files still load, and its saved settings are kept for it by the console, one store per app. What this does not cover: an app that ships its own server code (`entries.api` in its manifest) runs that code inside the brain's API, with the API's authority, so read that code before you install such an app. The details are in section 4b of `THREAT_MODEL.md`.
 
 **Embeddings at ingest.** To make text searchable, the brain turns every chunk into a list of numbers, called an embedding. This happens for every chunk, whatever its level, vault files included. It runs on the server, or on an embedding spoke if you set one. If that spoke is not your own machine, local-only text reaches it at ingest.
 

@@ -32,6 +32,7 @@ input) is the core of the threat model.
 | Tool *names/args* proposed by the model | **untrusted** | fail-closed gate (`api/tools.is_blocked_tool`) — but see Known Gap on MCP |
 | Integration credentials (IMAP app password, Telegram bot token, OAuth refresh, MCP auth) | secret | settings sidecar; never returned to a client. **Plaintext at rest** — see Known Gaps |
 | BYOK provider key | secret | env only; never logged, never returned to a client, never sent to a peer |
+| Installed brain-app code (the app's own JS in the console) | **untrusted** | opaque-origin sandbox; reaches the brain only through the postMessage bridge, which checks the manifest (§4b, 2026-10-16) |
 
 **Rule:** untrusted content never enters the system role. It is rendered as a
 user-role data block with a do-not-follow header and hard delimiters. This is
@@ -199,6 +200,106 @@ memory is not continued, summarised or classified by a closed model.
   hardware, local-only text reaches it at ingest.
 - The allowlist names models, not weights. A model pulled under an allowed
   name (a different `llama3.2:3b` pushed to the same tag) is allowed.
+
+## 4b. Brain apps: the app lane (added 2026-10-16)
+
+**Finding (2026-10-16, from reading the console code, then reproduced in
+headless Chromium).** An installed brain app ran in an iframe with
+`sandbox="allow-scripts allow-same-origin"`, served from `/api/bf/apps/<id>/`
+on the console's own origin. The console's `/api/bf` proxy
+(`ui/pages/api/bf/[...path].js`) adds `BRAIN_API_KEY` to every request it
+forwards. So app code had the owner's authority: it could `fetch`
+`/api/bf/documents/search` with `include_local_only: true` (local-only
+memory), `/api/bf/sessions` (chat history), `/api/bf/settings/*`, admin routes
+such as `/api/bf/apps/install`; mint loop permits at `/api/permit`; and read the
+raw owner key from `/api/cli-info`, which made the leak permanent (the key works
+from anywhere). With allow-same-origin it could also reach `window.parent`
+(the console page, its storage, its `fetch`). The same frame could post to the
+CC bridge at `/cc/*` (Caddy adds the operator token after the console login)
+and open the terminal websocket at `/claude/`. The manifest permissions and the
+`llm.complete` open-view rule held only for apps that used the bridge as
+intended. Severity: an app (or a script injected into an app, for example
+through memory content it renders) could read everything the owner can and act
+as the owner. Reproduced with a probe app: all of the above answered 200 with
+the owner key attached upstream.
+
+**Fix (2026-10-16).** Three layers, so no single one carries it:
+
+1. *Opaque origin.* The iframe is sandboxed without `allow-same-origin`
+   (`allow-scripts allow-downloads`, `ui/lib/appLane.js` `APP_SANDBOX`), and
+   every app file is served with `Content-Security-Policy: sandbox
+   allow-scripts allow-downloads`. An app document has an opaque origin
+   however it is opened: framed by the console, or opened directly in a tab
+   (the CSP header does it there). It cannot touch the console page, its
+   storage, or its `fetch`.
+2. *The doors refuse foreign pages.* The `/api/bf` proxy, `/api/permit`,
+   `/api/cli-info`, `/api/proposal-decide` and the CC bridge refuse any request
+   from a page other than the console itself: `Origin: null`,
+   `Sec-Fetch-Site: cross-site` or `same-site`, or a `Referer` inside
+   `/api/bf/apps/` (403 `app_frame_refused`). Only an app's own files
+   (`GET`/`HEAD apps/<id>/<file>`) and an app's own backend
+   (`apps/<id>/api/...`) pass, and both go upstream **without** the owner key
+   and without the caller's credentials. Clients that are not browser pages
+   (the CLI, curl, box processes) send none of these headers and are
+   unaffected. The CC bridge allows one more thing: a top-level `GET`
+   navigation (a link opened in a new tab), which an app frame cannot make.
+   The terminal (ttyd) runs with `--check-origin`, so its websocket opens only
+   from a page on the console's host (takes effect when `scripts/cc/install.sh`
+   is run again).
+3. *The bridge is the only way an app acts.* The host page
+   (`ui/pages/apps/[id].js`, logic in `ui/lib/appBridge.js`) answers only
+   messages whose `source` is the app's own frame window, and checks every
+   permission-gated intent against the installed manifest: `memory.write`
+   needs `memory.write` and a write/append layer in `requires_layers`;
+   `llm.complete` needs `llm.invoke`. No bridge intent returns local-only
+   memory: `llm.complete` is sent with a permit attributed `app:<id>`, and
+   `/chat/rag` gives such a permit the open view on any model (§4a); its body
+   is built from fixed fields, so an app cannot pass `session_id`,
+   `include_local_only` or its own layers; `memory.write` returns only the new
+   chunk's id, name and level; there is no memory-read intent.
+
+To keep existing apps working in an opaque origin, the proxy puts a small shim
+first in every app HTML page: `localStorage` becomes a store the host page
+keeps per app id (seeded through the iframe's `name`, saved through
+`storage.*` intents, at most 2,000,000 characters per app), `sessionStorage`
+lives for the page, `fetch` and `XMLHttpRequest` to the app's own files carry
+the console login, and a `Worker` from the app's own files starts through a
+small loader. The app's own files get CORS headers for the opaque origin
+(`Access-Control-Allow-Origin: null` with credentials); core routes never do.
+On first load the host copies the keys the default-shelf apps wrote into the
+console's own storage before the fix (`daybook:*`, `hbar-ink-*`,
+`qr-progress`) into that app's store, and only those. Checked 2026-10-16 in
+headless Chromium behind a basic-auth front: the nine apps installed on hbar
+(quantum-room, cell-architecture-studio, daybook, hbar-ink,
+hbar-health-letter-ingestion with its pdf.js and tesseract workers,
+poker-journal, oracle, science-experiment, thread-consolidator) load with no
+errors, keep their storage across visits, and a probe app's attempts on
+`/api/bf/documents/search`, `/api/bf/sessions`, `/api/bf/apps/install`,
+`/api/cli-info`, `/api/permit` and `window.parent` all fail, with no core
+request reaching the API. Tests: `tests/test_app_lane.py`.
+
+**What it does not cover.**
+
+- *App backends.* An app whose manifest declares `entries.api` runs Python in
+  the brain's API process. That code has the process's authority; the sandbox
+  is about the app's browser code. Read an app's backend before installing it.
+- *App backends are not per-app from the browser.* An app frame can call any
+  installed app's `apps/<id>/api/...` route (without the owner key); the
+  proxy cannot tell which app's frame sent it.
+- *Apps that called the console directly.* An app that used `/api/bf/...`,
+  `/cc/...` or the parent window itself (rather than the bridge) stops working.
+  None of the apps installed on hbar does; `brain-app-scene` (reads
+  `/api/bf/sessions`, posts to `/cc/chat`) does and needs a bridge intent or a
+  place as a console page.
+- *Fonts and anonymous-CORS media.* CSS `@font-face` files and elements with
+  `crossorigin="anonymous"` created by script are fetched without the console
+  login, so behind the console's basic auth they fail. Inline fonts as `data:`
+  URLs or load them from a public CDN. No installed app is affected.
+- *No IndexedDB, cookies or service workers* in an opaque origin.
+- *The Files pane* still shows hand-made HTML from the box in a frame with
+  `allow-same-origin` (`ui/pages/files.js` `VIEW_SANDBOX`, served by the CC
+  bridge at `/cc/files/raw`). That is the same class of exposure for HTML
+  files on the box (written by the reasoner or ingested), open as of this entry.
 
 ## 5. Key handling (BYOK)
 
