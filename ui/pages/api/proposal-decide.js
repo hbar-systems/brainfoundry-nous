@@ -1,5 +1,9 @@
+import { fromForeignPage } from '../../lib/appLane'
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+  // App lane (2026-10-16, ui/lib/appLane.js): an app frame or another site never reaches this.
+  if (fromForeignPage(req.headers)) return res.status(403).json({ error: 'app_frame_refused' })
 
   try {
     const { proposal_id, decision, decided_by, note } = req.body || {}

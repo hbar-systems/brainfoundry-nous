@@ -2,6 +2,13 @@
 // Raw-passthrough proxy: Next.js default bodyParser breaks multipart uploads
 // by consuming the stream and leaving req.body undefined. We disable the
 // built-in parser and forward the raw body for any method that has one.
+//
+// The app lane (2026-10-16, ui/lib/appLane.js): this proxy holds the owner key, so it refuses any
+// request from a page that is not the console itself (an app frame has Origin "null" and
+// Sec-Fetch-Site cross-site). An app's own files and backend pass, without the owner key; app
+// files carry the sandbox CSP and, for HTML, the storage shim.
+
+import { decide, corsHeaders, injectShim, APP_CSP } from "../../../lib/appLane";
 
 export const config = {
   api: {
@@ -25,13 +32,27 @@ export default async function handler(req, res) {
   const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
   const url = `${base.replace(/\/$/, "")}/${path}${qs}`;
 
+  const lane = decide(pathParts, req.method, req.headers);
+  if (lane.action === "refuse") {
+    return res.status(lane.status).json({ error: lane.error });
+  }
+  if (lane.cors) {
+    for (const [k, v] of Object.entries(corsHeaders(req.headers))) res.setHeader(k, v);
+    if (req.method === "OPTIONS") return res.status(204).end();
+  }
+  if (lane.appFile) res.setHeader("content-security-policy", APP_CSP);
+
   try {
     const headers = {};
     if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"];
     if (req.headers["content-length"]) headers["content-length"] = req.headers["content-length"];
-    const apiKey = process.env.BRAIN_API_KEY || req.headers["x-api-key"] || "";
-    if (apiKey) headers["x-api-key"] = apiKey;
-    if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
+    // The owner key goes only on requests from the console's own pages (lane.ownerKey). App files
+    // and app-frame calls to an app backend go without it, and without the caller's credentials.
+    if (lane.ownerKey) {
+      const apiKey = process.env.BRAIN_API_KEY || req.headers["x-api-key"] || "";
+      if (apiKey) headers["x-api-key"] = apiKey;
+      if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
+    }
 
     let body;
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -68,7 +89,10 @@ export default async function handler(req, res) {
     // browser parses them. First hit was brain-app PNGs rendering as white
     // squares; GLBs failed to parse and silently dropped to procedural
     // fallback.
-    const buf = Buffer.from(await r.arrayBuffer());
+    let buf = Buffer.from(await r.arrayBuffer());
+    if (lane.appFile && r.ok && ct.includes("text/html")) {
+      buf = Buffer.from(injectShim(buf.toString("utf8")), "utf8");
+    }
     res.setHeader("content-type", ct || "application/octet-stream");
     return res.send(buf);
   } catch (e) {
