@@ -120,6 +120,9 @@ LOGIN_USER=$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$ENV_FILE" 2>/dev/null || true
 sed -i "s|__LOGIN_USER__|$LOGIN_USER|g; s|__BRIDGE_USER__|$BRIDGE_USER|g" "$HOME_DIR/.cc-bridge/door.sh"
 chmod 755 "$HOME_DIR/.cc-bridge/door.sh"; FIX_OWNER
 THEME='{"background":"#0f0e0c","foreground":"#e8e0d5","cursor":"#c9a96e","selectionBackground":"#3a3520","black":"#0f0e0c","brightBlack":"#6b5f52","white":"#e8e0d5","brightWhite":"#ffffff","yellow":"#c9a96e","brightYellow":"#e0c48a","blue":"#8fb3c9","green":"#9fbf8f","red":"#d08a7a"}'
+# -O (--check-origin, 2026-10-16, the app lane): the terminal's websocket opens only from a page
+# on the console's own host. A brain app's frame (opaque origin, Origin "null") or another site is
+# refused, even though the browser would send the console login with the handshake.
 sudo tee /etc/systemd/system/claude-tab.service >/dev/null <<UNIT
 [Unit]
 Description=Reasoner web terminal for the brain console (ttyd + tmux)
@@ -133,7 +136,7 @@ Environment=PATH=$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TERM=xterm-256color
 EnvironmentFile=-$ENV_FILE
 Environment=BRAIN_DIR=$BRAIN_DIR
-ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -W -a -t titleFixed="brain" -t fontSize=15 -t fontFamily="DM Mono, Menlo, monospace" -t disableLeaveAlert=true -t 'theme=$THEME' /usr/bin/bash $HOME_DIR/.cc-bridge/door.sh
+ExecStart=/usr/bin/ttyd -i 127.0.0.1 -p $TERM_PORT -b /claude -O -W -a -t titleFixed="brain" -t fontSize=15 -t fontFamily="DM Mono, Menlo, monospace" -t disableLeaveAlert=true -t 'theme=$THEME' /usr/bin/bash $HOME_DIR/.cc-bridge/door.sh
 Restart=always
 RestartSec=2
 

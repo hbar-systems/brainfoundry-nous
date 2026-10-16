@@ -3221,6 +3221,29 @@ def _board() -> dict:
     return out
 
 
+def foreign_page(headers, method: str = "GET") -> bool:
+    """Same rule as the console's ui/lib/appLane.js fromForeignPage (2026-10-16), with one
+    allowance: a top-level GET navigation (a link to /cc/files/raw/... opened from Telegram or a
+    mail) is not a page acting on the bridge; an app frame cannot navigate the top window."""
+    if (method == "GET" and (headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+            and (headers.get("Sec-Fetch-Dest") or "").lower() == "document"):
+        return False
+    site = (headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if site in ("cross-site", "same-site"):
+        return True
+    if (headers.get("Origin") or "").strip().lower() == "null":
+        return True
+    ref = (headers.get("Referer") or "").strip()
+    if ref:
+        from urllib.parse import urlsplit
+        try:
+            if urlsplit(ref).path.startswith("/api/bf/apps/"):
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "cc-bridge/0.2"
 
@@ -3254,6 +3277,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def _foreign_page(self) -> bool:
+        """A browser page other than the console itself (2026-10-16, the app lane): a brain app's
+        frame (opaque origin: Origin "null", Sec-Fetch-Site cross-site) or another site. Caddy adds
+        the operator token to anything that passed the console login, so the token alone cannot
+        tell the console from an app frame running inside it. Box processes send none of these."""
+        return foreign_page(self.headers, self.command)
+
     def _operator_ok(self) -> bool:
         """Page routes need the operator token when one is set (the console's proxy adds it).
         The hook's and cc-job's routes use the ask token instead and are checked there."""
@@ -3263,6 +3293,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         route = self._route()
+        if self._foreign_page():
+            self._send(403, {"error": "app_frame_refused"})
+            return
         if route not in ("/health",) and not route.startswith("/jobs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
@@ -3446,6 +3479,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route = self._route()
+        if self._foreign_page():
+            self._send(403, {"error": "app_frame_refused"})
+            return
         if route not in ("/ask", "/jobs/start") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
