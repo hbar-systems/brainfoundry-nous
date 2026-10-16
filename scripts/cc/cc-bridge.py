@@ -1569,9 +1569,9 @@ def _tsv_cell(s, limit: int = 600) -> str:
     return " ".join(str(s or "").replace("\t", " ").split())[:limit]
 
 
-def _learn_lesson(term: str, context: str) -> dict:
-    """One mini lesson for a term, made by the reasoner on LEARN_MODEL outside any thread."""
-    prompt = _LEARN_PROMPT.format(term=term[:160], context=context[:1500])
+def _side_call(prompt: str, model: str, what: str) -> dict:
+    """One side call to the reasoner: one turn on `model`, no tools, no MCP, no memory, no thread.
+    Returns the reasoner's json event ({"result": ..., "total_cost_usd": ...}) or {"error": ...}."""
     # an empty directory: no CLAUDE.md, no project files. On a split box the reasoner runs as the hands user
     # (only it holds the sign-in; 2026-10-14 the first lesson failed because this ran as the bridge user),
     # so the directory must be one both users can enter.
@@ -1581,21 +1581,33 @@ def _learn_lesson(term: str, context: str) -> dict:
     else:
         work = STATE_DIR / "learn"
         work.mkdir(mode=0o700, parents=True, exist_ok=True)
-    base = [REASONER, "-p", "--output-format", "json", "--model", LEARN_MODEL, "--max-turns", "1",
+    base = [REASONER, "-p", "--output-format", "json", "--model", model, "--max-turns", "1",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}']
     out = None
     for cmd in (base + ["--tools", ""], base):   # older reasoners lack --tools; then it runs with no allowed tools
         try:
             out = subprocess.run(_as_hands(cmd), input=prompt, capture_output=True, text=True, timeout=90, env=_env() if not HANDS_USER else None, cwd=str(work))
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": f"the lesson call failed ({type(e).__name__})"}
+            return {"error": f"the {what} call failed ({type(e).__name__})"}
         if out.returncode == 0:
             break
     if out is None or out.returncode != 0:
-        print(f"learn failed rc={out.returncode if out else '?'}: {(out.stderr if out else '')[-200:]}", flush=True)
-        return {"ok": False, "error": "the reasoner did not answer the lesson"}
+        print(f"{what} failed rc={out.returncode if out else '?'}: {(out.stderr if out else '')[-200:]}", flush=True)
+        return {"error": f"the reasoner did not answer the {what}"}
     try:
         d = json.loads(out.stdout or "{}")
+    except Exception:
+        return {"error": f"the {what} came back in an unexpected shape"}
+    return d if isinstance(d, dict) else {"error": f"the {what} came back in an unexpected shape"}
+
+
+def _learn_lesson(term: str, context: str) -> dict:
+    """One mini lesson for a term, made by the reasoner on LEARN_MODEL outside any thread."""
+    prompt = _LEARN_PROMPT.format(term=term[:160], context=context[:1500])
+    d = _side_call(prompt, LEARN_MODEL, "lesson")
+    if d.get("error"):
+        return {"ok": False, "error": d["error"]}
+    try:
         text = str(d.get("result") or "")
         m = re.search(r"\{.*\}", text, re.S)
         card = json.loads(m.group(0)) if m else {}
@@ -1608,6 +1620,38 @@ def _learn_lesson(term: str, context: str) -> dict:
     print(f"learn: {term[:40]!r} model={LEARN_MODEL} cost_usd={cost}", flush=True)
     return {"ok": True, "term": term[:160], "question": q, "answer": a, "example": _tsv_cell(card.get("example"), 300),
             "cost_usd": cost, "model": LEARN_MODEL}
+
+
+# Inline card replies (2026-10-15, hbar: "go deeper" and "what do you need from me" answer inside the card).
+# The same side call as a lesson: one short turn, no tools, no thread, nothing posted; the card offers
+# "post to thread" if the answer is worth keeping. The answer only knows the message it came from.
+BRIEF_MODEL = os.environ.get("CC_BRIEF_MODEL", "").strip() or LEARN_MODEL
+_BRIEF_ASK = {
+    "deeper": "Go deeper on it: what it means here, the evidence in the message, its state, and the next step.",
+    "need": "Say exactly what the person must decide or do on it, as short options if there are any; if nothing is needed from them, say so.",
+}
+_BRIEF_PROMPT = (
+    "A person reading an answer in their chat clicked a phrase in it. The phrase: {phrase!r}. "
+    "The answer it is in: {context!r}.\n{ask}\n"
+    "Reply in two to four short plain sentences, only from what the answer says; where it does not say, "
+    "say that it does not. No headings, no lists, no preamble, no emoji."
+)
+
+
+def _brief(kind: str, phrase: str, context: str) -> dict:
+    """A few sentences on a phrase, for the card it was clicked in, made outside any thread."""
+    ask = _BRIEF_ASK.get(kind)
+    if not ask:
+        return {"ok": False, "error": "kind must be deeper or need"}
+    d = _side_call(_BRIEF_PROMPT.format(phrase=phrase[:300], context=context[:4000], ask=ask), BRIEF_MODEL, "card reply")
+    if d.get("error"):
+        return {"ok": False, "error": d["error"]}
+    text = " ".join(str(d.get("result") or "").split())[:1200]
+    if not text:
+        return {"ok": False, "error": "the card reply came back empty"}
+    cost = d.get("total_cost_usd")
+    print(f"brief: {kind} {phrase[:40]!r} model={BRIEF_MODEL} cost_usd={cost}", flush=True)
+    return {"ok": True, "kind": kind, "text": text, "cost_usd": cost, "model": BRIEF_MODEL}
 
 
 def _learn_save(term: str, question: str, answer: str, thread: str) -> dict:
@@ -3433,6 +3477,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             out = _learn_lesson(term, str(req.get("context") or ""))
             self._send(200 if out.get("ok") else 502, out)
+            return
+        if route == "/brief":
+            phrase = " ".join(str(req.get("phrase") or "").split())
+            if not phrase or len(phrase) > 300:
+                self._send(400, {"ok": False, "error": "a phrase of 1 to 300 characters"})
+                return
+            out = _brief(str(req.get("kind") or ""), phrase, str(req.get("context") or ""))
+            self._send(200 if out.get("ok") else (400 if "kind" in str(out.get("error")) else 502), out)
             return
         if route == "/learn/save":
             if not str(req.get("term") or "").strip() or not str(req.get("question") or "").strip():
