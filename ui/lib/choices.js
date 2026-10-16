@@ -77,4 +77,61 @@ function remarkMoney() {
   return (tree) => { walk(tree) }
 }
 
-module.exports = { splitChoices, splitMoney, remarkMoney, MAX_CHOICES }
+// Actionable phrases (2026-10-15, hbar: "you often say nothing was pushed or deployed: the word should be
+// pressable so an agent can go and do it"). A status phrase in plain text becomes <span data-ccact>, which
+// the renderer draws with a quiet shade; clicking it offers "do it (send agent)" with the sentence prefilled.
+const ACT_PHRASES = [
+  'nothing was pushed', 'nothing is pushed', 'not pushed', 'unpushed', 'waiting for your push', 'waiting only for your "push"',
+  'nothing was deployed', 'not deployed', 'not yet deployed', 'not installed', 'nothing installed',
+  'not committed', 'uncommitted', 'owed by hbar', 'owed by you', 'still to do', 'not built', 'not started',
+]
+const ACT_RE_SRC = '\\b(?:' + ACT_PHRASES.slice().sort((a, b) => b.length - a.length)
+  .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b'
+
+// text -> [{ t: 'text', v } | { t: 'act', v }]
+function splitAct(text) {
+  const s = String(text == null ? '' : text)
+  const re = new RegExp(ACT_RE_SRC, 'gi')
+  const out = []
+  let last = 0, m
+  while ((m = re.exec(s))) {
+    if (m.index > last) out.push({ t: 'text', v: s.slice(last, m.index) })
+    out.push({ t: 'act', v: m[0] })
+    last = m.index + m[0].length
+  }
+  if (last < s.length) out.push({ t: 'text', v: s.slice(last) })
+  return out
+}
+
+// The sentence of `block` that holds `phrase` (for the agent's prefilled task).
+function sentenceAround(block, phrase) {
+  const s = String(block || '').replace(/\s+/g, ' ').trim()
+  const i = s.toLowerCase().indexOf(String(phrase || '').toLowerCase())
+  if (i < 0) return s.slice(0, 300)
+  const before = s.slice(0, i), after = s.slice(i)
+  const a = Math.max(before.lastIndexOf('. '), before.lastIndexOf('? '), before.lastIndexOf('! '), before.lastIndexOf(': '))
+  const bm = after.search(/[.?!](\s|$)/)
+  return s.slice(a < 0 ? 0 : a + 2, bm < 0 ? s.length : i + bm + 1).trim().slice(0, 400)
+}
+
+function remarkActions() {
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.children)) return
+    if (node.type === 'link' || node.type === 'linkReference' || node.type === 'inlineCode' || node.type === 'code' || node.type === 'strong') return
+    const next = []
+    for (const ch of node.children) {
+      if (ch.type === 'text') {
+        const parts = splitAct(ch.value)
+        if (parts.length === 1 && parts[0].t === 'text') { next.push(ch); continue }
+        for (const p of parts) {
+          if (p.t === 'text') next.push({ type: 'text', value: p.v })
+          else next.push({ type: 'ccact', data: { hName: 'span', hProperties: { 'data-ccact': '1' }, hChildren: [{ type: 'text', value: p.v }] } })
+        }
+      } else { walk(ch); next.push(ch) }
+    }
+    node.children = next
+  }
+  return (tree) => { walk(tree) }
+}
+
+module.exports = { splitChoices, splitMoney, remarkMoney, splitAct, sentenceAround, remarkActions, ACT_PHRASES, MAX_CHOICES }

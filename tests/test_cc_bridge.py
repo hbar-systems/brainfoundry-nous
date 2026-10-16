@@ -840,6 +840,40 @@ console.log(JSON.stringify({
     assert d["money"] == ["EUR 34", "€27-31", "$0.39", "1,200 USD", "£5"]
 
 
+def test_ui_actionable_phrases():
+    # 2026-10-15: status phrases become pressable ("not pushed" -> send an agent with the sentence).
+    import json
+    out = _node(r"""
+const L = require('./choices')
+console.log(JSON.stringify({
+  acts: L.splitAct('Committed, nothing was pushed; the bridge is Not Deployed. A snot pushed word stays.').filter(p => p.t === 'act').map(p => p.v),
+  sent: L.sentenceAround('First line. The planner is 1 ahead, not pushed yet. Last line.', 'not pushed'),
+  none: L.splitAct('all live').length,
+}))""")
+    d = json.loads(out)
+    assert d["acts"] == ["nothing was pushed", "Not Deployed"]
+    assert d["sent"] == "The planner is 1 ahead, not pushed yet."
+    assert d["none"] == 1
+
+
+def test_brief_inline_card_reply(monkeypatch, tmp_path):
+    # 2026-10-15: /cc/brief answers in the card through the side call; bad kinds and empty answers refused.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    seen = {}
+    def fake(prompt, model, what):
+        seen["prompt"], seen["what"] = prompt, what
+        return {"result": "  It is waiting for your word.\n Nothing else is needed. ", "total_cost_usd": 0.001}
+    monkeypatch.setattr(m, "_side_call", fake)
+    out = m._brief("need", "not pushed", "world is 58 ahead, not pushed")
+    assert out["ok"] and out["text"] == "It is waiting for your word. Nothing else is needed." and seen["what"] == "card reply"
+    assert "not pushed" in seen["prompt"] and "58 ahead" in seen["prompt"]
+    assert m._brief("other", "x", "")["ok"] is False
+    monkeypatch.setattr(m, "_side_call", lambda *a: {"error": "the card reply call failed (Timeout)"})
+    assert m._brief("deeper", "x", "")["error"].startswith("the card reply call failed")
+    monkeypatch.setattr(m, "_side_call", lambda *a: {"result": "   "})
+    assert m._brief("deeper", "x", "")["ok"] is False
+
+
 def test_ui_markdown_view_structure():
     import json
     out = _node(r"""
