@@ -63,7 +63,7 @@ id "$OWNER" >/dev/null 2>&1 || die "no such user: $OWNER"
 
 SUDO=""
 [ "$ME" != "root" ] && SUDO="sudo"
-as_owner() { if [ "$ME" = "$OWNER" ]; then "$@"; else $SUDO -u "$OWNER" "$@"; fi; }
+as_owner() { if [ "$ME" = "$OWNER" ]; then "$@"; else sudo -u "$OWNER" "$@"; fi; }
 
 # ── 1. the directory ─────────────────────────────────────────────────────────
 if [ "$CHECK_ONLY" = "0" ]; then
