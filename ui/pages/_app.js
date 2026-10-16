@@ -4,6 +4,7 @@ import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import { applyStyle, clearStyle } from '../lib/layout'
+import { watchLift } from '../lib/lift'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -81,6 +82,9 @@ export default function App({ Component, pageProps }) {
       document.documentElement.style.setProperty('--nav-h', `${navH}px`)
     }
   }, [])
+
+  // Light (2026-10-16): lifts a dark skin toward a mid tone; re-applied when the skin changes.
+  useEffect(() => watchLift(), [])
 
   // The owner's layout file (2026-10-09): colours, text size and weight from GET /cc/layout, set one
   // custom property at a time (ui/lib/layout.js re-checks every name and value). The last answer is

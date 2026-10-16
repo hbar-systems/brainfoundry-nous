@@ -6,6 +6,7 @@ import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath,
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { LIFT_LEVELS, readLift, setLift } from '../lib/lift'
 import { splitChoices, remarkMoney, remarkActions, sentenceAround } from '../lib/choices'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
@@ -446,6 +447,8 @@ function SeatLine({ seat, onPick, codex, onOpenPane, onRecheck }) {
 function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
+  const [lift, setLiftS] = useState(0)
+  useEffect(() => { setLiftS(readLift()); const on = (e) => setLiftS(e.detail || 0); window.addEventListener('bf-lift', on); return () => window.removeEventListener('bf-lift', on) }, [])
   const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
@@ -473,6 +476,10 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>skin</span>
           {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
+        </span>
+        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+          <span style={lbl}>light</span>
+          {LIFT_LEVELS.map(n => <Chip key={n} on={lift === n} onClick={() => { setLift(n); setLiftS(n) }} title="lifts a dark skin toward a mid tone (every conversation, this browser); light skins stay as they are">{n}</Chip>)}
         </span>
         {posture ? (
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
@@ -2391,7 +2398,8 @@ function CC() {
   // stays where it is and notes the start.
   function choose(c) {
     if (c.mode !== 'agent') { send(c.send); return }
-    setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one; open it from the thread list.` }])
+    setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one. Started by mistake? The thread list is open: press **stop** on its row.` }])
+    setShowThreads(true)
     fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: c.send, new: true, thread: null, stream: false }) })
       .then(r => r.json()).then(d => { if (d && d.reply && (d.error || d.waiting)) setTurns(t => [...t, { who: 'brain', text: d.reply, error: !!d.error }]) })
       .catch(() => {}).finally(() => loadThreads())
@@ -2437,6 +2445,12 @@ function CC() {
       const r = await fetch('/cc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       return r.ok
     } catch { return false }
+  }
+  // Stop any conversation from the thread list (2026-10-16): an agent started by mistake (a ↗ choice)
+  // runs as its own thread; this ends its turn without opening it.
+  async function stopThread(brain) {
+    try { await fetch('/cc/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: brain }) }) } catch {}
+    loadThreads(); loadHealth()
   }
   async function cancelQueued(id) {
     const key = curRef.current
@@ -2530,6 +2544,7 @@ function CC() {
                           {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
                           {renaming !== th.brain && (
                             <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                              {th.running && !th.waiting ? <a onClick={() => stopThread(th.brain)} title="end the answer in progress in this conversation; it keeps everything up to here" style={{ ...act, color: C.gold }}>stop</a> : null}
                               <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
                               <a onClick={() => updateThread(th.brain, { pinned: !th.pinned })} style={act}>{th.pinned ? 'unpin' : 'pin'}</a>
                               <a onClick={() => updateThread(th.brain, { archived: !th.archived })} style={act}>{th.archived ? 'unarchive' : 'archive'}</a>
