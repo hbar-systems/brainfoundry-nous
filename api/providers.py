@@ -220,14 +220,12 @@ def _fetch_provider_models(provider: str) -> list:
         return []
 
 
-def get_available_models() -> list:
-    """
-    Return all models available given currently configured API keys + local Ollama.
-    Cloud providers only appear if their API key is set. Each provider's list
-    is fetched live from its /models endpoint (cached 60s) — falls back to the
-    static PROVIDER_MODELS dict if the fetch fails (revoked key, network blip,
-    provider downtime). Ollama models are whatever is actually pulled on the node.
-    """
+def hosted_models() -> list:
+    """Models the configured provider keys unlock, as [{name, provider}]. Names
+    only: no key, no masked key, no endpoint. A provider appears only when its
+    key is set and its client was built. Split out of get_available_models
+    (2026-10-15) so the compute view can list hosted models without probing
+    Ollama twice."""
     models = []
 
     def _append_provider(provider: str, env_key: str, client) -> None:
@@ -244,6 +242,18 @@ def get_available_models() -> list:
     _append_provider("openrouter", "OPENROUTER_API_KEY", _openrouter)
     _append_provider("together",   "TOGETHER_API_KEY",   _together)
     _append_provider("mistral",    "MISTRAL_API_KEY",    _mistral)
+    return models
+
+
+def get_available_models() -> list:
+    """
+    Return all models available given currently configured API keys + local Ollama.
+    Cloud providers only appear if their API key is set. Each provider's list
+    is fetched live from its /models endpoint (cached 60s) — falls back to the
+    static PROVIDER_MODELS dict if the fetch fails (revoked key, network blip,
+    provider downtime). Ollama models are whatever is actually pulled on the node.
+    """
+    models = hosted_models()
 
     try:
         import requests as _req

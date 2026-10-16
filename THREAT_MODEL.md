@@ -59,6 +59,147 @@ The autonomous agentic loop always dispatches with `admin=False`, so a poisoned
 document that smuggles "call delete_memory" past the model still dies at the gate.
 RED-tier tools remain blocked wholesale until a per-call approval flow exists.
 
+## 4a. Memory privacy: `local-only` (added 2026-10-14)
+
+Every memory chunk carries a privacy level in `metadata.privacy`
+(`api/privacy.py`):
+
+- `open` (default; also any chunk with no level): any reasoner may read it.
+- `local-only`: only a reasoner on hardware the owner controls may read it:
+  the box's own Ollama (`OLLAMA_URL`) or an Ollama on a tailnet spoke
+  (`OLLAMA_SPOKE_URL`).
+
+How the owner sets it: the Privacy chips (open / local-only) next to "Memory
+layer" on the Knowledge tab before uploading; the per-document chip in
+Knowledge → Browse to flip an existing document; or the API:
+`POST /documents/upload` with form field `privacy=local-only`,
+`POST /documents/{name}/privacy {"privacy": "local-only" | "open"}` (API key),
+`POST /memory/store {"privacy": "local-only", ...}`,
+`POST /memory/append {"privacy": "local-only", ...}` (brain apps pass it as
+`privacy` in `memory.write`; added 2026-10-15). A re-upload of a local-only
+document without a choice stays local-only; an append keeps the stricter of
+the requested level, a level in its passthrough metadata (which cannot lower
+it) and any chunk already stored with the same content.
+
+**The private vault (2026-10-15).** A folder on the host that the Unix users
+the closed reasoners run as (`hands`, `cc`) cannot read: mode 700, owned by
+the owner (default `/home/<owner>/vault`, `BRAIN_VAULT_DIR`), mounted
+read-only into the api container at `/vault`. Its text files are ingested
+(every 10 minutes, `BRAIN_VAULT_SCAN_MINUTES`, or Knowledge -> Vault -> Scan
+now, or `POST /vault/scan`) as documents `vault/<path>` with source
+`vault:<path>`, always local-only; `POST /documents/{name}/privacy` refuses to
+make them open (403 `vault_locked`, and the UPDATE itself skips vault chunks)
+while the file is in the vault. Vault files are never copied anywhere: not to
+`in/`, `out/`, the world checkout, the runtime volume, or an export (the
+on-box export and `scripts/export_brain.py` leave vault documents out unless
+`--include-vault`). Set up once by the owner with `scripts/vault-setup.sh`
+(docs/architecture.md, "The private vault").
+
+**The owner's allowlist of local readers (2026-10-15).** Locality says a
+model can be trusted with local-only memory; the allowlist says the owner
+does. With no list (the default) every model the locality rule accepts may
+read it. The owner narrows it to named models with the chips in Knowledge ->
+Vault (`POST /vault/readers`, settings entry `local_readers`) or
+`BRAIN_LOCAL_READERS` (comma-separated, `none` for no model); a local model
+not on the list gets the open view, exactly like a hosted one.
+
+**The read audit (2026-10-15).** Every turn that put local-only chunks in
+front of a model writes one line to the tool audit (`/tools/audit`, Trace
+tab, and "Recent reads" in the Vault panel): time, model, endpoint host,
+session id, surface, document names and chunk count. Never the content.
+
+**The session mark (2026-10-15).** A chat session in which any turn put a
+local-only chunk in front of a model is marked (`chat_sessions.local_only_at`;
+init.sql, startup hook, `scripts/migrate_privacy.py`). Its history holds the
+model's quotes and paraphrase, so only a reader that may see local-only
+memory may continue it: `/chat/rag` and `/chat/completions` refuse a marked
+session for a closed reasoner, a local model off the allowlist, or a brain
+app (409 `session_local_only`, nothing sent; the console offers a fresh
+session). "Save to memory" (consolidation) summarises a marked session only
+with a model that may read it (the local default) and stores the summary
+local-only; the Store button's classifier (`/memory/store/propose`, given the
+`session_id`) refuses a closed model; anything stored from a marked session
+lands local-only. The session list shows a "local-only" mark; the chat header
+shows "local-only · GREEN tools only" with the rule.
+
+**What it guarantees.** When a turn is answered by a closed provider
+(Anthropic, OpenAI, Gemini, xAI, Groq, OpenRouter, Together, Mistral, an Ollama
+`:cloud` model, or an Ollama endpoint on a public host), local-only chunks are
+filtered out in the SQL query itself, filtered again in Python, and so are
+never retrieved, never put in the prompt, and never sent to that provider.
+This holds on every path that feeds memory to a model: `/chat/rag` (all three
+retrieval architectures, the corroboration pass, the agentic `search_memory`
+tool), brain-app `llm.complete`, Telegram, `/v1/public/chat`,
+`/v1/federation/query`, the harmonics receiver context, the layer-scheme
+proposal, and `/documents/search` (which the CC bridge uses to give Claude Code
+memory; it returns local-only chunks only when the caller sends
+`include_local_only: true`, which only the Knowledge tab does).
+
+It fails closed: a model whose route cannot be resolved, a model name the
+provider layer does not know, an unparseable or public Ollama URL, or a stored
+level other than exactly `open` all count as closed / local-only. A retrieval
+call that does not say who reads the result gets the closed view.
+
+Local-only chunks are included only when the reasoner is local **and** the
+answer returns to the owner on the console. They are withheld, even on a local
+model, from: brain apps (the reply goes into third-party app code), Telegram
+(the reply crosses Telegram's servers), public chat and federation (the reader
+is not the owner), and the autonomy tick. Once a local turn holds local-only
+memory, only GREEN tools (own memory, own task list) can be called; web search,
+fetch, brain_call, mail, Drive, calendar and MCP tools are refused for the rest
+of the turn, since their arguments leave the box. The "your mind" fact
+extraction is skipped for that turn if its model is closed. The rule is
+returned with every reply in `rag_metadata.privacy` (`local_reader`,
+`local_only_used`, `rule`) and named in the chat header.
+
+The vault adds a file-level wall to the chunk-level gate: the vault's files
+are unreadable to `hands` and `cc` on the host (checked by
+`scripts/vault-setup.sh` with `sudo -u hands ls` and a probe file), so the
+Claude Code and Codex seats cannot read them from disk, and their memory
+block (`/documents/search` without `include_local_only`) never carries their
+chunks. Derived text is tracked per session: a session that quoted local-only
+memory is not continued, summarised or classified by a closed model.
+
+**What it does not guarantee.**
+
+- Files outside the vault are not covered. A local-only document that is
+  also a file in the world checkout, `in/` or `out/` is readable by Claude
+  Code and Codex whatever its memory level. Put private files in the vault,
+  not there.
+- The wall is Unix permissions plus docker. Root on the host, any member of
+  the `docker` group, and anyone holding the brain's API key can read vault
+  content (the api is root in its container; the API's document routes and
+  `/documents/search` with `include_local_only` return local-only chunks to
+  the key holder). `vault-setup.sh` refuses when `hands` or `cc` is in the
+  docker group, but it cannot see the key: keep `BRAIN_API_KEY` where hands
+  and cc cannot read it (the brain's `.env` and the cc bridge's env file), or
+  a Claude Code run could call the API itself.
+- The session mark is per session. Text the owner copies out of a marked
+  session by hand (a paste into a new session, a file) is ordinary text again.
+  A client that replays a marked session's messages without its `session_id`
+  is not caught: the console always sends it, but `/chat/completions` and
+  `/chat/rag` take the history from the request body.
+- Older sessions are unmarked. A session where a local model quoted
+  local-only memory before this change carries no mark; start fresh sessions
+  for hosted models, or delete those sessions.
+- Backups are not filtered. `scripts/backup_brain.sh` dumps the database,
+  vault documents included; the export leaves them out by default, a backup
+  does not.
+- It does not encrypt anything. A local-only chunk (vault chunks included) is
+  plaintext in Postgres and in backups, and in exports when it is not a vault
+  document; the gate controls which reasoner reads it, not who can read the
+  database.
+- Owner-controlled is judged from the address: a docker service name,
+  localhost, private, link-local or Tailscale (100.64.0.0/10) addresses,
+  `*.ts.net` / `*.local` / `*.internal` names, or hosts listed in
+  `PRIVACY_LOCAL_HOSTS`. Pointing `OLLAMA_URL` at a private address you do not
+  control defeats it.
+- Embeddings are computed on the box (or on the embed spoke) for every chunk,
+  whatever its level, vault files included. If the embed spoke is not owner
+  hardware, local-only text reaches it at ingest.
+- The allowlist names models, not weights. A model pulled under an allowed
+  name (a different `llama3.2:3b` pushed to the same tag) is allowed.
+
 ## 5. Key handling (BYOK)
 
 The provider key lives in the environment (`.env`, never committed; see

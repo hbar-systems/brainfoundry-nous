@@ -105,6 +105,28 @@ Settings has a CC section that shows, read-only, what the bridge reports: which 
 
 The reasoner runs on the brain owner's own account. Anthropic's terms (read 2026-09-19, quoted in the operator's legal notes) permit hosting the unmodified Claude Code binary in a product when every end user authenticates with their own API key or their own subscription and nobody pays, resells or intermediates usage for them. They do not permit a third party to offer Claude.ai login inside its own page or to pass subscription credentials or session tokens through. That is why the card offers the API key first and sends a subscription to the terminal door. If you operate brains for other people: their key or their sign-in, never yours, and never a token you store for them. The hosting party accepts Anthropic's Commercial Terms.
 
+## Codex seat (2026-10-15)
+
+A second reasoner beside Claude: OpenAI's Codex command-line tool, signed in with your own ChatGPT plan. Each thread has a seat, shown as chips on the tool line (`seat: Claude | Codex (read-only)`) and set with `/seat claude` or `/seat codex`. The choice sticks to the thread; each seat keeps its own session in it, so you can switch a thread to Codex for one question and back. Claude stays the default for every new thread. The answer streams the same way, lands in the brain's chat record the same way, and the audit line (`~/.cc-bridge/turns.jsonl`) names the seat (`"reasoner": "codex"`, `"tools": "codex:read-only"`).
+
+**It is read-only, not gated.** Codex 0.162 has hooks (PreToolUse, PermissionRequest), but they need a trust review per hook, and whether they fire under `codex exec` is not documented; a hook that silently did not fire would leave writes open. So this seat does not use them. Every turn runs `codex exec --json` as the hands user, in the working directory, with Codex's own read-only sandbox (`-s read-only`, `sandbox_mode="read-only"`), `approval_policy="never"` (a blocked action fails back to the model, nothing asks), `web_search="disabled"`, `--ignore-user-config` (no MCP servers or looser defaults from `~/.codex/config.toml`), `--ignore-rules`, and an environment of `HOME`, `USER`, `PATH`, `LANG` only (no ask token, no bridge keys). The bridge checks every command line before it runs and refuses one that would loosen any of this. The prompt goes in on stdin, never on the command line.
+
+What it can do: read files the hands user can read, run commands that only read, and answer from the brain's persona and memory, which arrive in the prompt exactly as for Claude. What it cannot do: edit, create or delete files; run anything that changes the box; reach the network from the commands it runs; use connected apps; raise permit cards (a `<proposal>` it writes is shown as text, never queued); change memory or settings. To make a change it describes, switch the thread to Claude, where the change passes your Allow.
+
+On some kernels the sandbox cannot start (Ubuntu 24.04 restricts unprivileged user namespaces; bubblewrap then fails with "Failed RTM_NEWADDR"). Codex then can run no command at all, not even a read, and answers from the prompt alone. That fails closed. `bash scripts/cc/install-codex.sh` says which one your box has.
+
+**Fail closed.** If the binary is missing or not signed in, a turn on the Codex seat is refused with a sentence that says so; nothing falls back to Claude. The status line beside the chips reads `codex: not installed on this box`, `codex: not signed in`, or `codex: signed in with ChatGPT`. It comes from the exit code of `codex login status` run as the hands; the CLI's own words, which can include a masked key, never reach the page (`GET /cc/codex/status`, also in `/cc/health` as `codex`).
+
+**Install, once (opt-in).** On the box, as the brain user, from the brain repo: `bash scripts/cc/install-codex.sh`. It installs `@openai/codex@0.162.1` from npm into the hands user's own `~/.local` (no system-wide install; needs node 16 or later), then prints the version, whether the sandbox starts, and whether the seat is signed in. Re-run `bash scripts/cc/install.sh` once as well, so the terminal door learns its `codex-login` case. Set `CC_CODEX_MODEL` in the bridge's env file to pick a model; leave it out for Codex's default.
+
+**Sign in.** First, once, in ChatGPT: Settings, Security, turn on Device code authorization (a workspace admin may have to). Then press **Sign in with ChatGPT** (on the connect card, or beside the seat chips when the seat is not signed in). It opens the terminal panel at `/claude/?arg=codex-login`, which runs `codex login --device-auth` as the hands user: OpenAI's own flow, a link and a one-time code you enter on any device. Nothing passes through this page. The credential lands in the hands user's `~/.codex/auth.json`. Close the panel and press **recheck**. On the box instead: `sudo -u <hands> -H codex login --device-auth`. To forget it: `sudo -u <hands> -H codex logout`.
+
+**Terms, plainly.** OpenAI documents device-code sign-in for remote and headless machines, and Codex is included with ChatGPT plans. This seat is OpenAI's own unmodified CLI, signed in with the owner's own account, on the owner's own server, answering the owner. There is no OpenAI-sanctioned way for a ChatGPT plan to power another app's chat API, and this does not try to: a ChatGPT plan works only through OpenAI's own clients. If you operate brains for other people, each signs in with their own account; never yours, and never a credential you hold for them.
+
+**Privacy.** Codex is a closed reasoner: what it reads is sent to OpenAI. The memory block is built the same way as for Claude, so chunks the brain keeps local-only (the privacy rule) are not put into its prompt. But Codex reads files on disk as the hands user, like the Claude seat, so anything in a file it can read can reach OpenAI. Unlike Claude Code, whose reads outside the working directories ask first, Codex's read-only sandbox can read anywhere the hands user can, including the hands user's own sign-in files (`~/.claude`, `~/.codex`). Keep secrets out of what the hands user can read, or leave the seat uninstalled.
+
+**The vault (2026-10-15).** For files neither seat may read, use the private vault: a folder only the owner can read, which the hands user (both seats) and the cc user (the bridge) cannot list. The brain reads it through a read-only mount and keeps what it ingests local-only, so it is never in a seat's memory block either. Set it up as the owner with `scripts/vault-setup.sh`; docs/architecture.md, "The private vault", has the steps and THREAT_MODEL.md 4a what it does and does not guarantee.
+
 ## What you see while it works
 
 Text appears as the reasoner writes it. Under the bubble, the last few things it did (a file read, a One lookup, a command) show as they happen. When the answer is complete the footer says how long it took, which model answered, how many tokens went in and out, and how many steps the turn had. Tokens in include the cached prompt; on a subscription this is not a bill, on an API key it is what you pay for.
@@ -178,6 +200,26 @@ Press "talk" beside "attach", or type `/talk`, and speak. The words appear in th
 ## The technical surface
 
 "System" in the drawer (order beside Update) shows the box in numbers, refreshed every minute: disk, memory, load, uptime, backups and the memory store from the api (`GET /admin/system`, read inside the container through /proc, the bind-mounted brain directory and the Docker socket); containers and images with what is reclaimable; the running and previous commit; local inference and the spokes; and, when CC is on, what only the host can see through the bridge (`GET /cc/system`): the tailnet and its peers, established connections and listening ports, failed services, the bridge's own units, permits and judgments recorded. Each tile carries a level against fixed thresholds (disk 80/90%, memory available 15/7%, load 1.0/2.0 per core, backup age 2/7 days, 5 GB reclaimable), and the first crossed threshold shows as one line in the chat footer, linking here. Nothing on the page changes anything. Added 2026-09-24 after the disk was found at 85% by accident.
+
+## The body map: boxes, models, shelf
+
+Added 2026-10-15. "Boxes" in the drawer (`/boxes`) draws every box and spoke from the owner's facts file, `<world>/ops/box-map/boxes.json`, with online state read live from the tailnet (`GET /cc/boxmap`).
+
+Models per machine (`GET /cc/compute`). The bridge passes each box's declared Ollama endpoint to the brain api (`POST /compute/models`, behind the brain's API key; `GET /compute/models` reads the brain's own endpoints only). A box declares one with `"ollama": "http://<host>:11434"` (or a list) in boxes.json. The api reads the box's own Ollama (`OLLAMA_URL`), the spoke (`OLLAMA_SPOKE_URL`) and every declared endpoint live: `/api/tags` for what is pulled, `/api/ps` for what is loaded, 1.5 seconds each (`COMPUTE_PROBE_SECONDS`), cached 20 seconds (`COMPUTE_CACHE_SECONDS`). An endpoint that does not answer shows as offline. Hosted providers list the model names the configured keys unlock; no key, masked or not, is ever in the answer. Each model is marked with the memory privacy gate's rule (api/privacy.py): `local` (an owner-network Ollama, not a `:cloud` model) may read local-only memory; `closed` (a hosted API, a public host, anything in doubt) reads open memory only. For the box and the spoke the mark is exactly the check a turn passes; a declared endpoint the brain does not route chat to gets the same host rule for that one endpoint. Each box card lists its models (name, size, loaded, local or closed); the Reasoners panel below the map summarises all of them.
+
+The agent shelf (`GET /cc/shelf`). Ready agent kinds come from the owner's file, never from the template: `<world>/ops/agent-shelf/shelf.json`, or the path in `CC_SHELF_FILE` in the bridge env. Format (example: `templates/agent-shelf.example.json`):
+
+```
+{"about": "one paragraph",
+ "legions": [{"id": "home", "name": "Home"}],
+ "agents": [{"id": "summarizer", "name": "Summarizer", "legion": "home",
+             "mission": "one line", "tools": ["read files"],
+             "model": "a model name" | "model_class": "local-small",
+             "runs_on": "<box id from boxes.json>",
+             "permit": "what always asks", "cost": "your own note"}]}
+```
+
+`id` is a lowercase slug, unique; `name`, `legion`, `mission` (one line, at most 200 characters), `runs_on` and `permit` are required; one of `model` or `model_class` is required; `tools` is a list of short names; `cost` is free text in the owner's words (the template carries no prices). A malformed entry is left off the shelf and named under "left off the shelf"; the others still show. The Shelf section filters by legion with chips. With no file the section says where to put it. Nothing on the page starts an agent.
 
 ## The guide, in the console
 

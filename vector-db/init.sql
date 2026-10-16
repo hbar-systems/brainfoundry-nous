@@ -37,6 +37,16 @@ CREATE INDEX IF NOT EXISTS document_embeddings_content_hash_idx
 ON document_embeddings ((metadata->>'content_hash'))
 WHERE metadata->>'content_hash' IS NOT NULL;
 
+-- 2026-10-14: memory privacy gate. `privacy` is 'open' (default; any reasoner)
+-- or 'local-only' (only reasoners on owner hardware: the box's Ollama or a
+-- tailnet spoke). A chunk without the key is open, so no backfill is needed.
+-- Retrieval for a closed reasoner keeps COALESCE(privacy,'open') = 'open'.
+-- See api/privacy.py. Existing brains: scripts/migrate_privacy.py (idempotent;
+-- the API startup hook also ensures this index on boot).
+CREATE INDEX IF NOT EXISTS document_embeddings_privacy_idx
+ON document_embeddings ((metadata->>'privacy'))
+WHERE metadata->>'privacy' IS NOT NULL;
+
 -- Create a table for chat sessions
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id SERIAL PRIMARY KEY,
@@ -45,6 +55,12 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     title VARCHAR(255) DEFAULT 'New Chat',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 2026-10-15: session mark. A session in which a model read local-only memory
+-- is marked (NULL = unmarked); its history is never replayed to a closed
+-- reasoner. See api/privacy.py. Existing brains: scripts/migrate_privacy.py
+-- (idempotent; the API startup hook also adds the column on boot).
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS local_only_at TIMESTAMP NULL;
 
 -- Create a table for chat messages
 CREATE TABLE IF NOT EXISTS chat_messages (

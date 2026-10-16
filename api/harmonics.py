@@ -411,8 +411,11 @@ def _receiver_context(contribution: str, conn=None) -> Optional[str]:
     try:
         with conn.cursor() as cur:
             try:
+                # Privacy gate: the score goes back to a peer, so the
+                # receiver context is drawn from open memory only.
                 cur.execute(
                     "SELECT content FROM document_embeddings "
+                    "WHERE COALESCE(metadata->>'privacy', 'open') = 'open' "
                     "ORDER BY embedding <=> %s::vector LIMIT 1",
                     (vec_literal,),
                 )

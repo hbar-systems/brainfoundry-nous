@@ -27,6 +27,14 @@
 #        absolute host path (the neutral default is /opt/brainfoundry/brain).
 #    With these absent, /admin/update returns a clear "not configured" 503 and
 #    you update via `scripts/update_brain.sh` over SSH — the recommended path.
+#
+# 3) The private vault (2026-10-15, api/vault.py)
+#    A host folder only the owner can read (mode 700), mounted READ-ONLY at
+#    /vault. Its files are ingested as local-only memory that hosted models
+#    never see. Optional: with no mount the brain simply has no vault. Do not
+#    hand-write this; run `scripts/vault-setup.sh` as the owner, which creates
+#    the folder, adds these two lines, and checks hands/cc cannot read it.
+#    Never mount it read-write, and never mount it into any other service.
 
 services:
   api:
@@ -38,3 +46,8 @@ services:
       # --- (2) in-console /admin/update opt-in: uncomment BOTH to enable ---
       # - /var/run/docker.sock:/var/run/docker.sock
       # - ${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}:${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}:rw
+
+      # --- (3) the private vault (written by scripts/vault-setup.sh) ---
+      # - /home/<owner>/vault:/vault:ro
+    # environment:
+    #   BRAIN_VAULT_DIR: /home/<owner>/vault

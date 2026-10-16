@@ -21,7 +21,8 @@ export async function freeTextSearch(query, limit = 10, signal) {
   const r = await fetch(`${API_BASE}/documents/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit }),
+    // Owner's own search: local-only chunks shown too (no model involved).
+    body: JSON.stringify({ query, limit, include_local_only: true }),
     signal,
     cache: "no-store",
   });

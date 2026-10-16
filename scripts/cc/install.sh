@@ -17,6 +17,8 @@
 #      running in a small venv that holds permitd (the permit gate for writes)
 #   5. two routes in the console's Caddy block, /claude* and /cc*, validated before reload
 #   6. starts both, checks them
+# The Codex seat is opt-in and separate: scripts/cc/install-codex.sh (pinned version, hands
+# user only); this script only adds the door's "codex-login" case for its sign-in.
 # It does not touch .env, docker, the database, or the brain repo checkout.
 # The CC tab itself is switched on with BRAIN_CC_ENABLED=true in the brain's .env
 # (docs/CC.md), which this script does not edit.
@@ -90,6 +92,25 @@ case "${1:-}" in
         claude auth login --claudeai
     fi
     printf '\n  Done. Close this panel and press reconnect.\n'
+    sleep 3600 ;;
+  codex-login)
+    # The Codex seat (2026-10-15, opt-in: scripts/cc/install-codex.sh). OpenAI's own device-code
+    # flow for the hands user; the token lands in that user's ~/.codex and nowhere else.
+    clear
+    printf '\n  Signing in the Codex seat with your own ChatGPT account, through OpenAI'"'"'s own flow.\n'
+    printf '  0. Once: ChatGPT > Settings > Security > turn on Device code authorization.\n'
+    printf '  1. A link and a one-time code appear below. Open the link on any device and sign in.\n'
+    printf '  2. Enter the code there. This panel says when it is done.\n\n'
+    # the check runs as the hands too: the door's user may not see into their home
+    AS=(env); [ "__LOGIN_USER__" != "$(id -un)" ] && AS=(sudo -n -u "__LOGIN_USER__" -H env)
+    AS+=(PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM")
+    if ! "${AS[@]}" test -x "/home/__LOGIN_USER__/.local/bin/codex"; then
+        printf '  The Codex CLI is not installed for __LOGIN_USER__ (or this door cannot act as them).\n  On the box, from the brain repo: bash scripts/cc/install-codex.sh\n'
+    else
+        "${AS[@]}" codex login --device-auth \
+            || printf '\n  The sign-in did not finish. In a terminal on the box run:\n  sudo -u __LOGIN_USER__ -H codex login --device-auth\n'
+    fi
+    printf '\n  Close this panel and press recheck beside the Codex seat.\n'
     sleep 3600 ;;
   *)
     exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;

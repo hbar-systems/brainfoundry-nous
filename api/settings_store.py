@@ -599,6 +599,28 @@ def set_agentic_tools_enabled(enabled: bool) -> None:
         _save(data)
 
 
+def get_local_readers():
+    """The owner's allowlist of local models that may read local-only memory
+    (api/privacy.py, 2026-10-15). None = never set (every model the locality
+    rule accepts may read it); a list (possibly empty) = only those names."""
+    v = _load().get("local_readers")
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if isinstance(x, str) and str(x).strip()][:64]
+    return None
+
+
+def set_local_readers(names) -> None:
+    """Set the allowlist (a list of model names) or clear it (None)."""
+    with _LOCK:
+        data = _load()
+        if names is None:
+            data.pop("local_readers", None)
+        else:
+            data["local_readers"] = [str(x).strip()[:200] for x in names
+                                     if isinstance(x, str) and str(x).strip()][:64]
+        _save(data)
+
+
 def get_autonomy_enabled() -> bool:
     """Standing autonomous loop: let the brain run its own agentic ticks against
     a standing goal, with no operator message. Off by default — opt-in per brain.

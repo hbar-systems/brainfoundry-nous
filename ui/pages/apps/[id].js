@@ -27,9 +27,14 @@ import { useEffect, useRef, useState } from 'react'
 //   ping              -> result = 'pong'  (sanity)
 //   meta.app_info     -> { id, name, version }
 //   meta.brain_info   -> { name }         (reads NEXT_PUBLIC_BRAIN_NAME)
-//   memory.write      -> { layer, content, source?, metadata? }
+//   memory.write      -> { layer, content, source?, metadata?, privacy? }
 //                        gated by manifest permissions + requires_layers;
-//                        proxies to brain POST /memory/append.
+//                        proxies to brain POST /memory/append. `privacy` is
+//                        "open" (default) or "local-only" (2026-10-15): no
+//                        extra permission to declare, since a stricter level
+//                        only narrows who reads the write; the brain keeps the
+//                        stricter of this, any level already stored for the
+//                        same content, and a vault source. Reply carries it.
 //   llm.complete      -> { messages: [{role, content}, ...] }
 //                        gated by manifest permission 'llm.invoke'. Generates
 //                        a completion over the brain's own corpus using the
@@ -131,6 +136,7 @@ export default function AppHost() {
             content: msg.payload.content,
             source: msg.payload.source || appInfo.id,
             metadata: msg.payload.metadata || {},
+            ...(msg.payload.privacy ? { privacy: String(msg.payload.privacy) } : {}),
           }),
         })
           .then(r => r.json().then(body => ({ status: r.status, ok: r.ok, body })))
@@ -138,7 +144,7 @@ export default function AppHost() {
             if (!ok) {
               return { ok: false, error: { code: 'memory_append_failed', status, body } }
             }
-            return { ok: true, result: { id: body.id, doc_name: body.doc_name } }
+            return { ok: true, result: { id: body.id, doc_name: body.doc_name, privacy: body.privacy } }
           })
           .catch(e => ({ ok: false, error: { code: 'memory_append_network_error', detail: String(e) } }))
       }

@@ -269,6 +269,13 @@ export default function Chat() {
   const [error, setError] = useState(null)
   const [sessions, setSessions] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState(null)
+  // Session mark (api/privacy.py, 2026-10-15): a hosted model refused to
+  // continue a session that carries local-only memory. Holds the brain's
+  // message; the banner offers a fresh session.
+  const [localOnlyBlock, setLocalOnlyBlock] = useState(null)
+  // A turn in this view read local-only memory (rag_metadata.privacy).
+  const [turnLocalOnly, setTurnLocalOnly] = useState(null)
+  const currentSessionLocalOnly = !!(sessions.find(s => s.session_id === currentSessionId) || {}).local_only
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Ref to the resizable sidebar panel. Used by the chat-header toggle and
   // the in-sidebar Hide button to collapse/expand. The panel's onCollapse /
@@ -382,7 +389,9 @@ export default function Chat() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: selectedModel,
+          // A session marked local-only is summarised by the brain's local
+          // default model, never the hosted one picked for chat.
+          ...(currentSessionLocalOnly ? {} : { model: selectedModel }),
           layer: saveLayer,
           permit_id: permitData.permit_id,
           permit_token: permitData.permit_token,
@@ -390,10 +399,11 @@ export default function Chat() {
       })
       if (r.ok) {
         const data = await r.json()
-        setConsolidateStatus({ ok: true, message: `Saved to memory: ${data.chunks_stored} chunks in the ${data.layer || saveLayer} layer.` })
+        setConsolidateStatus({ ok: true, message: `Saved to memory: ${data.chunks_stored} chunks in the ${data.layer || saveLayer} layer${data.privacy === 'local-only' ? ', local-only' : ''}.` })
       } else {
         const err = await r.json().catch(() => ({}))
-        setConsolidateStatus({ ok: false, message: err.detail || `Failed (${r.status})` })
+        const d = err.detail
+        setConsolidateStatus({ ok: false, message: (d && typeof d === 'object' ? d.message : d) || `Failed (${r.status})` })
       }
     } catch (e) {
       setConsolidateStatus({ ok: false, message: e.message })
@@ -800,7 +810,7 @@ export default function Chat() {
       const r = await fetch('/api/bf/memory/store/propose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, context: ctxMsgs, model: selectedModel }),
+        body: JSON.stringify({ content, context: ctxMsgs, model: selectedModel, session_id: currentSessionIdRef.current }),
       })
       if (r.ok) {
         const j = await r.json()
@@ -1159,6 +1169,8 @@ export default function Chat() {
     sessionLoadTargetRef.current = sessionId
     setCurrentSessionId(sessionId)
     setMessages([])
+    setLocalOnlyBlock(null)
+    setTurnLocalOnly(null)
     setSessionLoading(true)
 
     fetch(`/api/bf/sessions/${sessionId}/messages`)
@@ -1195,6 +1207,8 @@ export default function Chat() {
         const s = await r.json()
         setCurrentSessionId(s.session_id)
         setMessages([])
+        setLocalOnlyBlock(null)
+        setTurnLocalOnly(null)
         fetchSessions()
       }
     } catch (e) {
@@ -1307,7 +1321,16 @@ export default function Chat() {
 
       if (!r.ok) {
         const err = await r.json().catch(() => ({}))
-        setError(`Error ${r.status}: ${err.detail || 'server error — check API logs'}`)
+        if (r.status === 409 && err.detail && err.detail.error === 'session_local_only') {
+          // Nothing was sent to the model. Put the message back in the
+          // composer and offer a fresh session.
+          setMessages(messages)
+          setInputMessage(userMessage.content)
+          setLocalOnlyBlock({ message: err.detail.message, model: err.detail.model })
+        } else {
+          const d = err.detail
+          setError(`Error ${r.status}: ${(d && typeof d === 'object' ? (d.message || JSON.stringify(d)) : d) || 'server error — check API logs'}`)
+        }
       } else if (!useStreaming) {
         // Vision path returns JSON
         const data = await r.json()
@@ -1316,6 +1339,7 @@ export default function Chat() {
         const corroboration = data?.rag_metadata?.corroboration || null
         const toolEvents = Array.isArray(data?.rag_metadata?.tool_events) ? data.rag_metadata.tool_events : []
         const pendingApprovals = Array.isArray(data?.rag_metadata?.pending_approvals) ? data.rag_metadata.pending_approvals : []
+        if (data?.rag_metadata?.privacy) setTurnLocalOnly(data.rag_metadata.privacy.local_only_used ? data.rag_metadata.privacy : null)
         setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents, pendingApprovals }])
         fetchSessions()
       } else {
@@ -1415,6 +1439,9 @@ export default function Chat() {
                 const corroboration = parsed.rag_metadata.corroboration || null
                 const toolEvents = Array.isArray(parsed.rag_metadata.tool_events) ? parsed.rag_metadata.tool_events : []
                 const pendingApprovals = Array.isArray(parsed.rag_metadata.pending_approvals) ? parsed.rag_metadata.pending_approvals : []
+                if (parsed.rag_metadata.privacy && sessionId === currentSessionIdRef.current) {
+                  setTurnLocalOnly(parsed.rag_metadata.privacy.local_only_used ? parsed.rag_metadata.privacy : null)
+                }
                 setMessages(prev => {
                   if (!prev.length || prev[prev.length - 1].role !== 'assistant') return prev
                   const next = [...prev]
@@ -1665,6 +1692,12 @@ export default function Chat() {
                       style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text)', flex: 1, marginRight: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     >
                       {s.title || 'Untitled'}
+                      {s.local_only && (
+                        <span title="A local model read local-only memory in this session; hosted models may not continue it."
+                          style={{ marginLeft: '6px', fontSize: '10px', fontFamily: 'var(--font-mono)', color: '#8fb98f', border: '1px solid #8fb98f55', borderRadius: '999px', padding: '0 6px', fontWeight: 400 }}>
+                          local-only
+                        </span>
+                      )}
                     </div>
                   )}
                   {editingSessionId !== s.session_id && (
@@ -1842,6 +1875,14 @@ export default function Chat() {
               })),
             ]}
           />
+          {(currentSessionLocalOnly || turnLocalOnly) && (
+            <span
+              title={(turnLocalOnly && turnLocalOnly.rule) || 'This session carries local-only memory: only GREEN tools (own memory, own task list) may run in a turn that reads it; web, fetch, mail, calendar, Drive, brain_call and MCP are refused; hosted models may not continue it.'}
+              style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#8fb98f', border: '1px solid #8fb98f55', borderRadius: '999px', padding: '3px 9px', whiteSpace: 'nowrap' }}
+            >
+              local-only · GREEN tools only
+            </span>
+          )}
 
           {/* Max-tokens cap on the assistant's response. Operator picks a
               higher value when long answers were truncating; persisted
@@ -2473,6 +2514,26 @@ export default function Chat() {
             <div style={{ backgroundColor: '#1a0a0a', border: '1px solid #ff6b6b20', borderRadius: '10px', padding: '12px 16px', color: '#ff6b6b', fontSize: '13px' }}>
               {storeError}
               <button onClick={() => setStoreError(null)} style={{ float: 'right', background: 'transparent', border: 'none', color: '#ff6b6b', cursor: 'pointer' }}>×</button>
+            </div>
+          )}
+
+          {localOnlyBlock && (
+            <div style={{ backgroundColor: 'var(--surface2)', border: '1px solid #8fb98f55', borderRadius: '10px', padding: '12px 16px', color: 'var(--text)', fontSize: '13px', lineHeight: 1.6 }}>
+              <div>{localOnlyBlock.message}</div>
+              <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => createNewSession()}
+                  style={{ background: 'transparent', border: '1px solid #8fb98f', color: '#8fb98f', borderRadius: '999px', padding: '4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                >
+                  start a fresh session
+                </button>
+                <button
+                  onClick={() => setLocalOnlyBlock(null)}
+                  style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', borderRadius: '999px', padding: '4px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                >
+                  pick a local model instead
+                </button>
+              </div>
             </div>
           )}
 

@@ -96,7 +96,8 @@ export default function UploadSearch() {
       const r = await fetch(`${API_BASE}/documents/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, limit: searchLimit }),
+        // Owner's own search: local-only chunks shown too (no model involved).
+        body: JSON.stringify({ query, limit: searchLimit, include_local_only: true }),
       });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();

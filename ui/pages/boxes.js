@@ -29,19 +29,101 @@ function layout(boxes) {
 
 const dot = (b) => (b.online === true ? T.ok : b.online === false ? T.faint : T.warn)
 
+// Compute (2026-10-15): which models live on which machine, read live through the bridge (GET /cc/compute,
+// which asks the brain api POST /compute/models). local = may read local-only memory (api/privacy.py rule);
+// closed = a hosted API or anything in doubt. The shelf is the owner's file of ready agent kinds (GET /cc/shelf).
+const PRIV = { local: T.ok, closed: T.warn }
+const label = { ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.faint, margin: '0 0 2px 0' }
+const gb = (n) => (typeof n === 'number' && n > 0 ? (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`) : '')
+const chip = (on) => ({ ...mono, fontSize: '11px', padding: '3px 10px', borderRadius: '999px', cursor: 'pointer', border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`, background: on ? 'var(--accent)' : 'transparent', color: on ? 'var(--bg)' : 'var(--text-dim)' })
+
+function ModelRow({ m }) {
+  return (
+    <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', fontSize: '12px', margin: '0 0 2px 0' }}>
+      <span style={{ ...mono, fontSize: '10px', color: PRIV[m.privacy] || T.dim, minWidth: '42px' }}>{m.privacy}</span>
+      <span style={{ flex: 1, wordBreak: 'break-all' }}>{m.name}</span>
+      {m.loaded ? <span style={{ ...mono, fontSize: '10px', color: T.ok }}>loaded</span> : null}
+      {m.parameter_size ? <span style={{ ...mono, fontSize: '10px', color: T.faint }}>{m.parameter_size}</span> : null}
+      {gb(m.size) ? <span style={{ ...mono, fontSize: '10px', color: T.faint }}>{gb(m.size)}</span> : null}
+    </div>
+  )
+}
+
+function Endpoint({ e }) {
+  const roles = (e.roles || []).join(' + ')
+  return (
+    <div style={{ marginBottom: '6px' }}>
+      <p style={{ ...mono, fontSize: '10px', color: e.online ? T.ok : T.faint, margin: '0 0 2px 0' }}>
+        ollama {roles} · {e.online ? `online, ${(e.models || []).length} pulled` : 'offline'}{e.routed ? ' · the brain sends chat here' : ' · declared, the brain does not route chat here'}
+      </p>
+      {(e.models || []).map((m) => <ModelRow key={m.name} m={m} />)}
+    </div>
+  )
+}
+
+function Shelf({ shelf }) {
+  const [leg, setLeg] = useState('')
+  if (!shelf) return null
+  const agents = shelf.agents || []
+  if (!shelf.exists || !agents.length) {
+    return (
+      <p style={{ fontSize: '12px', color: T.dim, margin: 0 }}>
+        {shelf.exists ? 'The shelf file has no valid agents yet.' : 'No shelf yet.'} Put the file at world/{shelf.rel || 'ops/agent-shelf/shelf.json'} on this box ({shelf.path}); the format is in templates/agent-shelf.example.json.
+      </p>
+    )
+  }
+  const legions = shelf.legions || []
+  const shown = agents.filter((a) => !leg || a.legion === leg)
+  const name = (id) => (legions.find((l) => l.id === id) || {}).name || id
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '0 0 10px 0' }}>
+        <button type="button" onClick={() => setLeg('')} style={chip(!leg)}>all {agents.length}</button>
+        {legions.map((l) => (
+          <button type="button" key={l.id} onClick={() => setLeg(leg === l.id ? '' : l.id)} style={chip(leg === l.id)}>
+            {l.name} {agents.filter((a) => a.legion === l.id).length}
+          </button>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '10px' }}>
+        {shown.map((a) => (
+          <div key={a.id} style={{ border: `1px solid ${T.line}`, borderRadius: '10px', background: T.card, padding: '10px 12px' }}>
+            <p style={{ margin: '0 0 2px 0', fontSize: '14px' }}>{a.name}</p>
+            <p style={{ ...mono, fontSize: '10px', color: T.faint, margin: '0 0 6px 0' }}>{name(a.legion)} · runs on {a.runs_on} · {a.model || a.model_class}</p>
+            <p style={{ fontSize: '12px', margin: '0 0 6px 0' }}>{a.mission}</p>
+            {(a.tools || []).length ? <p style={{ fontSize: '11px', color: T.dim, margin: '0 0 4px 0' }}><span style={{ ...mono, color: T.faint }}>tools </span>{a.tools.join(', ')}</p> : null}
+            <p style={{ fontSize: '11px', color: T.dim, margin: '0 0 4px 0' }}><span style={{ ...mono, color: T.warn }}>always asks </span>{a.permit}</p>
+            {a.cost ? <p style={{ fontSize: '11px', color: T.dim, margin: 0 }}><span style={{ ...mono, color: T.faint }}>cost </span>{a.cost}</p> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function Boxes() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const [sel, setSel] = useState(null)
+  const [compute, setCompute] = useState(null)
+  const [shelf, setShelf] = useState(null)
   const load = async () => {
     try {
       const r = await fetch('/cc/boxmap', { cache: 'no-store' })
       if (!r.ok) { setErr(`the bridge answered ${r.status}`); return }
       setData(await r.json()); setErr('')
     } catch { setErr('the bridge is not answering') }
+    try { const r = await fetch('/cc/compute', { cache: 'no-store' }); if (r.ok) setCompute(await r.json()) } catch {}
+    try { const r = await fetch('/cc/shelf', { cache: 'no-store' }); if (r.ok) setShelf(await r.json()) } catch {}
   }
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t) }, [])
   const boxes = (data && data.boxes) || []
+  const eps = (compute && compute.endpoints) || []
+  const epsOf = (id) => eps.filter((e) => (e.boxes || []).includes(id))
+  const nModels = (id) => epsOf(id).reduce((n, e) => n + (e.models || []).length, 0)
+  const loose = eps.filter((e) => !(e.boxes || []).some((id) => boxes.find((b) => b.id === id)))
+  const hosted = (compute && compute.hosted) || []
+  const sum = (compute && compute.summary) || {}
   const pos = layout(boxes)
   const center = boxes.find((b) => (b.ring || 0) === 0)
   const target = (b, d) => (boxes.find((x) => x.id === d.to) || center)
@@ -77,6 +159,7 @@ export default function Boxes() {
                 <circle cx={p.x} cy={p.y} r={r0 ? 26 : 13} fill="var(--surface)" stroke={on ? 'var(--accent)' : dot(b)} strokeWidth={on ? 3 : 2} />
                 <circle cx={p.x} cy={p.y} r={r0 ? 6 : 4} fill={dot(b)} />
                 <text x={p.x} y={p.y + (r0 ? 42 : 27)} textAnchor="middle" style={{ ...mono, fontSize: '10px', fill: 'var(--text)' }}>{b.label}</text>
+                {nModels(b.id) ? <text x={p.x} y={p.y + (r0 ? 54 : 39)} textAnchor="middle" style={{ ...mono, fontSize: '9px', fill: 'var(--muted)' }}>{nModels(b.id)} model{nModels(b.id) === 1 ? '' : 's'}</text> : null}
               </g>
             )
           })}
@@ -106,6 +189,11 @@ export default function Boxes() {
                   <p style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.faint, margin: '0 0 2px 0' }}>doors</p>
                   {cur.doors.map((d, i) => <p key={i} style={{ fontSize: '12px', margin: '0 0 2px 0' }}><span style={{ color: DOOR[d.type] || T.dim }}>{d.type}</span> to {d.to}: {d.who}</p>)}
                 </div>) : null}
+              {epsOf(cur.id).length ? (
+                <div style={{ marginBottom: '8px' }}>
+                  <p style={label}>models</p>
+                  {epsOf(cur.id).map((e) => <Endpoint key={e.url} e={e} />)}
+                </div>) : null}
               <p style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.faint, margin: '0 0 2px 0' }}>look inside</p>
               {(cur.inside || []).length ? cur.inside.map((x, i) => (
                 <p key={i} style={{ margin: '0 0 2px 0' }}><a href={x.pane} style={{ color: T.gold, fontSize: '12px' }}>{x.label}</a></p>
@@ -115,7 +203,45 @@ export default function Boxes() {
           )}
         </div>
       </div>
-      <p style={{ ...mono, fontSize: '10px', color: T.faint, marginTop: '14px' }}>facts: world/ops/box-map/boxes.json (edit in place) · online: tailnet, refreshed every minute</p>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: '10px', background: T.card, padding: '12px 14px', marginTop: '14px', maxWidth: '1200px' }}>
+        <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, margin: '0 0 4px 0' }}>Reasoners · models per machine</p>
+        {!compute ? <p style={{ fontSize: '12px', color: T.dim, margin: 0 }}>reading the models...</p> : compute.ok === false ? (
+          <p style={{ ...mono, fontSize: '12px', color: T.warn, margin: 0 }}>{compute.error}</p>
+        ) : (
+          <div>
+            <p style={{ fontSize: '12px', color: T.dim, margin: '0 0 8px 0' }}>
+              {sum.online || 0} of {sum.endpoints || 0} Ollama endpoints online · <span style={{ color: PRIV.local }}>{sum.local || 0} local</span> may read local-only memory · <span style={{ color: PRIV.closed }}>{sum.closed || 0} closed</span> read open memory only · {sum.loaded || 0} loaded now
+            </p>
+            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+              {eps.map((e) => (
+                <div key={e.url} style={{ flex: '1 1 260px', minWidth: '240px', maxWidth: '380px' }}>
+                  <p style={label}>{(e.boxes || []).map((id) => (boxes.find((b) => b.id === id) || {}).label || id).join(', ') || (e.roles || []).join(' + ')}</p>
+                  <Endpoint e={e} />
+                </div>
+              ))}
+              {hosted.map((h) => (
+                <div key={h.provider} style={{ flex: '1 1 260px', minWidth: '240px', maxWidth: '380px' }}>
+                  <p style={label}>{h.provider} · hosted, from your key</p>
+                  {(h.models || []).map((m) => <ModelRow key={m.name} m={m} />)}
+                </div>
+              ))}
+            </div>
+            {loose.length ? <p style={{ ...mono, fontSize: '10px', color: T.faint, margin: '6px 0 0 0' }}>{loose.length} endpoint{loose.length === 1 ? '' : 's'} not tied to a box in the facts: add "ollama": "&lt;url&gt;" to that box</p> : null}
+            <p style={{ ...mono, fontSize: '10px', color: T.faint, margin: '6px 0 0 0' }}>{compute.rule}{compute.at ? ` · read ${compute.at}${compute.cached ? ' (cached)' : ''}` : ''}</p>
+          </div>
+        )}
+      </div>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: '10px', background: T.card, padding: '12px 14px', marginTop: '14px', maxWidth: '1200px' }}>
+        <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, margin: '0 0 4px 0' }}>Shelf · ready agents</p>
+        {shelf && shelf.about ? <p style={{ fontSize: '12px', color: T.dim, margin: '0 0 8px 0' }}>{shelf.about}</p> : null}
+        {shelf ? <Shelf shelf={shelf} /> : <p style={{ fontSize: '12px', color: T.dim, margin: 0 }}>reading the shelf...</p>}
+        {shelf && (shelf.errors || []).length ? (
+          <div style={{ marginTop: '8px' }}>
+            <p style={{ ...label, color: T.warn }}>left off the shelf</p>
+            {shelf.errors.map((x, i) => <p key={i} style={{ ...mono, fontSize: '11px', color: T.warn, margin: '0 0 2px 0' }}>{x}</p>)}
+          </div>) : null}
+      </div>
+      <p style={{ ...mono, fontSize: '10px', color: T.faint, marginTop: '14px' }}>facts: world/ops/box-map/boxes.json (edit in place; a box may add "ollama": "&lt;url&gt;") · online: tailnet, refreshed every minute · models: read live, cached 20 s · shelf: world/ops/agent-shelf/shelf.json</p>
     </div>
   )
 }

@@ -1211,3 +1211,147 @@ def box_map(facts: dict, peers: list | None, self_ip: str = "") -> dict:
                           "gaps": ["not in the facts file: add it to ops/box-map/boxes.json"]})
     return {"center": (facts or {}).get("center") or "", "about": (facts or {}).get("about") or "",
             "tailnet": peers is not None, "boxes": boxes}
+
+
+# ---- Compute view (2026-10-15): which models live on which machine ----
+# A box in the facts file may declare its Ollama endpoint(s): "ollama": "http://<host>:11434" (or a list).
+# The bridge passes those to the brain api (POST /compute/models), which reads every endpoint live and marks
+# each model local or closed with api/privacy.py; this side only assigns endpoints to boxes. Read-only.
+
+def declared_ollama(facts: dict) -> list:
+    out = []
+    for b in (facts or {}).get("boxes") or []:
+        if not isinstance(b, dict) or not b.get("id"):
+            continue
+        v = b.get("ollama")
+        for u in ([v] if isinstance(v, str) else v if isinstance(v, list) else []):
+            if isinstance(u, str) and u.strip():
+                out.append({"box": str(b["id"]), "url": u.strip()})
+    return out
+
+
+def _url_host(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def compute_view(facts: dict, res: dict | None) -> dict:
+    """Join the api's compute snapshot with the facts: the box's own Ollama goes to the center box, the spoke
+    to the box whose tailnet or public IP (or host) is the spoke URL's host. Endpoints the api already tied to
+    a declared box keep it. An unanswered api is an empty view with a reason, never an error page."""
+    if not isinstance(res, dict) or "endpoints" not in res:
+        return {"ok": False, "error": "the brain api did not answer the compute read (is BRAIN_API_KEY in the bridge env?)",
+                "endpoints": [], "hosted": [], "summary": {}, "rule": ""}
+    boxes = [b for b in (facts or {}).get("boxes") or [] if isinstance(b, dict) and b.get("id")]
+    center = (facts or {}).get("center") or next((b["id"] for b in boxes if (b.get("ring") or 0) == 0), "")
+    by_addr = {}
+    for b in boxes:
+        for k in ("tailnet_ip", "public_ip", "host"):
+            v = str(b.get(k) or "").strip().lower()
+            if v:
+                by_addr.setdefault(v, b["id"])
+    eps = []
+    for e in res.get("endpoints") or []:
+        if not isinstance(e, dict):
+            continue
+        e = dict(e)
+        ids = list(e.get("boxes") or [])
+        roles = e.get("roles") or []
+        if not ids and "box" in roles and center:
+            ids.append(center)
+        if not ids and "spoke" in roles:
+            hit = by_addr.get(_url_host(str(e.get("url") or "")))
+            if hit:
+                ids.append(hit)
+        e["boxes"] = ids
+        eps.append(e)
+    return {"ok": True, "at": res.get("at"), "cached": bool(res.get("cached")), "rule": res.get("rule") or "",
+            "endpoints": eps, "hosted": res.get("hosted") or [], "summary": res.get("summary") or {}}
+
+
+# ---- Agent shelf (2026-10-15): the ready agent kinds, from the owner's file ----
+# The file (in the world: ops/agent-shelf/shelf.json; example in templates/agent-shelf.example.json) is
+#   {"about": "...", "legions": [{"id": "...", "name": "..."}], "agents": [{...}, ...]}
+# and each agent carries id, name, legion, mission (one line), tools (list), model and/or model_class,
+# runs_on (a box id), permit (what always asks) and an optional cost note (free text, the owner's own words).
+# A malformed entry is left off the shelf and named in `errors`; the rest still show. Read-only.
+
+SHELF_REL = "ops/agent-shelf/shelf.json"
+_SHELF_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_SHELF_TEXT = {"name": 80, "legion": 64, "mission": 200, "model": 120, "model_class": 64, "runs_on": 64,
+               "permit": 240, "cost": 240}
+
+
+def _shelf_agent(a, seen: set):
+    if not isinstance(a, dict):
+        return None, "not an object"
+    aid = a.get("id")
+    if not isinstance(aid, str) or not _SHELF_ID.match(aid):
+        return None, "id must be a lowercase slug (a-z, 0-9, . _ -), up to 64 characters"
+    if aid in seen:
+        return None, f"{aid}: duplicate id"
+    out = {"id": aid}
+    for k, cap in _SHELF_TEXT.items():
+        v = a.get(k)
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            return None, f"{aid}: {k} must be text"
+        v = v.strip()
+        if "\n" in v or "\r" in v:
+            return None, f"{aid}: {k} must be one line"
+        if len(v) > cap:
+            return None, f"{aid}: {k} is longer than {cap} characters"
+        if v:
+            out[k] = v
+    for k in ("name", "legion", "mission", "runs_on", "permit"):
+        if k not in out:
+            return None, f"{aid}: {k} is required"
+    if "model" not in out and "model_class" not in out:
+        return None, f"{aid}: give a model or a model_class"
+    tools = a.get("tools", [])
+    if not isinstance(tools, list) or not all(isinstance(t, str) and t.strip() and len(t) <= 80 for t in tools):
+        return None, f"{aid}: tools must be a list of short names"
+    out["tools"] = [t.strip() for t in tools][:40]
+    return out, None
+
+
+def parse_shelf(obj) -> dict:
+    """Validate a shelf document. Returns {"agents", "legions", "errors", "about"}."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("agents"), list):
+        return {"agents": [], "legions": [], "errors": ["the file must be an object with an \"agents\" list"], "about": ""}
+    agents, errors, seen = [], [], set()
+    for i, a in enumerate(obj["agents"]):
+        got, why = _shelf_agent(a, seen)
+        if got is None:
+            errors.append(f"entry {i + 1}: {why}")
+            continue
+        seen.add(got["id"])
+        agents.append(got)
+    legions, lseen = [], set()
+    for l in obj.get("legions") or []:
+        if isinstance(l, dict) and isinstance(l.get("id"), str) and l["id"].strip() and l["id"] not in lseen:
+            lseen.add(l["id"])
+            legions.append({"id": l["id"].strip()[:64], "name": str(l.get("name") or l["id"]).strip()[:80]})
+    for a in agents:  # a legion named only on an agent still gets a chip
+        if a["legion"] not in lseen:
+            lseen.add(a["legion"])
+            legions.append({"id": a["legion"], "name": a["legion"]})
+    about = obj.get("about") if isinstance(obj.get("about"), str) else ""
+    return {"agents": agents, "legions": legions, "errors": errors, "about": about[:400]}
+
+
+def load_shelf(path) -> dict:
+    p = Path(path)
+    base = {"path": str(p), "rel": SHELF_REL}
+    if not p.is_file():
+        return {**base, "exists": False, "agents": [], "legions": [], "errors": [], "about": ""}
+    try:
+        obj = json.loads(p.read_text())
+    except Exception as e:
+        return {**base, "exists": True, "agents": [], "legions": [], "about": "",
+                "errors": [f"not valid JSON: {type(e).__name__}"]}
+    return {**base, "exists": True, **parse_shelf(obj)}

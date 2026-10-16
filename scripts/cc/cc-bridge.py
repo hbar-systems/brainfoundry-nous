@@ -22,7 +22,8 @@ the bridge; the CLI keeps its own credentials in the brain user's home.
 
 Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method}
-  POST /cc/chat           {"message"} -> {"reply","session_id","ms","error"}
+  POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"} -> {"reply","session_id","ms","error","reasoner"}
+  GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...]}  the real busy state of a thread
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
@@ -35,6 +36,7 @@ Endpoints (JSON):
 Configuration (environment, all optional):
   CC_BIND=127.0.0.1  CC_PORT=7682  CC_BASE=/cc  CC_CWD=$HOME/brain
   CC_BIN=$HOME/.local/bin/claude  CC_TOOLS=Read,Grep,Glob  CC_TIMEOUT=300
+  CC_CODEX_BIN=<hands home>/.local/bin/codex  CC_CODEX_MODEL=<optional model name>
   BRAIN_API_URL=http://127.0.0.1:8010  BRAIN_API_KEY=<the brain's own api key>  CC_MEMORY_K=6
 The api key reaches the bridge through a mode-600 env file (see install.sh),
 never through a repo. Nothing typed is logged; only sizes and timings.
@@ -107,6 +109,7 @@ SYSTEM = (
     "Do not name any vendor, model, or product unless the person asks about it directly. "
     "You may read files here."
 )
+SYSTEM_CORE = SYSTEM   # the Codex seat starts from this, not from the Claude-only paragraphs below
 # The closing rule about changes is appended at the very end (see _CLOSING below), after the
 # optional hands and writes paragraphs, so the three never contradict each other. The first
 # version said "you cannot change anything" up here and the reasoner, correctly, refused to
@@ -352,6 +355,21 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
 import cc_recent  # noqa: E402
+import cc_codex  # noqa: E402
+
+# The Codex seat (2026-10-15; scripts/cc/cc_codex.py, docs/CC.md "Codex seat"): a second reasoner,
+# chosen per thread. Read-only by construction; refused, never silently replaced, when the binary is
+# missing or not signed in.
+REASONERS = ("claude", "codex")
+CODEX_BIN = cc_codex.binary(HANDS_HOME, os.environ.get("CC_CODEX_BIN", ""))
+CODEX_MODEL = os.environ.get("CC_CODEX_MODEL", "").strip()
+CODEX_SYSTEM = SYSTEM_CORE + (
+    " You run in a read-only sandbox on this box: you may read files and run commands that only read. "
+    "You cannot edit, create or delete files, run anything that changes the box, or reach the network. "
+    "When the person wants a change, say exactly what you would change (the file and the edit, or the "
+    "command), so they can make it from the Claude seat, where every write passes their Allow, or by hand. "
+    "You cannot change anything else from this surface either: not memory, not settings. Say so if asked to."
+)
 # The RECENT block (2026-10-12): what moved in the last 48 h, from the world's ops files, the
 # steward queue, this box's threads and the memo tape; in front of the first turn of a new thread
 # and of any turn that is just the word "recap". The reasoner's transcripts live in the hands' home.
@@ -1772,8 +1790,13 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
         state["brain_session_id"] = created["session_id"]
         state["title"] = title
         threads = _threads_load()
-        threads.append({"claude": state.get("session_id"), "brain": state["brain_session_id"],
-                        "title": title, "started": now, "last": now, "via": source})
+        entry = {"claude": state.get("session_id"), "brain": state["brain_session_id"],
+                 "title": title, "started": now, "last": now, "via": source}
+        if state.get("reasoner") in REASONERS:
+            entry["reasoner"] = state["reasoner"]
+        if state.get("codex_id"):
+            entry["codex"] = state["codex_id"]
+        threads.append(entry)
         _threads_save(threads)
     sid = state["brain_session_id"]
     _brain_api("POST", f"/sessions/{sid}/messages", {"role": "user", "content": message})
@@ -1794,6 +1817,10 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
             th["last_via"] = source
             if state.get("session_id"):
                 th["claude"] = state["session_id"]
+            if state.get("codex_id"):
+                th["codex"] = state["codex_id"]
+            if state.get("reasoner") in REASONERS:
+                th["reasoner"] = state["reasoner"]
     _threads_save(threads)
     return state
 
@@ -2424,6 +2451,122 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
 META: dict = {}   # the last turn's model and token counts, shown on the page
 
 
+# ---------------------------------------------------------- codex seat ----
+_codex_cache: list = [0.0, {}]
+
+
+def _codex_status(fresh: bool = False) -> dict:
+    """The Codex seat's state for the page: installed, signed in, by what method; cached 20 s.
+    Read from the exit code of `codex login status` run as the hands; its words never pass."""
+    if not fresh and time.time() - _codex_cache[0] < 20 and _codex_cache[1]:
+        return dict(_codex_cache[1])
+    env = cc_codex.env(_hands_env())
+    st = cc_codex.status(CODEX_BIN, run=lambda argv, t: subprocess.run(
+        _as_hands(argv, env), capture_output=True, text=True, timeout=t, env=env))
+    _codex_cache[0], _codex_cache[1] = time.time(), st
+    return dict(st)
+
+
+def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
+    """Which seat answers: the one this turn asks for, else the thread's own, else Claude."""
+    for r in (requested, (thread_entry or {}).get("reasoner"), state.get("reasoner")):
+        if r in REASONERS:
+            return r
+    return "claude"
+
+
+def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
+                    recent: str = "") -> tuple[str, str | None, bool]:
+    """A turn on the Codex seat: `codex exec --json` as the hands, read-only, the prompt on stdin.
+    Streams start / block / text / tool like the Claude seat. Refuses (is_error, no fallback) when
+    the binary is missing or not signed in."""
+    META.clear()
+    META.update({"reasoner": "codex", "model": CODEX_MODEL or "codex"})
+    no = cc_codex.refusal(_codex_status(fresh=True))
+    if no:
+        return no, session_id, True
+    try:
+        cmd = cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
+    except cc_codex.Unsafe as e:
+        return f"The Codex seat refused to start: {e}. Nothing ran.", session_id, True
+    prompt, used = _compose(message, recent)
+    print(f"memory chunks={used} recent={len(recent)} seat=codex", flush=True)
+    prompt = f"<instructions>\n{CODEX_SYSTEM}\n</instructions>\n\n{prompt}"
+    run = run or Run(None, "")
+    on_event = on_event or (lambda k, p: None)
+    env = cc_codex.env(_run_env(run))
+    proc = subprocess.Popen(_as_hands(cmd, env), cwd=RUN_CWD, env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run.proc = proc
+    if run.stopped:
+        _stop_proc(proc)
+    try:
+        proc.stdin.write(prompt); proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    last = [time.time()]
+    in_tool = [False]
+    stop = threading.Event()
+
+    def _watch():
+        while not stop.wait(5):
+            if time.time() - last[0] > (TOOL_TIMEOUT_S if in_tool[0] else TIMEOUT_S):
+                proc.kill()
+                return
+            if time.time() - last[0] > 12:
+                on_event("ping", {})
+    threading.Thread(target=_watch, daemon=True).start()
+    sid, texts, usage, failed, last_err, steps, shown = session_id, [], {}, None, None, 0, set()
+    try:
+        for line in proc.stdout:
+            last[0] = time.time()
+            ev = cc_codex.parse_line(line)
+            if not ev:
+                continue
+            kind = ev.get("type")
+            item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
+            if kind == "thread.started":
+                sid = ev.get("thread_id") or sid
+                on_event("start", {"model": CODEX_MODEL or "codex", "session_id": sid, "reasoner": "codex"})
+            elif kind in ("item.started", "item.completed"):
+                b = cc_codex.brief(item)
+                if b and item.get("id") not in shown:
+                    shown.add(item.get("id"))
+                    steps += 1
+                    in_tool[0] = kind == "item.started"
+                    on_event("tool", {"name": b[0], "brief": b[1]})
+                elif kind == "item.completed":
+                    in_tool[0] = False
+                    if item.get("type") == "agent_message" and item.get("text"):
+                        on_event("block", {})
+                        on_event("text", {"t": item["text"]})
+                        texts.append(item["text"])
+            elif kind == "turn.completed":
+                usage = ev.get("usage") or {}
+            elif kind == "turn.failed":
+                failed = str((ev.get("error") or {}).get("message") or "the turn failed")
+            elif kind == "error":
+                last_err = str(ev.get("message") or "")
+    finally:
+        stop.set()
+    proc.wait()
+    err_tail = (proc.stderr.read() or "").strip()[-300:]
+    if run.stopped:
+        said = "".join(run.partial).strip()
+        return (said + "\n\n" if said else "") + "(stopped by you)", sid, False
+    if proc.returncode == -9 and not texts:
+        return f"The Codex seat went silent for over {TIMEOUT_S // 60} minutes and was stopped.", sid, True
+    if failed or (proc.returncode != 0 and not texts):
+        err = (failed or last_err or err_tail or "no output")[:600]
+        if cc_codex.is_auth_error(err):
+            _codex_status(fresh=True)
+            return "The Codex seat's sign-in needs renewing: use Sign in with ChatGPT, then send again. Nothing fell back to the Claude seat.", sid, True
+        return f"The Codex seat could not answer this turn: {err}", sid, True
+    META.update({"in": int(usage.get("input_tokens") or 0), "cached": int(usage.get("cached_input_tokens") or 0),
+                 "out": int(usage.get("output_tokens") or 0), "steps": steps, "cost": None})
+    return (texts[-1] if texts else "(no answer)"), sid, False
+
+
 # ----------------------------------------------------------------- http ----
 # Queued messages (2026-10-09). A message sent to a thread that is answering is not refused: it
 # waits here, in order, and is delivered as the thread's next turn the moment the running one
@@ -2498,7 +2641,8 @@ def _box_wait_next() -> None:
         threading.Thread(target=_drain, args=(item["thread"],), daemon=True).start()
     else:
         threading.Thread(target=_turn, args=(item["message"],), daemon=True,
-                         kwargs={"thread": None, "new": True, "source": item["source"], "waited": True}).start()
+                         kwargs={"thread": None, "new": True, "source": item["source"], "waited": True,
+                                 "reasoner": item.get("reasoner")}).start()
 
 
 def _drain(thread: str) -> None:
@@ -2528,16 +2672,16 @@ def _state(thread: str | None) -> dict:
             "others": sum(1 for x in _runs_active() if x is not r), "now": time.time()}
 
 
-def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False) -> tuple[int, dict]:
+def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None) -> tuple[int, dict]:
     """A turn, then the thread's next queued message (if any) is started, then the box's wait line."""
-    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited)
+    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited, reasoner=reasoner)
     if status in (200, 500):
         _drain_async(payload.get("thread"))
         _box_wait_next()
     return status, payload
 
 
-def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False) -> tuple[int, dict]:
+def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None) -> tuple[int, dict]:
     """One turn, for the page and for Telegram (2026-09-29). Picks the conversation (an explicit
     thread, a new one, or the box's current one), registers the Run, runs the reasoner, records
     the turn in the brain, emits "done" to every sink, and returns (status, payload). on_run(run)
@@ -2552,7 +2696,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         if explicit is None:
             return 404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."}
         state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
-                 "prompt_hash": PROMPT_HASH}
+                 "prompt_hash": PROMPT_HASH, "codex_id": explicit.get("codex"), "reasoner": explicit.get("reasoner")}
     else:
         state = _load_state()
         # A thread started under older instructions carries their conclusions ("I can't
@@ -2586,7 +2730,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         active = _runs_active()
         if len(active) >= MAX_RUNS and not from_queue:
             if new:
-                n = _box_wait_add({"kind": "new", "message": message, "source": source, "at": time.time()}, front=waited)
+                n = _box_wait_add({"kind": "new", "message": message, "source": source, "at": time.time(), "reasoner": reasoner}, front=waited)
                 return 202, {"waiting": n, "reply": f"{len(active)} conversations are answering; this one waits in line "
                                                     f"({n} in line) and starts by itself when one finishes."}
             if key:
@@ -2602,16 +2746,31 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
     if on_run:
         on_run(run)
     t0 = time.time()
+    seat = _reasoner_pick(reasoner, explicit, {} if new else state)
+    skey = "codex_id" if seat == "codex" else "session_id"   # each seat keeps its own session in the thread
     try:
-        fresh = new or not state.get("session_id")   # a new thread, or one the reasoner has not seen yet
-        reply, sid, is_error = _run_turn(message, state.get("session_id"), on_event=run.emit, run=run,
-                                         recent=_recent(message, fresh))
+        fresh = new or not state.get(skey)   # a new thread, or one this seat has not seen yet
+        if seat == "codex":
+            reply, sid, is_error = _run_codex_turn(message, state.get(skey), on_event=run.emit, run=run,
+                                                   recent=_recent(message, fresh))
+        else:
+            reply, sid, is_error = _run_turn(message, state.get(skey), on_event=run.emit, run=run,
+                                             recent=_recent(message, fresh))
+        state["reasoner"] = seat
         if sid:
-            state["session_id"] = sid
+            state[skey] = sid
             state["prompt_hash"] = PROMPT_HASH
             if explicit is None:
                 _save_state(state)
+        elif seat == "codex" and new and explicit is None:
+            # a refused first turn of a new thread (no Codex session yet) still lands in that new
+            # thread, not in whichever thread was current before
+            _save_state(state)
         reply, proposal = _extract_proposal(reply)
+        if seat == "codex" and proposal:
+            # the read-only seat raises no cards: a proposal is shown as text, never queued for a write
+            proposal = None
+            reply = (reply + "\n\n(The Codex seat is read-only and raises no cards; ask the Claude seat to make this change.)").strip()
         reply, pane = _extract_pane(reply)
         reply, _lay, _lay_err = cc_layout.parse_marker(reply)
         if _lay is not None:
@@ -2628,8 +2787,9 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         try:
             if explicit is None:
                 st = _load_state()
-                if st.get("session_id") == sid or not st.get("session_id"):
-                    st["session_id"] = sid
+                if st.get(skey) == sid or not st.get(skey):
+                    st[skey] = sid
+                    st["reasoner"] = seat
                     st = _record_turn(st, message, rec_reply, card, _earlier_pieces(run), source=source)
                     _save_state(st)
                 state = st
@@ -2638,6 +2798,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 cur = _load_state()
                 if cur.get("brain_session_id") == state.get("brain_session_id"):
                     cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
+                    cur["codex_id"] = state.get("codex_id"); cur["reasoner"] = seat
                     _save_state(cur)
             run.thread = state.get("brain_session_id") or run.thread
             run.title = state.get("title") or run.title
@@ -2656,13 +2817,14 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "brain_session": (run.thread or "")[:8], "brain": run.thread, "run": run.id, "in": len(message), "out": len(reply),
                  "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                  "proposal": (card or {}).get("id"),
-                 "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"), "tools": ALLOWED_TOOLS, "via": source,
+                 "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"),
+                 "tools": f"codex:{cc_codex.MODE}" if seat == "codex" else ALLOWED_TOOLS, "via": source, "reasoner": seat,
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "tok_fresh": META.get("in_fresh"), "tok_cache_write": META.get("cache_write"),
                  "model": META.get("model")})
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
                "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES),
-               "stopped": bool(run.stopped)}
+               "stopped": bool(run.stopped), "reasoner": seat}
     run.emit("done", payload)
     _runs_prune()
     return 200, payload
@@ -3134,9 +3296,12 @@ class Handler(BaseHTTPRequestHandler):
                              "tutorial": _tutorial_counts(),
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
-                             "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0})
+                             "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0,
+                             "reasoners": list(REASONERS), "codex": _codex_status()})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
+        elif route == "/codex/status":
+            self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
         elif route == "/threads":
             self._send(200, _threads_view(archived=self._query().get("archived") == "1"))
         elif route == "/live":
@@ -3190,6 +3355,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 peers = None
             self._send(200, cc_extras.box_map(facts, peers, self_ip))
+        elif route == "/compute":
+            # Which models live on which machine (2026-10-15): the facts' declared Ollama endpoints go to the
+            # brain api, which reads each live and marks every model local or closed (api/privacy.py).
+            facts = {}
+            try:
+                facts = json.loads((Path(WORLD_DIR or "/nonexistent") / "ops" / "box-map" / "boxes.json").read_text())
+            except Exception:
+                facts = {}
+            res = _brain_api("POST", "/compute/models", {"endpoints": cc_extras.declared_ollama(facts)})
+            self._send(200, cc_extras.compute_view(facts, res))
+        elif route == "/shelf":
+            # The agent shelf (2026-10-15): ready agent kinds from the owner's file, never from the template.
+            fp = os.environ.get("CC_SHELF_FILE", "").strip() or str(Path(WORLD_DIR or "/nonexistent") / cc_extras.SHELF_REL)
+            self._send(200, cc_extras.load_shelf(fp))
         elif route == "/permits/history":
             qy = self._query()
             try:
@@ -3506,7 +3685,8 @@ class Handler(BaseHTTPRequestHandler):
             # Resuming an older thread is the owner's explicit choice; mark it current under
             # today's instructions so the hash rule does not immediately reset it.
             _save_state({"session_id": th.get("claude"), "brain_session_id": th["brain"],
-                         "title": th.get("title"), "prompt_hash": PROMPT_HASH})
+                         "title": th.get("title"), "prompt_hash": PROMPT_HASH,
+                         "codex_id": th.get("codex"), "reasoner": th.get("reasoner")})
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
@@ -3656,7 +3836,11 @@ class Handler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
             run.attach(sink)
-        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True)
+        seat = req.get("reasoner")
+        if seat is not None and seat not in REASONERS:
+            self._send(400, {"error": "reasoner must be claude or codex"})
+            return
+        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True, reasoner=seat)
         if status != 200 or not stream:
             self._send(status, payload)
 

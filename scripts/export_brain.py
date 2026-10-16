@@ -73,8 +73,25 @@ sys.stderr.write(f"[worker] dumped {len(rows)} memory_proposals\n")
 # ============================================================================
 # Worker mode — runs INSIDE the api container (invoked by the orchestrator).
 # ============================================================================
-def worker_dump_pg(table: str) -> int:
-    """Stream one postgres table to stdout as JSON-lines. One object per row."""
+def _vault_row(row: dict) -> bool:
+    """A chunk ingested from the private vault (api/vault.py): name vault/...,
+    or metadata.source vault:..., or metadata.vault true."""
+    name = str(row.get("document_name") or "")
+    md = row.get("metadata")
+    if isinstance(md, str):
+        try:
+            md = json.loads(md)
+        except Exception:
+            md = {}
+    md = md if isinstance(md, dict) else {}
+    src = md.get("source")
+    return (name.lstrip("/").startswith("vault/") or bool(md.get("vault"))
+            or (isinstance(src, str) and src.startswith("vault:")))
+
+
+def worker_dump_pg(table: str, include_vault: bool = False) -> int:
+    """Stream one postgres table to stdout as JSON-lines. One object per row.
+    Vault documents are left out unless include_vault (2026-10-15)."""
     import psycopg2
 
     selects = {
@@ -99,11 +116,17 @@ def worker_dump_pg(table: str) -> int:
     try:
         cur = conn.cursor()
         cur.execute(sql)
-        n = 0
+        n = skipped = 0
         for row in cur:
             # metadata (jsonb) arrives as a dict; embedding::text as a string.
-            sys.stdout.write(json.dumps(dict(zip(cols, row)), default=str) + "\n")
+            d = dict(zip(cols, row))
+            if table == "document_embeddings" and not include_vault and _vault_row(d):
+                skipped += 1
+                continue
+            sys.stdout.write(json.dumps(d, default=str) + "\n")
             n += 1
+        if skipped:
+            sys.stderr.write(f"[worker] left out {skipped} vault chunk(s) (--include-vault to keep)\n")
         sys.stdout.flush()
         sys.stderr.write(f"[worker] dumped {n} rows from {table}\n")
         return 0
@@ -180,7 +203,7 @@ def count_lines(path: Path) -> int:
         return sum(1 for line in fh if line.strip())
 
 
-def orchestrate(host: str, out_path: Path) -> int:
+def orchestrate(host: str, out_path: Path, include_vault: bool = False) -> int:
     print(f"export_brain: source brain = {host}")
 
     # Preflight — the brain repo + compose stack must be present.
@@ -207,7 +230,8 @@ def orchestrate(host: str, out_path: Path) -> int:
             dest = stage / "db" / f"{table}.jsonl"
             ssh_run(host,
                     f"cd {BRAIN_DIR} && {COMPOSE} exec -T api "
-                    f"python {SELF_IN_CONTAINER} --dump-pg {table}",
+                    f"python {SELF_IN_CONTAINER} --dump-pg {table}"
+                    + (" --include-vault" if include_vault else ""),
                     outfile=dest)
             counts[table] = count_lines(dest)
             print(f"    {counts[table]} rows")
@@ -276,10 +300,12 @@ def main() -> int:
     # worker-mode flags — used only when re-invoked inside a container.
     ap.add_argument("--dump-pg", metavar="TABLE", help=argparse.SUPPRESS)
     ap.add_argument("--probe", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--include-vault", action="store_true",
+                    help="also export documents ingested from the private vault (left out by default)")
     args = ap.parse_args()
 
     if args.dump_pg:
-        return worker_dump_pg(args.dump_pg)
+        return worker_dump_pg(args.dump_pg, include_vault=args.include_vault)
     if args.probe:
         return worker_probe()
 
@@ -288,7 +314,7 @@ def main() -> int:
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(args.out) if args.out else Path.cwd() / f"brain-export-{args.host}-{stamp}.tar.gz"
     try:
-        return orchestrate(args.host, out)
+        return orchestrate(args.host, out, include_vault=args.include_vault)
     except Exception as e:  # noqa: BLE001 — surface a clean one-line failure
         print(f"export_brain: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
         return 1
