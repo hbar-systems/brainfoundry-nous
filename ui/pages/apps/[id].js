@@ -1,5 +1,7 @@
 import { useRouter } from 'next/router'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { makeBridge, acceptMessage, seedName } from '../../lib/appBridge'
+import { APP_SANDBOX } from '../../lib/appLane'
 
 // Iframe host shell for installed brain apps.
 //
@@ -13,52 +15,14 @@ import { useEffect, useRef, useState } from 'react'
 // pre-built dist/; brain api serves static files; this page wraps with the
 // postMessage bridge.
 //
-// Bridge contract (v0):
+// The bridge (contract, intents, permission gates) lives in ui/lib/appBridge.js.
 //
-//   Iframe -> host:
-//     postMessage({ type: <intent>, payload: <object?>, request_id: <string> }, '*')
-//
-//   Host -> iframe:
-//     postMessage({ type: 'reply', request_id: <string>,
-//                   ok: <bool>, result?: <object>, error?: { code, message } },
-//                 event.origin)
-//
-// Implemented intents (v0):
-//   ping              -> result = 'pong'  (sanity)
-//   meta.app_info     -> { id, name, version }
-//   meta.brain_info   -> { name }         (reads NEXT_PUBLIC_BRAIN_NAME)
-//   memory.write      -> { layer, content, source?, metadata?, privacy? }
-//                        gated by manifest permissions + requires_layers;
-//                        proxies to brain POST /memory/append. `privacy` is
-//                        "open" (default) or "local-only" (2026-10-15): no
-//                        extra permission to declare, since a stricter level
-//                        only narrows who reads the write; the brain keeps the
-//                        stricter of this, any level already stored for the
-//                        same content, and a vault source. Reply carries it.
-//   llm.complete      -> { messages: [{role, content}, ...] }
-//                        gated by manifest permission 'llm.invoke'. Generates
-//                        a completion over the brain's own corpus using the
-//                        brain's selected (BYOK) model. RAG retrieval is
-//                        scoped to the read-mode layers in requires_layers.
-//                        The host mints + holds the loop permit; the iframe
-//                        never sees it. Proxies to brain POST /chat/rag.
-//                        result -> { text, model, sources: [...] }
-//
-// Reserved-but-unimplemented intents (will land when first app needs them):
-//   memory.read       -> { layer, query, limit? }
-//   federation.query  -> { peer, path, body? }
-//   federation.send   -> { peer, message }
-//
-// Permission gating: the manifest's `permissions` list and `requires_layers`
-// will be checked in handleIntent() against installed.json before any
-// permission-gated intent executes. v0 ships with only the two `meta.*`
-// intents which require no permission; the gate is wired but exercises
-// nothing yet.
-//
-// Trust posture: same-origin sandbox in v0 ("trust your installed apps"),
-// per registry/schema/brain/app.schema.json (in hbar.world) and ops/brain-
-// apps-ownership.md. v1 hardening will move apps to a cross-origin subdomain
-// where the sandbox is real.
+// Trust posture (2026-10-16): the app is NOT trusted with the console's authority. The iframe is
+// sandboxed WITHOUT allow-same-origin, and every app file is served with a sandbox CSP
+// (ui/lib/appLane.js), so the app runs in an opaque origin: it cannot read this page, its storage
+// or cookies, and the /api/bf proxy refuses its requests (it holds the owner key). The postMessage
+// bridge below is the only way an app acts. The app's localStorage is a shim kept by this page per
+// app id, seeded through the iframe's name attribute and saved through storage.* intents.
 //
 // Created: 2026-05-08
 
@@ -87,175 +51,42 @@ export default function AppHost() {
     return () => { cancelled = true }
   }, [id])
 
+  // The bridge and the app's saved storage, built once per app. The seed goes into the iframe's
+  // name attribute before the frame loads; the shim inside reads it and clears it.
+  const lane = useMemo(() => {
+    if (!appInfo || typeof window === 'undefined') return null
+    let ls = null
+    try { ls = window.localStorage } catch (_) { ls = null }
+    const bridge = makeBridge({
+      appInfo,
+      fetch: (...a) => window.fetch(...a),
+      ls,
+      brainName: process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain',
+    })
+    return { bridge, seed: seedName(bridge.store) }
+  }, [appInfo])
+
   // postMessage bridge. Mounts once we have app info; tears down on unmount or app change.
   useEffect(() => {
-    if (!appInfo) return
-
-    function handleIntent(msg) {
-      const { type } = msg
-      // No-permission intents
-      if (type === 'ping') {
-        return Promise.resolve({ ok: true, result: 'pong' })
-      }
-      if (type === 'meta.app_info') {
-        return Promise.resolve({
-          ok: true,
-          result: { id: appInfo.id, name: appInfo.name, version: appInfo.version },
-        })
-      }
-      if (type === 'meta.brain_info') {
-        return Promise.resolve({
-          ok: true,
-          result: { name: process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain' },
-        })
-      }
-      // memory.write — append a chunk into the brain's memory layer. Requires
-      // permissions: ['memory.write'] AND a matching layer in requires_layers
-      // with mode 'write' or 'append'. Permission gate runs server-side too;
-      // this is the first-line check.
-      if (type === 'memory.write') {
-        const perms = appInfo.permissions || []
-        if (!perms.includes('memory.write')) {
-          return Promise.resolve({ ok: false, error: { code: 'permission_denied', detail: 'app did not declare memory.write' } })
-        }
-        const layer = msg.payload && msg.payload.layer
-        if (!layer) {
-          return Promise.resolve({ ok: false, error: { code: 'missing_layer' } })
-        }
-        const layerOk = (appInfo.requires_layers || []).some(l =>
-          l.layer === layer && (l.mode === 'write' || l.mode === 'append')
-        )
-        if (!layerOk) {
-          return Promise.resolve({ ok: false, error: { code: 'layer_not_declared', detail: `app did not declare ${layer}:write/append` } })
-        }
-        return fetch('/api/bf/memory/append', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            layer,
-            content: msg.payload.content,
-            source: msg.payload.source || appInfo.id,
-            metadata: msg.payload.metadata || {},
-            ...(msg.payload.privacy ? { privacy: String(msg.payload.privacy) } : {}),
-          }),
-        })
-          .then(r => r.json().then(body => ({ status: r.status, ok: r.ok, body })))
-          .then(({ status, ok, body }) => {
-            if (!ok) {
-              return { ok: false, error: { code: 'memory_append_failed', status, body } }
-            }
-            return { ok: true, result: { id: body.id, doc_name: body.doc_name, privacy: body.privacy } }
-          })
-          .catch(e => ({ ok: false, error: { code: 'memory_append_network_error', detail: String(e) } }))
-      }
-
-      // llm.complete — ask the brain to generate a completion over its own
-      // ingested corpus, using the brain's selected (BYOK) model. Requires
-      // permission 'llm.invoke'. Permission gate runs server-side too; this
-      // is the first-line check.
-      //
-      // Permit handling lives entirely here: the host mints a loop permit
-      // (attributed to this app) and proxies it to /chat/rag. The iframe
-      // never sees the permit — it only ever holds the generated text.
-      //
-      // RAG retrieval is scoped to the read-mode layers the operator
-      // approved at install (requires_layers). An app cannot generate over a
-      // layer it did not declare.
-      if (type === 'llm.complete') {
-        const perms = appInfo.permissions || []
-        if (!perms.includes('llm.invoke')) {
-          return Promise.resolve({ ok: false, error: { code: 'permission_denied', detail: 'app did not declare llm.invoke' } })
-        }
-        const messages = msg.payload && msg.payload.messages
-        if (!Array.isArray(messages) || messages.length === 0) {
-          return Promise.resolve({ ok: false, error: { code: 'missing_messages', detail: 'payload.messages must be a non-empty array of {role, content}' } })
-        }
-        // Operator-approved retrieval scope: read-mode layers from the manifest.
-        const layers = (appInfo.requires_layers || [])
-          .filter(l => l.mode === 'read')
-          .map(l => l.layer)
-        // Resolve the brain's selected model and mint a loop permit in
-        // parallel, then proxy to /chat/rag.
-        return Promise.all([
-          fetch('/api/bf/settings/model')
-            .then(r => r.ok ? r.json() : Promise.reject(`settings/model ${r.status}`)),
-          fetch('/api/permit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              agent_id: `app:${appInfo.id}`,
-              reason: `brain-app ${appInfo.id} llm.complete`,
-            }),
-          }).then(r => r.json()),
-        ])
-          .then(([modelInfo, permit]) => {
-            if (!permit || !permit.permit_id || !permit.permit_token) {
-              return { ok: false, error: { code: 'permit_failed', detail: (permit && (permit.detail || permit.error)) || 'NodeOS did not issue a permit' } }
-            }
-            const body = {
-              model: modelInfo && modelInfo.active,
-              messages,
-              permit_id: permit.permit_id,
-              permit_token: permit.permit_token,
-            }
-            // Let an app raise its output ceiling (e.g. transcript->memory
-            // extraction needs more than the 2048 default). Server clamps to
-            // [256, 65536]; without this every app reply was silently truncated.
-            const mt = msg.payload && msg.payload.max_tokens
-            if (Number.isInteger(mt) && mt > 0) body.max_tokens = mt
-            if (layers.length) body.layers = layers
-            return fetch('/api/bf/chat/rag', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            })
-              .then(r => r.json().then(b => ({ status: r.status, ok: r.ok, body: b })))
-              .then(({ status, ok, body }) => {
-                if (!ok) {
-                  return { ok: false, error: { code: 'llm_complete_failed', status, body } }
-                }
-                const text = body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content
-                return {
-                  ok: true,
-                  result: {
-                    text: text || '',
-                    model: body.model,
-                    sources: (body.rag_metadata && body.rag_metadata.sources) || [],
-                  },
-                }
-              })
-          })
-          .catch(e => ({ ok: false, error: { code: 'llm_complete_network_error', detail: String(e) } }))
-      }
-
-      return Promise.resolve({ ok: false, error: { code: 'unknown_intent', type } })
-    }
+    if (!lane) return
 
     function onMessage(event) {
-      // v0: same-origin only. The iframe at /api/bf/apps/<id>/ shares origin
-      // with this page after the proxy hop.
-      if (event.origin !== window.location.origin) return
-      // Don't echo our own replies.
-      if (event.source === window) return
+      // The frame's origin is opaque ("null"), so the check is on the sender's window: only the
+      // app's own frame is answered. Replies go to that window with '*' (an opaque origin cannot
+      // be named as a target); nothing else receives them.
+      const frame = iframeRef.current && iframeRef.current.contentWindow
+      if (!acceptMessage(event, frame)) return
       const msg = event.data
-      if (!msg || typeof msg !== 'object' || !msg.request_id || !msg.type) return
-      // Don't reply to replies.
-      if (msg.type === 'reply') return
-
-      handleIntent(msg).then(result => {
-        if (!event.source) return
+      lane.bridge.handleIntent(msg).then(result => {
         try {
-          event.source.postMessage(
-            { type: 'reply', request_id: msg.request_id, ...result },
-            event.origin,
-          )
+          event.source.postMessage({ type: 'reply', request_id: msg.request_id, ...result }, '*')
         } catch (_) { /* iframe gone */ }
       })
     }
 
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [appInfo])
+  }, [lane])
 
   if (error) {
     return (
@@ -270,7 +101,7 @@ export default function AppHost() {
     )
   }
 
-  if (!appInfo) {
+  if (!appInfo || !lane) {
     return (
       <div style={{ padding: '32px', color: 'var(--muted)', fontFamily: 'var(--font-body)', fontSize: '13px' }}>
         Loading…
@@ -306,7 +137,10 @@ export default function AppHost() {
         // Pointing at /index.html keeps the iframe document.location
         // anchored in the app's directory so relative URLs resolve right.
         src={`/api/bf/apps/${appInfo.id}/index.html`}
-        sandbox="allow-scripts allow-same-origin allow-downloads"
+        // No allow-same-origin (2026-10-16): the app gets an opaque origin and only the bridge.
+        // The same list is sent as the files' CSP sandbox (ui/lib/appLane.js APP_SANDBOX).
+        sandbox={APP_SANDBOX}
+        name={lane.seed}
         style={{
           width: '100%',
           height: '100%',
