@@ -6,7 +6,7 @@ import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath,
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
-import { splitChoices, remarkMoney } from '../lib/choices'
+import { splitChoices, remarkMoney, remarkActions, sentenceAround } from '../lib/choices'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -274,25 +274,102 @@ function PathLink({ path, children, style, copy }) {
     </span>
   )
 }
+// Inline card replies (2026-10-15, hbar: "say I press go deeper, it responds right there IN THE CARD").
+// POST /cc/brief: two to four sentences from the reasoner outside any thread; nothing is posted unless
+// the person presses "post to thread".
+function msgContext(el) {
+  const md = el && el.closest ? el.closest('.cc-md') : null
+  return md ? md.textContent.slice(0, 4000) : ''
+}
+function useBrief() {
+  const [st, setSt] = useState({})   // kind -> 'busy' | { text } | { error }
+  const ask = (kind, phrase, context) => {
+    if (st[kind] && st[kind] !== 'busy' && !st[kind].error) return
+    setSt(s => ({ ...s, [kind]: 'busy' }))
+    fetch('/cc/brief', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, phrase, context }) })
+      .then(r => r.json()).then(d => setSt(s => ({ ...s, [kind]: d.ok ? { text: d.text } : { error: d.error || 'no answer' } })))
+      .catch(() => setSt(s => ({ ...s, [kind]: { error: 'the bridge did not answer' } })))
+  }
+  return { st, ask }
+}
+function BriefBody({ st, post }) {
+  const kinds = Object.keys(st)
+  if (!kinds.length) return null
+  return (
+    <span style={{ display: 'block', marginTop: '8px' }}>
+      {kinds.map(k => {
+        const v = st[k]
+        const head = k === 'deeper' ? 'deeper' : 'needed from you'
+        return (
+          <span key={k} style={{ display: 'block', borderLeft: `2px solid ${C.line}`, paddingLeft: '8px', marginBottom: '6px' }}>
+            <span style={{ display: 'block', ...mono, fontSize: '9.5px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.faint }}>{head}</span>
+            {v === 'busy' ? <span style={{ fontSize: '12.5px', color: C.faint }}>thinking...</span>
+              : v.error ? <span style={{ fontSize: '12.5px', color: C.red || C.dim }}>{v.error}</span>
+              : <span style={{ display: 'block', fontSize: '12.5px', color: C.ink }}>{v.text}
+                  <a data-nopick="1" onClick={(e) => { e.stopPropagation(); post(k, v.text) }} title="Ask this in the thread so it stays in the conversation"
+                    style={{ ...mono, display: 'block', marginTop: '3px', fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>post to thread</a></span>}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
 // A highlighted phrase (bold in an answer) is a door too (2026-10-13): go deeper here, or send an agent.
 function Highlight({ children, node }) {
   const card = useCard()
+  const brief = useBrief()
+  const ctxRef = useRef('')
   const txt = hastText(node).trim()
   if (!txt || txt.length > 160) return <strong>{children}</strong>
+  const post = (k) => { card.setOpen(false); ccEmit('cc-send-text', k === 'deeper' ? `Go deeper on "${txt}": the evidence, the state, and the next step.` : `What exactly do you need from me on "${txt}"? Give me the choices.`) }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <strong onClick={(e) => { e.stopPropagation(); card.toggle() }} title="click: go deeper or send an agent"
+      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); card.toggle() }} title="click: go deeper or send an agent"
         style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
       {txt.length <= 80 && <LearnDoor term={txt} />}
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
           <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>{txt}</span>
           <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            <CardDoor accent onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Go deeper on "${txt}": the evidence, the state, and the next step.`) }} title="Ask in this thread">go deeper</CardDoor>
+            <CardDoor accent onClick={() => brief.ask('deeper', txt, ctxRef.current)} title="A short answer here, in the card">go deeper</CardDoor>
             <CopyDoor text={txt} />
-            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `What exactly do you need from me on "${txt}"? Give me the choices.`) }} title="Ask what it needs from you">what do you need from me</CardDoor>
+            <CardDoor onClick={() => brief.ask('need', txt, ctxRef.current)} title="What it needs from you, here in the card">what do you need from me</CardDoor>
             <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: txt.slice(0, 60), send: `Take this on: "${txt}" (from my central thread). Find where it lives in the world (ops/, the idea register, NOW.md), say its state, and do the next step if it is small and yours to do. Bring the repository up to date with safe-pull first, commit by exact path, never push, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start a thread of its own on this">send an agent ↗</CardDoor>
           </span>
+          <BriefBody st={brief.st} post={post} />
+        </InfoCard>
+      )}
+    </span>
+  )
+}
+// An actionable phrase ("not pushed", "owed by hbar", ...; remarkActions, 2026-10-15): a quiet shade; the
+// card offers "do it (send agent)" with the sentence it sits in, or a short answer in the card.
+function ActPhrase({ children }) {
+  const card = useCard()
+  const brief = useBrief()
+  const ref = useRef({ ctx: '', sentence: '' })
+  const phrase = React.Children.toArray(children).join('')
+  const post = (k) => { card.setOpen(false); ccEmit('cc-send-text', `"${ref.current.sentence}": ${k === 'deeper' ? 'go deeper, the evidence, the state, and the next step.' : 'what exactly do you need from me? Give me the choices.'}`) }
+  return (
+    <span style={{ position: 'relative', display: 'inline' }}>
+      <span data-nopick="1" onClick={(e) => {
+          e.stopPropagation()
+          const blk = e.currentTarget.closest('p, li, td, blockquote, h1, h2, h3, h4')
+          ref.current = { ctx: msgContext(e.currentTarget), sentence: sentenceAround(blk ? blk.textContent : phrase, phrase) }
+          card.toggle()
+        }}
+        title="click: do it, or ask what it needs"
+        style={{ cursor: 'pointer', backgroundColor: card.open ? 'rgba(212,175,55,0.22)' : 'rgba(212,175,55,0.10)', borderBottom: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '3px', padding: '0 2px' }}>{children}</span>
+      {card.open && (
+        <InfoCard boxRef={card.boxRef}>
+          <span style={{ display: 'block', color: C.ink, fontSize: '13px', marginBottom: '8px' }}>{ref.current.sentence}</span>
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <CardDoor accent onClick={() => { card.setOpen(false); ccEmit('cc-agent', { label: phrase + ': ' + ref.current.sentence.slice(0, 40), send: `Do this: "${ref.current.sentence}" (from my central thread). Find the repository or file it names, check its state first, and do it if it is yours to do. Pushes, deploys, sudo and paid calls still go through my card or my word. Bring the repository up to date with safe-pull first, commit by exact path, never touch another thread's work. If you need my decision, end with a <choices> block.` }) }} title="Start an agent on this sentence">do it (send agent) ↗</CardDoor>
+            <CardDoor onClick={() => brief.ask('deeper', ref.current.sentence, ref.current.ctx)} title="A short answer here, in the card">go deeper</CardDoor>
+            <CardDoor onClick={() => brief.ask('need', ref.current.sentence, ref.current.ctx)} title="What it needs from you, here in the card">what do you need from me</CardDoor>
+            <CopyDoor text={ref.current.sentence} />
+          </span>
+          <BriefBody st={brief.st} post={post} />
         </InfoCard>
       )}
     </span>
@@ -494,6 +571,7 @@ function mdComponents(base) {
     // an amount with a currency (remarkMoney, 2026-10-13): a quiet chip, so the costs in an answer stand out
     span: ({ node, ...props }) => (props['data-ccmoney']
       ? <span {...props} style={{ ...mono, fontSize: '0.9em', color: C.gold, border: `1px solid ${C.gold}`, borderRadius: '5px', padding: '0 4px', whiteSpace: 'nowrap' }} />
+      : props['data-ccact'] ? <ActPhrase>{props.children}</ActPhrase>
       : <span {...props} />),
     table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '0.93em', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
@@ -510,7 +588,7 @@ const Md = React.memo(function Md({ text }) {
   const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney, remarkActions]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
 })
