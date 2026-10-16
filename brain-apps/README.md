@@ -11,7 +11,7 @@ A brain is a sovereign cognitive substrate. Apps are how the substrate gains
 new surfaces. An installed app:
 
 - adds a tab to the brain UI nav,
-- runs as a sandboxed iframe served at `/apps/<id>/`,
+- runs as a sandboxed iframe served at `/apps/<id>/`, in an opaque origin (since 2026-10-16, see "The sandbox" below),
 - talks to the brain through a postMessage bridge,
 - declares its memory-layer access and permissions in `brain-app.yaml`,
 - is approved by the operator at install time.
@@ -21,7 +21,7 @@ Worked example: `registry/schema/brain/app.example.yaml`.
 
 ## Bridge intents
 
-_(intent catalog — last updated 2026-05-18, adds `llm.complete`)_
+_(intent catalog — last updated 2026-10-16, adds `storage.*`; 2026-05-18 added `llm.complete`)_
 
 An installed app talks to the brain by `postMessage`-ing an intent to its host
 shell (`ui/pages/apps/[id].js`) and awaiting a `reply`. The wire shape:
@@ -41,8 +41,9 @@ enforcement at the brain API is the durable gate.
 | `ping` | — | — | `'pong'` |
 | `meta.app_info` | — | — | `{ id, name, version }` |
 | `meta.brain_info` | — | — | `{ name }` |
-| `memory.write` | `memory.write` + `requires_layers` | `{ layer, content, source?, metadata? }` | `{ id, doc_name }` |
+| `memory.write` | `memory.write` + `requires_layers` | `{ layer, content, source?, metadata?, privacy? }` | `{ id, doc_name, privacy }` |
 | `llm.complete` | `llm.invoke` + `requires_layers` | `{ messages: [{role, content}, ...] }` | `{ text, model, sources: [...] }` |
+| `storage.set` / `storage.remove` / `storage.clear` | — (the app's own store only) | `{ key, value }` / `{ key }` / `{}` | `{ saved: true }`; sent for you by the `localStorage` shim |
 
 ### `llm.complete`
 
@@ -64,6 +65,47 @@ the app does not pick a model and never holds a key.
   never sees them.
 - **v0 limitation:** non-streaming — the full completion returns in one reply.
   SSE streaming is a follow-up.
+
+## The sandbox (2026-10-16): what an app may and may not do
+
+An app runs in an iframe sandboxed with `allow-scripts allow-downloads` and no
+`allow-same-origin`, and its files are served with
+`Content-Security-Policy: sandbox allow-scripts allow-downloads`. The app's
+document has an opaque origin (`self.origin === "null"`) wherever it is
+opened. The console's proxy holds the owner's API key and refuses every request
+from an app frame (403 `app_frame_refused`), except the app's own files and the
+app's own backend, which go without the key. The finding and the fix are in
+`THREAT_MODEL.md` section 4b.
+
+What this means when you write an app:
+
+- **Talk to the brain only through the bridge.** `window.parent.postMessage(msg, '*')`
+  (or with `location.origin` as the target, which is the console's origin) and
+  wait for the `reply` with your `request_id`. Replies come from the console's
+  origin. `fetch('/api/bf/...')`, `/cc/...`, `/api/permit` and
+  `window.parent.<anything but postMessage>` do not work.
+- **Your own files load as before**, by relative URL: scripts, module scripts
+  (Vite builds included), stylesheets, images, `fetch` of your own JSON, GLB or
+  wasm, and `Worker`s (classic and module) from your own files.
+- **`localStorage` works** through a shim the console puts first in your
+  HTML: the console keeps it for your app id (at most 2,000,000 characters),
+  and it is there again on the next visit. It is synchronous and per app; no
+  other app and not the console sees it. `sessionStorage` lasts for the page.
+- **Not available:** IndexedDB, cookies, service workers, forms
+  (`allow-forms` was never on: use `onClick`, not `type="submit"`), popups and
+  top-level navigation.
+- **Fonts:** a `@font-face` file in your bundle is fetched without the
+  console's login and fails behind basic auth. Inline it (`data:` URL; for Vite,
+  raise `build.assetsInlineLimit`) or load it from a public CDN such as Google
+  Fonts. The same holds for images that script creates with
+  `crossOrigin = 'anonymous'` from your own files.
+- **Backends** (`entries.api`) still run inside the brain's API process with
+  its authority. The sandbox does not cover them; operators should read them.
+
+Apps written before 2026-10-16 that used only the bridge need no change and no
+reinstall. On first load the console copies the keys the default-shelf apps kept
+in the console's own storage (`daybook:*`, `hbar-ink-*`, `qr-progress`) into
+that app's store.
 
 ## Files in this directory
 
