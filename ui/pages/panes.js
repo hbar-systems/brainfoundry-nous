@@ -79,7 +79,17 @@ export default function Panes() {
   const [rowW, setRowW] = useState([])
   const [dragging, setDragging] = useState(false)  // while a divider moves, the frames must not eat the pointer
 
-  useEffect(() => { setPanes(load()) }, [])
+  // Opened from a conversation's "side by side" (2026-10-16, hbar: "you should have the same thread in
+  // which you pressed it, and a new thread too"): that thread on the left, a new one beside it. The
+  // query is dropped afterwards so a reload brings back the saved layout instead.
+  useEffect(() => {
+    let from = null
+    try { from = new URLSearchParams(window.location.search).get('from') } catch {}
+    if (from) {
+      setPanes([fresh(from), fresh('new')])
+      try { window.history.replaceState(null, '', '/panes') } catch {}
+    } else setPanes(load())
+  }, [])
   useEffect(() => { try { const v = JSON.parse(localStorage.getItem(LKEY) || 'null'); if (v) { setColW(v.c || []); setRowW(v.r || []) } } catch {} }, [])
   const saveLayout = (c, r) => { setColW(c); setRowW(r); try { localStorage.setItem(LKEY, JSON.stringify({ c, r })) } catch {} }
   const resetLayout = () => { setColW([]); setRowW([]); setWide(null); try { localStorage.removeItem(LKEY) } catch {} }

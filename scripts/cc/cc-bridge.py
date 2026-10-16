@@ -1507,7 +1507,7 @@ def _threads_order(items: list) -> list:
     return sorted(by_last, key=lambda x: not x.get("pinned"))
 
 
-_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl")
+_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl", "dusk", "ocean", "rose", "sage", "sand")
 _STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 

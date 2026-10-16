@@ -15,6 +15,11 @@ const THEME_OPTIONS = [
   { value: 'fox', label: 'fox', swatch: '#d77a3a' },
   { value: 'octopus', label: 'octopus', swatch: '#3a9ea0' },
   { value: 'owl', label: 'owl', swatch: '#5b4d80' },
+  { value: 'dusk', label: 'dusk', swatch: '#f0b37e' },
+  { value: 'ocean', label: 'ocean', swatch: '#7fd1c7' },
+  { value: 'rose', label: 'rose', swatch: '#f2a7b8' },
+  { value: 'sage', label: 'sage', swatch: '#3f6a3b' },
+  { value: 'sand', label: 'sand', swatch: '#a8452b' },
 ]
 
 // Each option's optionStyle previews the font in the dropdown row itself,

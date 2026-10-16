@@ -5,6 +5,7 @@ import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import { applyStyle, clearStyle } from '../lib/layout'
 import { watchLift } from '../lib/lift'
+import { watchWall } from '../lib/wallpaper'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -85,6 +86,8 @@ export default function App({ Component, pageProps }) {
 
   // Light (2026-10-16): lifts a dark skin toward a mid tone; re-applied when the skin changes.
   useEffect(() => watchLift(), [])
+  // Wallpaper (2026-10-16): the owner's own picture behind the page, under a veil of the skin's colour.
+  useEffect(() => watchWall(), [])
 
   // The owner's layout file (2026-10-09): colours, text size and weight from GET /cc/layout, set one
   // custom property at a time (ui/lib/layout.js re-checks every name and value). The last answer is
@@ -274,6 +277,96 @@ export default function App({ Component, pageProps }) {
             --assistant-text: #b0c8c8;
             --code-bg: #051818;
             --code-fg: #b0c8c8;
+          }
+
+          /* dusk — lavender evening, peach light (2026-10-16) */
+          [data-theme="dusk"] {
+            --bg: #3a3346;
+            --surface: #443c52;
+            --surface2: #4e465e;
+            --text: #f3eef8;
+            --muted: #a99ebb;
+            --text-dim: #cbc2d9;
+            --accent: #f0b37e;
+            --border: #5d546e;
+            --user-bg: #f0b37e;
+            --user-text: #2a2333;
+            --assistant-bg: #443c52;
+            --assistant-text: #e9e2f2;
+            --code-bg: #2b2535;
+            --code-fg: #e9e2f2;
+          }
+
+          /* ocean — blue slate, sea-glass accent (2026-10-16) */
+          [data-theme="ocean"] {
+            --bg: #2b3a4a;
+            --surface: #34465a;
+            --surface2: #3e5268;
+            --text: #eef3f8;
+            --muted: #95a9bf;
+            --text-dim: #bfcddc;
+            --accent: #7fd1c7;
+            --border: #4c6178;
+            --user-bg: #7fd1c7;
+            --user-text: #13222c;
+            --assistant-bg: #34465a;
+            --assistant-text: #e3ebf3;
+            --code-bg: #1f2b37;
+            --code-fg: #e3ebf3;
+          }
+
+          /* rose — dusty mauve, soft pink light (2026-10-16) */
+          [data-theme="rose"] {
+            --bg: #4a3a40;
+            --surface: #55434a;
+            --surface2: #604d55;
+            --text: #f8eef1;
+            --muted: #b89da6;
+            --text-dim: #d8c3ca;
+            --accent: #f2a7b8;
+            --border: #705b63;
+            --user-bg: #f2a7b8;
+            --user-text: #2e2226;
+            --assistant-bg: #55434a;
+            --assistant-text: #efe2e6;
+            --code-bg: #33282c;
+            --code-fg: #efe2e6;
+          }
+
+          /* sage — pale green paper, leaf accent (2026-10-16) */
+          [data-theme="sage"] {
+            --bg: #dfe6dc;
+            --surface: #d2dccf;
+            --surface2: #c5d1c1;
+            --text: #1f2a1e;
+            --muted: #5e6e5b;
+            --text-dim: #3f4d3d;
+            --accent: #3f6a3b;
+            --border: #b3c2ae;
+            --user-bg: #2f4a2c;
+            --user-text: #eef3ec;
+            --assistant-bg: #d2dccf;
+            --assistant-text: #1f2a1e;
+            --code-bg: #1f2a1e;
+            --code-fg: #dfe6dc;
+          }
+
+          /* sand — warm dune, terracotta accent (2026-10-16) */
+          [data-theme="sand"] {
+            --bg: #efe3cf;
+            --surface: #e6d6bd;
+            --surface2: #dccaad;
+            --text: #2b2116;
+            --muted: #7a6a55;
+            --text-dim: #54473a;
+            --accent: #a8452b;
+            --border: #cfb995;
+            --user-bg: #a8452b;
+            --user-text: #fdf6ec;
+            --assistant-bg: #e6d6bd;
+            --assistant-text: #2b2116;
+            --code-bg: #2b2116;
+            --code-fg: #efe3cf;
           }
 
           /* owl — moonlit pale on slate, the second light theme alongside paper */

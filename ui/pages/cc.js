@@ -7,6 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { LIFT_LEVELS, readLift, setLift } from '../lib/lift'
+import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { splitChoices, remarkMoney, remarkActions, sentenceAround } from '../lib/choices'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
@@ -382,7 +383,7 @@ function ActPhrase({ children }) {
 // the look of different conversations live"). One slim strip above the conversation, folded to one line.
 // The look belongs to the thread and is kept on the box (/cc/threads/update, field `style`), so another
 // device opens the same thread in the same colours. Nothing here needs a push or a rebuild.
-const SKINS = ['gold', 'paper', 'sapphire', 'forest', 'crimson', 'mono', 'fox', 'octopus', 'owl']
+const SKINS = ['gold', 'paper', 'owl', 'dusk', 'ocean', 'rose', 'sage', 'sand', 'octopus', 'sapphire', 'forest', 'crimson', 'mono', 'fox']
 const TINTS = [0, 6, 12, 20]
 function hslHex(h, s, l) {
   s /= 100; l /= 100
@@ -448,6 +449,10 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
   const [lift, setLiftS] = useState(0)
+  const [wall, setWall] = useState({ image: '', veil: 60 })
+  const [wallMsg, setWallMsg] = useState('')
+  const pickRef = useRef(null)
+  useEffect(() => { setWall(readWall()); const on = () => setWall(readWall()); window.addEventListener('bf-wall', on); return () => window.removeEventListener('bf-wall', on) }, [])
   useEffect(() => { setLiftS(readLift()); const on = (e) => setLiftS(e.detail || 0); window.addEventListener('bf-lift', on); return () => window.removeEventListener('bf-lift', on) }, [])
   const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
@@ -480,6 +485,17 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
           <span style={lbl}>light</span>
           {LIFT_LEVELS.map(n => <Chip key={n} on={lift === n} onClick={() => { setLift(n); setLiftS(n) }} title="lifts a dark skin toward a mid tone (every conversation, this browser); light skins stay as they are">{n}</Chip>)}
+        </span>
+        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={lbl}>wallpaper</span>
+          <input ref={pickRef} type="file" accept="image/*" style={{ display: 'none' }}
+                 onChange={async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; setWallMsg(f ? 'reading...' : ''); setWallMsg(await setWallFromFile(f)) }} />
+          <Chip on={!!wall.image} onClick={() => pickRef.current && pickRef.current.click()} title="your own picture behind the console, kept in this browser only">{wall.image ? 'change image' : 'image...'}</Chip>
+          {wall.image ? <>
+            {VEILS.map(v => <Chip key={v} on={wall.veil === v} onClick={() => setVeil(v)} title="how much of the skin's colour lies over the picture">veil {v}</Chip>)}
+            <Chip onClick={() => { clearWall(); setWallMsg('') }} title="back to the plain skin">remove</Chip>
+          </> : null}
+          {wallMsg ? <span style={{ ...mono, fontSize: '10px', color: C.faint }}>{wallMsg}</span> : null}
         </span>
         {posture ? (
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
@@ -2510,7 +2526,7 @@ function CC() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
-            {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes' }} title="Several conversations side by side, like terminal windows">side by side</Btn>}
+            {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
             {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
             {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
