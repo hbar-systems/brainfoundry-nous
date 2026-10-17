@@ -1,6 +1,6 @@
 # Import: a year of ChatGPT or Claude into the brain
 
-Created: 2026-10-13. Plan and gap list: hbar.world `ops/2026-10-13_onboarding-import.md` (gaps A to G).
+Created: 2026-10-13.
 Tool: `scripts/import_chats.py`. Tests: `tests/test_import_chats.py` (synthetic fixtures only).
 
 One rule: the person brings the material, the brain never goes looking for it.
@@ -41,7 +41,7 @@ The person strikes what stays outside (health, other people, a job) in an exclud
 The id is the hash over every selected row's conversation id and document hash, so it names exactly this selection of exactly these texts.
 Unselected documents stay as files in the prep folder (move them into `library/` if the person wants them kept); they are not indexed.
 
-A year of chats swamps a fresh brain (hbar's own 943 ChatGPT conversations were about 8.5M tokens).
+A year of chats swamps a fresh brain (a year of daily use can be about 8.5M tokens).
 Start with `--newest 50` or the person's own include list; more can be selected later into a second manifest.
 
 ## 4. Propose: through the gate
