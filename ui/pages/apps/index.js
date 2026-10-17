@@ -91,6 +91,12 @@ export default function AppsIndex() {
       .catch(e => setErr(String(e.message || e)))
   useEffect(() => { load() }, [])
 
+  // People (Standard tier) joins the menu once a friend's brain is known; until then this page says so.
+  const [peerCount, setPeerCount] = useState(null)
+  useEffect(() => {
+    api('/v1/federation/peers').then(d => setPeerCount((d && d.peers || []).length)).catch(() => setPeerCount(null))
+  }, [])
+
   const doPreview = async () => {
     if (!repoUrl.trim()) return
     setBusy('preview'); setErr(null); setPreview(null)
@@ -183,6 +189,14 @@ export default function AppsIndex() {
         from a GitHub repo below — it declares which memory layers and permissions
         it needs, and you approve the scope before it runs.
       </p>
+
+      {peerCount !== null && (
+        <div style={{ padding: '10px 14px', marginBottom: 20, border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, color: 'var(--muted)' }}>
+          {peerCount > 0
+            ? <><Link href="/people" style={{ color: 'var(--text)' }}>People</Link>: {peerCount} {peerCount === 1 ? 'friend' : 'friends'} on the network</>
+            : <><span style={{ color: 'var(--text)' }}>People</span>: appears when a friend's brain joins</>}
+        </div>
+      )}
 
       {/* Install bar */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>

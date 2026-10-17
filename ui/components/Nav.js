@@ -44,6 +44,17 @@ function splitByMode(tabs, mode) {
   }
 }
 
+// People (2026-10-17, Standard tier): in the menu in every mode, but only once the brain knows at
+// least one peer; until then the Apps page says where it will appear. Placed after Chat.
+const PEOPLE_TAB = { id: '_people', href: '/people', label: 'People' }
+function withPeople(tabs, hasPeers) {
+  if (!hasPeers || tabs.some(t => t.id === PEOPLE_TAB.id)) return tabs
+  const at = tabs.findIndex(t => t.id === '_chat')
+  const out = [...tabs]
+  out.splice(at >= 0 ? at + 1 : Math.min(1, out.length), 0, PEOPLE_TAB)
+  return out
+}
+
 function isActive(router, tab) {
   if (tab.href === '/apps') {
     // The Apps hub is "active" both at /apps (the index) and inside any
@@ -68,10 +79,20 @@ export default function Nav() {
   const [drawer, setDrawer] = useState(false)
   const [mode, setMode] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [hasPeers, setHasPeers] = useState(false)
   // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
   const ccHome = tabs.some(t => t.id === '_cc' && t.href === '/')
-  const { shown, more } = splitByMode(tabs, mode)
+  const split = splitByMode(tabs, mode)
+  const shown = withPeople(split.shown, hasPeers)
+  const more = split.more
   useEffect(() => { setDrawer(false); setMoreOpen(false) }, [router.pathname])
+
+  useEffect(() => {
+    fetch('/api/bf/v1/federation/peers', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setHasPeers(!!(d && Array.isArray(d.peers) && d.peers.length > 0)))
+      .catch(() => setHasPeers(false))
+  }, [])
 
   useEffect(() => {
     const load = () => fetch('/cc/layout/mode', { cache: 'no-store' })

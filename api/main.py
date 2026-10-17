@@ -3969,6 +3969,8 @@ def federation_list_peers(api_key: str = Depends(get_api_key)):
             "endpoint": p.get("endpoint"),
             "introduced_at": p.get("introduced_at"),
             "pinned": bool(p.get("public_key")),
+            # The owner's name as the peer disclosed it at introduce ("" when it did not); People page.
+            "name": p.get("name") or "",
         })
     return {"peers": peers}
 

@@ -274,10 +274,14 @@ async def handle_hbar_command(
         # directory (no separate out-of-band known_peers edit needed for the
         # public-read federation path).
         public_key = identity.get("public_key") or ""
+        # The owner's name, only if the peer's /identity discloses one (People page, 2026-10-17).
+        name = str(identity.get("owner_name") or identity.get("display_name") or "").strip()[:80]
+        if name.startswith("${") or name == brain_id:  # unset placeholder, or just the handle again
+            name = ""
         existing_ids = {p["brain_id"] for p in peers}
         if brain_id not in existing_ids:
             peers.append({"brain_id": brain_id, "endpoint": endpoint,
-                          "public_key": public_key,
+                          "public_key": public_key, "name": name,
                           "introduced_at": datetime.now(timezone.utc).isoformat()})
             _save_peers(peers)
         return {"introduced": True, "peer": brain_id, "identity": identity}
