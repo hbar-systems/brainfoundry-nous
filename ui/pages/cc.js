@@ -8,7 +8,8 @@ import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { LIFT_LEVELS, readLift, setLift } from '../lib/lift'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
-import { splitChoices, remarkMoney, remarkActions, sentenceAround } from '../lib/choices'
+import { splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
+import { Face } from '../lib/agentface'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -627,12 +628,102 @@ function mdComponents(base) {
     span: ({ node, ...props }) => (props['data-ccmoney']
       ? <span {...props} style={{ ...mono, fontSize: '0.9em', color: C.gold, border: `1px solid ${C.gold}`, borderRadius: '5px', padding: '0 4px', whiteSpace: 'nowrap' }} />
       : props['data-ccact'] ? <ActPhrase>{props.children}</ActPhrase>
+      : props['data-ccagent'] ? <AgentTag tag={props['data-ccagent']}>{props.children}</AgentTag>
       : <span {...props} />),
     table: ({ node, ...props }) => <table {...props} style={{ borderCollapse: 'collapse', fontSize: '0.93em', margin: '4px 0 var(--cc-gap, 6px) 0' }} />,
     th: ({ node, ...props }) => <th {...props} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: `1px solid ${C.line}`, color: C.dim, fontWeight: 500 }} />,
     td: ({ node, ...props }) => <td {...props} style={{ padding: '4px 8px', borderBottom: `1px solid ${C.line}` }} />,
   }
 }
+// Agents named in an answer (2026-10-17, hbar: "whenever you name an agent, make it clickable and a card
+// appears: what it is, what it is responsible for, its record, who it is under, its rights"). The roster
+// is fetched once and refreshed each minute; a tag not on the roster stays plain text.
+const AGENT_ROSTER = { at: 0, map: null, wait: null }
+function agentRoster() {
+  if (AGENT_ROSTER.map && Date.now() - AGENT_ROSTER.at < 60000) return Promise.resolve(AGENT_ROSTER.map)
+  if (AGENT_ROSTER.wait) return AGENT_ROSTER.wait
+  AGENT_ROSTER.wait = fetch('/cc/agents', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+    const m = {}
+    for (const a of (d && d.agents) || []) if (a.tag) m[String(a.tag).split(' ')[0]] = a
+    AGENT_ROSTER.map = m; AGENT_ROSTER.at = Date.now(); AGENT_ROSTER.wait = null
+    return m
+  }).catch(() => { AGENT_ROSTER.wait = null; return AGENT_ROSTER.map || {} })
+  return AGENT_ROSTER.wait
+}
+function AgentTag({ tag, children }) {
+  const [a, setA] = useState(() => (AGENT_ROSTER.map ? AGENT_ROSTER.map[tag] || null : undefined))
+  useEffect(() => { let live = true; agentRoster().then(m => { if (live) setA(m[tag] || null) }); return () => { live = false } }, [tag])
+  if (!a) return <span>{children}</span>
+  return (
+    <a onClick={(e) => { e.preventDefault(); ccEmit('cc-open-agent', a) }} title={`${a.name}: open its card`}
+      style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: '3px' }}>{children}</a>
+  )
+}
+const AGENT_LEVELS = {
+  0: 'propose: writes only its state and reports; every change is a proposal',
+  1: 'branch: commits on its own branch in its own worktree; never pushes',
+  2: 'ship: may push its own branch onto main of its own repo when tests pass; never force or delete',
+}
+function agentRank(a) {
+  const c = (a.code || '').toUpperCase()
+  if (c === 'COMMAND' || c === 'CMD') return ['General', 'the Czar-General']
+  if (c === 'INSPECTOR' || c === 'IG') return ['Inspector General', 'the Czar-General']
+  return ['Captain', 'COMMAND-1, the General']
+}
+function AgentPopup() {
+  const [a, setA] = useState(null)
+  useEffect(() => {
+    const on = (e) => { if (e.detail) setA(e.detail) }
+    const esc = (e) => { if (e.key === 'Escape') setA(null) }
+    window.addEventListener('cc-open-agent', on); document.addEventListener('keydown', esc)
+    return () => { window.removeEventListener('cc-open-agent', on); document.removeEventListener('keydown', esc) }
+  }, [])
+  if (!a) return null
+  const close = () => setA(null)
+  const [rank, under] = agentRank(a)
+  const lv = a.level ?? 1
+  const every = !a.every_minutes ? 'on call' : a.every_minutes >= 10080 ? 'weekly' : a.every_minutes >= 1440 ? 'daily' : a.every_minutes >= 60 ? `every ${Math.round(a.every_minutes / 60)} h` : `every ${a.every_minutes} min`
+  const row = (k, v) => (
+    <div style={{ display: 'flex', gap: '10px', padding: '3px 0' }}>
+      <span style={{ ...mono, fontSize: '11px', color: C.dim, width: '108px', flex: 'none', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{k}</span>
+      <span style={{ fontSize: '13px', color: C.ink, minWidth: 0, overflowWrap: 'anywhere' }}>{v}</span>
+    </div>
+  )
+  return (
+    <div data-nopick="1" onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 200, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '8vh 16px', boxSizing: 'border-box' }}>
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label={a.tag}
+        style={{ width: 'min(620px, 100%)', maxHeight: '84vh', overflow: 'auto', backgroundColor: C.card, border: `1px solid ${C.gold}`, borderRadius: '12px', boxShadow: '0 12px 40px rgba(0,0,0,0.6)', padding: '14px 16px' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <Face a={a} size={58} />
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', ...mono, color: C.gold, fontSize: '14px' }}>{a.tag}</span>
+            <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '15px' }}>{a.name}</span>
+            <span style={{ display: 'block', ...mono, color: C.dim, fontSize: '11px' }}>{rank} · {a.post || 'no unit'} · A-{String(a.serial || 0).padStart(3, '0')} · {a.enabled ? 'on' : 'paused'}</span>
+          </span>
+          <a onClick={close} title="Close (Escape)" aria-label="close" style={{ ...mono, fontSize: '16px', color: C.dim, cursor: 'pointer', padding: '2px 4px', alignSelf: 'flex-start' }}>×</a>
+        </div>
+        <p style={{ fontSize: '13.5px', lineHeight: 1.55, color: C.ink, margin: '12px 0 8px' }}>{a.mission}</p>
+        {row('reports to', under)}
+        {row('rights', `level ${lv}, ${AGENT_LEVELS[lv] || AGENT_LEVELS[1]}`)}
+        {row('may write in', (a.ground || []).length ? a.ground.join(', ') : 'its report folder only')}
+        {row('never', 'force-push, delete branches, touch secrets, pay, send or publish outside its level, raise other agents')}
+        {row('schedule', `${every}, up to ${a.budget_usd} USD a run${a.model ? `, model ${a.model}` : ''}`)}
+        {row('record', `${a.runs || 0} runs; last ${a.last_run ? a.last_run.replace('T', ' ').replace('Z', ' UTC') : 'never'}${a.last_job ? ` (job ${a.last_job})` : ''}${a.last_error ? `; last start failed: ${a.last_error}` : ''}`)}
+        {row('next', a.next_due ? a.next_due.replace('T', ' ').replace('Z', ' UTC') : (a.enabled ? 'on call' : 'paused'))}
+        {row('raised', a.created ? a.created.slice(0, 10) : '?')}
+        {a.sitrep && <div style={{ marginTop: '8px' }}>
+          <div style={{ ...mono, fontSize: '11px', color: C.dim, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '4px 0' }}>last report ({a.sitrep.name})</div>
+          <pre style={{ ...mono, fontSize: '12px', whiteSpace: 'pre-wrap', backgroundColor: C.codeBg, color: C.codeFg, borderRadius: '8px', padding: '8px 10px', margin: 0 }}>{a.sitrep.text}</pre>
+        </div>}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '12px' }}>
+          <CardDoor accent onClick={() => { close(); window.location.href = '/agents' }} title="The agents page: pause, run now, level, retire">open on the agents page</CardDoor>
+          <CardDoor onClick={() => { close(); ccEmit('cc-send-text', `Tell me about ${a.tag}: what it did in its last runs, its score trend, and anything it owes or proposes.`) }} title="Ask about it in this thread">ask about it</CardDoor>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const Md = React.memo(function Md({ text }) {
   // The reasoner answers in markdown. Render it, but keep it plain: no raw HTML,
   // links open in a new tab, code stays monospace.
@@ -643,7 +734,7 @@ const Md = React.memo(function Md({ text }) {
   const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney, remarkActions]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney, remarkActions, remarkAgents]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
 })
@@ -2496,6 +2587,7 @@ function CC() {
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
       <MdPopup />
+      <AgentPopup />
       <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
       <div style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>

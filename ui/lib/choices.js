@@ -134,4 +134,45 @@ function remarkActions() {
   return (tree) => { walk(tree) }
 }
 
-module.exports = { splitChoices, splitMoney, remarkMoney, splitAct, sentenceAround, remarkActions, ACT_PHRASES, MAX_CHOICES }
+// Agent tags (2026-10-17, hbar: "whenever you name an agent in a conversation, make it clickable and a card
+// appears"). A tag like LAW-1 or LOGISTICS-1, optionally followed by its "Callsign", becomes
+// <span data-ccagent="LAW-1">; the renderer shows it as a link only when the tag is on the roster, so
+// look-alikes (UTF-8, SHA-256) stay plain text.
+const AGENT_RE_SRC = '\\b[A-Z]{2,12}-\\d{1,3}\\b(?:\\s\u201c[^\u201d]{1,30}\u201d|\\s"[^"\\n]{1,30}")?'
+
+// text -> [{ t: 'text', v } | { t: 'agent', v, tag }]
+function splitAgents(text) {
+  const s = String(text == null ? '' : text)
+  const re = new RegExp(AGENT_RE_SRC, 'g')
+  const out = []
+  let last = 0, m
+  while ((m = re.exec(s))) {
+    if (m.index > last) out.push({ t: 'text', v: s.slice(last, m.index) })
+    out.push({ t: 'agent', v: m[0], tag: m[0].match(/^[A-Z]{2,12}-\d{1,3}/)[0] })
+    last = m.index + m[0].length
+  }
+  if (last < s.length) out.push({ t: 'text', v: s.slice(last) })
+  return out
+}
+
+function remarkAgents() {
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.children)) return
+    if (node.type === 'link' || node.type === 'linkReference' || node.type === 'code') return
+    const next = []
+    for (const ch of node.children) {
+      if (ch.type === 'text' || ch.type === 'inlineCode') {
+        const parts = splitAgents(ch.value)
+        if (parts.length === 1 && parts[0].t === 'text') { next.push(ch); continue }
+        for (const p of parts) {
+          if (p.t === 'text') next.push(ch.type === 'inlineCode' ? { type: 'inlineCode', value: p.v } : { type: 'text', value: p.v })
+          else next.push({ type: 'ccagent', data: { hName: 'span', hProperties: { 'data-ccagent': p.tag }, hChildren: [{ type: 'text', value: p.v }] } })
+        }
+      } else { walk(ch); next.push(ch) }
+    }
+    node.children = next
+  }
+  return (tree) => { walk(tree) }
+}
+
+module.exports = { splitChoices, splitMoney, remarkMoney, splitAct, sentenceAround, remarkActions, splitAgents, remarkAgents, ACT_PHRASES, MAX_CHOICES }
