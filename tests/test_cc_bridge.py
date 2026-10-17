@@ -1215,3 +1215,23 @@ def test_list_price_from_tokens_and_invoices(tmp_path):
     assert abs(u["today"]["list_usd"] - 18.75) < 1e-9 and abs(u["today"]["invoiced_net_eur"] - 16.71) < 1e-9
     assert abs(u["all"]["invoiced_gross_eur"] - 21.78) < 1e-9 and u["invoices"] is True
     assert m.usage_summary(turns, now=now)["invoices"] is False
+
+
+def test_tick_off_without_cmd_and_runs_as_hands(monkeypatch, tmp_path):
+    """The standing-order tick (2026-10-17): off when CC_TICK_CMD is unset; when set it runs once, as hands, never overlapping."""
+    mod = _load(monkeypatch, tmp_path, with_key=False)
+    mod.TICK["cmd"] = ""
+    assert mod._tick_once() is None
+    seen = []
+
+    class R:
+        returncode = 0
+        stdout = "nothing to dispatch"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: (seen.append(cmd), R())[1])
+    mod.TICK["cmd"] = "echo hi"
+    assert mod._tick_once() == 0
+    assert seen and seen[0][-3:] == ["bash", "-lc", "echo hi"]
+    mod.TICK["running"] = True
+    assert mod._tick_once() is None

@@ -297,3 +297,7 @@ Complaint: replies took a lot of scrolling, bullets sat about 40 px apart, and t
 Two densities, chosen with the small link beside "full width" in the footer line (shows the current one), kept in this browser as `cc.density`, and a `density` key in the layout file (`compact` default, `comfortable` = the older looser spacing; also chips on `/layout`). "reset layout" returns to compact.
 
 The title block collapses to one slim line (the "cc" label with "show title" and "hide") once the thread has more than two messages, which gives the message area the height. "show title" is an explicit choice, kept as `cc.heroShow`, and keeps the full title open; "hide" is the existing hide. Press-to-underline and margin remarks are unaffected: they read the DOM text nodes (spanpick's flatten adds a newline per block), not the CSS, and no node was added or removed.
+
+### Standing order: the tick (2026-10-17)
+
+`CC_TICK_CMD` in the bridge env runs one command as the hands user every `CC_TICK_EVERY` seconds (default 1800, minimum 60), with the hands' environment, so it carries the ask token a cron line lacks and may open cc-jobs. Unset means off. Runs never overlap; each run's last lines go to the bridge journal as `tick rc=...`. Every job it opens still runs under the permission hook and its own budget. First use: memo dispatch (`memo.py dispatch`), so signed memo bits open their jobs without a console turn.

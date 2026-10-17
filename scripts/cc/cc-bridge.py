@@ -751,6 +751,42 @@ def _restart_watch() -> None:
                 _restart_now(f"idle, queued by {RESTART['by']}")
 
 
+TICK = {"cmd": os.environ.get("CC_TICK_CMD", "").strip(), "every": 1800, "last": None, "rc": None, "running": False}
+try:
+    TICK["every"] = max(60, int(os.environ.get("CC_TICK_EVERY", "1800")))
+except ValueError:
+    pass
+
+
+def _tick_once() -> int | None:
+    """One standing-order run (2026-10-17): CC_TICK_CMD as the hands user with the hands' environment,
+    so it carries the ask token a cron line lacks and can open cc-jobs (memo dispatch). Never overlaps.
+    Unset CC_TICK_CMD = off. Every job it opens still runs under the permission hook and its budget."""
+    if not TICK["cmd"] or TICK["running"]:
+        return None
+    TICK["running"] = True
+    try:
+        r = subprocess.run(_as_hands(["bash", "-lc", TICK["cmd"]]), capture_output=True, text=True, timeout=600)
+        TICK["rc"] = r.returncode
+        tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-3:]
+        print(f"tick rc={r.returncode}: {' | '.join(tail)[:300]}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        TICK["rc"] = -1
+        print(f"tick failed: {type(e).__name__}: {e}", flush=True)
+    finally:
+        TICK["last"] = time.time()
+        TICK["running"] = False
+    return TICK["rc"]
+
+
+def _tick_loop() -> None:
+    print(f"tick on: every {TICK['every']} s", flush=True)
+    time.sleep(60)                               # let the bridge settle after a restart
+    while True:
+        _tick_once()
+        time.sleep(TICK["every"])
+
+
 def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
     r = _box_ask_inner(tool, inp, session_id)
     if r.get("behavior") == "allow" and tool == "Bash" and _RESTART_CMD.match(str((inp or {}).get("command", ""))):
@@ -3896,6 +3932,8 @@ def main() -> None:
     if TG is not None:
         TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
     threading.Thread(target=_restart_watch, daemon=True).start()
+    if TICK["cmd"]:
+        threading.Thread(target=_tick_loop, daemon=True).start()
     signal.signal(signal.SIGHUP, lambda *_: _restart_request("reload signal (Update)"))
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
