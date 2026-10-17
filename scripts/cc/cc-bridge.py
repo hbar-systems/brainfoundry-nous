@@ -787,6 +787,35 @@ def _tick_loop() -> None:
         time.sleep(TICK["every"])
 
 
+AGENTS_PY = Path(__file__).resolve().parent / "cc_agents.py"
+AGENTS_ON = os.environ.get("CC_AGENTS", "1") != "0"
+
+
+def _agents_call(args: list, body: dict | None = None) -> tuple[int, dict]:
+    """Standing agents (2026-10-17): every agents operation runs scripts/cc/cc_agents.py as the hands user
+    with the hands' environment, so the files live in the hands' home and the jobs carry the ask token."""
+    try:
+        r = subprocess.run(_as_hands(["/usr/bin/python3", str(AGENTS_PY), *args]),
+                           input=json.dumps(body or {}), capture_output=True, text=True, timeout=90)
+        d = json.loads((r.stdout or "").strip().splitlines()[-1]) if (r.stdout or "").strip() else {}
+        if not d:
+            d = {"ok": False, "error": ((r.stderr or "").strip().splitlines() or ["no answer"])[-1][:200]}
+        return (200 if d.get("ok", True) else 400), d
+    except Exception as e:  # noqa: BLE001
+        return 500, {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
+
+
+def _agents_loop() -> None:
+    print("agents on: checked every 60 s", flush=True)
+    time.sleep(90)
+    while True:
+        code, d = _agents_call(["tick"])
+        started = d.get("started") or []
+        if started or code != 200:
+            print(f"agents tick {code}: {json.dumps(started or d)[:300]}", flush=True)
+        time.sleep(60)
+
+
 def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
     r = _box_ask_inner(tool, inp, session_id)
     if r.get("behavior") == "allow" and tool == "Bash" and _RESTART_CMD.match(str((inp or {}).get("command", ""))):
@@ -3468,6 +3497,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _state(t))
         elif route == "/board":
             self._send(200, _board())
+        elif route == "/agents":
+            self._send(*_agents_call(["list"]))
         elif route.startswith("/layout"):
             self._send(*_layout_api("GET", route, None, self._query()))
         elif route == "/usage":
@@ -3539,6 +3570,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "unreadable or too large"})
                 return
             self._send(*_layout_api("POST", route, body, self._query()))
+            return
+        if route in ("/agents", "/agents/update", "/agents/delete", "/agents/run"):
+            body = self._json(limit=20000) or {}
+            aid = str(body.get("id") or "")
+            if route == "/agents":
+                self._send(*_agents_call(["create"], body))
+            elif not re.fullmatch(r"[a-z0-9-]{1,40}", aid):
+                self._send(400, {"ok": False, "error": "which agent? (id missing)"})
+            elif route == "/agents/update":
+                self._send(*_agents_call(["update", aid], body))
+            elif route == "/agents/delete":
+                self._send(*_agents_call(["delete", aid]))
+            else:
+                self._send(*_agents_call(["run", aid]))
             return
         if route == "/files/write":
             # The person edits a text file in the Files pane and saves (2026-09-28). No permit: their
@@ -3934,6 +3979,8 @@ def main() -> None:
     threading.Thread(target=_restart_watch, daemon=True).start()
     if TICK["cmd"]:
         threading.Thread(target=_tick_loop, daemon=True).start()
+    if AGENTS_ON:
+        threading.Thread(target=_agents_loop, daemon=True).start()
     signal.signal(signal.SIGHUP, lambda *_: _restart_request("reload signal (Update)"))
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)

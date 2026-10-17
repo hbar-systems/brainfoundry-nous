@@ -156,6 +156,7 @@ export default function Board() {
           <a href="/talk?thread=new" title="Start a new conversation" aria-label="new conversation"
              style={{ ...mono, fontSize: '13px', lineHeight: 1, padding: '3px 10px', borderRadius: '6px', border: `1px solid ${C.gold}`, color: C.gold, textDecoration: 'none' }}>+ new</a>
           {board && board.max_runs ? <span style={{ ...mono, fontSize: '11px', color: C.dim }}>up to {board.max_runs} answer at once</span> : null}
+          <a href="/agents" style={link}>agents</a>
           <a href="/panes" style={link}>side by side</a>
           <a href="/gallery" style={link}>gallery</a>
           <a href="/talk" style={link}>one conversation</a>

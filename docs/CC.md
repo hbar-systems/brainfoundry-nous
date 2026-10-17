@@ -301,3 +301,7 @@ The title block collapses to one slim line (the "cc" label with "show title" and
 ### Standing order: the tick (2026-10-17)
 
 `CC_TICK_CMD` in the bridge env runs one command as the hands user every `CC_TICK_EVERY` seconds (default 1800, minimum 60), with the hands' environment, so it carries the ask token a cron line lacks and may open cc-jobs. Unset means off. Runs never overlap; each run's last lines go to the bridge journal as `tick rc=...`. Every job it opens still runs under the permission hook and its own budget. First use: memo dispatch (`memo.py dispatch`), so signed memo bits open their jobs without a console turn.
+
+### Standing agents: the Agents page (2026-10-17)
+
+Console page `/agents` (linked from the board and the CC page). Create an agent with a name, a mission, the folders it may write in (its ground), a schedule (30 min to weekly, never more often than 15 min), a budget per run (up to USD 5) and an optional model. The bridge keeps one file per agent in the hands' `~/agents/` (scripts/cc/cc_agents.py, run as the hands user) and checks every minute which agents are due; at most three start per minute. Each run is a cc-job (a tile on the board): a headless reasoner turn with the charter as prompt, writes allowed inside the ground and the agent's own folder, push, `rm -rf` and `.env` refused, everything else a card. The run ends with a sitrep in `~/agents/<id>/sitreps/`, shown on the page. Pause, resume, run now and retire (the file moves to `~/agents/.trash/`) from the page. `CC_AGENTS=0` in the bridge env turns the minute check off.

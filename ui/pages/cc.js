@@ -2529,6 +2529,7 @@ function CC() {
             {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
             {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
             {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
+            {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/agents' }} title="Standing agents: create one, it runs on its schedule and files a sitrep">agents</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
             {showThreads && (
               <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
