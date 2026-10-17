@@ -129,3 +129,9 @@ def test_callsign_and_post_validation(ag):
         ag.create({**BODY, "callsign": "x" * 31})
     with pytest.raises(ValueError):
         ag.create({**BODY, "post": "bad<post>"})
+
+
+def test_unattended_checks_allowed_but_no_post_or_branch_delete(ag):
+    allow = ag.settings(ag.create(BODY))["permissions"]["allow"]
+    assert "Bash(curl -s -o /dev/null *)" in allow and "WebFetch" in allow and "Bash(git worktree list)" in allow
+    assert not any("curl -X" in a or "curl -d" in a or "branch -D" in a or a == "Bash(curl *)" for a in allow)

@@ -36,7 +36,13 @@ SCHEDULES = {"15 min": 15, "30 min": 30, "hourly": 60, "every 6 h": 360, "daily"
 
 BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "find *", "wc *", "head *", "tail *", "date", "date *",
               "git status", "git status *", "git diff *", "git log *", "git show *", "git add *", "git commit *",
-              "df *", "du *", "cc-job *", "python3 -c *")
+              "df *", "du *", "cc-job *", "python3 -c *",
+              # read-only checks an unattended agent needs (2026-10-17): status codes with the body discarded,
+              # headers, git state, tests; and moving between folders. No POST pattern, no branch deletion.
+              "cd *", "pwd", "curl -sI *", "curl -s -o /dev/null *", "curl -sS -o /dev/null *",
+              "git rev-parse *", "git ls-files *", "git branch --show-current", "git worktree list",
+              "git fetch", "git fetch --quiet", "python3 -m pytest *", "node registry/validate.js",
+              "dig *", "openssl s_client *", "WebFetch")
 DENY = ("Bash(git push*)", "Bash(git push)", "Bash(git push *)", "Bash(git -C * push*)", "Bash(* git push*)",
         "Bash(rm -rf*)", "Bash(rm -rf *)", "Bash(* rm -rf *)", "Bash(rm -fr *)", "Bash(* rm -fr *)",
         "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)",
@@ -245,7 +251,8 @@ def prompt(a: dict, stamp: str) -> str:
 def settings(a: dict) -> dict:
     """Pure: Claude Code settings for the agent's turn: its own write area, the card hook for the rest."""
     write = [*(a.get("ground") or []), str(AGENTS_DIR / a["id"])]
-    allow = [f"Edit(//{w.lstrip('/')}/**)" for w in write] + [f"Bash({c})" for c in BASH_ALLOW]
+    allow = ([f"Edit(//{w.lstrip('/')}/**)" for w in write]
+             + [c if c == "WebFetch" else f"Bash({c})" for c in BASH_ALLOW])
     return {
         "hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
