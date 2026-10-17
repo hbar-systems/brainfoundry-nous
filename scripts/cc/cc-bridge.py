@@ -355,6 +355,7 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
 import cc_recent  # noqa: E402
+import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
 
 # The Codex seat (2026-10-15; scripts/cc/cc_codex.py, docs/CC.md "Codex seat"): a second reasoner,
@@ -383,8 +384,28 @@ for _d in (OUT_DIR, IN_DIR):
     except OSError:
         pass   # the hands' home is not ours to create in; split-hands.sh makes these
 FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), **({} if SAME_ROOT else {"work": WORK_DIR}), "world": WORLD_DIR, "brain": CWD})
+# The spend meter (2026-10-17, new-mind standard section 4): the brain's own ledger, ~/.cc-bridge/spend.jsonl.
+# Every place here that knows a cost or a duration appends one line; Settings shows the totals and the cap.
+SPEND = cc_spend.Ledger(STATE_DIR)
+
+
+def _spend(what: str, provider: str, **kw) -> None:
+    try:
+        SPEND.append(what, provider, **kw)
+    except Exception as e:  # noqa: BLE001  (the meter never breaks the thing it measures)
+        print(f"spend line not written: {type(e).__name__}: {e}"[:200], flush=True)
+
+
+def _job_spent(rec: dict) -> None:
+    """A finished job: its minutes. The price is not known here (a job runs any command); an agent run
+    that reports its own cost can append it through POST /spend/append."""
+    if rec.get("started") and rec.get("ended"):
+        _spend("job: " + str(rec.get("title") or rec.get("id")), "this server",
+               minutes=max(0, rec["ended"] - rec["started"]) / 60)
+
+
 JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv),
-                      resolve=lambda run_id: _job_thread(run_id))
+                      resolve=lambda run_id: _job_thread(run_id), on_end=_job_spent)
 
 
 def _job_thread(run_id: str | None) -> str | None:
@@ -809,6 +830,11 @@ def _agents_loop() -> None:
     print("agents on: checked every 60 s", flush=True)
     time.sleep(90)
     while True:
+        # Over the owner's spend cap, scheduled agents do not start; they wait, and Settings says so.
+        # Run now on the Agents page is the owner's own press, so it still works (that press is the ask).
+        if SPEND.over_cap():
+            time.sleep(60)
+            continue
         code, d = _agents_call(["tick"])
         started = d.get("started") or []
         if started or code != 200:
@@ -1681,7 +1707,14 @@ def _side_call(prompt: str, model: str, what: str) -> dict:
         d = json.loads(out.stdout or "{}")
     except Exception:
         return {"error": f"the {what} came back in an unexpected shape"}
-    return d if isinstance(d, dict) else {"error": f"the {what} came back in an unexpected shape"}
+    if not isinstance(d, dict):
+        return {"error": f"the {what} came back in an unexpected shape"}
+    if d.get("total_cost_usd") is not None:
+        u = d.get("usage") or {}
+        _spend(what, "Anthropic", usd=d.get("total_cost_usd"),
+               tokens=int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0) or None,
+               estimate=_auth_status().get("method") != "api-key")
+    return d
 
 
 def _learn_lesson(term: str, context: str) -> dict:
@@ -2887,6 +2920,10 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "tok_fresh": META.get("in_fresh"), "tok_cache_write": META.get("cache_write"),
                  "model": META.get("model")})
+    if META.get("cost") is not None or META.get("in") or META.get("out"):
+        _spend("conversation turn", "OpenAI" if seat == "codex" else "Anthropic", usd=META.get("cost"),
+               tokens=int(META.get("in") or 0) + int(META.get("out") or 0), minutes=ms / 60000,
+               estimate=_auth_status().get("method") != "api-key")
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
                "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES),
                "stopped": bool(run.stopped), "reasoner": seat}
@@ -3165,6 +3202,9 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
     try:
         if method == "GET" and route == "/layout":
             return 200, _layout_view()
+        if route == "/layout/mode":   # newcomer or operator (2026-10-17); the Nav and Settings read it
+            mode = LAYOUT.set_mode(body.get("mode")) if method == "POST" else LAYOUT.mode()
+            return 200, {"mode": mode, "modes": list(cc_layout.MODES), "tiers": cc_layout.TIERS}
         if method == "GET" and route == "/layout/export":
             cur = LAYOUT.get()
             if cur is None:
@@ -3501,6 +3541,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*_agents_call(["list"]))
         elif route.startswith("/layout"):
             self._send(*_layout_api("GET", route, None, self._query()))
+        elif route == "/spend":
+            # The spend meter (2026-10-17): today, 7 days, 30 days, the owner's cap, and whether
+            # agents wait. "billing" says whether the figures are paid (an API key) or estimates.
+            self._send(200, {**SPEND.view(), "billing": "api-key" if _auth_status().get("method") == "api-key" else "subscription"})
         elif route == "/usage":
             # Cost and usage (2026-09-29): totals from the turn audit, never content.
             try:
@@ -3549,7 +3593,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -3563,6 +3607,27 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=lambda: (time.sleep(0.5), _restart_now("forced from the console")), daemon=True).start()
                 return
             self._send(200, _restart_request("the console"))
+            return
+        if route in ("/spend/cap", "/spend/append"):
+            # /spend/cap: the owner, from Settings (a number of EUR for 30 days, or null for no cap).
+            # /spend/append: internal, from anything on this box that paid for something and holds the
+            # ask token (a paid tool, an agent run that reports its cost): one line in the ledger.
+            body = self._json(limit=4000)
+            if body is None:
+                self._send(400, {"error": "unreadable or too large"})
+                return
+            try:
+                if route == "/spend/cap":
+                    SPEND.set_cap(body.get("eur"))
+                    self._send(200, SPEND.view())
+                elif not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                    self._send(403, {"error": "only programs on this server may add to the ledger"})
+                else:
+                    self._send(200, {"ok": True, "line": SPEND.append(
+                        str(body.get("what") or ""), str(body.get("provider") or ""), eur=body.get("eur"), usd=body.get("usd"),
+                        tokens=body.get("tokens"), minutes=body.get("minutes"), estimate=bool(body.get("estimate")))})
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
             return
         if route.startswith("/layout"):
             body = self._json(limit=40000)

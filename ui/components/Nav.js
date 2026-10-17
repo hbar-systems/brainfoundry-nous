@@ -31,6 +31,19 @@ function tabsFromApi(apiTabs) {
   return apiTabs.map(t => ({ id: t.id, href: t.route, label: t.label }))
 }
 
+// Console mode (2026-10-17, new-mind standard section 2), from the bridge's layout file. "newcomer"
+// shows the standard tabs and puts the catalogue behind one "more"; every other tab stays hidden.
+// No bridge (a brain without CC) or "operator" means every tab, as before.
+function splitByMode(tabs, mode) {
+  if (!mode || mode.mode !== 'newcomer' || !mode.tiers) return { shown: tabs, more: [] }
+  const std = mode.tiers.standard || []
+  const cat = mode.tiers.catalogue || []
+  return {
+    shown: tabs.filter(t => t.id === '_cc' || std.includes(t.id)),
+    more: tabs.filter(t => cat.includes(t.id)),
+  }
+}
+
 function isActive(router, tab) {
   if (tab.href === '/apps') {
     // The Apps hub is "active" both at /apps (the index) and inside any
@@ -53,9 +66,37 @@ export default function Nav() {
   // Owner-set menu header (appearance plane); null => fall back to brand name.
   const [menuTitle, setMenuTitle] = useState(null)
   const [drawer, setDrawer] = useState(false)
+  const [mode, setMode] = useState(null)
+  const [moreOpen, setMoreOpen] = useState(false)
   // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
   const ccHome = tabs.some(t => t.id === '_cc' && t.href === '/')
-  useEffect(() => { setDrawer(false) }, [router.pathname])
+  const { shown, more } = splitByMode(tabs, mode)
+  useEffect(() => { setDrawer(false); setMoreOpen(false) }, [router.pathname])
+
+  useEffect(() => {
+    const load = () => fetch('/cc/layout/mode', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null)).then(setMode).catch(() => setMode(null))
+    load()
+    // Settings flips the switch and says so; the nav follows without a reload.
+    window.addEventListener('bf-mode', load)
+    return () => window.removeEventListener('bf-mode', load)
+  }, [])
+
+  const linkStyle = (active, block) => ({
+    display: block ? 'block' : undefined, padding: block ? '8px 12px' : '6px 14px', borderRadius: '6px', fontSize: '13px',
+    textDecoration: 'none', fontFamily: 'var(--font-body)', color: active ? 'var(--text)' : 'var(--muted)',
+    backgroundColor: active ? 'var(--surface2)' : 'transparent', fontWeight: active ? 600 : 400,
+  })
+  const moreButton = (
+    <button onClick={() => setMoreOpen(o => !o)} aria-expanded={moreOpen} className="bf-nav-link"
+      style={{ ...linkStyle(more.some(t => isActive(router, t)), ccHome), border: 'none', cursor: 'pointer',
+               width: ccHome ? '100%' : undefined, textAlign: 'left' }}>
+      more {moreOpen ? '▴' : '▾'}
+    </button>
+  )
+  const moreList = (block) => more.map(t => (
+    <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={linkStyle(isActive(router, t), block)}>{t.label}</Link>
+  ))
 
   useEffect(() => {
     let cancelled = false
@@ -154,22 +195,19 @@ export default function Nav() {
           {drawer && (
             <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', minWidth: '220px', backgroundColor: 'var(--bg)',
                           border: '1px solid var(--border)', borderRadius: '10px', padding: '6px', boxShadow: '0 12px 32px rgba(0,0,0,0.45)', zIndex: 200 }}>
-              {tabs.filter(t => t.id !== '_cc').map(t => {
-                const active = isActive(router, t)
-                return (
-                  <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={{
-                    display: 'block', padding: '8px 12px', borderRadius: '6px', fontSize: '13px', textDecoration: 'none',
-                    fontFamily: 'var(--font-body)', color: active ? 'var(--text)' : 'var(--muted)',
-                    backgroundColor: active ? 'var(--surface2)' : 'transparent', fontWeight: active ? 600 : 400,
-                  }}>{t.label}</Link>
-                )
-              })}
+              {shown.filter(t => t.id !== '_cc').map(t => (
+                <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={linkStyle(isActive(router, t), true)}>{t.label}</Link>
+              ))}
+              {more.length > 0 && moreButton}
+              {more.length > 0 && moreOpen && (
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px', paddingTop: '4px' }}>{moreList(true)}</div>
+              )}
             </div>
           )}
         </div>
       ) : (
       <div className="bf-nav-links">
-        {tabs.map(t => {
+        {shown.map(t => {
           const active = isActive(router, t)
           return (
             <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={{
@@ -187,6 +225,9 @@ export default function Nav() {
             </Link>
           )
         })}
+        {/* the bar scrolls sideways, so "more" opens in line rather than as a dropdown it would clip */}
+        {more.length > 0 && moreButton}
+        {more.length > 0 && moreOpen && moreList(false)}
       </div>
       )}
 

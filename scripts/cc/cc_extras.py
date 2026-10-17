@@ -417,7 +417,8 @@ class Jobs:
     UNKNOWN = "unknown"
     UNSEEN_TTL = 24 * 3600      # a finished job nobody took stops being "unseen" after a day
 
-    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None):
+    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None, on_end=None):
+        self.on_end = on_end      # called with the finished record (the spend meter, 2026-10-17)
         self.dir = out_dir / "jobs"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg = self.dir / "jobs.json"
@@ -490,6 +491,7 @@ class Jobs:
         def _wait():
             rc = proc.wait()
             lf.close()
+            done = None
             with self.lock:
                 cur = self._load()
                 for r in cur:
@@ -497,8 +499,14 @@ class Jobs:
                         r["ended"] = int(time.time()); r["rc"] = rc
                         # by now the turn that started it has usually recorded its thread
                         r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
+                        done = dict(r)
                 self._save(cur)
                 self.unseen.add(jid)
+            if done and self.on_end:
+                try:
+                    self.on_end(done)
+                except Exception:  # noqa: BLE001
+                    pass
         threading.Thread(target=_wait, daemon=True).start()
         return rec
 

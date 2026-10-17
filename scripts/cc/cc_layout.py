@@ -56,6 +56,21 @@ PRESETS = {
 SIZE_ZOOM = {"small": 0.92, "normal": 1.0, "large": 1.12}
 
 
+# Console mode (2026-10-17, the new-mind standard, section 2). "newcomer" shows the standard pages and puts
+# the catalogue behind one "more"; "operator" shows every tab. Kept beside the layout in layout.json, not in
+# the layout itself, so a shared layout pack never switches anyone's mode. Tabs by the api's tab id; a tab
+# in no list is hidden from a newcomer until it is ruled into a tier.
+MODES = ("newcomer", "operator")
+TIERS = {
+    "standard": ["_chat", "_knowledge", "_files", "_guide", "_settings", "_apps"],
+    "catalogue": ["_tasks", "_research", "_graph", "_integrations", "_trace"],
+    "operator": ["_dashboard", "_persona", "_federation", "_economy", "_update", "_system", "_terminal", "_future"],
+}
+# Files in the bridge state dir that only exist once the console has been used: a brain that has them
+# is an existing brain and stays in operator mode.
+USED_SIGNS = ("turns.jsonl", "threads.json", "board.json", "auto.json", "permit-decisions.jsonl")
+
+
 class LayoutError(ValueError):
     """A layout (or answers) that does not satisfy the closed schema."""
 
@@ -303,6 +318,27 @@ class Store:
                 d["answers"] = validate_answers(answers)
             self._write(d)
         return lay
+
+    def mode(self) -> str:
+        """The console mode. Decided once and written down: a brain with any layout state or any sign of
+        use (USED_SIGNS) starts in operator mode, a brand new one in newcomer mode."""
+        with self.lock:
+            d = self._read()
+            if d.get("mode") in MODES:
+                return d["mode"]
+            used = any(d.get(k) for k in ("current", "history", "answers", "proposals", "decided")) or \
+                any((self.path.parent / f).exists() for f in USED_SIGNS)
+            d["mode"] = "operator" if used else "newcomer"
+            self._write(d)
+            return d["mode"]
+
+    def set_mode(self, mode) -> str:
+        m = _enum(mode, MODES, "mode")
+        with self.lock:
+            d = self._read()
+            d["mode"] = m
+            self._write(d)
+        return m
 
     def answers(self) -> dict:
         try:

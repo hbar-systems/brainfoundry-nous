@@ -1621,6 +1621,121 @@ function CCPanel() {
   )
 }
 
+// ---------- The console: newcomer or full (2026-10-17, new-mind standard section 2) ----------
+// One switch. Off: the menu shows the everyday pages, the rest sit under "more". On: every page.
+// Persona and layout live here now; their own pages stay where they were.
+function ConsolePanel() {
+  const [mode, setMode] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  useEffect(() => {
+    fetch('/cc/layout/mode', { cache: 'no-store' }).then(r => (r.ok ? r.json() : false)).then(d => setMode(d ? d.mode : false)).catch(() => setMode(false))
+  }, [])
+  const flip = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/cc/layout/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode === 'operator' ? 'newcomer' : 'operator' }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'not saved')
+      setMode(d.mode)
+      window.dispatchEvent(new Event('bf-mode'))
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  const on = mode === 'operator'
+  const link = (href, label) => (
+    <a href={href} style={{ ...BTN_GHOST, textDecoration: 'none', display: 'inline-block', marginRight: 8, marginTop: 8 }}>{label}</a>
+  )
+  return (
+    <div style={{ paddingTop: 16 }}>
+      {mode !== false && (
+        <button onClick={flip} disabled={busy || mode === null} role="switch" aria-checked={on}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text)', fontSize: 14 }}>
+          <span style={{ width: 38, height: 22, borderRadius: 11, background: on ? 'var(--accent)' : 'var(--surface2)', border: '1px solid var(--border)', position: 'relative', flexShrink: 0, transition: 'background 0.15s ease' }}>
+            <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: on ? 'var(--bg)' : 'var(--muted)', transition: 'left 0.15s ease' }} />
+          </span>
+          Show the full console
+        </button>
+      )}
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '10px 0 0 0' }}>
+        {mode === false
+          ? 'The menu shows every page on this brain.'
+          : on ? 'The menu shows every page.' : 'The menu shows the pages you need every day. The others are under "more".'}
+      </p>
+      <div style={{ marginTop: 6 }}>
+        {link('/persona', 'Who your brain is')}
+        {link('/layout', 'How the chat looks')}
+        {link('/guide', 'Guide')}
+      </div>
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
+// ---------- Spending (2026-10-17, new-mind standard section 4) ----------
+// What this brain has spent, from its own ledger on the server, and the limit the owner sets.
+function SpendPanel() {
+  const [s, setS] = useState(null)
+  const [cap, setCap] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const show = d => { setS(d); setCap(d && d.cap != null ? String(d.cap) : '') }
+  useEffect(() => {
+    fetch('/cc/spend', { cache: 'no-store' }).then(r => (r.ok ? r.json() : false)).then(show).catch(() => setS(false))
+  }, [])
+  const saveCap = async (value) => {
+    setBusy(true); setErr(null)
+    try {
+      const eur = value === '' ? null : Number(value)
+      if (eur !== null && !(eur >= 0)) throw new Error('Write an amount in euros, like 20.')
+      const r = await fetch('/cc/spend/cap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eur }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'not saved')
+      show({ ...s, ...d })
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  if (s === null) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>reading…</p>
+  if (s === false) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>The spending record lives on your server's assistant side, which is not running on this brain.</p>
+  const eur = n => `€${(n || 0).toFixed(2)}`
+  const cell = (label, t) => (
+    <div style={{ flex: 1, minWidth: 110, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+      <div style={{ color: 'var(--muted)', fontSize: 12 }}>{label}</div>
+      <div style={{ color: 'var(--text)', fontSize: 18, marginTop: 2 }}>{eur(t.eur)}</div>
+    </div>
+  )
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {cell('Today', s.today)}
+        {cell('Last 7 days', s.week)}
+        {cell('Last 30 days', s.month)}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, flexWrap: 'wrap', fontSize: 13, color: 'var(--text)' }}>
+        <span>Limit for 30 days: €</span>
+        <input value={cap} onChange={e => setCap(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="no limit" inputMode="decimal"
+          style={{ ...INPUT, width: 110 }} />
+        <button style={BTN} disabled={busy} onClick={() => saveCap(cap)}>Save</button>
+        {s.cap != null && <button style={BTN_GHOST} disabled={busy} onClick={() => saveCap('')}>No limit</button>}
+      </div>
+      <p style={{ color: s.over ? '#d97777' : 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '10px 0 0 0' }}>
+        {s.cap == null
+          ? 'No limit set. Set one and your brain\'s agents ask you before running once it is reached.'
+          : s.over
+            ? 'Over the limit: your agents ask before running. Raise the limit or start them yourself.'
+            : 'Over the limit, agents ask before running.'}
+      </p>
+      {s.billing === 'subscription' && (
+        <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '6px 0 0 0' }}>
+          You use a subscription, so you pay your plan. These amounts show what the same work would cost if paid by use.
+        </p>
+      )}
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
 // ---------- Export ----------
 // The one-button export (unreleased 0.10.0): everything the brain accumulated,
 // minus secrets, in one .tar.gz built on the brain and downloaded here.
@@ -1726,6 +1841,14 @@ export default function Settings() {
           (federation). Build it up deliberately. What goes in shapes what comes
           out.
         </p>
+      </Section>
+
+      <Section title="Your console" subtitle="How much of the console the menu shows, who your brain is, how it looks." defaultOpen={true}>
+        <ConsolePanel />
+      </Section>
+
+      <Section title="Spending" subtitle="What your brain has spent, and a limit you choose." defaultOpen={true}>
+        <SpendPanel />
       </Section>
 
       <Section title="Persona" subtitle="The brain's system prompt — who it is, how it thinks.">
