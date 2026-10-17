@@ -21,7 +21,7 @@ const BUDGET = [0.5, 1, 2, 5, 10, 20]
 // Autonomy levels: 0 propose, 1 branch (default), 2 ship (its own branch onto main of its own repo; never force).
 const LEVELS = [[0, 'propose'], [1, 'branch'], [2, 'ship']]
 // Institution codes: the letters of the tag (LAW-1, ENG-2). Any 2 to 4 letters can be typed.
-const CODES = [['CMD', 'Command'], ['SLF', 'Self-knowledge'], ['ENG', 'Engineering'], ['MEM', 'Memory intake'], ['LOG', 'Logistics and treasury'], ['ECO', 'Economy'], ['MKT', 'Market'], ['COM', 'Foreign commerce'], ['LAW', 'Law'], ['DEF', 'Defence'], ['CEN', 'Census'], ['ADM', 'Admission'], ['SUP', 'Support'], ['PAR', 'Parliament'], ['DIP', 'Diplomacy'], ['SCI', 'Science'], ['EDU', 'Education'], ['HEA', 'Health'], ['PRS', 'Press'], ['CUL', 'Culture']]
+const CODES = [['COMMAND', 'Command'], ['INSPECTOR', 'Inspector General'], ['SELF', 'Self-knowledge'], ['ENGINEERING', 'Engineering'], ['MEMORY', 'Memory intake'], ['LOGISTICS', 'Logistics and treasury'], ['ECONOMY', 'Economy'], ['MARKET', 'Market'], ['COMMERCE', 'Foreign commerce'], ['LAW', 'Law'], ['DEFENCE', 'Defence'], ['CENSUS', 'Census'], ['ADMISSION', 'Admission'], ['SUPPORT', 'Support'], ['PARLIAMENT', 'Parliament'], ['DIPLOMACY', 'Diplomacy'], ['SCIENCE', 'Science'], ['EDUCATION', 'Education'], ['HEALTH', 'Health'], ['PRESS', 'Press'], ['CULTURE', 'Culture']]
 // Suggested posts (the units of the order of battle); any other name can be typed.
 const POSTS = ['Command', 'I Hands', 'II Studio', 'III Media', 'IV Science', 'V Doors', 'VI Agency', 'VII Legal', 'J2 Intelligence', 'J4 Logistics']
 const everyWord = (m) => (EVERY.find(e => e[1] === m) || [`every ${m} min`])[0]
@@ -89,8 +89,8 @@ function NewAgent({ onMade, posts }) {
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Disk watch" style={field} />
       <div style={label}>callsign (optional nickname; the number is given automatically, A-001, A-002, ...)</div>
       <input value={callsign} onChange={e => setCallsign(e.target.value)} placeholder="Sentinel" style={field} />
-      <div style={label}>institution: the letters of its tag; the number is given automatically (LAW-1, LAW-2, ...)</div>
-      <div>{CODES.map(([c, n]) => <Chip key={c} on={code === c} onClick={() => setCode(code === c ? '' : c)}>{c} {n}</Chip>)}</div>
+      <div style={label}>institution: the word of its tag; the number is given automatically (LAW-1, LOGISTICS-1, ...)</div>
+      <div>{CODES.map(([c, n]) => <Chip key={c} on={code === c} onClick={() => setCode(code === c ? '' : c)}>{c}</Chip>)}</div>
       <div style={label}>post: the unit it serves under</div>
       <div>{(posts || []).map(p => <Chip key={p} on={post === p} onClick={() => setPost(post === p ? '' : p)}>{p}</Chip>)}</div>
       <input value={post} onChange={e => setPost(e.target.value)} placeholder="I Hands" style={field} />
@@ -129,8 +129,8 @@ function Face({ a, size = 46 }) {
   const hue = h % 360, hue2 = (hue + 40 + (g % 80)) % 360
   const cells = []
   for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if ((g >> (y * 3 + x)) & 1) { cells.push([x, y]); if (x < 2) cells.push([4 - x, y]) }
-  const general = (a.code || '') === 'CMD' || /general/i.test(a.name || '')
-  const letters = (a.code || (a.callsign || a.name || '?').slice(0, 2)).toUpperCase()
+  const general = ['CMD', 'COMMAND'].includes(a.code || '') || /general/i.test(a.name || '')
+  const letters = (a.code || a.callsign || a.name || '?').slice(0, 3).toUpperCase()
   return (
     <svg width={size} height={size} viewBox="0 0 50 50" style={{ flex: 'none', alignSelf: 'center' }} aria-label={`face of ${a.tag}`}>
       <circle cx="25" cy="25" r="23.5" fill={`hsl(${hue2} 35% 16%)`} stroke={`hsl(${hue} 55% 55%)`} strokeWidth="3" />

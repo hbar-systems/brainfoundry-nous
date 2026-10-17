@@ -150,6 +150,7 @@ def test_institution_code_tags_and_on_call(ag):
     assert ag.create({**BODY, "budget_usd": 20})["budget_usd"] == 20
     with pytest.raises(ValueError):
         ag.create({**BODY, "code": "law1"})
+    assert ag.tag(ag.create({**BODY, "code": "logistics"})) == "LOGISTICS-1"
     with pytest.raises(ValueError):
         ag.create({**BODY, "every_minutes": 5})
 

@@ -162,8 +162,8 @@ def validate(body: dict, existing: dict | None = None) -> dict:
         a["callsign"] = cs
     if "code" in body or not existing:
         code = str(body.get("code") or "").strip().upper()
-        if code and not re.fullmatch(r"[A-Z]{2,4}", code):
-            raise ValueError("an institution code is 2 to 4 letters, like LAW or ENG")
+        if code and not re.fullmatch(r"[A-Z]{2,12}", code):
+            raise ValueError("an institution name for the tag is 2 to 12 letters, like LAW or LOGISTICS")
         a["code"] = code
     if "post" in body or not existing:
         post = str(body.get("post") or "").strip()
