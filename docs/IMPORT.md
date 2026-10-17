@@ -82,12 +82,55 @@ Limits: `approve-all` lists at most 1000 pending proposals, so keep manifests un
 - `scripts/import_chatgpt.sh <zip> [label] [filters]` runs prep, select and propose in one go and prints the approve line; it never approves. `scripts/prep_chatgpt_export.py` is kept as a shim onto `prep`.
 - Not yet done: linking each document to a `source/<export>` entity (the old script's step 4, which needs the in-container SemanticDB); the file-name prefix carries source and date meanwhile.
 
-## 7. Design sketch, not built: inbox and sorter (loose folders)
+## 7. Inbox and sorter (loose folders): built 2026-10-17
 
-No laptop scan; the person picks folders on their own spoke or drops files into one inbox.
+Tool: `scripts/sort_inbox.py`. Tests: `tests/test_sort_inbox.py` (made-up files only).
+No laptop scan; the person drops everything they have into one inbox folder per brain (`library/inbox/` in their world, filled by the console's Files upload or a synced folder). Nothing outside it is read.
 
-- Inbox: `library/inbox/` in the person's world, filled by the console's Files upload or a synced folder. Nothing outside it is read.
-- Sorter: an agent on the brain lists the inbox (name, size, type, first lines; no execution, no following links) and writes `library/inbox/MANIFEST.proposed.tsv`: path, proposed place (`areas/<area>/`, `library/<date>_<source>/`, or `stays-outside`), kind, size, reason, remember yes or no, sha256. Anything that reads as someone else's private material (other people's health records, passwords, IDs, bank exports, sz-type employer material) is proposed `stays-outside` and never offered for memory.
-- Review: the console shows the proposed manifest as cards, one per folder, not per file; the person moves or strikes rows, then gives one dated yes.
-- File and remember: files move to their places; rows marked remember go through steps 4 and 5 above unchanged (same permit, same manifest id, same hash check). The rest stays as files the brain opens on request.
-- Hours from the plan: inbox and sorter 4, card review 3, pick-folders on the spoke 2.
+```
+python3 scripts/sort_inbox.py sort library/inbox prepared_docs/inbox_2026-10-17 [--llm] [--owner NAME] [--brain-name NAME]
+```
+
+- Walks the inbox: names, sizes, extensions, and the first lines of text, md, docx and pdf (pdf text only if `pypdf` is installed, else its title). Images, audio and video by name and type only. Nothing is run, links are listed and not followed, `.DS_Store` and `__MACOSX` are ignored. The inbox itself is never changed; the sorter copies.
+- ChatGPT and Claude exports (a zip holding `conversations*.json`, or an unzipped export folder) go to `import_chats.py prep` into `<out>/chats/<name>/`; the person picks from them with `select` as in step 3 (a year of chats is too much for one yes).
+- Exact duplicates (same sha256) are listed and skipped.
+- Every other file gets one area and a short reason: `identity`, `projects`, `writing`, `thinking` (the folders retrieval pins, `RAG_TIER1..2C` in `api/main.py`), `library` (kept as a file, not remembered: images, audio, data, anything no rule placed), or `outside` (keys, passwords, bank, tax, health, IDs: not copied, never offered).
+- Rules decide: names first (`cv`, `roadmap`, `essay`, `journal`, a dated name ...), then headings (`# About me`, `## Milestones` ...). It works with no model at all. With `--llm`, only text files no rule placed are sent (name and first 1500 characters) to the brain's own model through `POST /chat/completions` under a NodeOS loop permit; if the model fails, the rule result stands. That model may be a cloud provider, so `--llm` is the person's choice.
+
+Writes into `<out>`:
+- `identity/ projects/ writing/ thinking/ library/`: the filed copies.
+- `sorted.tsv`: every file: file, source, sha256, area, reason, size, kind.
+- `manifest.tsv`: the rows to remember (the four pinned areas), with `# manifest_id:` in the same form as step 3. Its `name` column (`identity/cv.md`) is the document name in memory, so retrieval pins it.
+- `summary.txt`: e.g. `42 files: 5 identity, 8 projects, 12 writing, 9 thinking, 4 library, 1 outside; 3 duplicates skipped; 1 chat export`, then the manifest id and the next commands.
+- `persona_draft.md` (below).
+
+The person corrects the sort by editing the area column of `sorted.tsv`, then:
+
+```
+python3 scripts/sort_inbox.py manifest prepared_docs/inbox_2026-10-17
+```
+
+which moves the filed copies and writes `manifest.tsv` again under a new id.
+
+Remember: steps 4 and 5, unchanged. Same permit, one proposal per document, same hash check, one yes for the named manifest id:
+
+```
+BRAIN_API_KEY=... python3 scripts/import_chats.py propose prepared_docs/inbox_2026-10-17 --api http://localhost:8010
+BRAIN_API_KEY=... python3 scripts/import_chats.py approve prepared_docs/inbox_2026-10-17 --api http://localhost:8010 --yes <manifest_id>
+```
+
+(`propose` now sends the manifest's `name` column when it has one, and pdf/docx with their own content type so the api extracts them; chat manifests are unchanged.)
+
+### Persona draft
+
+`sort` writes `persona_draft.md`; `persona <out>` writes it again after the sort has been corrected. It has the shape of `api/brain_persona.template.md` (banner and `[CONFIGURE]` block stripped as `api/persona_tools.py` does), with an "About <owner>" block before `Identity:`: lines from the identity files, project titles, writing titles and two plain style notes, each line naming its source file. It opens with a `# DRAFT` banner. The owner name comes from `--owner` or a `Name:` line in an identity file; otherwise `[OWNER_NAME]` stays for the person to fill.
+
+The person reads it, edits it if they want, then:
+
+```
+BRAIN_API_KEY=... python3 scripts/sort_inbox.py persona-approve prepared_docs/inbox_2026-10-17 --api http://localhost:8010 --yes <draft_id>
+```
+
+`--yes` must equal the hash of the draft as it is on disk now (an edit changes it; a wrong id prints the right one and writes nothing). The banner is stripped and the text goes through `PUT /persona`, the Persona page's own save; `persona_approval.json` records the id, time and any placeholders left.
+
+Not built yet: the console card review (one card per folder) and picking folders on the person's own spoke; both use these files as they are.

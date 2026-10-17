@@ -337,7 +337,7 @@ class Brain:
         if layer:
             form["layer"] = layer
         resp = self.r.post(f"{self.api}/documents/upload", headers=self.h, data=form,
-                           files={"file": (name, data, "text/markdown")}, timeout=120)
+                           files={"file": (name, data, content_type(name))}, timeout=120)
         # An expired permit comes back from NodeOS as 403/404, wrapped by the api as 502
         # "NodeOS proposal failed"; one retry with a fresh permit (bounded by the caller).
         if resp.status_code in (403, 404, 502) and ("ermit" in resp.text or "NodeOS proposal failed" in resp.text):
@@ -355,6 +355,19 @@ class Brain:
         resp = self.r.get(f"{self.api}/documents/approve-all/status", headers=self.h, timeout=15)
         resp.raise_for_status()
         return resp.json()
+
+
+def content_type(name):
+    """pdf and docx are extracted by the api from their type; everything else is read as text."""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return {"pdf": "application/pdf",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}.get(ext, "text/markdown")
+
+
+def doc_name(row):
+    """The document's name in memory: the manifest's name column (sort_inbox.py writes
+    <area>/<file>, which retrieval pins), else the file's own name."""
+    return row.get("name") or row["file"].rsplit("/", 1)[-1]
 
 
 PERMIT_REFRESH_S = 240  # NodeOS upload permits live 300 s
@@ -378,7 +391,7 @@ def propose_manifest(out_dir, brain, layer=None, log=print):
         for _ in range(2):
             if not permit or time.monotonic() - got > PERMIT_REFRESH_S:
                 permit, got = brain.permit(), time.monotonic()
-            res = brain.propose(permit, r["file"].rsplit("/", 1)[-1], data, layer)
+            res = brain.propose(permit, doc_name(r), data, layer)
             if not res.get("permit_expired"):
                 break
             permit = None
