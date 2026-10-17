@@ -169,3 +169,11 @@ def test_levels_shape_permissions(ag):
         assert f in s2["deny"]
     with pytest.raises(ValueError):
         ag.create({**BODY, "level": 3})
+
+
+def test_reads_cover_the_standard_one_folder_up(ag, tmp_path):
+    a = ag.create({**BODY, "ground": "/home/hands/world/ops/institutions/state"})
+    cmd = ag.job_command(a, tmp_path / "p", tmp_path / "s")
+    assert "--add-dir /home/hands/world/ops/institutions " in cmd and "--add-dir /home/hands/world/ops/institutions/state" in cmd
+    assert f"--add-dir {ag.AGENTS_DIR}" in cmd
+    assert not any(r.startswith("Edit(//home/hands/world/ops/institutions/**") for r in ag.settings(a)["permissions"]["allow"])

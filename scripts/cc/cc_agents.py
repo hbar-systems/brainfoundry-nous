@@ -42,7 +42,8 @@ BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "find *", "wc *", "head *
               "cd *", "pwd", "curl -sI *", "curl -s -o /dev/null *", "curl -sS -o /dev/null *",
               "git rev-parse *", "git ls-files *", "git branch --show-current", "git worktree list",
               "git fetch", "git fetch --quiet", "python3 -m pytest *", "node registry/validate.js",
-              "dig *", "openssl s_client *", "WebFetch")
+              "dig *", "openssl s_client *", "sed -n *", "sort *", "uniq *", "cut *", "tr *", "jq *", "stat *",
+              "npm test", "npm test *", "npm run test*", "node --test*", "make test*", "WebFetch")
 PUSH_DENY = ("Bash(git push*)", "Bash(git push)", "Bash(git push *)", "Bash(git -C * push*)", "Bash(* git push*)")
 FORCE_DENY = ("Bash(git push -f*)", "Bash(git push --force*)", "Bash(git push * -f*)", "Bash(git push * --force*)",
               "Bash(git push * +*)", "Bash(git push --delete*)", "Bash(git push * --delete*)", "Bash(git push * :*)",
@@ -279,6 +280,8 @@ def prompt(a: dict, stamp: str) -> str:
         "2. Write only inside your ground. Work that belongs elsewhere becomes a proposal in your sitrep.\n"
         "3. Do not start other agents. Nothing that leaves the brain (send, publish, pay): propose it instead.\n"
         "4. Never read or print secrets (.env, keys, tokens). Say \"(not checkable)\" instead of guessing.\n"
+        "   Run one plain command at a time (no pipes, no &&): change folder with cd first, then run git or tests; "
+        "a command outside your allowed list is refused, so write it as \"(not checkable)\" and move on.\n"
         + {0: "5. Autonomy level 0 (propose): write only your state and sitrep; every change is a proposal.\n\n",
            1: "5. Autonomy level 1 (branch): commit on your own branch in your worktree, by exact path; never push.\n\n",
            2: "5. Autonomy level 2 (ship): commit on your own branch in your worktree, by exact path. You may ship it with "
@@ -318,9 +321,15 @@ def settings(a: dict) -> dict:
 def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     """Pure: one shell line for cc-job."""
     parts = ["claude", "-p", "--output-format", "text", "--max-budget-usd", str(a.get("budget_usd") or 1),
-             "--settings", str(settings_path), "--add-dir", str(AGENTS_DIR / a["id"])]
+             "--settings", str(settings_path)]
+    # Folders the turn may READ (2026-10-17: the first unattended runs were refused reading their own standard,
+    # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (the
+    # General and the Inspector read every report). Writing stays limited to the ground by the allow list.
+    reads = [str(AGENTS_DIR)]
     for g in a.get("ground") or []:
-        parts += ["--add-dir", g]
+        reads += [g, str(Path(g).parent)]
+    for d in dict.fromkeys(reads):
+        parts += ["--add-dir", d]
     if a.get("model"):
         parts += ["--model", a["model"]]
     line = " ".join(shlex.quote(p) for p in parts)
