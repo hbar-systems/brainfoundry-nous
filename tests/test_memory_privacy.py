@@ -491,20 +491,24 @@ def _vault_queries(db):
     return [p for s, p in db.statements if p and "vault/%" in p]
 
 
-def test_tiered_closed_view_has_no_vault_slot(m):
-    m.search_similar_documents("q", limit=10, architecture="tiered")
+@pytest.mark.parametrize("arch", ["flat", "layer_scoped", "tiered"])
+def test_closed_view_has_no_vault_slot(m, arch):
+    layers = ["notes"] if arch == "layer_scoped" else None
+    m.search_similar_documents("q", limit=10, layers=layers, architecture=arch)
     assert not _vault_queries(m._test_db)
 
 
-def test_tiered_local_view_pins_vault_and_dedupes(m, monkeypatch):
+@pytest.mark.parametrize("arch", ["flat", "layer_scoped", "tiered"])
+def test_local_view_pins_vault_and_dedupes(m, monkeypatch, arch):
+    layers = ["notes"] if arch == "layer_scoped" else None
     vault_row = ("vault/test.txt", "the recipe code is PINEAPPLE", {"privacy": "local-only"}, 0.9)
     m._test_db.rows = list(m._test_db.rows) + [vault_row]
-    docs = m.search_similar_documents("q", limit=10, architecture="tiered", allow_local_only=True)
+    docs = m.search_similar_documents("q", limit=10, layers=layers, architecture=arch, allow_local_only=True)
     assert _vault_queries(m._test_db)
     keys = [(d["document_name"], d["content"]) for d in docs]
     assert ("vault/test.txt", "the recipe code is PINEAPPLE") in keys
     assert len(keys) == len(set(keys))
     monkeypatch.setenv("RAG_VAULT_SLOTS", "0")
     m._test_db.statements.clear()
-    m.search_similar_documents("q", limit=10, architecture="tiered", allow_local_only=True)
+    m.search_similar_documents("q", limit=10, layers=layers, architecture=arch, allow_local_only=True)
     assert not _vault_queries(m._test_db)

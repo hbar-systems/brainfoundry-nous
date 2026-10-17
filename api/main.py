@@ -2091,6 +2091,42 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         from api import privacy as _privacy
         privacy_sql = _privacy.sql_clause(allow_local_only)
 
+        # Vault slots (2026-10-17), in every retrieval mode: a reader allowed local-only memory also
+        # gets the nearest vault documents pinned first, so a short private note is not outranked by
+        # the whole corpus. Closed readers never see them (privacy_sql drops local-only rows, the
+        # Python filter backs it up). RAG_VAULT_SLOTS=0 turns it off.
+        try:
+            _vault_n = max(0, int(os.getenv("RAG_VAULT_SLOTS", "2")))
+        except ValueError:
+            _vault_n = 2
+        vault_rows = []
+        if allow_local_only and _vault_n:
+            cursor.execute(
+                f"""
+                SELECT document_name, content, metadata,
+                       embedding <-> %s::vector as distance
+                FROM document_embeddings
+                WHERE document_name LIKE %s
+                  AND (metadata->>'deleted_at' IS NULL)
+                  {privacy_sql}
+                ORDER BY embedding <-> %s::vector
+                LIMIT %s
+                """,
+                (embedding_str, 'vault/%', embedding_str, _vault_n),
+            )
+            vault_rows = cursor.fetchall()
+
+        def _pin_vault(results):
+            pinned = _privacy.filter_docs([
+                {"document_name": r[0], "content": r[1], "metadata": r[2] or {},
+                 "similarity_score": float(1 - r[3])} for r in vault_rows], allow_local_only)
+            out, seen = [], set()
+            for d in pinned + list(results):      # one copy of each chunk, vault first
+                k = (d["document_name"], d["content"])
+                if k not in seen:
+                    seen.add(k); out.append(d)
+            return out
+
         if architecture == "flat":
             cursor.execute(
                 f"""
@@ -2117,7 +2153,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
-            return _memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit)
+            return _pin_vault(_memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit))
 
         # ── Layer-filtered path (v0.8) ───────────────────────────────
         if layers:
@@ -2146,7 +2182,7 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
                 }
                 for r in rows
             ]
-            return _memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit)
+            return _pin_vault(_memtype.rerank(_privacy.filter_docs(results, allow_local_only), limit))
 
         def fetch_tier(pattern, n):
             cursor.execute(
@@ -2168,14 +2204,6 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         tier2a = fetch_tier(f'{_t2a}/%', 1)
         tier2b = fetch_tier(f'{_t2b}/%', 1)
         tier2c = fetch_tier(f'{_t2c}/%', 1)
-        # Vault slots (2026-10-17): a reader allowed local-only memory also gets the nearest vault
-        # documents pinned, so a short private note is not outranked by the whole corpus. Closed
-        # readers never see them (privacy_sql already drops local-only rows). RAG_VAULT_SLOTS=0 turns it off.
-        try:
-            _vault_n = max(0, int(os.getenv("RAG_VAULT_SLOTS", "2")))
-        except ValueError:
-            _vault_n = 2
-        tier_vault = fetch_tier('vault/%', _vault_n) if (allow_local_only and _vault_n) else []
 
         # Tier 3: similarity search excluding tiered folders
         cursor.execute(
@@ -2215,14 +2243,8 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         # dropped, then truncated back to `limit`.
         tier3_ranked = _memtype.rerank(
             _privacy.filter_docs(_to_dicts(tier3), allow_local_only), limit)
-        pinned = _privacy.filter_docs(
-            _to_dicts(tier_vault + tier1 + tier2a + tier2b + tier2c), allow_local_only)
-        out, _seen = [], set()
-        for d in pinned + tier3_ranked:          # one copy of each chunk, pinned ones first
-            k = (d["document_name"], d["content"])
-            if k not in _seen:
-                _seen.add(k); out.append(d)
-        return out
+        return _pin_vault(_privacy.filter_docs(
+            _to_dicts(tier1 + tier2a + tier2b + tier2c), allow_local_only) + tier3_ranked)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
