@@ -109,3 +109,23 @@ def test_update_delete_and_sitrep(ag):
     assert ag.view()["agents"] == [] and list((ag.AGENTS_DIR / ".trash").glob("disk-watch.*.json"))
     with pytest.raises(ValueError):
         ag.load("../etc/passwd")
+
+
+def test_serials_never_reused_and_tag(ag):
+    a = ag.create({**BODY, "callsign": "Sentinel", "post": "I Hands"})
+    b = ag.create(BODY)
+    assert (a["serial"], b["serial"]) == (1, 2)
+    assert ag.tag(a) == 'A-001 "Sentinel"' and ag.tag(b) == "A-002"
+    ag.delete(b["id"])
+    c = ag.create(BODY)
+    assert c["serial"] == 3                            # a retired number is never given again
+    assert "A-001" in ag.prompt(a, "x") and "I Hands" in ag.prompt(a, "x")
+    v = ag.view()
+    assert [x["tag"] for x in v["agents"]] == ['A-001 "Sentinel"', "A-003"]
+
+
+def test_callsign_and_post_validation(ag):
+    with pytest.raises(ValueError):
+        ag.create({**BODY, "callsign": "x" * 31})
+    with pytest.raises(ValueError):
+        ag.create({**BODY, "post": "bad<post>"})

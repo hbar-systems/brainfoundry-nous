@@ -85,7 +85,7 @@ def load_all() -> list[dict]:
             out.append(json.loads(p.read_text()))
         except Exception:  # noqa: BLE001  a broken file is skipped, never a dead page
             continue
-    return sorted(out, key=lambda a: (a.get("created") or "", a.get("id") or ""))
+    return sorted(out, key=lambda a: (int(a.get("serial") or 0), a.get("created") or "", a.get("id") or ""))
 
 
 def _clean_ground(ground) -> list[str]:
@@ -137,7 +137,39 @@ def validate(body: dict, existing: dict | None = None) -> dict:
         a["model"] = m
     if "enabled" in body or not existing:
         a["enabled"] = bool(body.get("enabled", True))
+    if "callsign" in body or not existing:
+        cs = str(body.get("callsign") or "").strip()
+        if cs and not re.fullmatch(r"[A-Za-z0-9 ._'-]{1,30}", cs):
+            raise ValueError("a callsign is up to 30 letters, digits, spaces or . _ ' -")
+        a["callsign"] = cs
+    if "post" in body or not existing:
+        post = str(body.get("post") or "").strip()
+        if post and not re.fullmatch(r"[A-Za-z0-9 ._'&/-]{1,40}", post):
+            raise ValueError("a post name is up to 40 plain characters")
+        a["post"] = post
     return a
+
+
+def next_serial() -> int:
+    """Serial numbers are never reused: a counter file, bumped under a rename, survives retirement."""
+    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    f = AGENTS_DIR / ".serial"
+    try:
+        n = int(f.read_text().strip() or 0)
+    except (FileNotFoundError, ValueError):
+        n = 0
+    seen = [int(a.get("serial") or 0) for a in load_all()]
+    n = max([n, *seen]) + 1
+    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(str(n))
+    tmp.replace(f)
+    return n
+
+
+def tag(a: dict) -> str:
+    """Pure: the agent's designation, e.g. A-007 "Sentinel"."""
+    t = f"A-{int(a.get('serial') or 0):03d}"
+    return f'{t} "{a["callsign"]}"' if a.get("callsign") else t
 
 
 def create(body: dict) -> dict:
@@ -146,7 +178,7 @@ def create(body: dict) -> dict:
     aid, n = base, 2
     while _path(aid).exists():
         aid, n = f"{base[:36]}-{n}", n + 1
-    a.update({"id": aid, "created": iso(), "last_run": None, "last_job": None, "runs": 0})
+    a.update({"id": aid, "serial": next_serial(), "created": iso(), "last_run": None, "last_job": None, "runs": 0})
     save(a)
     (AGENTS_DIR / aid / "sitreps").mkdir(parents=True, exist_ok=True)
     return a
@@ -193,7 +225,7 @@ def prompt(a: dict, stamp: str) -> str:
     ground = "\n".join(f"- {g}" for g in a.get("ground") or []) or "- (none: report only)"
     sit = sitrep_dir(a) / f"{stamp}.md"
     return (
-        f"You are the standing agent \"{a['name']}\" of this brain. This turn was started by its schedule, "
+        f"You are the standing agent {tag(a)}, \"{a['name']}\"{(', of the post ' + a['post']) if a.get('post') else ''}, of this brain. This turn was started by its schedule, "
         f"not by a person; nobody is watching it live.\n\n"
         f"MISSION\n{a['mission']}\n\n"
         f"GROUND (the only places you may write, besides your sitrep)\n{ground}\n\n"
@@ -204,7 +236,7 @@ def prompt(a: dict, stamp: str) -> str:
         "4. Never read or print secrets (.env, keys, tokens). Say \"(not checkable)\" instead of guessing.\n"
         "5. If you commit in a git repository inside your ground, commit by exact path, never push.\n\n"
         f"Before you end, write your sitrep to {sit} in this shape:\n"
-        "SITREP <agent> <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
+        f"SITREP {tag(a)} <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
         "3. FOUND what you noticed\n4. OWED one word or one press each from the owner, with the exact address\n"
         "5. NEXT at most three\n"
     )
@@ -242,7 +274,7 @@ def parse_job(out: str) -> str | None:
 
 
 def open_job(a: dict, cmd: str, cwd: str) -> str:
-    r = subprocess.run(["cc-job", "run", "-C", cwd, "-t", f"agent: {a['name']}", "--", cmd],
+    r = subprocess.run(["cc-job", "run", "-C", cwd, "-t", f"{tag(a)} {a['name']}", "--", cmd],
                        capture_output=True, text=True, timeout=60)
     jid = parse_job((r.stdout or "") + (r.stderr or ""))
     if r.returncode != 0 or not jid:
@@ -294,7 +326,7 @@ def last_sitrep(a: dict) -> dict | None:
 def view() -> dict:
     agents = []
     for a in load_all():
-        agents.append({**a, "next_due": iso(next_due(a)) if a.get("enabled") else None, "sitrep": last_sitrep(a)})
+        agents.append({**a, "tag": tag(a), "next_due": iso(next_due(a)) if a.get("enabled") else None, "sitrep": last_sitrep(a)})
     return {"agents": agents, "dir": str(AGENTS_DIR), "schedules": SCHEDULES,
             "limits": {"min_every_minutes": MIN_EVERY_MIN, "max_budget_usd": MAX_BUDGET_USD, "max_per_tick": MAX_PER_TICK}}
 
