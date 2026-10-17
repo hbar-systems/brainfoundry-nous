@@ -16,8 +16,10 @@ const C = {
 }
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 const link = { ...mono, fontSize: '11px', color: C.dim, cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
-const EVERY = [['30 min', 30], ['hourly', 60], ['every 6 h', 360], ['daily', 1440], ['weekly', 10080]]
-const BUDGET = [0.5, 1, 2, 5]
+const EVERY = [['on call', 0], ['30 min', 30], ['hourly', 60], ['every 6 h', 360], ['daily', 1440], ['weekly', 10080]]
+const BUDGET = [0.5, 1, 2, 5, 10, 20]
+// Institution codes: the letters of the tag (LAW-1, ENG-2). Any 2 to 4 letters can be typed.
+const CODES = [['CMD', 'Command'], ['SLF', 'Self-knowledge'], ['ENG', 'Engineering'], ['MEM', 'Memory intake'], ['LOG', 'Logistics and treasury'], ['ECO', 'Economy'], ['MKT', 'Market'], ['COM', 'Foreign commerce'], ['LAW', 'Law'], ['DEF', 'Defence'], ['CEN', 'Census'], ['ADM', 'Admission'], ['SUP', 'Support'], ['PAR', 'Parliament'], ['DIP', 'Diplomacy'], ['SCI', 'Science'], ['EDU', 'Education'], ['HEA', 'Health'], ['PRS', 'Press'], ['CUL', 'Culture']]
 // Suggested posts (the units of the order of battle); any other name can be typed.
 const POSTS = ['Command', 'I Hands', 'II Studio', 'III Media', 'IV Science', 'V Doors', 'VI Agency', 'VII Legal', 'J2 Intelligence', 'J4 Logistics']
 const everyWord = (m) => (EVERY.find(e => e[1] === m) || [`every ${m} min`])[0]
@@ -59,6 +61,7 @@ async function post(path, body) {
 function NewAgent({ onMade, posts }) {
   const [name, setName] = useState('')
   const [callsign, setCallsign] = useState('')
+  const [code, setCode] = useState('')
   const [post, setPost] = useState('')
   const [mission, setMission] = useState('')
   const [ground, setGround] = useState('')
@@ -70,8 +73,8 @@ function NewAgent({ onMade, posts }) {
   const make = async () => {
     setBusy(true); setErr('')
     try {
-      await post('/agents', { name, callsign, post, mission, ground, every_minutes: every, budget_usd: budget, model })
-      setName(''); setCallsign(''); setMission(''); setGround(''); setModel('')
+      await post('/agents', { name, callsign, code, post, mission, ground, every_minutes: every, budget_usd: budget, model })
+      setName(''); setCallsign(''); setCode(''); setMission(''); setGround(''); setModel('')
       onMade()
     } catch (e) { setErr(String(e.message || e)) }
     setBusy(false)
@@ -83,6 +86,8 @@ function NewAgent({ onMade, posts }) {
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Disk watch" style={field} />
       <div style={label}>callsign (optional nickname; the number is given automatically, A-001, A-002, ...)</div>
       <input value={callsign} onChange={e => setCallsign(e.target.value)} placeholder="Sentinel" style={field} />
+      <div style={label}>institution: the letters of its tag; the number is given automatically (LAW-1, LAW-2, ...)</div>
+      <div>{CODES.map(([c, n]) => <Chip key={c} on={code === c} onClick={() => setCode(code === c ? '' : c)}>{c} {n}</Chip>)}</div>
       <div style={label}>post: the unit it serves under</div>
       <div>{(posts || []).map(p => <Chip key={p} on={post === p} onClick={() => setPost(post === p ? '' : p)}>{p}</Chip>)}</div>
       <input value={post} onChange={e => setPost(e.target.value)} placeholder="I Hands" style={field} />
@@ -110,6 +115,29 @@ function NewAgent({ onMade, posts }) {
   )
 }
 
+// A face for each agent (2026-10-17): drawn from its tag, the same every time, no image service.
+// Unit colour ring, a field with its institution letters, and rank marks: a star for the General,
+// two bars for a captain. The pattern behind is a 5x5 mirrored grid seeded by the serial.
+function hashOf(str) { let h = 2166136261; for (const ch of String(str)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) } return h >>> 0 }
+function Face({ a, size = 46 }) {
+  const h = hashOf(a.post || 'none'), g = hashOf(`${a.serial}-${a.callsign}`)
+  const hue = h % 360, hue2 = (hue + 40 + (g % 80)) % 360
+  const cells = []
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if ((g >> (y * 3 + x)) & 1) { cells.push([x, y]); if (x < 2) cells.push([4 - x, y]) }
+  const general = (a.code || '') === 'CMD' || /general/i.test(a.name || '')
+  const letters = (a.code || (a.callsign || a.name || '?').slice(0, 2)).toUpperCase()
+  return (
+    <svg width={size} height={size} viewBox="0 0 50 50" style={{ flex: 'none', alignSelf: 'center' }} aria-label={`face of ${a.tag}`}>
+      <circle cx="25" cy="25" r="23.5" fill={`hsl(${hue2} 35% 16%)`} stroke={`hsl(${hue} 55% 55%)`} strokeWidth="3" />
+      <g opacity="0.55">{cells.map(([x, y], i) => <rect key={i} x={12.5 + x * 5} y={9 + y * 5} width="5" height="5" fill={`hsl(${hue2} 50% 45%)`} />)}</g>
+      <text x="25" y="41.5" textAnchor="middle" fontSize="8.5" fontFamily="monospace" fill={`hsl(${hue} 70% 80%)`}>{letters}</text>
+      {general
+        ? <polygon points="25,3 27,8 32,8 28,11 30,16 25,13 20,16 22,11 18,8 23,8" fill="#d4b86a" />
+        : <g fill="#d4b86a"><rect x="19" y="4" width="12" height="2" /><rect x="19" y="7.5" width="12" height="2" /></g>}
+    </svg>
+  )
+}
+
 function Agent({ a, reload }) {
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
@@ -123,7 +151,9 @@ function Agent({ a, reload }) {
   return (
     <div style={{ backgroundColor: C.card, border: `1px solid ${on ? C.line : C.line}`, borderLeft: `3px solid ${on ? C.ok : C.dim}`, borderRadius: '10px', padding: '12px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+        <Face a={a} />
         <span style={{ ...mono, fontSize: '13px', color: C.gold }}>{a.tag}</span>
+        <span style={{ ...mono, fontSize: '10px', color: C.dim }}>A-{String(a.serial || 0).padStart(3, '0')}</span>
         <span style={{ fontSize: '15px', color: C.ink, fontWeight: 600 }}>{a.name}</span>
         <span style={{ ...mono, fontSize: '11px', color: on ? C.ok : C.dim }}>{on ? 'on' : 'paused'}</span>
         <span style={{ ...mono, fontSize: '11px', color: C.dim }}>{everyWord(a.every_minutes)} · up to {a.budget_usd} USD a run{a.model ? ` · ${a.model}` : ''}</span>
@@ -131,7 +161,7 @@ function Agent({ a, reload }) {
       <p style={{ fontSize: '13px', color: C.ink, lineHeight: 1.55, margin: '6px 0' }}>{a.mission}</p>
       <div style={{ ...mono, fontSize: '11px', color: C.dim, lineHeight: 1.7 }}>
         ground: {(a.ground || []).length ? a.ground.join(', ') : 'none (reports only)'}<br />
-        last run: {when(a.last_run)}{a.last_job ? ` (job ${a.last_job})` : ''} · next: {on ? when(a.next_due) : 'paused'} · runs: {a.runs || 0}
+        last run: {when(a.last_run)}{a.last_job ? ` (job ${a.last_job})` : ''} · next: {!on ? 'paused' : a.every_minutes ? when(a.next_due) : 'on call'} · runs: {a.runs || 0}
         {a.last_error ? <><br /><span style={{ color: C.bad }}>last start failed: {a.last_error}</span></> : null}
       </div>
       {a.sitrep && (

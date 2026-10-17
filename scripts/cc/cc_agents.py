@@ -30,9 +30,9 @@ AGENTS_DIR = Path(os.environ.get("CC_AGENTS_DIR") or (Path.home() / "agents"))
 HOOK_DIR = Path(os.environ.get("CC_HOOK_DIR") or Path(__file__).resolve().parent)
 HOOK_PYTHON = os.environ.get("CC_HOOK_PYTHON", "/usr/bin/python3")
 MIN_EVERY_MIN = 15             # nothing runs more often than every 15 minutes
-MAX_BUDGET_USD = 5.0           # D65: cheap proceeds; above this the person decides, not a schedule
+MAX_BUDGET_USD = 20.0          # the owner picks the budget on the page (that press is the ask, D65)
 MAX_PER_TICK = 3               # at most three agents start in one tick; the rest wait a minute
-SCHEDULES = {"15 min": 15, "30 min": 30, "hourly": 60, "every 6 h": 360, "daily": 1440, "weekly": 10080}
+SCHEDULES = {"on call": 0, "15 min": 15, "30 min": 30, "hourly": 60, "every 6 h": 360, "daily": 1440, "weekly": 10080}
 
 BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "find *", "wc *", "head *", "tail *", "date", "date *",
               "git status", "git status *", "git diff *", "git log *", "git show *", "git add *", "git commit *",
@@ -127,8 +127,8 @@ def validate(body: dict, existing: dict | None = None) -> dict:
     if "ground" in body or not existing:
         a["ground"] = _clean_ground(body.get("ground"))
     if "every_minutes" in body or not existing:
-        every = int(body.get("every_minutes") or 1440)
-        if every < MIN_EVERY_MIN:
+        every = int(body.get("every_minutes") if body.get("every_minutes") is not None else 1440)
+        if every < 0 or (every and every < MIN_EVERY_MIN):
             raise ValueError(f"nothing runs more often than every {MIN_EVERY_MIN} minutes")
         a["every_minutes"] = every
     if "budget_usd" in body or not existing:
@@ -148,6 +148,11 @@ def validate(body: dict, existing: dict | None = None) -> dict:
         if cs and not re.fullmatch(r"[A-Za-z0-9 ._'-]{1,30}", cs):
             raise ValueError("a callsign is up to 30 letters, digits, spaces or . _ ' -")
         a["callsign"] = cs
+    if "code" in body or not existing:
+        code = str(body.get("code") or "").strip().upper()
+        if code and not re.fullmatch(r"[A-Z]{2,4}", code):
+            raise ValueError("an institution code is 2 to 4 letters, like LAW or ENG")
+        a["code"] = code
     if "post" in body or not existing:
         post = str(body.get("post") or "").strip()
         if post and not re.fullmatch(r"[A-Za-z0-9 ._'&/-]{1,40}", post):
@@ -172,9 +177,24 @@ def next_serial() -> int:
     return n
 
 
+def next_code_serial(code: str) -> int:
+    """Number within an institution: LAW-1, LAW-2. Never reused, retired agents included."""
+    seen = [int(a.get("code_serial") or 0) for a in load_all() if a.get("code") == code]
+    trash = AGENTS_DIR / ".trash"
+    if trash.is_dir():
+        for p in trash.glob("*.json"):
+            try:
+                t = json.loads(p.read_text())
+                if t.get("code") == code:
+                    seen.append(int(t.get("code_serial") or 0))
+            except Exception:  # noqa: BLE001
+                pass
+    return max([0, *seen]) + 1
+
+
 def tag(a: dict) -> str:
-    """Pure: the agent's designation, e.g. A-007 "Sentinel"."""
-    t = f"A-{int(a.get('serial') or 0):03d}"
+    """Pure: the agent's designation: LAW-1 "Magistrate" with an institution code, else A-007 "Sentinel"."""
+    t = f"{a['code']}-{int(a.get('code_serial') or 1)}" if a.get("code") else f"A-{int(a.get('serial') or 0):03d}"
     return f'{t} "{a["callsign"]}"' if a.get("callsign") else t
 
 
@@ -184,6 +204,8 @@ def create(body: dict) -> dict:
     aid, n = base, 2
     while _path(aid).exists():
         aid, n = f"{base[:36]}-{n}", n + 1
+    if a.get("code"):
+        a["code_serial"] = next_code_serial(a["code"])
     a.update({"id": aid, "serial": next_serial(), "created": iso(), "last_run": None, "last_job": None, "runs": 0})
     save(a)
     (AGENTS_DIR / aid / "sitreps").mkdir(parents=True, exist_ok=True)
@@ -191,7 +213,10 @@ def create(body: dict) -> dict:
 
 
 def update(aid: str, body: dict) -> dict:
-    a = validate(body, load(aid))
+    old = load(aid)
+    a = validate(body, old)
+    if a.get("code") and a.get("code") != old.get("code"):
+        a["code_serial"] = next_code_serial(a["code"])
     save(a)
     return a
 
@@ -219,6 +244,8 @@ def next_due(a: dict) -> float:
 
 
 def due(a: dict, t: float | None = None) -> bool:
+    if not int(a.get("every_minutes") or 0):      # on call: runs only when someone presses run now
+        return False
     return bool(a.get("enabled")) and (t if t is not None else now()) >= next_due(a)
 
 
@@ -333,7 +360,7 @@ def last_sitrep(a: dict) -> dict | None:
 def view() -> dict:
     agents = []
     for a in load_all():
-        agents.append({**a, "tag": tag(a), "next_due": iso(next_due(a)) if a.get("enabled") else None, "sitrep": last_sitrep(a)})
+        agents.append({**a, "tag": tag(a), "next_due": iso(next_due(a)) if (a.get("enabled") and int(a.get("every_minutes") or 0)) else None, "sitrep": last_sitrep(a)})
     return {"agents": agents, "dir": str(AGENTS_DIR), "schedules": SCHEDULES,
             "limits": {"min_every_minutes": MIN_EVERY_MIN, "max_budget_usd": MAX_BUDGET_USD, "max_per_tick": MAX_PER_TICK}}
 

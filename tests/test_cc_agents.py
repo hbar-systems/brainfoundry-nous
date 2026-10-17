@@ -36,6 +36,7 @@ def test_create_and_list(ag):
     {"mission": "too short"},
     {"every_minutes": 5},
     {"budget_usd": 50},
+    {"every_minutes": -1},
     {"ground": "relative/path"},
     {"ground": "/"},
     {"ground": "/srv/app/.env"},
@@ -135,3 +136,19 @@ def test_unattended_checks_allowed_but_no_post_or_branch_delete(ag):
     allow = ag.settings(ag.create(BODY))["permissions"]["allow"]
     assert "Bash(curl -s -o /dev/null *)" in allow and "WebFetch" in allow and "Bash(git worktree list)" in allow
     assert not any("curl -X" in a or "curl -d" in a or "branch -D" in a or a == "Bash(curl *)" for a in allow)
+
+
+def test_institution_code_tags_and_on_call(ag):
+    a = ag.create({**BODY, "code": "law", "callsign": "Magistrate"})
+    b = ag.create({**BODY, "code": "LAW"})
+    c = ag.create({**BODY, "code": "ENG"})
+    assert [ag.tag(x) for x in (a, b, c)] == ['LAW-1 "Magistrate"', "LAW-2", "ENG-1"]
+    ag.delete(b["id"])
+    assert ag.tag(ag.create({**BODY, "code": "LAW"})) == "LAW-3"    # never reused
+    oc = ag.create({**BODY, "every_minutes": 0})
+    assert not ag.due(oc, 9e12) and [x for x in ag.view()["agents"] if x["id"] == oc["id"]][0]["next_due"] is None
+    assert ag.create({**BODY, "budget_usd": 20})["budget_usd"] == 20
+    with pytest.raises(ValueError):
+        ag.create({**BODY, "code": "law1"})
+    with pytest.raises(ValueError):
+        ag.create({**BODY, "every_minutes": 5})
