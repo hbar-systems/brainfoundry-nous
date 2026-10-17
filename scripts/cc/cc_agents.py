@@ -43,11 +43,18 @@ BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "find *", "wc *", "head *
               "git rev-parse *", "git ls-files *", "git branch --show-current", "git worktree list",
               "git fetch", "git fetch --quiet", "python3 -m pytest *", "node registry/validate.js",
               "dig *", "openssl s_client *", "WebFetch")
-DENY = ("Bash(git push*)", "Bash(git push)", "Bash(git push *)", "Bash(git -C * push*)", "Bash(* git push*)",
-        "Bash(rm -rf*)", "Bash(rm -rf *)", "Bash(* rm -rf *)", "Bash(rm -fr *)", "Bash(* rm -fr *)",
+PUSH_DENY = ("Bash(git push*)", "Bash(git push)", "Bash(git push *)", "Bash(git -C * push*)", "Bash(* git push*)")
+FORCE_DENY = ("Bash(git push -f*)", "Bash(git push --force*)", "Bash(git push * -f*)", "Bash(git push * --force*)",
+              "Bash(git push * +*)", "Bash(git push --delete*)", "Bash(git push * --delete*)", "Bash(git push * :*)",
+              "Bash(git -C * push*)", "Bash(* git push*)")
+DENY = ("Bash(rm -rf*)", "Bash(rm -rf *)", "Bash(* rm -rf *)", "Bash(rm -fr *)", "Bash(* rm -fr *)",
         "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)",
         "Bash(*/.env*)", "Bash(* .env*)", "Bash(cat .env*)")
 ASK = ("Bash(sudo *)", "Bash(sudo:*)")
+# Autonomy levels (2026-10-17, the Czar-General's ruling): 0 propose (writes only its state and sitrep), 1 branch
+# (commits on its own branch in its own worktree, never pushes; the default), 2 ship (may also push its own branch
+# onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
+LEVELS = {0: "propose", 1: "branch", 2: "ship"}
 FORBIDDEN_GROUND = ("/", "/etc", "/root", "/home", "/usr", "/var", "/boot", "/proc", "/sys")
 
 
@@ -143,6 +150,11 @@ def validate(body: dict, existing: dict | None = None) -> dict:
         a["model"] = m
     if "enabled" in body or not existing:
         a["enabled"] = bool(body.get("enabled", True))
+    if "level" in body or not existing:
+        lv = int(body.get("level") if body.get("level") is not None else 1)
+        if lv not in LEVELS:
+            raise ValueError("autonomy level is 0 (propose), 1 (branch) or 2 (ship)")
+        a["level"] = lv
     if "callsign" in body or not existing:
         cs = str(body.get("callsign") or "").strip()
         if cs and not re.fullmatch(r"[A-Za-z0-9 ._'-]{1,30}", cs):
@@ -265,27 +277,41 @@ def prompt(a: dict, stamp: str) -> str:
         "STANDING ORDERS\n"
         "1. Do one useful round of the mission and stop. Small, inspectable steps; no long loops.\n"
         "2. Write only inside your ground. Work that belongs elsewhere becomes a proposal in your sitrep.\n"
-        "3. Do not start other agents. Nothing that leaves the brain (send, publish, push, pay): propose it instead.\n"
+        "3. Do not start other agents. Nothing that leaves the brain (send, publish, pay): propose it instead.\n"
         "4. Never read or print secrets (.env, keys, tokens). Say \"(not checkable)\" instead of guessing.\n"
-        "5. If you commit in a git repository inside your ground, commit by exact path, never push.\n\n"
-        f"Before you end, write your sitrep to {sit} in this shape:\n"
-        f"SITREP {tag(a)} <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
-        "3. FOUND what you noticed\n4. OWED one word or one press each from the owner, with the exact address\n"
-        "5. NEXT at most three\n"
+        + {0: "5. Autonomy level 0 (propose): write only your state and sitrep; every change is a proposal.\n\n",
+           1: "5. Autonomy level 1 (branch): commit on your own branch in your worktree, by exact path; never push.\n\n",
+           2: "5. Autonomy level 2 (ship): commit on your own branch in your worktree, by exact path. You may ship it with "
+              "`git push origin HEAD:main` only when (a) the repo's tests pass and you name the count in your sitrep, "
+              "(b) the diff holds no secret, no private material and no employer name, (c) the change is one small "
+              "reviewable step. Never force, never delete a branch, never push anything else. Name the pushed commit id "
+              "in your sitrep; the Inspector General audits every ship.\n\n"}[
+            int(a.get("level", 1)) if int(a.get("level", 1)) in LEVELS else 1]
+        + f"Before you end, write your sitrep to {sit} in this shape:\n"
+        + f"SITREP {tag(a)} <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
+        + "3. FOUND what you noticed\n4. OWED one word or one press each from the owner, with the exact address\n"
+        + "5. NEXT at most three\n"
     )
 
 
 def settings(a: dict) -> dict:
     """Pure: Claude Code settings for the agent's turn: its own write area, the card hook for the rest."""
-    write = [*(a.get("ground") or []), str(AGENTS_DIR / a["id"])]
+    lv = int(a.get("level", 1))
+    ground = list(a.get("ground") or [])
+    if lv == 0:                                   # propose: no worktree writes
+        ground = [g for g in ground if "/wt/" not in g]
+    write = [*ground, str(AGENTS_DIR / a["id"])]
     allow = ([f"Edit(//{w.lstrip('/')}/**)" for w in write]
              + [c if c == "WebFetch" else f"Bash({c})" for c in BASH_ALLOW])
+    if lv == 2:
+        allow += ["Bash(git push origin HEAD:main)"]
+    deny = list(DENY) + (list(FORCE_DENY) if lv == 2 else list(PUSH_DENY))
     return {
         "hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
                   "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit",
                                    "hooks": [{"type": "command", "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-post-hook.py'}", "timeout": 10}]}]},
-        "permissions": {"allow": allow, "ask": list(ASK), "deny": list(DENY)},
+        "permissions": {"allow": allow, "ask": list(ASK), "deny": deny},
     }
 
 

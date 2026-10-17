@@ -18,6 +18,8 @@ const mono = { fontFamily: 'var(--font-mono, monospace)' }
 const link = { ...mono, fontSize: '11px', color: C.dim, cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
 const EVERY = [['on call', 0], ['30 min', 30], ['hourly', 60], ['every 6 h', 360], ['daily', 1440], ['weekly', 10080]]
 const BUDGET = [0.5, 1, 2, 5, 10, 20]
+// Autonomy levels: 0 propose, 1 branch (default), 2 ship (its own branch onto main of its own repo; never force).
+const LEVELS = [[0, 'propose'], [1, 'branch'], [2, 'ship']]
 // Institution codes: the letters of the tag (LAW-1, ENG-2). Any 2 to 4 letters can be typed.
 const CODES = [['CMD', 'Command'], ['SLF', 'Self-knowledge'], ['ENG', 'Engineering'], ['MEM', 'Memory intake'], ['LOG', 'Logistics and treasury'], ['ECO', 'Economy'], ['MKT', 'Market'], ['COM', 'Foreign commerce'], ['LAW', 'Law'], ['DEF', 'Defence'], ['CEN', 'Census'], ['ADM', 'Admission'], ['SUP', 'Support'], ['PAR', 'Parliament'], ['DIP', 'Diplomacy'], ['SCI', 'Science'], ['EDU', 'Education'], ['HEA', 'Health'], ['PRS', 'Press'], ['CUL', 'Culture']]
 // Suggested posts (the units of the order of battle); any other name can be typed.
@@ -68,12 +70,13 @@ function NewAgent({ onMade, posts }) {
   const [every, setEvery] = useState(1440)
   const [budget, setBudget] = useState(1)
   const [model, setModel] = useState('')
+  const [level, setLevel] = useState(1)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const make = async () => {
     setBusy(true); setErr('')
     try {
-      await post('/agents', { name, callsign, code, post, mission, ground, every_minutes: every, budget_usd: budget, model })
+      await post('/agents', { name, callsign, code, post, level, mission, ground, every_minutes: every, budget_usd: budget, model })
       setName(''); setCallsign(''); setCode(''); setMission(''); setGround(''); setModel('')
       onMade()
     } catch (e) { setErr(String(e.message || e)) }
@@ -101,6 +104,8 @@ function NewAgent({ onMade, posts }) {
       <div>{EVERY.map(([w, m]) => <Chip key={m} on={every === m} onClick={() => setEvery(m)}>{w}</Chip>)}</div>
       <div style={label}>budget per run (USD)</div>
       <div>{BUDGET.map(b => <Chip key={b} on={budget === b} onClick={() => setBudget(b)}>{b}</Chip>)}</div>
+      <div style={label}>autonomy: propose = changes only as proposals; branch = commits on its own branch, never pushed; ship = may push its branch onto main of its own repo when tests pass</div>
+      <div>{LEVELS.map(([v, w]) => <Chip key={v} on={level === v} onClick={() => setLevel(v)}>{v} {w}</Chip>)}</div>
       <div style={label}>model (optional; empty = the default reasoner)</div>
       <input value={model} onChange={e => setModel(e.target.value)} placeholder="" style={{ ...field, ...mono, fontSize: '13px' }} />
       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '14px' }}>
@@ -172,6 +177,8 @@ function Agent({ a, reload }) {
       )}
       <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
         <Btn onClick={() => act('run', '/agents/run', { id: a.id })} disabled={!!busy}>{busy === 'run' ? 'starting' : 'run now'}</Btn>
+        <span style={{ ...mono, fontSize: '11px', color: C.dim }}>autonomy</span>
+        {LEVELS.map(([v, w]) => <Chip key={v} on={(a.level ?? 1) === v} onClick={() => { if ((a.level ?? 1) !== v && (v < 2 || window.confirm(`${a.tag} may push its own branch onto main of its repo when tests pass. Grant ship?`))) act('level', '/agents/update', { id: a.id, level: v }) }}>{w}</Chip>)}
         <Btn onClick={() => act('toggle', '/agents/update', { id: a.id, enabled: !on })} disabled={!!busy}>{on ? 'pause' : 'resume'}</Btn>
         <Btn onClick={() => { if (window.confirm(`Retire ${a.name}? Its file is kept in the agents folder's .trash; its sitreps stay.`)) act('delete', '/agents/delete', { id: a.id }) }} disabled={!!busy}>retire</Btn>
         <a href="/board" style={link}>board</a>

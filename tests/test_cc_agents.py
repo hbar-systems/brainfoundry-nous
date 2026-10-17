@@ -152,3 +152,19 @@ def test_institution_code_tags_and_on_call(ag):
         ag.create({**BODY, "code": "law1"})
     with pytest.raises(ValueError):
         ag.create({**BODY, "every_minutes": 5})
+
+
+def test_levels_shape_permissions(ag):
+    p = ag.create({**BODY, "ground": "/srv/x\n/home/hands/work/wt/agents/A-9", "level": 0})
+    s0 = ag.settings(p)["permissions"]
+    assert not any("/wt/" in r for r in s0["allow"]) and "Bash(git push*)" in s0["deny"]
+    assert "level 0" in ag.prompt(p, "x")
+    b = ag.create(BODY)                                       # default level 1: never pushes
+    assert ag.load(b["id"])["level"] == 1 and "Bash(git push*)" in ag.settings(b)["permissions"]["deny"]
+    assert "never push" in ag.prompt(b, "x")
+    s2 = ag.settings(ag.create({**BODY, "level": 2}))["permissions"]
+    assert "Bash(git push origin HEAD:main)" in s2["allow"] and "Bash(git push*)" not in s2["deny"]
+    for f in ("Bash(git push --force*)", "Bash(git push * --delete*)", "Bash(git push * :*)", "Bash(git push * +*)"):
+        assert f in s2["deny"]
+    with pytest.raises(ValueError):
+        ag.create({**BODY, "level": 3})
