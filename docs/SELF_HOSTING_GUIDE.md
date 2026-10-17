@@ -196,6 +196,7 @@ The brain gives priority to documents in named folders during search. The folder
 | `RAG_TIER2A` | `thinking` | High — always 1 result | Notes, active reasoning |
 | `RAG_TIER2B` | `projects` | High — always 1 result | Current work |
 | `RAG_TIER2C` | `writing` | High — always 1 result | Essays, published work |
+| `RAG_VAULT_SLOTS` | `2` | Private chats only | Nearest vault documents pinned when the model may read local-only memory; `0` turns it off |
 
 Everything else in your corpus is searched by similarity. You can ignore the tier structure entirely — it only matters if you organize your documents into folders.
 

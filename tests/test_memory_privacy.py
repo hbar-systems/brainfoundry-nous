@@ -483,3 +483,28 @@ def test_init_sql_and_startup_carry_the_same_index():
     assert " ".join(pv.INDEX_SQL.split()) in init_sql
     main_src = (ROOT / "api" / "main.py").read_text()
     assert "cur.execute(_privacy.INDEX_SQL)" in main_src
+
+
+# ── vault slots (2026-10-17) ────────────────────────────────────────────────
+
+def _vault_queries(db):
+    return [p for s, p in db.statements if p and "vault/%" in p]
+
+
+def test_tiered_closed_view_has_no_vault_slot(m):
+    m.search_similar_documents("q", limit=10, architecture="tiered")
+    assert not _vault_queries(m._test_db)
+
+
+def test_tiered_local_view_pins_vault_and_dedupes(m, monkeypatch):
+    vault_row = ("vault/test.txt", "the recipe code is PINEAPPLE", {"privacy": "local-only"}, 0.9)
+    m._test_db.rows = list(m._test_db.rows) + [vault_row]
+    docs = m.search_similar_documents("q", limit=10, architecture="tiered", allow_local_only=True)
+    assert _vault_queries(m._test_db)
+    keys = [(d["document_name"], d["content"]) for d in docs]
+    assert ("vault/test.txt", "the recipe code is PINEAPPLE") in keys
+    assert len(keys) == len(set(keys))
+    monkeypatch.setenv("RAG_VAULT_SLOTS", "0")
+    m._test_db.statements.clear()
+    m.search_similar_documents("q", limit=10, architecture="tiered", allow_local_only=True)
+    assert not _vault_queries(m._test_db)

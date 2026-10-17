@@ -2168,6 +2168,14 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         tier2a = fetch_tier(f'{_t2a}/%', 1)
         tier2b = fetch_tier(f'{_t2b}/%', 1)
         tier2c = fetch_tier(f'{_t2c}/%', 1)
+        # Vault slots (2026-10-17): a reader allowed local-only memory also gets the nearest vault
+        # documents pinned, so a short private note is not outranked by the whole corpus. Closed
+        # readers never see them (privacy_sql already drops local-only rows). RAG_VAULT_SLOTS=0 turns it off.
+        try:
+            _vault_n = max(0, int(os.getenv("RAG_VAULT_SLOTS", "2")))
+        except ValueError:
+            _vault_n = 2
+        tier_vault = fetch_tier('vault/%', _vault_n) if (allow_local_only and _vault_n) else []
 
         # Tier 3: similarity search excluding tiered folders
         cursor.execute(
@@ -2207,8 +2215,14 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         # dropped, then truncated back to `limit`.
         tier3_ranked = _memtype.rerank(
             _privacy.filter_docs(_to_dicts(tier3), allow_local_only), limit)
-        return _privacy.filter_docs(
-            _to_dicts(tier1 + tier2a + tier2b + tier2c), allow_local_only) + tier3_ranked
+        pinned = _privacy.filter_docs(
+            _to_dicts(tier_vault + tier1 + tier2a + tier2b + tier2c), allow_local_only)
+        out, _seen = [], set()
+        for d in pinned + tier3_ranked:          # one copy of each chunk, pinned ones first
+            k = (d["document_name"], d["content"])
+            if k not in _seen:
+                _seen.add(k); out.append(d)
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
