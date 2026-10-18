@@ -195,7 +195,7 @@ def test_owner_permissions_file(ag, tmp_path, monkeypatch):
 
 def test_permissions_file_missing_is_empty(ag, tmp_path, monkeypatch):
     monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
-    assert ag.load_permissions() == {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": ""}
+    assert ag.load_permissions() == {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": "", "commit_owner": ""}
 
 
 def test_local_first_from_permissions(ag, tmp_path, monkeypatch):
@@ -223,4 +223,7 @@ def test_commits_name_the_agent(ag, tmp_path, monkeypatch):
     monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
     a = {"id": "law", "name": "Law", "code": "LAW", "code_serial": 1, "ground": ["/srv/g"], "level": 1}
     cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
-    assert "GIT_AUTHOR_NAME='hbar (via LAW-1)'" in cmd and "GIT_COMMITTER_NAME='hbar (via LAW-1)'" in cmd
+    assert "GIT_AUTHOR_NAME='LAW-1 (agent)'" in cmd
+    (tmp_path / "permissions.json").write_text(json.dumps({"commit_owner": "ada"}))
+    cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
+    assert "GIT_AUTHOR_NAME='ada (via LAW-1)'" in cmd and "GIT_COMMITTER_NAME='ada (via LAW-1)'" in cmd

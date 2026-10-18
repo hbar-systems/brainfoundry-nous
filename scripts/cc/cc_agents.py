@@ -82,7 +82,7 @@ def load_permissions() -> dict:
     try:
         d = json.loads(permissions_file().read_text())
     except (OSError, ValueError):
-        return {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": ""}
+        return {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": "", "commit_owner": ""}
     bad = [g for g in d.get("read_dirs") or [] if str(g).rstrip("/") in FORBIDDEN_GROUND]
     return {"bash_allow": [str(c) for c in d.get("bash_allow") or [] if not str(c).startswith("sudo")],
             "tools": [t for t in d.get("tools") or [] if t in PERMISSIONS_TOOLS],
@@ -90,7 +90,9 @@ def load_permissions() -> dict:
             # Read local first (2026-10-18): a map of the box's hosts and doors, and a cached https GET tool.
             # Both optional; absolute paths only; unset changes nothing.
             "network_map": str(d.get("network_map") or "") if str(d.get("network_map") or "").startswith("/") else "",
-            "fetch_tool": str(d.get("fetch_tool") or "") if str(d.get("fetch_tool") or "").startswith("/") else ""}
+            "fetch_tool": str(d.get("fetch_tool") or "") if str(d.get("fetch_tool") or "").startswith("/") else "",
+            # the name agents' commits carry before "(via TAG)"; empty = "TAG (agent)" (no owner name in the template)
+            "commit_owner": str(d.get("commit_owner") or "")[:60]}
 # Autonomy levels (2026-10-17, the Czar-General's ruling): 0 propose (writes only its state and sitrep), 1 branch
 # (commits on its own branch in its own worktree, never pushes; the default), 2 ship (may also push its own branch
 # onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
@@ -381,7 +383,8 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     line = " ".join(shlex.quote(p) for p in parts)
     # who made a commit (2026-10-18, hbar: "there is no agent logging regarding commits"): the author and committer
     # name carry the agent's tag; the email stays the owner's, so hosting that matches commits to accounts still builds
-    who = shlex.quote(f"hbar (via {tag(a)})")
+    owner = load_permissions()["commit_owner"]
+    who = shlex.quote(f"{owner} (via {tag(a)})" if owner else f"{tag(a)} (agent)")
     line = f"GIT_AUTHOR_NAME={who} GIT_COMMITTER_NAME={who} " + line
     if load_permissions()["fetch_tool"]:
         # tag the cached fetches with the agent and this run, for the owner's per-run network budget (2026-10-18)
