@@ -237,7 +237,7 @@ PANE_ROUTES = {
     "/economy": "Economy", "/trace": "Trace", "/chat": "Chat", "/dashboard": "Dashboard",
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
     "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
-    "/permits": "Permits", "/boxes": "Boxes",
+    "/permits": "Permits", "/boxes": "Boxes", "/profile": "Profile",
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -354,6 +354,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
+import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
@@ -1105,7 +1106,7 @@ _SPEAK_CODE = re.compile(r"```.*?```", re.S)
 _SPEAK_INLINE = re.compile(r"`([^`]*)`")
 _SPEAK_URL = re.compile(r"https?://\S+")
 _SPEAK_MARKS = re.compile(r"[*_#>|]+")
-_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>|<choices>.*?</choices>", re.S)
+_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>|<profile>.*?</profile>|<choices>.*?</choices>", re.S)
 
 
 def _speakable(text: str) -> str:
@@ -1874,6 +1875,7 @@ def _earlier_pieces(run) -> list:
             t, _ = _extract_proposal(txt)
             t, _ = _extract_pane(t)
             t, _, _ = cc_layout.parse_marker(t)
+            t, _, _ = cc_profile.parse_marker(t)
             if t.strip():
                 out.append(t.strip())
     return out
@@ -2215,7 +2217,8 @@ LOGIN = Login()
 # --------------------------------------------------------------- memory ----
 def _persona() -> str:
     try:
-        return PERSONA_FILE.read_text(encoding="utf-8")[:PERSONA_MAX].strip()
+        # the profile's managed block is always kept whole, even in a persona longer than the cut (2026-10-18)
+        return cc_profile.clip_persona(PERSONA_FILE.read_text(encoding="utf-8"), PERSONA_MAX).strip()
     except Exception:
         return ""
 
@@ -2885,6 +2888,14 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 print(f"layout proposal not saved: {type(e).__name__}", flush=True)
         elif _lay_err:
             reply = (reply + f"\n\n(The layout was not proposed: {_lay_err})").strip()
+        reply, _prof, _prof_err = cc_profile.parse_marker(reply)
+        if _prof is not None:
+            try:
+                PROFILE.propose(_prof, "interview")
+            except OSError as e:
+                print(f"profile proposal not saved: {type(e).__name__}", flush=True)
+        elif _prof_err:
+            reply = (reply + f"\n\n(The profile was not proposed: {_prof_err})").strip()
         card = _propose(proposal) if proposal else None
         # the visual this answer opened rides with it into the record (2026-10-13), so the page can show
         # an "open" chip on the message after a reload; the page strips the marker before rendering
@@ -3257,6 +3268,76 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
     return 200, {"ok": True, **_layout_view()}
 
 
+# ---- the owner's profile: how the brain talks to them (2026-10-18) ----
+# ~/.cc-bridge/profile.json holds the interview's answers and the proposals waiting for a yes. Applied,
+# the answers are written into the persona (api/brain_persona.local.md) through the api's own writer
+# (PUT /persona), as a managed block between cc_profile.BEGIN and END; text outside the block is never
+# touched. Owner access without a permit, like /layout. Apply never changes the posture.
+PROFILE = cc_profile.Store(STATE_DIR)
+
+
+def _profile_view() -> dict:
+    cur = _brain_api("GET", "/persona")
+    text = cur.get("persona") if isinstance(cur, dict) else None
+    return {"answers": PROFILE.answers(), "proposals": PROFILE.proposals(),
+            "set": cc_profile.has_block(text) if isinstance(text, str) else None,
+            "named": (not cc_profile.unnamed(text)) if isinstance(text, str) else None,
+            "posture": _posture_current() if (BOX_ENABLED and GATE is not None) else None,
+            "postures": cc_profile.POSTURE,
+            "questions": [{**q, "options": [list(o) for o in q["options"]]} if "options" in q else dict(q)
+                          for q in cc_profile.QUESTIONS]}
+
+
+def _profile_write(answers: dict) -> tuple[int, dict] | None:
+    """Write the answers into the persona's managed block. None on success, else (status, error)."""
+    cur = _brain_api("GET", "/persona")
+    if not isinstance(cur, dict) or not isinstance(cur.get("persona"), str):
+        return 502, {"error": "the brain's api did not answer; nothing was written"}
+    text = cur["persona"]
+    if cc_profile.unnamed(text):
+        return 409, {"error": "this brain has no name yet: name it first (at /persona or in the chat), then apply"}
+    new = cc_profile.replace_block(text, cc_profile.to_persona_md(answers))
+    res = _brain_api("PUT", "/persona", {"persona": new})
+    if not isinstance(res, dict) or not res.get("ok"):
+        return 502, {"error": "the brain's api did not take the persona; nothing changed"}
+    PROFILE.saved(answers)
+    return None
+
+
+def _profile_api(method: str, route: str, body: dict | None) -> tuple[int, dict]:
+    """Every /profile route, as (status, object). Errors from the answers or the markers are 400/409."""
+    body = body or {}
+    try:
+        if method == "GET" and route == "/profile":
+            return 200, _profile_view()
+        if method != "POST":
+            return 404, {"error": "not_found"}
+        if route == "/profile/propose":
+            PROFILE.propose(body.get("answers"), str(body.get("source") or "page"))
+        elif route == "/profile/answers":
+            err = _profile_write(cc_profile.validate(body.get("answers")))
+            if err:
+                return err
+        elif route == "/profile/approve":
+            p = PROFILE.proposal(str(body.get("id") or ""))
+            if p is None:
+                return 404, {"error": "no such proposal"}
+            err = _profile_write(p["answers"])
+            if err:
+                return err
+            PROFILE.decide(p["id"], "applied")
+        elif route == "/profile/dismiss":
+            if not PROFILE.decide(str(body.get("id") or ""), "dismissed"):
+                return 404, {"error": "no such proposal"}
+        else:
+            return 404, {"error": "not_found"}
+    except cc_profile.ProfileError as e:
+        return (409 if "markers" in str(e) else 400), {"error": str(e)}
+    except (KeyError, TypeError) as e:
+        return 400, {"error": f"bad request: {type(e).__name__}"}
+    return 200, {"ok": True, **_profile_view()}
+
+
 # ---- mission control: one board for all running work (2026-10-06) ----
 # GET /board assembles tiles from what is already tracked here: RUNS (with each turn's events
 # and waiting cards), the turn audit, threads.json, the jobs registry and pending permits.
@@ -3433,7 +3514,7 @@ class Handler(BaseHTTPRequestHandler):
                              "voice_name": _voice_current_name(), "transcribe_backend": _voice_backend("stt"),
                              "hands_user": HANDS_USER or None, "operator_token": bool(OPERATOR_TOKEN),
                              "telegram": (TG.owner() is not None) if TG is not None else None,
-                             "cards_waiting": _cards_waiting(), "layout_proposals": len(LAYOUT.proposals()), "turn_running": bool(_runs_active()),
+                             "cards_waiting": _cards_waiting(), "layout_proposals": len(LAYOUT.proposals()), "profile_proposals": len(PROFILE.proposals()), "turn_running": bool(_runs_active()),
                              "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS,
                              "out": str(OUT_DIR), "in": str(IN_DIR), "jobs_running": sum(1 for j in JOBS.list() if j.get("ended") is None),
                              "ingest": _ingest_summary(),
@@ -3548,6 +3629,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*_agents_call(["list"]))
         elif route.startswith("/layout"):
             self._send(*_layout_api("GET", route, None, self._query()))
+        elif route.startswith("/profile"):
+            self._send(*_profile_api("GET", route, None))
         elif route == "/spend":
             # The spend meter (2026-10-17): today, 7 days, 30 days, the owner's cap, and whether
             # agents wait. "billing" says whether the figures are paid (an API key) or estimates.
@@ -3643,6 +3726,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "unreadable or too large"})
                 return
             self._send(*_layout_api("POST", route, body, self._query()))
+            return
+        if route.startswith("/profile"):
+            body = self._json(limit=20000)
+            if body is None:
+                self._send(400, {"error": "unreadable or too large"})
+                return
+            self._send(*_profile_api("POST", route, body))
             return
         if route in ("/agents", "/agents/update", "/agents/delete", "/agents/run"):
             body = self._json(limit=20000) or {}

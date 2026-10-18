@@ -113,3 +113,61 @@ def test_store_proposals(tmp_path):
     assert s.answers() == FULL
     with pytest.raises(P.ProfileError):
         s.propose({"nope": 1}, "interview")
+
+
+# ---- the bridge: marker, proposal, apply through the api's persona writer ----
+
+def _bridge(monkeypatch, tmp_path, persona):
+    from tests.test_cc_bridge import _load
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    box = {"persona": persona, "puts": 0}
+
+    def fake(method, path, body=None):
+        if path != "/persona":
+            return None
+        if method == "PUT":
+            box["persona"], box["puts"] = body["persona"], box["puts"] + 1
+            return {"ok": True, "persona": box["persona"].strip()}
+        return {"persona": box["persona"]}
+    monkeypatch.setattr(m, "_brain_api", fake)
+    return m, box
+
+
+def test_bridge_propose_apply_replace(monkeypatch, tmp_path):
+    m, box = _bridge(monkeypatch, tmp_path, "# Lyra\n\nYou are Lyra.")
+    st, d = m._profile_api("GET", "/profile", None)
+    assert st == 200 and d["set"] is False and d["named"] is True and len(d["questions"]) == len(P.QUESTIONS)
+    st, d = m._profile_api("POST", "/profile/propose", {"answers": FULL, "source": "interview"})
+    assert st == 200 and len(d["proposals"]) == 1 and box["puts"] == 0   # proposing writes nothing
+    assert d["proposals"][0]["posture"] == "judged"
+    posture_before = m._posture_current()
+    st, d = m._profile_api("POST", "/profile/approve", {"id": d["proposals"][0]["id"]})
+    assert st == 200 and d["set"] is True and d["proposals"] == [] and d["answers"] == FULL
+    assert box["persona"].startswith("# Lyra\n\nYou are Lyra.") and "- Tone: direct" in box["persona"]
+    assert m._posture_current() == posture_before   # apply never changes the posture
+    st, d = m._profile_api("POST", "/profile/answers", {"answers": {"tone": "warm"}})
+    assert st == 200 and box["persona"].count(P.BEGIN) == 1 and "- Tone: warm" in box["persona"]
+    assert "Tone: direct" not in box["persona"] and box["persona"].startswith("# Lyra")
+    assert m._profile_api("POST", "/profile/answers", {"answers": {"tone": "loud"}})[0] == 400
+    assert m._profile_api("POST", "/profile/approve", {"id": "nope"})[0] == 404
+    assert m._profile_api("POST", "/profile/nothing", {})[0] == 404
+    assert (tmp_path / ".cc-bridge" / "profile.json").exists()
+
+
+def test_bridge_refuses_broken_markers_and_unnamed(monkeypatch, tmp_path):
+    m, box = _bridge(monkeypatch, tmp_path, "You are Lyra.\n" + P.BEGIN)
+    st, d = m._profile_api("POST", "/profile/answers", {"answers": {"tone": "warm"}})
+    assert st == 409 and "markers" in d["error"] and box["puts"] == 0
+    m, box = _bridge(monkeypatch, tmp_path, "You are [BRAIN_NAME].")
+    st, d = m._profile_api("POST", "/profile/answers", {"answers": {"tone": "warm"}})
+    assert st == 409 and "name" in d["error"] and box["puts"] == 0
+
+
+def test_bridge_speech_history_and_persona_cut(monkeypatch, tmp_path):
+    m, _ = _bridge(monkeypatch, tmp_path, "You are Lyra.")
+    assert "profile" not in m._speakable('Done. <profile>{"answers": {}}</profile>')
+    assert "/profile" in m.PANE_ROUTES and "docs/profile-interview.md" in m.SYSTEM
+    m.PERSONA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    m.PERSONA_FILE.write_text(P.replace_block("You are Lyra.\n" + "x" * 9000, P.to_persona_md(FULL)))
+    got = m._persona()
+    assert len(got) <= m.PERSONA_MAX and P.has_block(got)
