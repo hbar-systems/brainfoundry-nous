@@ -58,6 +58,19 @@ CURL_WRITE_DENY = ("Bash(curl * -d*)", "Bash(curl * --data*)", "Bash(curl * -X*)
 PERMISSIONS_TOOLS = ("WebFetch", "WebSearch")
 
 
+def local_first_line() -> str:
+    """One prompt line when the owner's file names a network map or a fetch tool; empty otherwise."""
+    perm = load_permissions()
+    parts = []
+    if perm["network_map"]:
+        parts.append(f"read {perm['network_map']} before probing any host")
+    if perm["fetch_tool"]:
+        parts.append(f"fetch pages with `python3 {perm['fetch_tool']} <url>` before WebFetch or curl (it caches)")
+    if not parts:
+        return ""
+    return "   Read locally before the network: " + "; ".join(parts) + ". Name your fetches and cache hits in your sitrep.\n"
+
+
 def permissions_file() -> Path:
     return AGENTS_DIR / "permissions.json"
 
@@ -69,11 +82,15 @@ def load_permissions() -> dict:
     try:
         d = json.loads(permissions_file().read_text())
     except (OSError, ValueError):
-        return {"bash_allow": [], "tools": [], "read_dirs": []}
+        return {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": ""}
     bad = [g for g in d.get("read_dirs") or [] if str(g).rstrip("/") in FORBIDDEN_GROUND]
     return {"bash_allow": [str(c) for c in d.get("bash_allow") or [] if not str(c).startswith("sudo")],
             "tools": [t for t in d.get("tools") or [] if t in PERMISSIONS_TOOLS],
-            "read_dirs": [str(g) for g in d.get("read_dirs") or [] if str(g).startswith("/") and g not in bad]}
+            "read_dirs": [str(g) for g in d.get("read_dirs") or [] if str(g).startswith("/") and g not in bad],
+            # Read local first (2026-10-18): a map of the box's hosts and doors, and a cached https GET tool.
+            # Both optional; absolute paths only; unset changes nothing.
+            "network_map": str(d.get("network_map") or "") if str(d.get("network_map") or "").startswith("/") else "",
+            "fetch_tool": str(d.get("fetch_tool") or "") if str(d.get("fetch_tool") or "").startswith("/") else ""}
 # Autonomy levels (2026-10-17, the Czar-General's ruling): 0 propose (writes only its state and sitrep), 1 branch
 # (commits on its own branch in its own worktree, never pushes; the default), 2 ship (may also push its own branch
 # onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
@@ -304,6 +321,7 @@ def prompt(a: dict, stamp: str) -> str:
         "4. Never read or print secrets (.env, keys, tokens). Say \"(not checkable)\" instead of guessing.\n"
         "   Pipes and && are fine when every part is on your allowed list; change folder with cd first, then run git or tests; "
         "a command outside your allowed list is refused, so write it as \"(not checkable)\" and move on.\n"
+        + local_first_line()
         + {0: "5. Autonomy level 0 (propose): write only your state and sitrep; every change is a proposal.\n\n",
            1: "5. Autonomy level 1 (branch): commit on your own branch in your worktree, by exact path; never push.\n\n",
            2: "5. Autonomy level 2 (ship): commit on your own branch in your worktree, by exact path. You may ship it with "
@@ -330,6 +348,8 @@ def settings(a: dict) -> dict:
              + [c if c == "WebFetch" else f"Bash({c})" for c in BASH_ALLOW])
     perm = load_permissions()
     allow += [f"Bash({c})" for c in perm["bash_allow"]] + [t for t in perm["tools"] if t not in allow]
+    if perm["fetch_tool"]:
+        allow += [f"Bash(python3 {perm['fetch_tool']} *)"]
     if lv == 2:
         allow += ["Bash(git push origin HEAD:main)"]
     deny = list(DENY) + list(CURL_WRITE_DENY) + (list(FORCE_DENY) if lv == 2 else list(PUSH_DENY))

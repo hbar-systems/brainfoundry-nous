@@ -195,4 +195,16 @@ def test_owner_permissions_file(ag, tmp_path, monkeypatch):
 
 def test_permissions_file_missing_is_empty(ag, tmp_path, monkeypatch):
     monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
-    assert ag.load_permissions() == {"bash_allow": [], "tools": [], "read_dirs": []}
+    assert ag.load_permissions() == {"bash_allow": [], "tools": [], "read_dirs": [], "network_map": "", "fetch_tool": ""}
+
+
+def test_local_first_from_permissions(ag, tmp_path, monkeypatch):
+    monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
+    assert ag.local_first_line() == ""
+    (tmp_path / "permissions.json").write_text(json.dumps({"network_map": "/w/ops/network-map.md", "fetch_tool": "/w/scripts/wfetch"}))
+    line = ag.local_first_line()
+    assert "/w/ops/network-map.md" in line and "python3 /w/scripts/wfetch <url>" in line
+    st = ag.settings({"id": "x", "ground": ["/srv/g"], "level": 1})
+    assert "Bash(python3 /w/scripts/wfetch *)" in st["permissions"]["allow"]
+    (tmp_path / "permissions.json").write_text(json.dumps({"network_map": "relative.md"}))
+    assert ag.local_first_line() == ""
