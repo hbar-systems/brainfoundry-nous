@@ -379,6 +379,9 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     if os.environ.get("CC_POSTURE", "").strip().lower() == "auto":   # owner chose auto for agents too
         parts += ["--permission-mode", "auto"]
     line = " ".join(shlex.quote(p) for p in parts)
+    if load_permissions()["fetch_tool"]:
+        # tag the cached fetches with the agent and this run, for the owner's per-run network budget (2026-10-18)
+        line = f"WFETCH_AGENT={shlex.quote(tag(a))} WFETCH_RUN=$(date -u +%Y%m%dT%H%M%SZ) " + line
     return (line + ' ${CC_MCP_CONFIG:+--strict-mcp-config --mcp-config "$CC_MCP_CONFIG"}'
             + f' -- "$(cat {shlex.quote(str(prompt_path))})"')
 

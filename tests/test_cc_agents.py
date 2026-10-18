@@ -208,3 +208,12 @@ def test_local_first_from_permissions(ag, tmp_path, monkeypatch):
     assert "Bash(python3 /w/scripts/wfetch *)" in st["permissions"]["allow"]
     (tmp_path / "permissions.json").write_text(json.dumps({"network_map": "relative.md"}))
     assert ag.local_first_line() == ""
+
+
+def test_fetch_tag_only_with_fetch_tool(ag, tmp_path, monkeypatch):
+    monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
+    a = {"id": "law", "name": "Law", "code": "LAW", "code_serial": 1, "ground": ["/srv/g"], "level": 1}
+    assert "WFETCH_AGENT" not in ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
+    (tmp_path / "permissions.json").write_text(json.dumps({"fetch_tool": "/w/scripts/wfetch"}))
+    cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
+    assert cmd.startswith("WFETCH_AGENT=") and "WFETCH_RUN=$(date -u +%Y%m%dT%H%M%SZ) claude -p" in cmd
