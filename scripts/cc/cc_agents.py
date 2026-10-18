@@ -376,6 +376,8 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
         parts += ["--add-dir", d]
     if a.get("model"):
         parts += ["--model", a["model"]]
+    if os.environ.get("CC_POSTURE", "").strip().lower() == "auto":   # owner chose auto for agents too
+        parts += ["--permission-mode", "auto"]
     line = " ".join(shlex.quote(p) for p in parts)
     return (line + ' ${CC_MCP_CONFIG:+--strict-mcp-config --mcp-config "$CC_MCP_CONFIG"}'
             + f' -- "$(cat {shlex.quote(str(prompt_path))})"')
