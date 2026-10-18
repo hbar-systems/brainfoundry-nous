@@ -1492,9 +1492,16 @@ def _ingest_summary() -> dict | None:
 GUIDE_FILE = Path(CWD) / "docs" / "CC.md"
 
 
-def _guide_markdown() -> str | None:
+def _guide_markdown(doc: str | None = None) -> str | None:
+    """docs/CC.md, or with doc= one other page under docs/ (2026-10-18: the Member Handbook tab reads
+    docs/handbook/*.md and the pages they link). A name only, one folder deep, never a path that climbs."""
+    path = GUIDE_FILE
+    if doc:
+        if not re.fullmatch(r"(?:(?:handbook|public|brainfoundry)/)?[A-Za-z0-9_-]{1,80}", doc):
+            return None
+        path = GUIDE_FILE.parent / f"{doc}.md"
     try:
-        return GUIDE_FILE.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except OSError:
         return None
 
@@ -3564,8 +3571,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL, "backend": "eleven" if ELEVEN_KEY else None})
         elif route == "/guide":
-            md = _guide_markdown()
-            self._send(200 if md else 404, {"markdown": md, "path": str(GUIDE_FILE)})
+            doc = self._query().get("doc") or None
+            md = _guide_markdown(doc)
+            self._send(200 if md else 404, {"markdown": md, "path": f"docs/{doc}.md" if doc else str(GUIDE_FILE)})
         elif route == "/files/recent":
             self._send(200, {"recent": FILES.recent(self._query().get("root", "out"))})
         elif route == "/jobs":

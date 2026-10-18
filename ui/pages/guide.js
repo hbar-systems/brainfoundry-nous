@@ -47,16 +47,45 @@ const PRIVACY = [
     how: 'One table: every reader (you, local and hosted models, the seats, brain-apps, Telegram, visitors, other brains, root) against every kind of thing the brain holds.' },
 ]
 
+const MD = {
+  h1: ({ node, ...p }) => <h1 {...p} style={{ fontSize: '22px', margin: '0 0 12px 0' }} />,
+  h2: ({ node, ...p }) => <h2 {...p} style={{ fontSize: '17px', margin: '26px 0 8px 0', color: T.gold }} />,
+  p: ({ node, ...p }) => <p {...p} style={{ margin: '0 0 10px 0' }} />,
+  a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" style={{ color: T.gold }} />,
+  ul: ({ node, ...p }) => <ul {...p} style={{ margin: '0 0 10px 0', paddingLeft: '20px' }} />,
+  pre: ({ node, ...p }) => <pre {...p} style={{ ...mono, fontSize: '12.5px', backgroundColor: T.codeBg, padding: '8px 10px', borderRadius: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />,
+  code: ({ node, ...p }) => <code {...p} style={{ ...mono, fontSize: '12.5px', backgroundColor: T.codeBg, padding: '1px 5px', borderRadius: '4px' }} />,
+}
+
+// Handbook (2026-10-18): docs/handbook/*.md through the bridge's /cc/guide?doc=. A link to another .md
+// under docs/ opens in this tab; anything else opens in a new tab as before. Frontmatter is not shown.
+function docPath(cur, href) {
+  if (!href || /^([a-z]+:|\/|#)/i.test(href) || !/\.md(#.*)?$/.test(href)) return null
+  const parts = cur.split('/').slice(0, -1)
+  for (const seg of href.replace(/#.*$/, '').replace(/\.md$/, '').split('/')) {
+    if (seg === '..') parts.pop(); else if (seg && seg !== '.') parts.push(seg)
+  }
+  return parts.join('/') || null
+}
+
 export default function Guide() {
   const [health, setHealth] = useState(null)
   const [md, setMd] = useState(null)
   const [tab, setTab] = useState('tutorial')
+  const [hbDoc, setHbDoc] = useState('handbook/README')
+  const [hbMd, setHbMd] = useState(undefined)
   const embedded = typeof window !== 'undefined' && window.self !== window.top
   useEffect(() => {
     fetch('/cc/health', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(setHealth).catch(() => setHealth(false))
     fetch('/cc/guide', { cache: 'no-store' }).then(r => (r.ok ? r.json() : { markdown: null })).then(d => setMd(d.markdown || null)).catch(() => setMd(null))
     try { const q = new URLSearchParams(window.location.search).get('tab'); if (q) setTab(q) } catch {}
   }, [])
+  useEffect(() => {
+    if (tab !== 'handbook') return
+    setHbMd(undefined)
+    fetch(`/cc/guide?doc=${encodeURIComponent(hbDoc)}`, { cache: 'no-store' }).then(r => (r.ok ? r.json() : { markdown: null }))
+      .then(d => setHbMd(d.markdown ? d.markdown.replace(/^---\n[\s\S]*?\n---\n/, '') : null)).catch(() => setHbMd(null))
+  }, [tab, hbDoc])
   const rows = steps(health)
   const done = rows.filter(r => r.done).length
   return (
@@ -65,7 +94,7 @@ export default function Guide() {
       <div style={{ maxWidth: '860px', margin: '0 auto', padding: '18px 20px 60px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
         <p style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, margin: '0 0 6px 0' }}>Guide · how this brain works</p>
         <div style={{ display: 'flex', gap: '14px', margin: '0 0 18px 0', borderBottom: `1px solid ${T.line}` }}>
-          {[['tutorial', `Tutorial (${done} of ${rows.length})`], ['guide', 'The guide'], ['privacy', 'Privacy']].map(([k, label]) => (
+          {[['tutorial', `Tutorial (${done} of ${rows.length})`], ['handbook', 'Handbook'], ['guide', 'The guide'], ['privacy', 'Privacy']].map(([k, label]) => (
             <a key={k} onClick={() => setTab(k)} style={{ ...mono, fontSize: '12px', padding: '8px 2px', cursor: 'pointer', color: tab === k ? T.ink : T.dim, borderBottom: tab === k ? `2px solid ${T.gold}` : '2px solid transparent' }}>{label}</a>
           ))}
         </div>
@@ -102,20 +131,25 @@ export default function Guide() {
             ))}
           </div>
         )}
+        {tab === 'handbook' && (
+          <div className="cc-md" style={{ fontSize: '14.5px', lineHeight: 1.65 }}>
+            {hbDoc !== 'handbook/README' && <p style={{ ...mono, fontSize: '11px', margin: '0 0 12px 0' }}><a onClick={() => setHbDoc('handbook/README')} style={{ color: T.gold, cursor: 'pointer' }}>Handbook contents</a></p>}
+            {hbMd === null && <p style={{ color: T.dim, fontSize: '13px' }}>The handbook is docs/{hbDoc}.md in your brain's checkout; the bridge could not read it.</p>}
+            {hbMd && (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
+                components={{ ...MD, a: ({ node, href, ...p }) => {
+                  const d = docPath(hbDoc, href)
+                  return d ? <a {...p} onClick={() => setHbDoc(d)} style={{ color: T.gold, cursor: 'pointer' }} />
+                    : <a {...p} href={href} target="_blank" rel="noreferrer" style={{ color: T.gold }} />
+                } }}>{hbMd}</ReactMarkdown>
+            )}
+          </div>
+        )}
         {tab === 'guide' && (
           <div className="cc-md" style={{ fontSize: '14.5px', lineHeight: 1.65 }}>
             {md === null && <p style={{ color: T.dim, fontSize: '13px' }}>The guide is docs/CC.md in your brain's checkout; the bridge could not read it.</p>}
             {md && (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
-                components={{
-                  h1: ({ node, ...p }) => <h1 {...p} style={{ fontSize: '22px', margin: '0 0 12px 0' }} />,
-                  h2: ({ node, ...p }) => <h2 {...p} style={{ fontSize: '17px', margin: '26px 0 8px 0', color: T.gold }} />,
-                  p: ({ node, ...p }) => <p {...p} style={{ margin: '0 0 10px 0' }} />,
-                  a: ({ node, ...p }) => <a {...p} target="_blank" rel="noreferrer" style={{ color: T.gold }} />,
-                  ul: ({ node, ...p }) => <ul {...p} style={{ margin: '0 0 10px 0', paddingLeft: '20px' }} />,
-                  pre: ({ node, ...p }) => <pre {...p} style={{ ...mono, fontSize: '12.5px', backgroundColor: T.codeBg, padding: '8px 10px', borderRadius: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />,
-                  code: ({ node, ...p }) => <code {...p} style={{ ...mono, fontSize: '12.5px', backgroundColor: T.codeBg, padding: '1px 5px', borderRadius: '4px' }} />,
-                }}>{md}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={MD}>{md}</ReactMarkdown>
             )}
           </div>
         )}

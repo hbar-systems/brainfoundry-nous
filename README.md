@@ -35,6 +35,8 @@ Quickstart; the deeper model is in [Trust model](#trust-model-v09--read-this-bef
        ![BrainFoundry demo](docs/assets/demo.gif) -->
 _See a brain live right now: **[nous.brainfoundry.ai](https://nous.brainfoundry.ai)** — a demo GIF lands here shortly._
 
+Have a brain already? Start with the [Member Handbook](docs/handbook/README.md): eight short pages, plain language.
+
 ## Quickstart
 
 One command on a fresh Linux box with Docker. It generates dev secrets into
