@@ -2046,7 +2046,10 @@ function CC() {
     setPending(p => p.filter(x => x.id !== id))
     if (remember && data.ok) loadPending()
     markCard(id, { busy: false, decided: action })
-    if (isBox) return   // the reasoner continues in the same live answer; nothing more to say here
+    if (isBox) {   // the reasoner continues in the same live answer; a failed press is said, not swallowed (2026-10-18)
+      if (!data.ok) setTurns(t => [...t, { who: 'brain', error: true, text: `That ${action === 'approve' ? 'Allow' : 'Refuse'} did not reach the job: ${data.error || data.status || 'the permit has expired (15 minutes) or the job that asked has ended'}.` }])
+      return
+    }
     if (action === 'approve') {
       const text = data.ok
         ? `Done: ${data.summary || 'the action ran'}.` + (data.result && data.result.status ? ` One answered ${data.result.status}.` : '')
