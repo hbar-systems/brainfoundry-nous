@@ -33,7 +33,13 @@ function splitPaths(text) {
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i
 function isImagePath(p) { return IMAGE_RE.test(tidy(p)) }
-function rawUrl(p) { return '/cc/files/raw' + String(p).split('/').map(encodeURIComponent).join('/') }
+// A relative path ("ops/x.md") goes as ?path= so the bridge resolves it in the world; before 2026-10-18 it was glued
+// on without a slash (/cc/files/rawops/x.md) and every relative link in an answer read "file not found".
+function rawUrl(p) {
+  const s = String(p)
+  if (!s.startsWith('/')) return '/cc/files/raw?path=' + encodeURIComponent(s)
+  return '/cc/files/raw' + s.split('/').map(encodeURIComponent).join('/')
+}
 
 // A markdown link target that is a file on the box or in the world, not a web address or an in-page
 // anchor: "ops/x.md", "./x.md#part", "/home/hands/in/...png", "file:///home/...". null otherwise.
