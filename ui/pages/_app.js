@@ -4,7 +4,6 @@ import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import { applyStyle, clearStyle } from '../lib/layout'
-import { watchLift } from '../lib/lift'
 import { watchWall } from '../lib/wallpaper'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
@@ -84,8 +83,8 @@ export default function App({ Component, pageProps }) {
     }
   }, [])
 
-  // Light (2026-10-16): lifts a dark skin toward a mid tone; re-applied when the skin changes.
-  useEffect(() => watchLift(), [])
+  // Light was removed on 2026-10-18 (hbar: useless); clear a level a browser may still hold.
+  useEffect(() => { try { localStorage.removeItem('bf-lift'); const t = document.getElementById('bf-lift'); if (t) t.remove() } catch {} }, [])
   // Wallpaper (2026-10-16): the owner's own picture behind the page, under a veil of the skin's colour.
   useEffect(() => watchWall(), [])
 

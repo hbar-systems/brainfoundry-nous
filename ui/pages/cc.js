@@ -6,7 +6,6 @@ import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath,
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
-import { LIFT_LEVELS, readLift, setLift } from '../lib/lift'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
@@ -449,12 +448,10 @@ function SeatLine({ seat, onPick, codex, onOpenPane, onRecheck }) {
 function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
-  const [lift, setLiftS] = useState(0)
   const [wall, setWall] = useState({ image: '', veil: 60 })
   const [wallMsg, setWallMsg] = useState('')
   const pickRef = useRef(null)
   useEffect(() => { setWall(readWall()); const on = () => setWall(readWall()); window.addEventListener('bf-wall', on); return () => window.removeEventListener('bf-wall', on) }, [])
-  useEffect(() => { setLiftS(readLift()); const on = (e) => setLiftS(e.detail || 0); window.addEventListener('bf-lift', on); return () => window.removeEventListener('bf-lift', on) }, [])
   const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
@@ -482,10 +479,6 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>skin</span>
           {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
-        </span>
-        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
-          <span style={lbl}>light</span>
-          {LIFT_LEVELS.map(n => <Chip key={n} on={lift === n} onClick={() => { setLift(n); setLiftS(n) }} title="lifts a dark skin toward a mid tone (every conversation, this browser); light skins stay as they are">{n}</Chip>)}
         </span>
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>wallpaper</span>
@@ -1702,11 +1695,24 @@ function CC() {
   const [look, setLookState] = useState({})
   const lookSave = useRef(null)
   const curStyle = JSON.stringify((curThread && curThread.style) || {})
-  useEffect(() => { if (!lookSave.current) setLookState(JSON.parse(curStyle)) }, [cur, curStyle])
+  // A look picked before the first message (no thread yet) is kept and saved onto the thread the
+  // message creates; before 2026-10-18 it was dropped there and the page fell back to gold.
+  const lookRef = useRef({}); lookRef.current = look
+  const lookCur = useRef(cur)
+  useEffect(() => {
+    const was = lookCur.current; lookCur.current = cur
+    if (lookSave.current) return
+    const pending = lookRef.current
+    // carried when the page moves from no thread, or from a thread record that is gone (renamed on its first answer)
+    const gone = !was || !threads.some(t => t.brain === was)
+    if (gone && cur && curStyle === '{}' && Object.keys(pending).length) { saveLook(pending, cur); return }
+    setLookState(JSON.parse(curStyle))
+  }, [cur, curStyle])
   const setLook = (n) => {
     setLookState(n)
-    if (!cur) return
-    const brain = cur
+    if (cur) saveLook(n, cur)
+  }
+  function saveLook(n, brain) {
     clearTimeout(lookSave.current)
     lookSave.current = setTimeout(() => {
       lookSave.current = null
