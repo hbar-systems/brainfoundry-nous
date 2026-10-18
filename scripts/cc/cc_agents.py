@@ -379,6 +379,10 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     if os.environ.get("CC_POSTURE", "").strip().lower() == "auto":   # owner chose auto for agents too
         parts += ["--permission-mode", "auto"]
     line = " ".join(shlex.quote(p) for p in parts)
+    # who made a commit (2026-10-18, hbar: "there is no agent logging regarding commits"): the author and committer
+    # name carry the agent's tag; the email stays the owner's, so hosting that matches commits to accounts still builds
+    who = shlex.quote(f"hbar (via {tag(a)})")
+    line = f"GIT_AUTHOR_NAME={who} GIT_COMMITTER_NAME={who} " + line
     if load_permissions()["fetch_tool"]:
         # tag the cached fetches with the agent and this run, for the owner's per-run network budget (2026-10-18)
         line = f"WFETCH_AGENT={shlex.quote(tag(a))} WFETCH_RUN=$(date -u +%Y%m%dT%H%M%SZ) " + line

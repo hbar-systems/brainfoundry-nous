@@ -216,4 +216,11 @@ def test_fetch_tag_only_with_fetch_tool(ag, tmp_path, monkeypatch):
     assert "WFETCH_AGENT" not in ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
     (tmp_path / "permissions.json").write_text(json.dumps({"fetch_tool": "/w/scripts/wfetch"}))
     cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
-    assert cmd.startswith("WFETCH_AGENT=") and "WFETCH_RUN=$(date -u +%Y%m%dT%H%M%SZ) claude -p" in cmd
+    assert cmd.startswith("WFETCH_AGENT=") and "WFETCH_RUN=$(date -u +%Y%m%dT%H%M%SZ) GIT_AUTHOR_NAME=" in cmd
+
+
+def test_commits_name_the_agent(ag, tmp_path, monkeypatch):
+    monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
+    a = {"id": "law", "name": "Law", "code": "LAW", "code_serial": 1, "ground": ["/srv/g"], "level": 1}
+    cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
+    assert "GIT_AUTHOR_NAME='hbar (via LAW-1)'" in cmd and "GIT_COMMITTER_NAME='hbar (via LAW-1)'" in cmd
