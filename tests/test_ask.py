@@ -283,3 +283,23 @@ def test_client_request_accepted(env):
     assert r.status_code == 200
     text, cites = ask_brain.answer_of(r.json())
     assert "PUBLIC FACT" in text and cites == ["notes/public-essay.md"]
+
+
+def test_card_url_follows_proxy_headers(monkeypatch):
+    # behind the reverse proxy the card must advertise the outside https address (2026-10-18)
+    monkeypatch.delenv("BRAIN_PUBLIC_URL", raising=False)
+
+    class Req:
+        headers = {"x-forwarded-proto": "https", "host": "brain.example.org"}
+        base_url = "http://127.0.0.1:8000/"
+
+    assert m._ask_base_url(Req()) == "https://brain.example.org"
+    monkeypatch.setenv("BRAIN_PUBLIC_URL", "https://set.example.org/")
+    assert m._ask_base_url(Req()) == "https://set.example.org"
+
+    class Bare:
+        headers = {}
+        base_url = "http://127.0.0.1:8000/"
+
+    monkeypatch.delenv("BRAIN_PUBLIC_URL", raising=False)
+    assert m._ask_base_url(Bare()) == "http://127.0.0.1:8000"

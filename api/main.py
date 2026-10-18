@@ -3925,7 +3925,15 @@ _ask_rate_limiter = FederationRateLimiter()
 def _ask_base_url(http_request: Request) -> str:
     """Where peers reach this brain: BRAIN_PUBLIC_URL when the operator set it
     (behind a proxy the transport URL is the inside one), else the request's."""
-    return (os.getenv("BRAIN_PUBLIC_URL") or str(http_request.base_url)).rstrip("/")
+    if os.getenv("BRAIN_PUBLIC_URL"):
+        return os.getenv("BRAIN_PUBLIC_URL").rstrip("/")
+    # Behind the reverse proxy the request arrives as plain http on the inside port; the proxy's
+    # forwarded headers carry what the peer actually used (2026-10-18: the card advertised http://).
+    proto = (http_request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    host = (http_request.headers.get("x-forwarded-host") or http_request.headers.get("host") or "").split(",")[0].strip()
+    if proto in ("http", "https") and host:
+        return f"{proto}://{host}"
+    return str(http_request.base_url).rstrip("/")
 
 
 @app.get("/.well-known/agent-card.json")

@@ -58,6 +58,9 @@ services:
       # Off unless the operator sets BRAIN_CC_ENABLED=true in .env AND runs the
       # cc-bridge on the host (operator runbook). The api only lists the tab.
       - BRAIN_CC_ENABLED=${BRAIN_CC_ENABLED:-}
+      # BRAIN_PUBLIC_URL: where other brains reach this one (the ask door's Agent Card). Optional:
+      # without it the card uses the proxy's forwarded scheme and host.
+      - BRAIN_PUBLIC_URL=${BRAIN_PUBLIC_URL:-}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
       # Org-brain public-chat tuning. PUBLIC_CHAT_LAYERS comma-separated
