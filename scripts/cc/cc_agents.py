@@ -52,6 +52,28 @@ DENY = ("Bash(rm -rf*)", "Bash(rm -rf *)", "Bash(* rm -rf *)", "Bash(rm -fr *)",
         "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)",
         "Bash(*/.env*)", "Bash(* .env*)", "Bash(cat .env*)")
 ASK = ("Bash(sudo *)", "Bash(sudo:*)")
+# A curl with a body or a method is a write; it is refused whatever the owner's file allows (2026-10-18).
+CURL_WRITE_DENY = ("Bash(curl * -d*)", "Bash(curl * --data*)", "Bash(curl * -X*)", "Bash(curl * --request*)",
+                   "Bash(curl * -F*)", "Bash(curl * --form*)", "Bash(curl * -T*)", "Bash(curl * --upload*)")
+PERMISSIONS_TOOLS = ("WebFetch", "WebSearch")
+
+
+def permissions_file() -> Path:
+    return AGENTS_DIR / "permissions.json"
+
+
+def load_permissions() -> dict:
+    """The owner's one file of agent permissions (2026-10-18, hbar: "we don't have a file for allowing permissions
+    for our agents"): {"bash_allow": [...], "tools": [...], "read_dirs": [...]}, added to the built-in list for every
+    agent. Read dirs are read-only; writing stays limited to each agent's ground; the deny list always wins."""
+    try:
+        d = json.loads(permissions_file().read_text())
+    except (OSError, ValueError):
+        return {"bash_allow": [], "tools": [], "read_dirs": []}
+    bad = [g for g in d.get("read_dirs") or [] if str(g).rstrip("/") in FORBIDDEN_GROUND]
+    return {"bash_allow": [str(c) for c in d.get("bash_allow") or [] if not str(c).startswith("sudo")],
+            "tools": [t for t in d.get("tools") or [] if t in PERMISSIONS_TOOLS],
+            "read_dirs": [str(g) for g in d.get("read_dirs") or [] if str(g).startswith("/") and g not in bad]}
 # Autonomy levels (2026-10-17, the Czar-General's ruling): 0 propose (writes only its state and sitrep), 1 branch
 # (commits on its own branch in its own worktree, never pushes; the default), 2 ship (may also push its own branch
 # onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
@@ -280,7 +302,7 @@ def prompt(a: dict, stamp: str) -> str:
         "2. Write only inside your ground. Work that belongs elsewhere becomes a proposal in your sitrep.\n"
         "3. Do not start other agents. Nothing that leaves the brain (send, publish, pay): propose it instead.\n"
         "4. Never read or print secrets (.env, keys, tokens). Say \"(not checkable)\" instead of guessing.\n"
-        "   Run one plain command at a time (no pipes, no &&): change folder with cd first, then run git or tests; "
+        "   Pipes and && are fine when every part is on your allowed list; change folder with cd first, then run git or tests; "
         "a command outside your allowed list is refused, so write it as \"(not checkable)\" and move on.\n"
         + {0: "5. Autonomy level 0 (propose): write only your state and sitrep; every change is a proposal.\n\n",
            1: "5. Autonomy level 1 (branch): commit on your own branch in your worktree, by exact path; never push.\n\n",
@@ -306,9 +328,11 @@ def settings(a: dict) -> dict:
     write = [*ground, str(AGENTS_DIR / a["id"])]
     allow = ([f"Edit(//{w.lstrip('/')}/**)" for w in write]
              + [c if c == "WebFetch" else f"Bash({c})" for c in BASH_ALLOW])
+    perm = load_permissions()
+    allow += [f"Bash({c})" for c in perm["bash_allow"]] + [t for t in perm["tools"] if t not in allow]
     if lv == 2:
         allow += ["Bash(git push origin HEAD:main)"]
-    deny = list(DENY) + (list(FORCE_DENY) if lv == 2 else list(PUSH_DENY))
+    deny = list(DENY) + list(CURL_WRITE_DENY) + (list(FORCE_DENY) if lv == 2 else list(PUSH_DENY))
     return {
         "hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
@@ -325,7 +349,7 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     # Folders the turn may READ (2026-10-17: the first unattended runs were refused reading their own standard,
     # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (the
     # General and the Inspector read every report). Writing stays limited to the ground by the allow list.
-    reads = [str(AGENTS_DIR)]
+    reads = [str(AGENTS_DIR), *load_permissions()["read_dirs"]]
     for g in a.get("ground") or []:
         reads += [g, str(Path(g).parent)]
     for d in dict.fromkeys(reads):

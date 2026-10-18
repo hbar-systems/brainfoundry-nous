@@ -177,3 +177,22 @@ def test_reads_cover_the_standard_one_folder_up(ag, tmp_path):
     assert "--add-dir /home/hands/world/ops/institutions " in cmd and "--add-dir /home/hands/world/ops/institutions/state" in cmd
     assert f"--add-dir {ag.AGENTS_DIR}" in cmd
     assert not any(r.startswith("Edit(//home/hands/world/ops/institutions/**") for r in ag.settings(a)["permissions"]["allow"])
+
+
+def test_owner_permissions_file(ag, tmp_path, monkeypatch):
+    monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
+    (tmp_path / "permissions.json").write_text(json.dumps({
+        "bash_allow": ["git grep *", "sudo rm x"], "tools": ["WebSearch", "Bash"], "read_dirs": ["/srv/world", "/home", "rel"]}))
+    a = {"id": "x", "ground": ["/srv/g"], "level": 1}
+    st = ag.settings(a)
+    allow, deny = st["permissions"]["allow"], st["permissions"]["deny"]
+    assert "Bash(git grep *)" in allow and "WebSearch" in allow
+    assert not any("sudo" in c for c in allow) and "Bash" not in allow
+    assert "Bash(curl * -d*)" in deny and "Bash(curl * -X*)" in deny
+    cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
+    assert "--add-dir /srv/world" in cmd and "--add-dir /home " not in cmd and "--add-dir rel" not in cmd
+
+
+def test_permissions_file_missing_is_empty(ag, tmp_path, monkeypatch):
+    monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path)
+    assert ag.load_permissions() == {"bash_allow": [], "tools": [], "read_dirs": []}
