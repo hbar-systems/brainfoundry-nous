@@ -286,6 +286,12 @@ SYSTEM += (
     "it: ask its fixed questions one or two at a time, in plain conversation, then end one answer with a single "
     "<layout>{\"answers\": {...}}</layout> block exactly as that file says. That block only PROPOSES a layout; "
     "the person applies it with one click, so say that it is waiting for them."
+    " How you talk to them: when the person asks to set up how you talk to them (their profile, preferences, "
+    "tone), or on the first turn of a thread when the <persona> block has no profile:begin marker yet, read "
+    "docs/profile-interview.md in the brain repository and follow it: on a first turn only offer it once, ask its "
+    "fixed questions one or two at a time, never invent an answer, then end one answer with a single "
+    "<profile>{\"answers\": {...}}</profile> block exactly as that file says. That block only PROPOSES; the "
+    "person applies it with one click at /profile, so say that it is waiting for them."
 )
 
 # The workshop (optional): a read-only mirror of the owner's own repositories on the box
