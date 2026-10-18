@@ -26,6 +26,8 @@ Record fields (per the federation-MVP spec):
     trust         "peer" | "anonymous"
     outcome       short status — "ok" | "rate_limited" | "budget_exceeded" |
                   "no_answer" | "error:<reason>"
+    surface       optional; "ask" for the A2A ask door (/v1/ask), absent for
+                  /v1/federation/query
 """
 from __future__ import annotations
 
@@ -65,6 +67,7 @@ def record_event(
     verified: bool = False,
     trust: Optional[str] = None,
     outcome: str = "ok",
+    surface: Optional[str] = None,
 ) -> None:
     """Typed convenience wrapper so call sites don't hand-assemble the dict."""
     entry: Dict[str, Any] = {
@@ -79,6 +82,8 @@ def record_event(
         entry["documents_used"] = int(documents_used)
     if answer_len is not None:
         entry["answer_len"] = int(answer_len)
+    if surface:
+        entry["surface"] = surface
     log(entry)
 
 

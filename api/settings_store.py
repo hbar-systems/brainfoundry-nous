@@ -636,6 +636,21 @@ def set_autonomy_enabled(enabled: bool) -> None:
         _save(data)
 
 
+def get_ask_public_enabled() -> bool:
+    """Public asking on the ask door (/v1/ask): when on, a brain that is not a
+    pinned peer (or a pinned peer that fails the substrate floor) may ask, signing
+    with its own self-certified key. Off by default — only pinned, healthy peers
+    may ask. See docs/ASK.md."""
+    return bool(_load().get("ask_public_enabled", False))
+
+
+def set_ask_public_enabled(enabled: bool) -> None:
+    with _LOCK:
+        data = _load()
+        data["ask_public_enabled"] = bool(enabled)
+        _save(data)
+
+
 def get_autonomy_goal() -> str:
     """The standing goal each autonomous tick pursues. Empty → autonomy.DEFAULT_GOAL."""
     v = _load().get("autonomy_goal")

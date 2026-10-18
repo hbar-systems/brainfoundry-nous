@@ -3913,6 +3913,149 @@ async def federation_query(request: dict, http_request: Request):
     }
 
 
+# ── Ask door (A2A-shaped, ED25519-signed) ───────────────────────────────────
+# One brain (or its agents) asks another a question. Discovery is the A2A Agent
+# Card; the call is JSON-RPC 2.0 "message/send"; trust is the federation
+# assertion, bound to the question by its hash. Public-scope memory only, no
+# tools, no writes. Logic lives in api/ask.py; docs/ASK.md is the one page.
+
+_ask_rate_limiter = FederationRateLimiter()
+
+
+def _ask_base_url(http_request: Request) -> str:
+    """Where peers reach this brain: BRAIN_PUBLIC_URL when the operator set it
+    (behind a proxy the transport URL is the inside one), else the request's."""
+    return (os.getenv("BRAIN_PUBLIC_URL") or str(http_request.base_url)).rstrip("/")
+
+
+@app.get("/.well-known/agent-card.json")
+def ask_agent_card(http_request: Request):
+    """Public A2A Agent Card: who this brain is, where to ask, how to sign."""
+    from api import ask as _ask
+    brain_id = os.getenv("BRAIN_ID", "")
+    return _ask.agent_card(
+        base_url=_ask_base_url(http_request),
+        brain_id=brain_id,
+        name=os.getenv("BRAIN_NAME") or brain_id,
+        persona=BRAIN_PERSONA,
+        version=BRAIN_VERSION,
+    )
+
+
+@app.post("/v1/ask")
+async def ask_door(http_request: Request):
+    """A2A message/send from another brain: verify its signed assertion, answer
+    from public-scoped chunks only with document names cited, rate-limit per
+    peer, audit every ask. No tool use, no writes, no memory changes."""
+    from api import ask as _ask
+    from api import substrate
+    from api.tools import federation_audit
+
+    rpc_id = None
+    question = ""
+    who = "anonymous"
+
+    def _refuse(e: "_ask.AskError", caller=None):
+        federation_audit.record_event(
+            direction="in", peer_brain_id=(caller.brain_id if caller else who), query=question,
+            verified=bool(caller), trust=(caller.trust if caller else "anonymous"),
+            outcome=f"refused:{e.reason}"[:120], surface="ask")
+        return JSONResponse(status_code=e.status, content=_ask.error(rpc_id, e.code, e.reason))
+
+    try:
+        body = await http_request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content=_ask.error(None, _ask.PARSE_ERROR, "invalid JSON"))
+    if isinstance(body, dict):
+        rpc_id = body.get("id")
+
+    this_brain_id = os.getenv("BRAIN_ID")
+    if not this_brain_id:
+        return JSONResponse(status_code=500,
+                            content=_ask.error(rpc_id, _ask.INTERNAL_ERROR, "BRAIN_ID not configured"))
+
+    try:
+        req = _ask.parse_request(body)
+        question = req["question"]
+        token = http_request.headers.get(_ask.ASSERTION_HEADER)
+        who = _ask._unverified_iss(token or "") or "anonymous"
+        public_asking = settings_store.get_ask_public_enabled()
+        caller = _ask.verify_caller(
+            token=token, question=question, this_brain_id=this_brain_id,
+            public_key=req["public_key"], public_asking=public_asking)
+    except _ask.AskError as e:
+        return _refuse(e)
+
+    # A pinned peer that fails the substrate floor is degraded: refused, unless
+    # public asking is on, in which case it asks as the public does.
+    if (caller.trust == "peer" and caller.endpoint
+            and os.getenv("FEDERATION_SUBSTRATE_GATE", "on").lower() != "off"):
+        floor = await substrate.fetch_and_check_peer(
+            peer_endpoint=caller.endpoint, pinned_pubkey_b64=caller.public_key)
+        if not floor.ok:
+            if not public_asking:
+                return _refuse(_ask.AskError(403, _ask.FORBIDDEN, f"degraded_peer: {floor.code}"), caller)
+            caller.trust = "public"
+
+    rl = _ask_rate_limiter.check(caller.rate_key)
+    if rl:
+        reason = "rate_limited" if rl.get("error") != "FAILURE" else "rate_limiter_unavailable"
+        resp = _refuse(_ask.AskError(429, _ask.RATE_LIMITED, reason), caller)
+        if rl.get("retry_after") is not None:
+            resp.headers["Retry-After"] = str(max(0, int(rl["retry_after"])))
+        return resp
+
+    try:
+        docs = search_similar_documents(
+            question, limit=_PUBLIC_SEARCH_LIMIT, architecture="flat",
+            scope="public", allow_local_only=False)
+    except Exception as e:
+        print(f"ask RAG error: {e}")
+        docs = []
+    docs = _ask.public_only(docs)
+    cites = _ask.citations(docs)
+
+    if not docs:
+        answer = _ask.NO_ANSWER
+    else:
+        model = os.getenv("PUBLIC_CHAT_MODEL") or "llama3.2:1b"
+        try:
+            answer = await _providers.complete(
+                model, [{"role": "user", "content": _ask.build_prompt(question, docs)}],
+                max_tokens=_PUBLIC_MAX_TOKENS_OUT)
+        except Exception as e:
+            print(f"ask model error: {e}")
+            federation_audit.record_event(
+                direction="in", peer_brain_id=caller.brain_id, query=question,
+                documents_used=len(docs), verified=True, trust=caller.trust,
+                outcome="error:model", surface="ask")
+            return JSONResponse(status_code=502,
+                                content=_ask.error(rpc_id, _ask.INTERNAL_ERROR, "upstream model error"))
+
+    federation_audit.record_event(
+        direction="in", peer_brain_id=caller.brain_id, query=question,
+        documents_used=len(docs), answer_len=len(answer or ""), verified=True,
+        trust=caller.trust, outcome="ok" if docs else "no_answer", surface="ask")
+    return _ask.reply(rpc_id, answer or "", cites, brain_id=this_brain_id,
+                      context_id=req.get("context_id"))
+
+
+@app.get("/settings/ask")
+def settings_get_ask(api_key: str = Depends(get_api_key)):
+    return {"public_asking": settings_store.get_ask_public_enabled()}
+
+
+class SetAskRequest(BaseModel):
+    public_asking: bool
+
+
+@app.post("/settings/ask")
+def settings_set_ask(req: SetAskRequest, api_key: str = Depends(get_api_key)):
+    """Owner switch: let brains that are not pinned peers ask (default off)."""
+    settings_store.set_ask_public_enabled(req.public_asking)
+    return {"ok": True, "public_asking": settings_store.get_ask_public_enabled()}
+
+
 @app.get("/v1/federation/log")
 def federation_log_endpoint(limit: int = 100, api_key: str = Depends(get_api_key)):
     """Recent cross-brain federation events, both directions (newest last).
