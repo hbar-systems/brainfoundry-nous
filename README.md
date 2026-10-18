@@ -437,6 +437,10 @@ Other codes: `signature_invalid`, `substrate_depth_unreachable`. Tests:
 This node implements the BrainFoundryOS node contract.
 See `docs/brainfoundry/NODE_CONTRACT.md` for the full spec.
 
+Brains and agents can ask each other questions through an A2A-shaped door: an Agent Card at
+`/.well-known/agent-card.json` and a signed `POST /v1/ask` that answers only from public memory.
+Off for strangers by default. See [`docs/ASK.md`](docs/ASK.md).
+
 The protocol is open. The brain is yours.
 
 ---
