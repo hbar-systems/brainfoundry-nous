@@ -37,7 +37,8 @@ with any port already listening. `--apply` then:
 7. runs `scripts/cc/install.sh` and `scripts/cc/split-hands.sh` for the member (units
    `cc-bridge-<handle>` and `claude-tab-<handle>`, sudoers `cc-bridge-<handle>` and
    `cc-hands-<handle>`, operator token `CC_OPERATOR_TOKEN_<HANDLE>` in `/etc/caddy/cc-<handle>.env`);
-8. appends `<handle> <n> <api port> <date>` to `/srv/brains/members.tsv`;
+8. appends `<handle> <n> <api port> <date>` to `/srv/brains/members.tsv` (640, root and the admin's
+   group: it names every member) and writes the member count, no names, to `/srv/brains/count` (644);
 9. prints the Caddy site block for `<handle>.brainfoundry.ai` and `console.<handle>.brainfoundry.ai`.
 
 By hand afterwards: paste the block into `/etc/caddy/Caddyfile` with the member's console password
@@ -87,6 +88,41 @@ scripts) and `scripts/cc/cc_member.py` (the bridge, `scripts/member_env.py`).
 - **Caddy**: one process, one site block per member.
 - **The admin**: runs every stack and can read everything, as root always can.
 
+## The System page on a shared box (2026-10-19)
+
+Before this, a member's System page and the chat footer read the whole host: memory, load and disk
+were the box's, and the container list, listening ports and failed services held other members'.
+Now each brain knows it shares the box (a member from `BRAIN_MEMBER` in its `.env`, written by
+`scripts/member_env.py` and passed to the api by compose with `COMPOSE_PROJECT_NAME`; the first
+brain from the member compose projects docker shows it and, in its bridge, `/srv/brains/count`)
+and `GET /admin/system` answers in two groups instead of `host`:
+
+- `this_brain`: its compose project, its containers (count and running), the RAM they hold
+  (`docker stats`) and its volumes' size (`docker system df -v`), each with its share of the box.
+  A member's api has no docker socket by default; it then reports its own api container's cgroup
+  memory and its database plus the api's files, and says so in `source`.
+- `box`: memory, load, disk, uptime, and `brains`, a count, never names.
+- `shared`: `{"role": "member"|"first", "brains": n}`.
+
+Warnings (the page and the footer line): this brain's own memory or disk at 50/75% of the box,
+its own containers not running, its backups and database; the box only when the box is short
+(disk 80/90% used, memory available 15/7%). Box load is shown, never warned on. Docker's
+reclaimable space and the image counts stay with the first brain.
+
+Hidden from a member: other members' and the first brain's containers (the api filters to its own
+project label even with `--update-tab`), and in `GET /cc/system` the tailnet and its peers,
+connections and listening ports, the box's failed services and units; the member's bridge keeps
+only its own units and lists what it left out in `hidden`. The first brain's admin view keeps
+everything, with the two groups added. A brain alone on its box: the report, the host view and
+every warning are byte for byte what they were (tests/test_system_status.py,
+tests/test_multi_instance.py).
+
+Not covered: a member's RAM without docker is its api container only (Postgres, nodeos, redis, ui
+are not counted); `/proc` inside a member's api still shows the box's memory and load, so those
+numbers are labelled "shared box", not hidden. A member's hands can still run `ss`, `systemctl
+--failed` or `tailscale status` themselves; the page no longer shows them, the Unix walls are what
+they were.
+
 ## Remove a member
 
 Export or back up first if the member's memory should survive
@@ -106,6 +142,7 @@ sudo systemctl daemon-reload && sudo systemctl restart caddy
 sudo userdel -r <handle>-cc && sudo userdel -r <handle>-hands && sudo groupdel <handle>-brain
 sudo mv /srv/brains/<handle> /srv/brains/.removed-<handle>-$(date +%F)   # or delete it
 # delete the member's line from /srv/brains/members.tsv: the block is free again
+awk 'NF && $1 !~ /^#/' /srv/brains/members.tsv | wc -l | sudo tee /srv/brains/count   # the count the System pages read
 ```
 
 Then the DNS names. The Ollama link timer drops the network by itself (it no longer exists).
