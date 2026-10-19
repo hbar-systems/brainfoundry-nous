@@ -31,7 +31,7 @@ Created: 2026-10-18. Read by the brain's reasoner (CC) when the owner asks to se
 Some owners sat a recorded first session before their brain opened, and the transcript is in their memory. Asking them the same things again feels like the brain did not listen.
 
 - Search memory for that interview (a transcript or interview form in the owner's own words). Use nothing else: not other chats, not documents about them, not guesses.
-- For each question the interview answers, propose the answer in one line and quote the words it came from, with the date ("from your interview on 7 October: 'I am a medical student in my fourth year'").
+- For each question the interview answers, propose the answer in one line and quote the words it came from, with the date ("from your interview on 3 March: 'I teach chemistry and I never have time for email'").
 - Ask only the questions the interview does not answer.
 - Then ask the owner to confirm, change or drop each proposed answer, in one short message. Only confirmed answers go into the `<profile>` block. Unconfirmed means unanswered.
 - If you find no interview, ask the nine questions as below.
