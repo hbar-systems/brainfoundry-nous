@@ -5,6 +5,9 @@ import { useEffect, useState } from 'react'
 // backups, last update and the database from the api (GET /admin/system); the tailnet,
 // connections, failed services and the bridge's units from the bridge on the host
 // (GET /cc/system) when CC is on. Every tile carries its level; the reasons are listed.
+// A shared box (2026-10-19, docs/MULTI_INSTANCE.md): the api sends "this_brain" and "box"
+// instead of "host", shown as two labelled groups; a member's bridge leaves out the box's tailnet,
+// ports and services. A brain alone on its box: the page is what it was.
 const mono = { fontFamily: "'JetBrains Mono', ui-monospace, monospace" }
 const T = { ink: 'var(--text)', dim: 'var(--text-dim)', faint: 'var(--muted)', line: 'var(--border)', card: 'var(--surface)', gold: 'var(--accent)', ok: '#7fc99c', warn: '#d4b86a', alert: '#d49a9a' }
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n || 0}`)
@@ -36,6 +39,12 @@ export default function System() {
   }
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t) }, [])
   const h = (api && api.host) || {}
+  const sh = (api && api.shared) || null
+  const bx = (api && api.box) || {}
+  const tb = (api && api.this_brain) || {}
+  const hb = (host && host.box) || null
+  const brains = bx.brains || (hb && hb.brains) || null
+  const isMember = (sh && sh.role === 'member') || (hb && hb.role === 'member')
   const dk = (api && api.docker) || {}
   const b = (api && api.backups) || {}
   const up = (api && api.update) || {}
@@ -55,7 +64,26 @@ export default function System() {
         </p>
         {api && api.error ? <p style={{ color: T.alert, fontSize: '13px' }}>{api.error}</p> : null}
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
+        {sh ? (
+          <>
+            <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '6px 0 8px 0' }}>This brain</h2>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
+              {tb.memory ? <Tile label="its memory" level={tb.memory.level} value={`${tb.memory.used_gb} GB`} sub={`${typeof tb.memory.share_pct === 'number' ? `${tb.memory.share_pct}% of the box · ` : ''}${tb.memory.source}`} /> : null}
+              {tb.disk ? <Tile label="its disk" level={tb.disk.level} value={`${tb.disk.used_gb} GB`} sub={`${typeof tb.disk.share_pct === 'number' ? `${tb.disk.share_pct}% of the box · ` : ''}${tb.disk.source}`} /> : null}
+              <Tile label="its containers" level={dk.level} value={tb.containers ? `${tb.running} of ${tb.containers} running` : 'not visible'} sub={tb.project ? `compose project ${tb.project}` : 'no docker access from this brain'} />
+              {b.count !== undefined ? <Tile label="backups" level={b.level} value={b.count ? `${b.age_days} d ago` : 'none'} sub={b.count ? `${b.count} kept, ${b.size_gb} GB, latest ${b.latest}` : b.dir} /> : null}
+              {db.documents !== undefined ? <Tile label="memory store" level={db.level} value={`${db.documents} docs`} sub={`${db.chunks} chunks · ${db.size_gb} GB in Postgres`} /> : (db.error ? <Tile label="memory store" level="warn" value="?" sub={db.error} /> : null)}
+            </div>
+            <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '6px 0 8px 0' }}>Shared box</h2>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
+              {bx.memory ? <Tile label="box memory" level={bx.memory.level} value={`${bx.memory.available_gb} GB free`} sub={`of ${bx.memory.total_gb} GB (${bx.memory.available_pct}% available)`} /> : null}
+              {bx.load ? <Tile label="box load" value={bx.load.five} sub={`1 min ${bx.load.one} · 15 min ${bx.load.fifteen} · ${bx.load.cores} cores, shared`} /> : null}
+              {bx.disk && !bx.disk.error ? <Tile label="box disk" level={bx.disk.level} value={`${bx.disk.free_gb} GB free`} sub={`${bx.disk.pct}% of ${bx.disk.total_gb} GB used`} /> : null}
+              <Tile label="brains on it" value={brains || '?'} sub={sh.role === 'member' ? 'this one and the others, each walled off' : 'this one (the first) and the members'} />
+            </div>
+          </>
+        ) : null}
+        <div style={{ display: sh ? 'none' : 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
           {h.disk && !h.disk.error ? <Tile label="disk" level={h.disk.level} value={`${h.disk.pct}%`} sub={`${h.disk.used_gb} of ${h.disk.total_gb} GB used, ${h.disk.free_gb} free`} /> : null}
           {h.memory ? <Tile label="memory" level={h.memory.level} value={`${h.memory.available_gb} GB free`} sub={`of ${h.memory.total_gb} GB (${h.memory.available_pct}% available)`} /> : null}
           {h.load ? <Tile label="load" level={h.load.level} value={h.load.five} sub={`1 min ${h.load.one} · 15 min ${h.load.fifteen} · ${h.load.cores} cores`} /> : null}
@@ -64,7 +92,7 @@ export default function System() {
           {db.documents !== undefined ? <Tile label="memory store" level={db.level} value={`${db.documents} docs`} sub={`${db.chunks} chunks · ${db.size_gb} GB in Postgres`} /> : (db.error ? <Tile label="memory store" level="warn" value="?" sub={db.error} /> : null)}
         </div>
 
-        <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Containers and images</h2>
+        <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>{isMember ? "This brain's containers" : 'Containers and images'}</h2>
         <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
           {(dk.containers || []).map(c => <div key={c.name}><span style={{ color: c.state === 'running' ? T.ok : T.alert }}>{c.state}</span> {c.name} <span style={{ color: T.faint }}>{c.status} · {c.image}</span></div>)}
           {dk.images ? <div style={{ marginTop: '6px' }}>{dk.images.count} images, {dk.images.size}{typeof dk.reclaimable_gb === 'number' ? ` · ${dk.reclaimable_gb} GB unused` : ''}{dk.reclaimable_by_type ? ` (${Object.entries(dk.reclaimable_by_type).filter(([, v]) => v > 0).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(', ') || 'nothing'})` : ''}{typeof dk.dangling_gb === 'number' ? ` · ${dk.dangling_gb} GB dangling` : ''}
@@ -80,11 +108,11 @@ export default function System() {
 
         {host ? (
           <>
-            <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>Host, from the bridge</h2>
+            <h2 style={{ fontWeight: 'normal', fontSize: '15px', color: T.gold, margin: '18px 0 8px 0' }}>{isMember ? "This brain's bridge" : 'Host, from the bridge'}</h2>
             <div style={{ ...mono, fontSize: '12px', color: T.dim, lineHeight: 1.7 }}>
-              {host.tailnet ? <div>tailnet: {host.tailnet.self} {host.tailnet.ip} ({host.tailnet.state}) · peers: {(host.tailnet.peers || []).map(p => <span key={p.name} style={{ color: p.online ? T.ink : T.faint }}>{p.name} {p.ip}{p.online ? '' : ' (offline)'}; </span>)}</div> : <div>tailnet: not joined</div>}
-              {host.connections ? <div>connections: {host.connections.established} established · listening on {(host.connections.listening_ports || []).join(', ')}</div> : null}
-              <div>failed services: {host.failed_units && host.failed_units.length ? <span style={{ color: T.alert }}>{host.failed_units.join(', ')}</span> : 'none'}</div>
+              {host.hidden ? <div>not shown on a member's console: {host.hidden.join(', ')} (the box's operator sees them)</div> : host.tailnet ? <div>tailnet: {host.tailnet.self} {host.tailnet.ip} ({host.tailnet.state}) · peers: {(host.tailnet.peers || []).map(p => <span key={p.name} style={{ color: p.online ? T.ink : T.faint }}>{p.name} {p.ip}{p.online ? '' : ' (offline)'}; </span>)}</div> : <div>tailnet: not joined</div>}
+              {host.hidden ? null : host.connections ? <div>connections: {host.connections.established} established · listening on {(host.connections.listening_ports || []).join(', ')}</div> : null}
+              <div>{isMember ? "this brain's failed services" : 'failed services'}: {host.failed_units && host.failed_units.length ? <span style={{ color: T.alert }}>{host.failed_units.join(', ')}</span> : 'none'}</div>
               <div>units: {Object.entries(host.units || {}).map(([k, v]) => <span key={k} style={{ color: v === 'active' ? T.ink : T.warn }}>{k} {v}; </span>)}</div>
               <div><a href="/permits" style={{ color: T.gold, textDecoration: 'underline' }}>permits recorded {host.permits}</a> · judgments {host.judgments} · jobs running {host.jobs_running}</div>
               {host.restart && host.restart.pending ? <div style={{ color: T.warn }}>restart queued by {host.restart.by}, waiting for {host.restart.waiting_for} {host.restart.waiting_for === 1 ? 'thread' : 'threads'} to finish answering · <a onClick={async () => { await fetch('/cc/restart/now', { method: 'POST' }).catch(() => {}); setTimeout(load, 4000) }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>restart now</a> · <a onClick={async () => { await fetch('/cc/restart/cancel', { method: 'POST' }).catch(() => {}); load() }} style={{ color: T.gold, cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div> : <div>restart: none queued (a bridge restart now waits until no thread is answering)</div>}
@@ -110,7 +138,7 @@ export default function System() {
             </div>
           </>
         ) : null}
-        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB. "Unused" is everything no running container needs (tagged images, stopped containers, volumes, build cache); the only action here, "reclaim now", removes dangling images only, the same step the update runs, so it appears when there are any.</p>
+        <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: '22px 0 0 0' }}>{sh ? 'thresholds on a shared box: this brain\'s memory or disk 50/75% of the box · box disk 80/90% · box memory available 15/7% · box load shown, never a warning · backup age 2/7 days' + (isMember ? '.' : ' · reclaimable docker 5 GB.') : 'thresholds: disk 80/90% · memory available 15/7% · load 1.0/2.0 per core · backup age 2/7 days · reclaimable docker 5 GB.'} "Unused" is everything no running container needs (tagged images, stopped containers, volumes, build cache); the only action here, "reclaim now", removes dangling images only, the same step the update runs, so it appears when there are any.</p>
       </div>
     </>
   )
