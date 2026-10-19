@@ -365,6 +365,22 @@ import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
 import cc_guard  # noqa: E402
+import cc_member  # noqa: E402
+
+# A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md): CC_MEMBER names this bridge's
+# units (cc-bridge-<m>, claude-tab-<m>) and narrows the root verbs the prompt names to the four the
+# installer grants a member. Unset: the single brain, every name as before.
+MEMBER = os.environ.get("CC_MEMBER", "").strip()
+BRIDGE_UNIT = cc_member.unit("cc-bridge", MEMBER)
+TAB_UNIT = cc_member.unit("claude-tab", MEMBER)
+# The member's port block (CC_MEMBER_N) fills the two ports the unit did not name: the bridge's own
+# (8100+10n+8) and its brain's api (8100+10n). An explicit CC_PORT or BRAIN_API_URL always wins.
+if MEMBER and os.environ.get("CC_MEMBER_N", "").strip():
+    _block = cc_member.ports(os.environ["CC_MEMBER_N"].strip())
+    if not os.environ.get("CC_PORT"):
+        PORT = _block["bridge"]
+    if not os.environ.get("BRAIN_API_URL"):
+        BRAIN_API_URL = f"http://127.0.0.1:{_block['api']}"
 
 # The Codex seat (2026-10-15; scripts/cc/cc_codex.py, docs/CC.md "Codex seat"): a second reasoner,
 # chosen per thread. Read-only by construction; refused, never silently replaced, when the binary is
@@ -450,7 +466,22 @@ if BOX_ENABLED:
         "sudo in a job."
     )
 
-if BOX_ENABLED:
+if BOX_ENABLED and MEMBER:
+    SYSTEM += (
+        " This box is shared with other members, each walled off; you have hands in this member's part of it: "
+        "you may read, edit and write files and run commands with your own tools (Edit, Write, Bash). Reads run "
+        "freely. Any other call raises a card in the person's chat with the exact file or command; they allow or "
+        "refuse it there, and you get the answer as the tool result. Do not ask in words whether you may; make the "
+        "call and let the card ask. You run as a plain user without general sudo. The only root verbs, each also "
+        f"behind a card: `sudo systemctl restart {BRIDGE_UNIT}` (restarts you; the turn ends), "
+        f"`sudo systemctl restart {TAB_UNIT}`, `sudo systemctl status {BRIDGE_UNIT}` and `sudo systemctl status {TAB_UNIT}`. "
+        "The brain is updated from its console's Update tab or by the box's operator, not by you. Anything else "
+        "with sudo fails; say so rather than trying workarounds. Never read or print secrets (.env files, "
+        "credentials, tokens)."
+        f" You run as the Unix user {__import__('getpass').getuser()} with home {Path.home()}; the brain repository "
+        f"is {CWD}" + (f" and the world {WORLD_DIR}" if WORLD_DIR else "") + "."
+    )
+elif BOX_ENABLED:
     SYSTEM += (
         " This box is the person's own server and you have hands on it: you may read, edit and write files "
         "and run commands with your own tools (Edit, Write, Bash). Reads run freely. Any other call raises a "
@@ -749,7 +780,7 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
 # ExecReload, used by the Update watcher), POST /restart. "now" forces it; "cancel" drops it.
 RESTART = {"pending": False, "since": 0.0, "by": ""}
 RESTART_LOCK = threading.Lock()
-_RESTART_CMD = re.compile(r"^\s*sudo\s+(-n\s+)?(/usr/bin/)?systemctl\s+(restart|reload-or-restart)\s+cc-bridge(\.service)?\s*$")
+_RESTART_CMD = re.compile(r"^\s*sudo\s+(-n\s+)?(/usr/bin/)?systemctl\s+(restart|reload-or-restart)\s+" + re.escape(BRIDGE_UNIT) + r"(\.service)?\s*$")
 
 
 def _restart_request(by: str) -> dict:
@@ -1412,7 +1443,8 @@ def _host_system() -> dict:
     d["failed_units"] = failed
     d["restart"] = _restart_status()
     units = {}
-    for u in ("cc-bridge", "claude-tab", "cc-work-pull.timer", "world-mirror.timer", "world-propose.timer", "cc-bridge-watch.path", "cc-install-watch.path", "tailscaled"):
+    for u in (BRIDGE_UNIT, TAB_UNIT, cc_member.unit("cc-work-pull", MEMBER) + ".timer", "world-mirror.timer", "world-propose.timer",
+              cc_member.unit("cc-bridge-watch", MEMBER) + ".path", cc_member.unit("cc-install-watch", MEMBER) + ".path", "tailscaled"):
         st = run(["systemctl", "is-active", u]).strip()
         if st:
             units[u] = st
@@ -1429,7 +1461,7 @@ def _host_system() -> dict:
     w = []
     if failed:
         w.append("failed services: " + ", ".join(failed[:4]))
-    for u in ("cc-bridge", "world-mirror.timer", "world-propose.timer"):
+    for u in (BRIDGE_UNIT, "world-mirror.timer", "world-propose.timer"):
         if units.get(u) and units[u] != "active":
             w.append(f"{u} is {units[u]}")
     d["warnings"] = w

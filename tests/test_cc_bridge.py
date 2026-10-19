@@ -1173,8 +1173,8 @@ def test_box_map_route_and_pane_exist():
 
 def _restart_regex():
     src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
-    m = re.search(r'_RESTART_CMD = re\.compile\(r"(.+?)"\)\n', src)
-    return re.compile(m.group(1))
+    m = re.search(r'_RESTART_CMD = (re\.compile\(.+?\))\n', src)
+    return eval(m.group(1), {"re": re, "BRIDGE_UNIT": "cc-bridge"})     # the single brain's unit (multi-instance 2026-10-19)
 
 
 def test_restart_command_is_recognised_and_nothing_else():
@@ -1193,7 +1193,7 @@ def test_restart_queue_wired_everywhere():
     assert '"/restart/now"' in src and '"/restart/cancel"' in src and '"restart": _restart_status()' in src
     inst = (ROOT / "scripts" / "cc" / "install.sh").read_text()
     assert "KillMode=process" in inst and "ExecReload=/bin/kill -HUP \\$MAINPID" in inst
-    assert "reload-or-restart cc-bridge.service" in inst
+    assert "reload-or-restart cc-bridge$SFX.service" in inst
 # ---- Cost tiles: list price from tokens, real invoices (2026-10-12) ----
 
 def test_list_price_from_tokens_and_invoices(tmp_path):

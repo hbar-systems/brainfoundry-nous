@@ -12,10 +12,21 @@
 #   bash scripts/cc/split-hands.sh verify   -> the four checks, nothing changed
 # Rollback: remove CC_HANDS_USER, CC_HANDS_HOME, CC_OPERATOR_TOKEN from the bridge env,
 # empty /etc/caddy/cc.env, move the folders back, restart cc-bridge and reload caddy.
+#
+# A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md; scripts/multi/add-member.sh):
+# CC_MEMBER=<m> CC_MEMBER_N=<n> BRAIN_DIR=/srv/brains/<m> makes the users <m>-cc and <m>-hands,
+# the units cc-bridge-<m>, the sudoers file cc-hands-<m>, the bridge port from block n, and the
+# operator token CC_OPERATOR_TOKEN_<M> in /etc/caddy/cc-<m>.env. CADDY_ROUTES=0: the Caddyfile
+# is not edited and caddy is not restarted (the operator pastes the printed block, then restarts).
 set -euo pipefail
 BRAIN_DIR=${BRAIN_DIR:-/home/hbar/brain}
-BRIDGE_USER=${BRIDGE_USER:-cc}
-HANDS_USER=${HANDS_USER:-hands}
+. "$(dirname "$0")/member.sh"; member_load
+SFX=$M_SFX
+BRIDGE_USER=${BRIDGE_USER:-${M_BRIDGE_USER:-cc}}
+HANDS_USER=${HANDS_USER:-$M_HANDS_USER}
+ADMIN_USER=${ADMIN_USER:-hbar}
+CC_PORT=${CC_PORT:-$M_CC_PORT}
+CADDY_ROUTES=${CADDY_ROUTES:-1}
 BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
 HANDS_HOME=/home/$HANDS_USER
 ENV_FILE="$BRIDGE_HOME/.cc-bridge/env"
@@ -28,9 +39,9 @@ verify() {
     echo "hands cannot read the bridge's state: $(sudo -u "$HANDS_USER" ls "$BRIDGE_HOME/.cc-bridge" >/dev/null 2>&1 && echo FAIL || echo ok)"
     echo "hands cannot read the brain's env:    $(sudo -u "$HANDS_USER" cat "$BRAIN_DIR/.env" >/dev/null 2>&1 && echo FAIL || echo ok)"
     if sudo test -d "$HANDS_HOME/world"; then echo "bridge reaches the hands' world:      $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/world" >/dev/null 2>&1 && echo ok || echo FAIL)"; else echo "bridge reaches the hands' out:        $(sudo -u "$BRIDGE_USER" ls "$HANDS_HOME/out" >/dev/null 2>&1 && echo ok || echo FAIL)"; fi
-    echo "decision route without the token:     $(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:7682/cc/new) (403 expected)"
+    echo "decision route without the token:     $(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:$CC_PORT/cc/new) (403 expected)"
     echo "hands can run the permission hook:    $(sudo -u "$HANDS_USER" -H /usr/bin/python3 -c 'import urllib.request' >/dev/null 2>&1 && echo ok || echo FAIL)"
-    echo "health:                               $(curl -s http://127.0.0.1:7682/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("hands_user", d.get("hands_user"), "operator_token", d.get("operator_token"))')"
+    echo "health:                               $(curl -s http://127.0.0.1:$CC_PORT/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("hands_user", d.get("hands_user"), "operator_token", d.get("operator_token"))')"
 }
 
 case "${1:-do}" in
@@ -106,26 +117,33 @@ do)
     # excerpts and the ask token included (found on hbar 2026-10-01); the bridge keeps its own audit
     # umask 0002 for what the bridge starts as the hands: the two users write into the same folders
     # (in/, out/, the world); without it a folder the reasoner made refused the bridge's upload (hbar 2026-10-04)
-    printf 'Defaults:%s !syslog\nDefaults:%s umask_override, umask=0002\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$BRIDGE_USER" "$BRIDGE_USER" "$HANDS_USER" "hbar" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands >/dev/null
-    sudo chmod 440 /etc/sudoers.d/cc-hands; sudo visudo -cf /etc/sudoers.d/cc-hands >/dev/null
+    printf 'Defaults:%s !syslog\nDefaults:%s umask_override, umask=0002\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n%s ALL=(%s) NOPASSWD: /usr/bin/env\n' "$BRIDGE_USER" "$BRIDGE_USER" "$BRIDGE_USER" "$HANDS_USER" "$ADMIN_USER" "$HANDS_USER" | sudo tee /etc/sudoers.d/cc-hands$SFX >/dev/null
+    sudo chmod 440 /etc/sudoers.d/cc-hands$SFX; sudo visudo -cf /etc/sudoers.d/cc-hands$SFX >/dev/null
     echo "== 5/7 the operator token"
+    # the bridge always reads CC_OPERATOR_TOKEN; Caddy holds every member's under its own name
     TOK=$(getenv CC_OPERATOR_TOKEN); [ -n "$TOK" ] || TOK=$(python3 -c 'import secrets;print(secrets.token_hex(24))')
     setenv CC_OPERATOR_TOKEN "$TOK"
-    printf 'CC_OPERATOR_TOKEN=%s\n' "$TOK" | sudo tee /etc/caddy/cc.env >/dev/null; sudo chmod 600 /etc/caddy/cc.env; sudo chown root:root /etc/caddy/cc.env
+    CENV=/etc/caddy/$M_CADDY_ENV.env
+    printf '%s=%s\n' "$M_TOKEN_VAR" "$TOK" | sudo tee "$CENV" >/dev/null; sudo chmod 600 "$CENV"; sudo chown root:root "$CENV"
     sudo mkdir -p /etc/systemd/system/caddy.service.d
-    printf '[Service]\nEnvironmentFile=/etc/caddy/cc.env\n' | sudo tee /etc/systemd/system/caddy.service.d/cc.conf >/dev/null
-    if ! sudo grep -q "X-CC-Operator" "$CADDYFILE"; then
+    printf '[Service]\nEnvironmentFile=%s\n' "$CENV" | sudo tee /etc/systemd/system/caddy.service.d/$M_CADDY_ENV.conf >/dev/null
+    if [ "$CADDY_ROUTES" != 1 ]; then
+        sudo systemctl daemon-reload
+        echo "CADDY_ROUTES=0: Caddyfile untouched; paste the member's site block, then: sudo systemctl restart caddy"
+    elif ! sudo grep -q "X-CC-Operator" "$CADDYFILE"; then
         sudo cp "$CADDYFILE" "$CADDYFILE.bak-split-$(date +%Y%m%d%H%M)"
-        sudo python3 - "$CADDYFILE" <<'PY'
+        sudo python3 - "$CADDYFILE" "$CC_PORT" "$M_TOKEN_VAR" <<'PY'
 import re, sys
 p = sys.argv[1]; t = open(p).read()
-new = re.sub(r"(\n(\s+)reverse_proxy localhost:7682)\n", lambda m: f"{m.group(1)} {{\n{m.group(2)}    header_up X-CC-Operator {{$CC_OPERATOR_TOKEN}}\n{m.group(2)}}}\n", t, count=1)
+new = re.sub(r"(\n(\s+)reverse_proxy localhost:" + sys.argv[2] + r")\n", lambda m: f"{m.group(1)} {{\n{m.group(2)}    header_up X-CC-Operator {{${sys.argv[3]}}}\n{m.group(2)}}}\n", t, count=1)
 if new == t: sys.exit("could not find the /cc reverse_proxy line")
 open(p, "w").write(new)
 PY
     fi
-    sudo caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null
-    sudo systemctl daemon-reload; sudo systemctl restart caddy
+    if [ "$CADDY_ROUTES" = 1 ]; then
+        sudo caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null
+        sudo systemctl daemon-reload; sudo systemctl restart caddy
+    fi
     echo "== 6/7 the bridge env"
     setenv CC_HANDS_USER "$HANDS_USER"; setenv CC_HANDS_HOME "$HANDS_HOME"
     if [ "$HAS_WORLD" = 1 ]; then setenv CC_WORLD_DIR "$HANDS_HOME/world"; setenv CC_WORK_DIR "$HANDS_HOME/world"; fi
@@ -142,7 +160,7 @@ PY
     sudo systemctl daemon-reload
     echo "== 7/7 restart and check"
     bash "$BRAIN_DIR/scripts/cc/install.sh" >/dev/null 2>&1 || true      # rewrites the door for the hands user
-    sudo systemctl restart cc-bridge; sleep 2
+    sudo systemctl restart cc-bridge$SFX; sleep 2
     verify
     echo
     echo "Sign the reasoner in as $HANDS_USER if its login did not travel: the console's sign-in door, or: sudo -u $HANDS_USER -H claude auth login --claudeai" ;;
