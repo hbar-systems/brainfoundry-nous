@@ -32,6 +32,7 @@ def member_values(handle: str, n) -> dict:
         "BRAIN_NAME": f"{handle.capitalize()}'s Brain",
         "BRAIN_OWNER": handle.capitalize(),
         "COMPOSE_PROJECT_NAME": f"brain-{handle}",
+        "BRAIN_MEMBER": handle,              # the System page knows it shares the box
         "BRAIN_API_PORT": str(p["api"]),
         "BRAIN_UI_PORT": str(p["ui"]),
         "BRAIN_NODEOS_PORT": str(p["nodeos"]),

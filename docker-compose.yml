@@ -128,6 +128,11 @@ services:
       # you enable it via docker-compose.override.yml, so most installs never
       # need to touch this.
       - BRAIN_HOST_DIR=${BRAIN_HOST_DIR:-/opt/brainfoundry/brain}
+      # A member on a shared box (scripts/add-member.sh writes both): the System page then shows
+      # "this brain" and "shared box" apart and only its own containers (docs/MULTI_INSTANCE.md).
+      # Empty for a brain alone on its box: the System page is what it was.
+      - BRAIN_MEMBER=${BRAIN_MEMBER:-}
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
     depends_on:
       - postgres
       - nodeos
