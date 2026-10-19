@@ -514,6 +514,34 @@ class Jobs:
         items = self._load()
         return [self._fill(r) for r in list(reversed(items))[:n]]
 
+    def running_by_thread(self) -> dict:
+        """The jobs still running, grouped by the thread that started them (2026-10-18): the second
+        light beside a thread's state, lit while its turn is over and its jobs are not. Only known
+        threads; a record whose process is gone (the bridge restarted mid-job) does not count.
+        Oldest first within a thread: {thread: [{"id", "title", "started"}]}."""
+        out: dict = {}
+        for r in self._load():
+            if r.get("ended") is not None:
+                continue
+            r = self._fill(r)
+            th = r.get("thread")
+            if not self.known(th) or not self._alive(r.get("pid")):
+                continue
+            out.setdefault(str(th), []).append({k: r.get(k) for k in ("id", "title", "started")})
+        return out
+
+    @staticmethod
+    def _alive(pid) -> bool:
+        try:
+            os.kill(int(pid), 0)
+        except PermissionError:
+            return True       # the hands user's process: there, just not ours to signal
+        except (ProcessLookupError, TypeError, ValueError):
+            return False
+        except OSError:
+            return True
+        return True
+
     def get(self, jid: str, tail_bytes: int = 4000) -> dict | None:
         for r in self._load():
             if r["id"] == jid:

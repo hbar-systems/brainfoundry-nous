@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import pathlib
 import sys
@@ -321,3 +322,40 @@ def test_board_lists_every_job_with_its_thread():
     b = X.board_tiles([], [], jobs, [], [], set(), now)
     by = {t["key"]: t for t in b["tiles"]}
     assert by["job:J1"]["thread"] == "t-1" and by["job:J2"]["thread"] is None and len(by) == 2
+
+
+def test_running_jobs_are_counted_per_thread(tmp_path):
+    """2026-10-18: the second light. running_by_thread() groups the jobs still running by the
+    thread that started them, resolves a new conversation's job through its run, leaves out jobs
+    of no known thread and finished ones, and drops a record whose process is gone."""
+    runs = {"r-new": None}
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"}, resolve=lambda rid: runs.get(rid))
+    a1 = j.start("sleep 30", str(tmp_path), "long A one", thread="thread-A")
+    a2 = j.start("sleep 30", str(tmp_path), "long A two", thread="thread-A")
+    b = j.start("sleep 30", str(tmp_path), "long of a new one", thread="unknown", run="r-new")
+    j.start("sleep 30", str(tmp_path), "long of nobody", thread="")
+    q = j.start("true", str(tmp_path), "quick A", thread="thread-A")
+    try:
+        for _ in range(60):
+            if q["id"] in j.unseen:
+                break
+            time.sleep(0.1)
+        got = j.running_by_thread()
+        assert set(got) == {"thread-A"}
+        assert [x["id"] for x in got["thread-A"]] == [a1["id"], a2["id"]]
+        assert got["thread-A"][0] == {"id": a1["id"], "title": "long A one", "started": a1["started"]}
+        runs["r-new"] = "thread-B"
+        assert [x["id"] for x in j.running_by_thread().get("thread-B", [])] == [b["id"]]
+        # a record left "running" by a bridge that restarted mid-job: its pid is gone, it does not count
+        reg = tmp_path / "out" / "jobs" / "jobs.json"
+        items = json.loads(reg.read_text())
+        items.append({"id": "Jghost", "title": "ghost", "pid": 2 ** 22 + 12345, "started": 1, "ended": None, "thread": "thread-C"})
+        reg.write_text(json.dumps(items))
+        assert "thread-C" not in j.running_by_thread()
+    finally:
+        for r in json.loads((tmp_path / "out" / "jobs" / "jobs.json").read_text()):
+            if r.get("ended") is None and r["id"] != "Jghost":
+                try:
+                    os.killpg(r["pid"], 9)
+                except OSError:
+                    pass
