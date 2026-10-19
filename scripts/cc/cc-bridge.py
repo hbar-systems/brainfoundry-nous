@@ -25,7 +25,7 @@ Endpoints (JSON):
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"} -> {"reply","session_id","ms","error","reasoner"}
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
-  GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...]}  the real busy state of a thread
+  GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
@@ -1573,6 +1573,7 @@ def _threads_view(archived: bool = False) -> dict:
     tg_thread = _tg_thread()
     st = _load_state()
     running = {r.thread: r.public() for r in _runs_active() if r.thread}
+    jobs_by = JOBS.running_by_thread()
     verdicts = cc_recent.load_verdicts(VERDICTS_WORLD)
     for th in items:
         r = running.get(th.get("brain"))
@@ -1580,6 +1581,7 @@ def _threads_view(archived: bool = False) -> dict:
         th["running"] = bool(r)
         th["run"] = (r or {}).get("run")
         th["waiting"] = (r or {}).get("waiting", 0)
+        th["jobs_running"] = jobs_by.get(th.get("brain"), [])   # the second light (2026-10-18)
         th["pinned"] = bool(th.get("pinned"))
         th["archived"] = bool(th.get("archived"))
         v = cc_recent.verdict_for(verdicts, th) or {}
@@ -2783,6 +2785,7 @@ def _state(thread: str | None) -> dict:
         run = {"run": r.id, "seconds": int(time.time() - r.started), "steps": v["steps"], "agents": v["agents"],
                "last": v["last"], "waiting": r.waiting, "message": r.message[:120]}
     return {"thread": thread, "running": r is not None, "run": run, "queue": _queue_view(thread),
+            "jobs_running": JOBS.running_by_thread().get(thread, []) if thread else [],
             "others": sum(1 for x in _runs_active() if x is not r), "now": time.time()}
 
 
