@@ -72,6 +72,23 @@ def test_jobs_run_detached_and_finish(tmp_path):
     assert j.start("", None)["error"]
 
 
+def test_jobs_guard_rewrites_or_refuses(tmp_path):
+    """2026-10-19: the bridge's guard (cc_guard.check_job) sees every job command before it runs."""
+    def guard(c):
+        if "bad" in c:
+            raise ValueError("refused for the test")
+        return c.replace("hello", "guarded")
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"}, guard=guard)
+    assert j.start("echo bad", None) == {"error": "refused for the test"}
+    rec = j.start("echo hello", str(tmp_path))
+    for _ in range(50):
+        g = j.get(rec["id"])
+        if not g["running"]:
+            break
+        time.sleep(0.1)
+    assert "guarded" in g["tail"] and rec["command"] == "echo hello"     # the record keeps the person's words
+
+
 def test_uploads_multipart(tmp_path):
     up = X.Uploads(tmp_path / "in")
     boundary = "XYZ"

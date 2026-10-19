@@ -417,8 +417,11 @@ class Jobs:
     UNKNOWN = "unknown"
     UNSEEN_TTL = 24 * 3600      # a finished job nobody took stops being "unseen" after a day
 
-    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None, on_end=None):
+    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None, on_end=None, guard=None):
         self.on_end = on_end      # called with the finished record (the spend meter, 2026-10-17)
+        # command -> the command to run, or raises with the reason (2026-10-19: a claude started by a
+        # job gets the turn's permission hook and may not loosen the owner's posture; cc_guard.check_job)
+        self.guard = guard
         self.dir = out_dir / "jobs"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg = self.dir / "jobs.json"
@@ -459,6 +462,12 @@ class Jobs:
             return {"error": "empty command"}
         if re.search(r"(^|[\s;&|(])sudo(\s|$)", command):
             return {"error": "jobs never run sudo; ask for that in the chat so it gets a card"}
+        run_cmd = command
+        if self.guard is not None:
+            try:
+                run_cmd = self.guard(command)
+            except Exception as e:  # noqa: BLE001  (a guard that fails, refuses)
+                return {"error": str(e) or type(e).__name__}
         wd = Path(cwd).expanduser() if cwd else None
         if wd is not None and not wd.is_dir():
             return {"error": f"no such folder: {wd}"}
@@ -477,7 +486,7 @@ class Jobs:
             lf.write(f"# {jid} {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} in {wd or os.getcwd()}\n# {command}\n".encode())
             lf.flush()
             try:
-                proc = subprocess.Popen(self.wrap(["bash", "-lc", command]), cwd=str(wd) if wd else None, env=self.env_fn(),
+                proc = subprocess.Popen(self.wrap(["bash", "-lc", run_cmd]), cwd=str(wd) if wd else None, env=self.env_fn(),
                                         stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
             except Exception as e:  # noqa: BLE001
                 lf.close()

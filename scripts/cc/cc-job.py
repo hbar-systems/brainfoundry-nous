@@ -11,7 +11,8 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job tail <id> [n]      last n bytes of the log (default 4000)
     cc-job list               recent jobs
 
-Jobs never run sudo. The person sees every job on the CC page and can ask about it.
+Jobs never run sudo. A claude started by a job gets the turn's permission settings, and the flags
+that would loosen the owner's posture are refused by the bridge (2026-10-19, cc_guard.py). The person sees every job on the CC page and can ask about it.
 """
 import json
 import os

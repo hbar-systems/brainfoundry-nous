@@ -364,6 +364,7 @@ import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
+import cc_guard  # noqa: E402
 
 # The Codex seat (2026-10-15; scripts/cc/cc_codex.py, docs/CC.md "Codex seat"): a second reasoner,
 # chosen per thread. Read-only by construction; refused, never silently replaced, when the binary is
@@ -412,7 +413,7 @@ def _job_spent(rec: dict) -> None:
 
 
 JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv),
-                      resolve=lambda run_id: _job_thread(run_id), on_end=_job_spent)
+                      resolve=lambda run_id: _job_thread(run_id), on_end=_job_spent, guard=lambda c: _job_guard(c))
 
 
 def _job_thread(run_id: str | None) -> str | None:
@@ -941,8 +942,8 @@ def _box_settle(pid: str, decision: str, message: str = "") -> None:
 #         writes (those never pass through here). Only the owner of this brain can choose it,
 #         and only where the box lane is on. Requested by the operator 2026-09-21 after the
 #         first day of use: "the cards are not attractive for my own files on my own box".
-POSTURES = ("cards", "auto", "judged")
-ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
+POSTURES = cc_guard.POSTURES
+ASK_ALWAYS = cc_guard.ASK_ALWAYS
 
 # The judged posture (2026-09-22, first TypeSafe experiment): every action still reaches the
 # bridge, but before a card is shown a System One model (TypeSafe Jev) answers three typed
@@ -1449,16 +1450,36 @@ HOOK_PYTHON = os.environ.get("CC_HOOK_PYTHON", "").strip() or ("/usr/bin/python3
 
 def _hook_settings() -> str:
     """Claude Code settings JSON for this turn: the permission hook, with a timeout that
-    outlives the permit; in the auto posture also the ask rules that keep sudo on a card."""
-    s = {"hooks": {"PermissionRequest": [{"hooks": [
-        {"type": "command", "command": f"{HOOK_PYTHON} {HOOK_SCRIPT}", "timeout": PERMIT_TTL + 60}]}],
-        # after every write the file is opened to the group, so the bridge (another user after the
-        # split) can show it in the Files pane (2026-10-01)
-        "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [
-        {"type": "command", "command": f"{HOOK_PYTHON} {POST_HOOK_SCRIPT}", "timeout": 10}]}]}}
-    if _posture_current() == "auto":
-        s["permissions"] = {"ask": ASK_ALWAYS}
-    return json.dumps(s)
+    outlives the permit; in the auto posture also the ask rules that keep sudo on a card.
+    Shared with jobs through cc_guard (2026-10-19)."""
+    return cc_guard.hook_settings(_posture_current(), HOOK_PYTHON, HOOK_SCRIPT, POST_HOOK_SCRIPT, PERMIT_TTL)
+
+
+# A job may start a reasoner (`cc-job run -- 'claude -p ...'`). Until 2026-10-19 that one ran without
+# the hook and with any --permission-mode its caller wrote. Now it gets this turn's settings, and
+# --dangerously-skip-permissions, bypassPermissions, and auto/acceptEdits/--allowedTools outside the
+# auto posture are refused. A standing agent's own settings file (cc_agents writes the hook into it)
+# is kept when its content still carries the hook and the sudo ask rules.
+AGENTS_DIR_HANDS = Path(os.environ.get("CC_AGENTS_DIR", "").strip() or str(HANDS_HOME / "agents"))
+
+
+def _agent_settings_ok(path: str) -> bool:
+    if not cc_guard.agent_settings_path_ok(path, AGENTS_DIR_HANDS):
+        return False
+    try:
+        text = Path(path).read_text()
+    except OSError:                       # the hands' home is closed to the bridge after the split
+        try:
+            r = subprocess.run(_as_hands(["/bin/cat", path]), capture_output=True, text=True, timeout=10)
+            text = r.stdout if r.returncode == 0 else ""
+        except Exception:  # noqa: BLE001
+            text = ""
+    return cc_guard.agent_settings_ok(text)
+
+
+def _job_guard(command: str) -> str:
+    box = BOX_ENABLED and GATE is not None
+    return cc_guard.check_job(command, _posture_current(), _hook_settings() if box else None, _agent_settings_ok)
 
 
 # An external reconciler (the operator's world-propose on hbar) may keep a summary of what it

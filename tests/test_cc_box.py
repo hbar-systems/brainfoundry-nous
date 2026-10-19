@@ -20,6 +20,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 pytest.importorskip("permitd")
 
 
+@pytest.fixture(autouse=True)
+def _no_posture(monkeypatch):
+    monkeypatch.delenv("CC_POSTURE", raising=False)    # the shell running the tests may be a box in the auto posture
+
+
 def _load(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CC_CWD", str(tmp_path / "brain"))
@@ -134,6 +139,21 @@ def test_posture_auto_adds_ask_rules_and_mode(monkeypatch, tmp_path):
     assert s["hooks"]["PermissionRequest"]           # the card hook stays
     monkeypatch.setenv("CC_POSTURE", "nonsense")
     assert m._posture_current() == "cards"
+
+
+def test_job_guard_follows_the_posture(monkeypatch, tmp_path):
+    """2026-10-19: a job's claude gets this turn's settings; auto mode only in the auto posture."""
+    m = _load(monkeypatch, tmp_path)
+    out = m._job_guard("claude -p hi")
+    assert out.startswith("claude --settings ") and "cc-permit-hook.py" in out
+    assert m.JOBS.start("claude --permission-mode auto -p hi", None)["error"].startswith("--permission-mode auto needs")
+    assert m.JOBS.start("claude --dangerously-skip-permissions -p hi", None)["error"]
+    monkeypatch.setenv("CC_POSTURE", "auto")
+    out = m._job_guard("claude --permission-mode auto -p hi")
+    assert "Bash(sudo *)" in out and out.endswith("--permission-mode auto -p hi")
+    with pytest.raises(m.cc_guard.Refused):
+        m._job_guard("claude --permission-mode bypassPermissions -p hi")
+    assert m._agent_settings_ok(str(tmp_path / "agents" / "A-1" / "settings.json")) is False   # no file, no pass
 
 
 def test_judged_posture_runs_or_asks(monkeypatch, tmp_path):
