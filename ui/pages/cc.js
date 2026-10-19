@@ -36,6 +36,22 @@ const C = {
 }
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 
+// The second light (2026-10-18): jobs a thread started that still run after its turn ended. A ring
+// beside the state light with the count; off when none. The tooltip names them, a click opens the board.
+function JobsLight({ jobs, size = 8, fontSize = '10px' }) {
+  const list = Array.isArray(jobs) ? jobs : []
+  if (!list.length) return null
+  const tip = `${list.length === 1 ? 'a job' : `${list.length} jobs`} from this conversation still running:\n` +
+    list.map(j => `${j.title || 'untitled'} (${j.id})`).join('\n') + '\nclick: the board'
+  const open = (e) => { e.preventDefault(); e.stopPropagation(); window.location.href = '/board' }
+  return (
+    <a onClick={open} title={tip} style={{ ...mono, color: C.gold, fontSize, display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer', textDecoration: 'none', whiteSpace: 'nowrap', marginRight: '8px' }}>
+      <span style={{ display: 'inline-block', width: `${size}px`, height: `${size}px`, borderRadius: '50%', boxSizing: 'border-box', border: `1.5px solid ${C.gold}`, backgroundColor: 'transparent' }} />
+      {list.length} job{list.length === 1 ? '' : 's'}
+    </a>
+  )
+}
+
 function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '') }
 function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
 const SLASH = [
@@ -1145,7 +1161,7 @@ function CC() {
   // `busy` alone is what THIS page started or follows; a turn started elsewhere (another tab, a pane,
   // Telegram, a queued message that just began) or a stream a proxy cut left the line saying idle
   // while the bridge refused the next message. The line, the dot and the composer read `active`.
-  const [srv, setSrv] = useState(null)                // { running, run:{seconds,steps,agents,last}, queue:[{id,message}] }
+  const [srv, setSrv] = useState(null)                // { running, run:{seconds,steps,agents,last}, queue:[{id,message}], jobs_running:[{id,title,started}] }
   const srvAtRef = useRef(0)
   const pollRef = useRef(null)
   const srvRunning = !!(srv && srv.running)
@@ -2655,7 +2671,7 @@ function CC() {
                                      style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
                             : <a onClick={() => switchThread(th)}
                                  style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
-                                {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}{th.title || 'untitled'}
+                                {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
                                 {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
                                 <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
                               </a>}
@@ -2846,6 +2862,7 @@ function CC() {
                     return <span>answering{ms !== null ? ` for ${fmtElapsed(ms)}` : ''}{nSteps ? ` · ${nSteps} step${nSteps === 1 ? '' : 's'}` : (live && live.text ? ' · writing' : ' · thinking')}{sr && sr.agents ? ` · ${sr.agents} subagent${sr.agents === 1 ? '' : 's'}` : ''}{nq ? ` · ${nq} queued` : ''}{lastStep ? ` · last: ${lastStep.slice(0, 90)}` : ''}</span>
                   })()
                 : <span>idle{last ? ` · last answer ${(last.ms / 1000).toFixed(1)} s${last.meta && last.meta.steps > 1 ? `, ${last.meta.steps} steps` : ''}` : ''}</span>}
+              {srv && srv.thread === cur ? <JobsLight jobs={srv.jobs_running} fontSize="11px" /> : null}
               <style>{`@keyframes ccpulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
             </p>
           )
