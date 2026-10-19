@@ -260,6 +260,75 @@ def test_bridge_member(monkeypatch, tmp_path):
     assert m.PORT == 9999                                                                 # an explicit port wins
 
 
+
+# ------------------------------------------------- the System page on a shared box ----
+# 2026-10-19: a member's bridge shows only its own units; the box's tailnet, ports and services
+# stay with the first brain's admin. A brain alone: the host view is what it was.
+def _stub_host(monkeypatch, m, failed="cc-bridge-bob.service loaded failed failed x\nworld-mirror.service loaded failed failed y\n"):
+    def fake(cmd, capture_output=True, text=True, timeout=8):
+        out = {"tailscale": '{"Self": {"HostName": "box", "TailscaleIPs": ["100.1.1.1"]}, "BackendState": "Running", '
+                            '"Peer": {"a": {"HostName": "laptop", "TailscaleIPs": ["100.1.1.2"], "OS": "macOS", "Online": true}}}',
+               "ss": "LISTEN 0 4096 127.0.0.1:8120 0.0.0.0:*\nLISTEN 0 4096 127.0.0.1:8130 0.0.0.0:*\n"}.get(cmd[0], "")
+        if cmd[:2] == ["systemctl", "--failed"]:
+            out = failed
+        elif cmd[:2] == ["systemctl", "is-active"]:
+            out = "active\n"
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+    monkeypatch.setattr(m.subprocess, "run", fake)
+
+
+def test_bridge_system_single_brain_unchanged(monkeypatch, tmp_path):
+    m = _bridge(monkeypatch, tmp_path, CC_BRAINS_ROOT=str(tmp_path / "srv"))
+    _stub_host(monkeypatch, m)
+    d = m._host_system()
+    assert "box" not in d and "hidden" not in d
+    assert d["tailnet"]["peers"][0]["name"] == "laptop" and d["connections"]["listening_ports"] == ["8120", "8130"]
+    assert d["failed_units"] == ["cc-bridge-bob.service", "world-mirror.service"]
+    assert "world-mirror.timer" in d["units"] and "tailscaled" in d["units"]
+    assert d["warnings"] == ["failed services: cc-bridge-bob.service, world-mirror.service"]
+
+
+def test_bridge_system_first_brain_keeps_everything(monkeypatch, tmp_path):
+    (tmp_path / "srv").mkdir()
+    (tmp_path / "srv" / "count").write_text("2\n")
+    m = _bridge(monkeypatch, tmp_path, CC_BRAINS_ROOT=str(tmp_path / "srv"))
+    _stub_host(monkeypatch, m)
+    d = m._host_system()
+    assert d["box"] == {"shared": True, "role": "first", "brains": 3}
+    assert d["tailnet"] and d["connections"] and len(d["failed_units"]) == 2
+
+
+def test_bridge_system_member_hides_the_box(monkeypatch, tmp_path):
+    (tmp_path / "srv").mkdir()
+    (tmp_path / "srv" / "members.tsv").write_text("ada\t2\t8120\t2026-10-19\nbob\t3\t8130\t2026-10-19\n")
+    m = _bridge(monkeypatch, tmp_path, CC_MEMBER="ada", CC_MEMBER_N="2", CC_BRAINS_ROOT=str(tmp_path / "srv"))
+    _stub_host(monkeypatch, m, failed="cc-bridge-bob.service loaded failed failed x\ncc-bridge-ada.service loaded failed failed y\n")
+    d = m._host_system()
+    assert d["box"] == {"shared": True, "role": "member", "brains": 3}
+    assert "tailnet" not in d and "connections" not in d and d["hidden"]
+    assert d["failed_units"] == ["cc-bridge-ada.service"]                                # its own, never bob's
+    assert set(d["units"]) == {"cc-bridge-ada", "claude-tab-ada", "cc-work-pull-ada.timer", "cc-bridge-watch-ada.path",
+                               "cc-install-watch-ada.path"}
+    assert "bob" not in str(d) and "laptop" not in str(d) and "8130" not in str(d)
+    assert d["warnings"] == ["failed services: cc-bridge-ada.service"]
+
+
+def test_box_members_count(tmp_path, monkeypatch):
+    m = _bridge(monkeypatch, tmp_path)
+    assert m._box_members(tmp_path / "none") is None
+    (tmp_path / "count").write_text("4")
+    assert m._box_members(tmp_path) == 4
+
+
+def test_add_member_writes_a_count_and_closes_the_registry(tmp_path):
+    r, _ = _add(tmp_path, "test1", "1", "--dry-run")
+    assert "+ sudo chmod 640 " in r.stdout and "/count (the number of members, no names; mode 644)" in r.stdout
+
+
+def test_compose_passes_the_member_to_the_api():
+    text = (ROOT / "docker-compose.yml").read_text()
+    assert "- BRAIN_MEMBER=${BRAIN_MEMBER:-}" in text and "- COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}" in text
+
 # ------------------------------------------------------------------- add-member ----
 def _add(tmp_path, *args, ss: str = "", registry: str | None = None):
     bins = tmp_path / "bin"
@@ -342,6 +411,7 @@ def test_member_env_secrets_only_in_the_file(tmp_path):
     assert env["COMPOSE_PROJECT_NAME"] == "brain-test1" and env["BRAIN_API_PORT"] == "8110"
     assert env["BRAIN_HOST_DIR"] == "/srv/brains/test1" and env["OLLAMA_URL"] == "http://ollama:11434"
     assert env["POSTGRES_PASSWORD"] != "postgres"
+    assert env["BRAIN_MEMBER"] == "test1"                                                 # the System page knows it shares the box
     r2 = subprocess.run([sys.executable, str(ROOT / "scripts" / "member_env.py"), "test1", "1",
                          str(ROOT / ".env.example"), str(out)], capture_output=True, text=True, env=_clean_env())
     assert r2.returncode == 1 and "exists" in r2.stderr                                  # written once, never overwritten

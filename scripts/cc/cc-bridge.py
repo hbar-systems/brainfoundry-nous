@@ -1411,10 +1411,44 @@ def _transcribe(data: bytes, filename: str, mime: str) -> str:
     return str(d.get("text") or "").strip()
 
 
+# A shared box (2026-10-19, docs/MULTI_INSTANCE.md): add-member.sh keeps the number of members in
+# <BRAINS_ROOT>/count (644, no names) and the registry itself readable by the admin's group only.
+BRAINS_ROOT = Path(os.environ.get("CC_BRAINS_ROOT", "/srv/brains"))
+
+
+def _box_members(root: Path = None) -> int | None:
+    """How many members share this box beside the first brain: the count file, else the registry's
+    lines when this user may read it; None when neither is there (a brain alone)."""
+    root = root or BRAINS_ROOT
+    try:
+        return int((root / "count").read_text().strip())
+    except (OSError, ValueError):
+        pass
+    try:
+        return sum(1 for ln in (root / "members.tsv").read_text().splitlines() if ln.strip() and not ln.startswith("#"))
+    except OSError:
+        return None
+
+
+def _member_view(d: dict, member: str, own_units) -> dict:
+    """A member's view of the host on a shared box: the box's tailnet, connections, listening ports
+    and other members' failed services are not theirs to see; only this member's own units stay.
+    Pure; tested."""
+    own = set(own_units)
+    d = dict(d)
+    for k in ("tailnet", "connections"):
+        d.pop(k, None)
+    d["failed_units"] = [u for u in d.get("failed_units") or [] if u in own or u.split(".")[0] in own]
+    d["units"] = {k: v for k, v in (d.get("units") or {}).items() if k in own}
+    d["hidden"] = ["tailnet", "connections", "listening ports", "the box's services"]
+    return d
+
+
 def _host_system() -> dict:
     """What a container cannot see: the tailnet and its peers, established connections,
     listening ports, failed services, the bridge's own units, permit and judge counts. Read
-    only, no sudo (2026-09-24)."""
+    only, no sudo (2026-09-24). On a shared box (2026-10-19) it says so in "box" (a count, no
+    names); a member's bridge then keeps only its own units, the first brain's keeps everything."""
     d: dict = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
     def run(cmd, timeout=8):
@@ -1458,14 +1492,28 @@ def _host_system() -> dict:
     except OSError:
         d["judgments"] = 0
     d["jobs_running"] = sum(1 for j in JOBS.list() if j.get("ended") is None)
+    members = _box_members()
+    if MEMBER:
+        own = (BRIDGE_UNIT, TAB_UNIT, cc_member.unit("cc-work-pull", MEMBER) + ".timer",
+               cc_member.unit("cc-bridge-watch", MEMBER) + ".path", cc_member.unit("cc-install-watch", MEMBER) + ".path")
+        d = _member_view(d, MEMBER, own)
+        d["box"] = {"shared": True, "role": "member", "brains": (members + 1) if members else None}
+    elif members:
+        d["box"] = {"shared": True, "role": "first", "brains": members + 1}
+    d["warnings"] = _host_warnings(d, MEMBER)
+    return d
+
+
+def _host_warnings(d: dict, member: str = "") -> list:
+    """One line per failed service and per inactive unit of this bridge. Pure; tested."""
     w = []
+    failed, units = d.get("failed_units") or [], d.get("units") or {}
     if failed:
         w.append("failed services: " + ", ".join(failed[:4]))
-    for u in (BRIDGE_UNIT, "world-mirror.timer", "world-propose.timer"):
+    for u in ((BRIDGE_UNIT,) if member else (BRIDGE_UNIT, "world-mirror.timer", "world-propose.timer")):
         if units.get(u) and units[u] != "active":
             w.append(f"{u} is {units[u]}")
-    d["warnings"] = w
-    return d
+    return w
 
 
 def _posture_current() -> str:

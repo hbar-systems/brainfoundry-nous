@@ -140,6 +140,13 @@ say "== 8 registry"
 LINE=$(printf '%s\t%s\t%s\t%s' "$HANDLE" "$N" "$M_API_PORT" "$(date -u +%Y-%m-%d)")
 if [ "$APPLY" = 1 ]; then printf '%s\n' "$LINE" | sudo tee -a "$REGISTRY" >/dev/null; fi
 echo "+ append to $REGISTRY: $LINE"
+# The registry names every member: the admin's group only. Every brain's bridge reads the count of
+# members beside it (a number, no names) for its System page (2026-10-19).
+ADMIN_GROUP=$(id -gn "$ADMIN_USER" 2>/dev/null || echo "$ADMIN_USER")
+run sudo chown "root:$ADMIN_GROUP" "$REGISTRY"
+run sudo chmod 640 "$REGISTRY"
+if [ "$APPLY" = 1 ]; then awk 'NF && $1 !~ /^#/' "$REGISTRY" | wc -l | tr -d ' ' | sudo tee "$BRAINS_ROOT/count" >/dev/null; sudo chmod 644 "$BRAINS_ROOT/count"; fi
+echo "+ write $BRAINS_ROOT/count (the number of members, no names; mode 644)"
 
 TOKEN_VAR=$M_TOKEN_VAR
 say "== 9 Caddy: paste into /etc/caddy/Caddyfile, then sudo systemctl restart caddy (restart, not reload: the token env is new)"
