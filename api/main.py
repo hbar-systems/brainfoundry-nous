@@ -792,7 +792,7 @@ def _auto_update_loop() -> None:
                     log_path = "/app/runtime/auto-update.log"
                     with open(log_path, "a") as lf:
                         lf.write(f"\n==> auto-update {stamp}\n"); lf.flush()
-                        proc = subprocess.run(["bash", script], cwd=BRAIN_HOST_DIR, stdout=lf, stderr=subprocess.STDOUT,
+                        proc = subprocess.run(["bash", script, BRAIN_HOST_DIR], cwd=BRAIN_HOST_DIR, stdout=lf, stderr=subprocess.STDOUT,
                                               env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR}, timeout=1800)
                     settings_store.set_auto_update(last_result=f"rc={proc.returncode}")
         except Exception as e:  # noqa: BLE001
@@ -7399,7 +7399,7 @@ def admin_update(api_key: str = Depends(get_api_key)):
 
         try:
             proc = subprocess.Popen(
-                ["bash", script],
+                ["bash", script, BRAIN_HOST_DIR],
                 cwd=BRAIN_HOST_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -7461,7 +7461,7 @@ def admin_revert(api_key: str = Depends(get_api_key)):
 
         try:
             proc = subprocess.Popen(
-                ["bash", script],
+                ["bash", script, BRAIN_HOST_DIR],
                 cwd=BRAIN_HOST_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

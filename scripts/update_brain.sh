@@ -8,19 +8,36 @@
 #   - Verifies /health after rebuild; restores .env if rebuild fails
 #
 # Usage:
-#   ./scripts/update_brain.sh
+#   ./scripts/update_brain.sh                      # BRAIN_DIR, default /home/hbar/brain
+#   ./scripts/update_brain.sh /srv/brains/<m>      # one member's checkout on a shared box
+#
+# The checkout path is the only thing updated (2026-10-19, docs/MULTI_INSTANCE.md): its own
+# compose project (COMPOSE_PROJECT_NAME in its .env, else the directory name, as before), its
+# own api container and image, its own host port (BRAIN_API_PORT in its .env, else 8010).
 #
 # Or via the wrapper CLI:
 #   nous update     (alias — same script)
 
 set -e
 
-BRAIN_DIR="${BRAIN_DIR:-/home/hbar/brain}"
+BRAIN_DIR="${1:-${BRAIN_DIR:-/home/hbar/brain}}"
+export BRAIN_DIR   # backup_brain.sh reads it; an argument alone would leave it at the default
+# One non-secret line from the checkout's .env (unreadable .env: empty, the defaults hold).
+env_line() { grep -m1 -oP "^$1=\K.*" "$BRAIN_DIR/.env" 2>/dev/null | tr -d "\"'" || true; }
+# The compose project: named in .env for a member (brain-<m>); otherwise compose's own default,
+# the directory name, exactly as before.
+PROJECT="${COMPOSE_PROJECT_NAME:-$(env_line COMPOSE_PROJECT_NAME)}"
+[ -n "$PROJECT" ] && export COMPOSE_PROJECT_NAME="$PROJECT"
+PROJECT="${PROJECT:-$(basename "$BRAIN_DIR")}"
+# A member's checkout on a shared box is group-readable by its own bridge and hands; nothing this
+# script writes may be group-writable, or the hands could edit what root reruns (install.sh).
+[ -n "$(env_line COMPOSE_PROJECT_NAME)" ] && umask 027
 # Inside the api container (the Update tab's path) the api listens on 8000 and the
 # host's 8010 does not exist, so the old default failed every time the script lived
 # long enough to check (found 2026-09-16, understood 2026-09-22: a false "unhealthy").
 if [ -z "${HEALTH_URL:-}" ]; then
-    if [ -f /.dockerenv ]; then HEALTH_URL="http://127.0.0.1:8000/health"; else HEALTH_URL="http://127.0.0.1:8010/health"; fi
+    API_PORT="$(env_line BRAIN_API_PORT)"
+    if [ -f /.dockerenv ]; then HEALTH_URL="http://127.0.0.1:8000/health"; else HEALTH_URL="http://127.0.0.1:${API_PORT:-8010}/health"; fi
 fi
 TS=$(date +%Y%m%d-%H%M%S)
 
@@ -71,9 +88,10 @@ echo ""
 # Surfaced on hbar 2026-05-26 — same wall will hit every git-deployed brain.
 if [ -n "$(find "$BRAIN_DIR" -not -user "$(whoami)" -print -quit 2>/dev/null)" ]; then
     echo "==> Detected non-operator-owned files in brain dir (container write residue) — healing..."
-    api_container="$(basename "$BRAIN_DIR")-api-1"
+    api_container="${PROJECT}-api-1"
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${api_container}\$"; then
-        if docker exec "$api_container" chown -R "$(id -u):$(id -g)" "$BRAIN_DIR" > /dev/null 2>&1; then
+        # the checkout's own group is kept (a member's checkout belongs to its <m>-brain group)
+        if docker exec "$api_container" chown -R "$(id -u):$(stat -c %g "$BRAIN_DIR")" "$BRAIN_DIR" > /dev/null 2>&1; then
             echo "✓ Ownership healed via $api_container"
         else
             echo "⚠ Container chown failed. Try manually: sudo chown -R $(whoami):$(whoami) $BRAIN_DIR"
@@ -252,7 +270,7 @@ echo "    Your chats, documents, and models persist — only code is rebuilt."
 # Update tab can show what is actually running, not what is checked out.
 export BRAIN_GIT_COMMIT="$(git rev-parse HEAD)"
 export BRAIN_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-API_IMAGE="$(basename "$BRAIN_DIR")-api"
+API_IMAGE="${PROJECT}-api"
 API_IMAGE_BEFORE=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
 docker compose build
 API_IMAGE_AFTER=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
@@ -268,6 +286,7 @@ else
     docker run -d --rm \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
+        ${COMPOSE_PROJECT_NAME:+-e COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"} \
         "$API_IMAGE" \
         bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'; sleep 20; docker image prune -f >> '$HELPER_LOG' 2>&1"
     echo "    api is restarting on the new image. If you ran this from the brain's"

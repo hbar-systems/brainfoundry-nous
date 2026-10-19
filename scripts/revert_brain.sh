@@ -23,8 +23,16 @@
 
 set -e
 
-BRAIN_DIR="${BRAIN_DIR:-/home/hbar/brain}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8010/health}"
+BRAIN_DIR="${1:-${BRAIN_DIR:-/home/hbar/brain}}"   # a member's checkout as the argument (docs/MULTI_INSTANCE.md)
+env_line() { grep -m1 -oP "^$1=\K.*" "$BRAIN_DIR/.env" 2>/dev/null | tr -d "\"'" || true; }
+PROJECT="${COMPOSE_PROJECT_NAME:-$(env_line COMPOSE_PROJECT_NAME)}"
+[ -n "$PROJECT" ] && export COMPOSE_PROJECT_NAME="$PROJECT"
+PROJECT="${PROJECT:-$(basename "$BRAIN_DIR")}"
+# A member's checkout on a shared box is group-readable by its own bridge and hands; nothing this
+# script writes may be group-writable, or the hands could edit what root reruns (install.sh).
+[ -n "$(env_line COMPOSE_PROJECT_NAME)" ] && umask 027
+API_PORT="$(env_line BRAIN_API_PORT)"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${API_PORT:-8010}/health}"
 STAMP="$BRAIN_DIR/.update-prev-commit"
 TS=$(date +%Y%m%d-%H%M%S)
 
@@ -95,7 +103,8 @@ echo "==> Recreating the api container via a detached helper..."
 docker run -d --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
-    "$(basename "$BRAIN_DIR")-api" \
+    ${COMPOSE_PROJECT_NAME:+-e COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"} \
+    "${PROJECT}-api" \
     docker compose up -d --no-deps --no-build api
 echo "    api is restarting on the new image — the live log stops here if you"
 echo "    ran this from the Update tab; that is expected."
