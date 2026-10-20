@@ -35,6 +35,11 @@ def _save(tasks: List[Dict[str, Any]]) -> None:
     tmp.replace(TASKS_PATH)
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def list_tasks(include_done: bool = False) -> List[Dict[str, Any]]:
     tasks = _load()
     if not include_done:
@@ -44,7 +49,8 @@ def list_tasks(include_done: bool = False) -> List[Dict[str, Any]]:
     return tasks
 
 
-def add(text: str, due: Optional[str] = None, created: Optional[str] = None) -> Dict[str, Any]:
+def add(text: str, due: Optional[str] = None, created: Optional[str] = None,
+        source: Optional[str] = None) -> Dict[str, Any]:
     text = (text or "").strip()
     if not text:
         raise ValueError("task text required")
@@ -54,8 +60,12 @@ def add(text: str, due: Optional[str] = None, created: Optional[str] = None) -> 
         "due": (due or None),
         "done": False,
         "reminded": False,
-        "created": created or "",
+        "created": created or _now_iso(),
     }
+    # Who put it there (2026-10-20): absent for the owner; "the brain (<thread>)" for the reasoner's
+    # write path (cc-job task add, through the CC bridge), so the Tasks page can say so.
+    if source:
+        task["source"] = str(source).strip()[:120]
     with _LOCK:
         tasks = _load()
         tasks.append(task)

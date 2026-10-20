@@ -10,6 +10,8 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job status <id>        state, exit code, last lines of the log
     cc-job tail <id> [n]      last n bytes of the log (default 4000)
     cc-job list               recent jobs
+    cc-job task add "<text>" [--due <ISO 8601>]   put a task on the person's list (the /tasks page)
+    cc-job task list          the open tasks
 
 Jobs never run sudo. A claude started by a job gets the turn's permission settings, and the flags
 that would loosen the owner's posture are refused by the bridge (2026-10-19, cc_guard.py). The person sees every job on the CC page and can ask about it.
@@ -79,6 +81,31 @@ def main(argv: list[str]) -> int:
             n = int(rest[1]) if len(rest) > 1 else 4000
             d = _call("GET", f"/jobs/{rest[0]}?tail={n}")
             print(d.get("tail", "") if d else "no such job"); return 0
+        if cmd == "task" and rest and rest[0] == "add":
+            # The reasoner's task-write path (2026-10-20): the bridge holds the brain's key and adds it.
+            words, due, i = [], None, 1
+            while i < len(rest):
+                if rest[i] == "--due" and i + 1 < len(rest):
+                    due, i = rest[i + 1], i + 2
+                else:
+                    words.append(rest[i]); i += 1
+            if not words:
+                print('cc-job task add "<text>" [--due <ISO 8601>]'); return 2
+            d = _call("POST", "/tasks/add", {"text": " ".join(words), "due": due,
+                                             "thread": os.environ.get("CC_THREAD_ID", "").strip()})
+            if not d.get("ok"):
+                print("refused:", d.get("error", "no answer")); return 1
+            t = d["task"]
+            print(f"task {t['id']} added{' due ' + t['due'] if t.get('due') else ''}: {t['text']}"); return 0
+        if cmd == "task" and rest and rest[0] == "list":
+            d = _call("GET", "/tasks")
+            if "tasks" not in d:
+                print("refused:", d.get("error", "no answer")); return 1
+            for t in d["tasks"]:
+                print(f"{t['id']}  {t.get('due') or '-':20} {t['text']}{'  (from ' + t['source'] + ')' if t.get('source') else ''}")
+            if not d["tasks"]:
+                print("no open tasks")
+            return 0
         if cmd == "list":
             for j in _call("GET", "/jobs").get("jobs", []):
                 state = "running" if j.get("ended") is None else f"rc={j.get('rc')}"

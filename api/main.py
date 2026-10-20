@@ -982,6 +982,7 @@ def mcp_disconnect(req: ConnectMcpRequest, api_key: str = Depends(get_api_key)):
 class CreateTaskRequest(BaseModel):
     text: str
     due: Optional[str] = None
+    source: Optional[str] = None
 
 
 @app.get("/tasks")
@@ -994,7 +995,7 @@ def tasks_list(include_done: bool = False, api_key: str = Depends(get_api_key)):
 def tasks_create(req: CreateTaskRequest, api_key: str = Depends(get_api_key)):
     from api import tasks_store
     try:
-        return {"ok": True, "task": tasks_store.add(req.text, due=req.due)}
+        return {"ok": True, "task": tasks_store.add(req.text, due=req.due, source=req.source)}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
