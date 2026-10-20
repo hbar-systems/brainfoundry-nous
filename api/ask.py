@@ -252,7 +252,8 @@ def verify_caller(*, token: Optional[str], question: str, this_brain_id: str,
 
 def public_only(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Belt to retrieval's braces: keep only chunks whose scope is exactly public."""
-    return [d for d in docs or [] if (d.get("metadata") or {}).get("scope") == "public"]
+    from api.public_scope import is_public
+    return [d for d in docs or [] if is_public(d.get("metadata"))]
 
 
 def citations(docs: List[Dict[str, Any]]) -> List[str]:

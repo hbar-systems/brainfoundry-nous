@@ -235,8 +235,8 @@ not-yet-built RED per-call approval flow.
 ### Read path
 
 - **Inbound** — `POST /v1/federation/query` answers a peer's question from *this*
-  brain's public-scoped corpus (`PUBLIC_CHAT_LAYERS` / `PUBLIC_CHAT_SCOPE`
-  gate — federation never exposes more than the public chat surface). Read-only,
+  brain's public-scoped corpus (`metadata.scope = "public"`, api/public_scope.py;
+  `PUBLIC_CHAT_LAYERS` only narrows — federation never exposes more than the public chat surface). Read-only,
   non-streaming JSON.
 - **Outbound** — the `brain_call` tool (YELLOW tier) lets the agentic loop ask a
   peer a question and synthesize the answer *with attribution*. The callable

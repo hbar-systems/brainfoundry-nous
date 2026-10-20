@@ -1724,6 +1724,11 @@ def _ensure_runtime_indexes() -> None:
             cur.execute(_privacy.INDEX_SQL)
             # 2026-10-15: the session mark (local-only memory read in a session).
             cur.execute(_privacy.SESSION_COLUMN_SQL)
+            # 2026-10-20: one meaning of "public" (api/public_scope.py): scope index, trigger, one-time mark.
+            from api import public_scope as _public_scope
+            n = _public_scope.ensure(cur)
+            if n:
+                print(f"[startup] public scope: {n} chunk(s) with layer=public now carry scope=public", flush=True)
         conn.close()
     except Exception as e:
         print(f"[startup] layer index ensure skipped: {e}", flush=True)
@@ -3525,6 +3530,18 @@ _PUBLIC_MAX_HISTORY_CHARS = 12000  # ~3000 tokens at 4 chars/token
 # 120s timeout in benchmarks 2026-05-02; 3 keeps end-to-end latency around
 # 60-90s on a cold call.
 _PUBLIC_SEARCH_LIMIT = 3
+
+
+def _public_retrieve(query: str) -> List[Dict[str, Any]]:
+    """What strangers and other brains may read (2026-10-20, api/public_scope.py): chunks with
+    metadata.scope "public", never local-only. PUBLIC_CHAT_LAYERS (comma list, optional) narrows to
+    those layers; it never widens. PUBLIC_CHAT_SCOPE is no longer read: the scope is always public."""
+    from api import public_scope as _ps
+    layers = _ps.layers_from_env(os.getenv("PUBLIC_CHAT_LAYERS"))
+    docs = search_similar_documents(query, limit=_PUBLIC_SEARCH_LIMIT, layers=layers,
+                                    architecture=None if layers else "flat",
+                                    scope=_ps.PUBLIC, allow_local_only=False)
+    return [d for d in docs if _ps.is_public(d.get("metadata"))]
 _PUBLIC_MAX_TOKENS_OUT = 1024
 
 
@@ -3780,30 +3797,9 @@ async def public_chat(request: dict, http_request: Request):
             break
         history.append({"role": role, "content": content})
 
-    # ── RAG retrieval — layers + scope chosen by operator via env, never by client ─
-    # PUBLIC_CHAT_LAYERS (default ["public"]) preserves nous behavior. Org
-    # brains override per their corpus convention: hbar.university uses
-    # PUBLIC_CHAT_LAYERS=semantic because the curriculum ingest landed
-    # with metadata.layer="semantic" (HUB-8). Comma-separated.
-    #
-    # PUBLIC_CHAT_SCOPE (default unset, recommended "public" for any org
-    # brain) ANDs metadata.scope=X onto the query. Closes the leak where
-    # a layer-only filter pulls in chunks tagged scope=internal (e.g.,
-    # hbar.university's vqa:_backlog: layer=semantic + scope=internal).
-    # Added 2026-05-26 as defense-in-depth.
-    _public_layers_env = os.getenv("PUBLIC_CHAT_LAYERS", "public").strip()
-    _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
-    _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
+    # ── RAG retrieval: public memory only, chosen by the operator, never by the client ─
     try:
-        # Privacy gate: the public surface answers strangers, so local-only
-        # memory is never retrieved here, whatever model serves it.
-        relevant_docs = search_similar_documents(
-            message,
-            limit=_PUBLIC_SEARCH_LIMIT,
-            layers=_public_layers,
-            scope=_public_scope,
-            allow_local_only=False,
-        )
+        relevant_docs = _public_retrieve(message)
     except Exception as e:
         # RAG failure is non-fatal — answer without context rather than 500.
         print(f"public_chat RAG error: {e}")
@@ -3852,7 +3848,7 @@ async def federation_query(request: dict, http_request: Request):
     public-scoped corpus and return non-streaming JSON (easy for the caller to
     consume). Read-only: no memory write, no Turnstile (machine path), per-IP
     rate-limited (same limiter as /v1/public/chat). Private scope stays
-    unreachable — the same PUBLIC_CHAT_LAYERS / PUBLIC_CHAT_SCOPE gate applies,
+    unreachable — the same rule as the public chat applies (_public_retrieve, scope "public"),
     so federation never exposes more than the public chat surface already does.
     """
     from api.tools import federation_audit
@@ -3878,14 +3874,8 @@ async def federation_query(request: dict, http_request: Request):
         return JSONResponse(status_code=429,
                             content={"error": "Rate limited.", "retry_after": retry})
 
-    _public_layers_env = os.getenv("PUBLIC_CHAT_LAYERS", "public").strip()
-    _public_layers = [s.strip() for s in _public_layers_env.split(",") if s.strip()] if _public_layers_env else None
-    _public_scope = os.getenv("PUBLIC_CHAT_SCOPE", "").strip() or None
     try:
-        # Privacy gate: a peer brain is not the owner — never local-only.
-        relevant_docs = search_similar_documents(
-            query, limit=_PUBLIC_SEARCH_LIMIT, layers=_public_layers, scope=_public_scope,
-            allow_local_only=False)
+        relevant_docs = _public_retrieve(query)
     except Exception as e:
         print(f"federation_query RAG error: {e}")
         relevant_docs = []

@@ -68,21 +68,18 @@ services:
       - BRAIN_PUBLIC_URL=${BRAIN_PUBLIC_URL:-}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
-      # Org-brain public-chat tuning. PUBLIC_CHAT_LAYERS comma-separated
-      # metadata.layer values to retrieve from (default "public" for nous;
-      # org brains like hbar.university set this to "semantic" per their
-      # corpus convention). PUBLIC_CHAT_CITE_SOURCES=true makes the prompt
+      # Public chat tuning. What strangers and other brains may read is one
+      # mark, metadata.scope="public" (api/public_scope.py, 2026-10-20).
+      # PUBLIC_CHAT_LAYERS (comma list, default empty) only narrows the public
+      # chat to some layers within that, e.g. "semantic" on hbar.university.
+      # PUBLIC_CHAT_CITE_SOURCES=true makes the prompt
       # surface document_name + ask the model to cite by name (default
       # false = index-only [Document N] labels, nous behavior).
       # PUBLIC_PERSONA_PATH points to the persona file the public-chat
       # endpoint loads at startup (default = nous demo persona).
-      - PUBLIC_CHAT_LAYERS=${PUBLIC_CHAT_LAYERS:-public}
+      - PUBLIC_CHAT_LAYERS=${PUBLIC_CHAT_LAYERS:-}
       - PUBLIC_CHAT_CITE_SOURCES=${PUBLIC_CHAT_CITE_SOURCES:-false}
       - PUBLIC_PERSONA_PATH=${PUBLIC_PERSONA_PATH:-/app/api/brain_persona_nous.md}
-      # PUBLIC_CHAT_SCOPE: AND metadata.scope=X onto the RAG retrieval so
-      # internal-tagged chunks never leak through a layer-only filter.
-      # Recommended "public" for any org brain. Empty = no scope filter.
-      - PUBLIC_CHAT_SCOPE=${PUBLIC_CHAT_SCOPE:-}
       # PUBLIC_CHAT_DAILY_MAX: brain-wide daily cap on /v1/public/chat
       # calls. Counts ALL IPs combined; bypasses-by-IP-rotation are
       # caught here. Default 2000 (safe non-zero ceiling). Set to 0 to
