@@ -4292,12 +4292,39 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+def _refresh_cc_job() -> None:
+    """Keep the hands' cc-job equal to this checkout's scripts/cc/cc-job.py (2026-10-20). install.sh copied
+    it once; Update never refreshed it, so on hbar the copy on the reasoner's PATH was from 2026-10-10: it
+    sent no thread id (finished jobs never reached their conversation) and had no `task add`. The bridge
+    restarts on every Update, so a check at start keeps them equal."""
+    src = Path(__file__).resolve().parent / "cc-job.py"
+    homes = {HANDS_HOME} if HANDS_USER else set()
+    homes.add(Path.home())
+    for home in homes:
+        dst = home / ".local" / "bin" / "cc-job"
+        try:
+            want = src.read_bytes()
+            try:
+                if dst.read_bytes() == want:
+                    continue
+            except OSError:
+                pass                                   # unreadable to the bridge: let the owner of that home write it
+            mine = home == Path.home()
+            cmd = ["/usr/bin/install", "-D", "-m", "755", str(src), str(dst)]
+            r = subprocess.run(cmd if mine else _as_hands(cmd), capture_output=True, text=True, timeout=10)
+            print(f"cc-job at {dst}: {'refreshed' if r.returncode == 0 else 'not refreshed: ' + (r.stderr or '').strip()[:200]}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"cc-job at {dst}: not refreshed: {e}", flush=True)
+
+
 def main() -> None:
     if not Path(REASONER).exists():
         print(f"reasoner binary not found at {REASONER}", file=sys.stderr)
         sys.exit(1)
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     MCP_EMPTY.write_text('{"mcpServers": {}}')
+    if BOX_ENABLED:
+        threading.Thread(target=_refresh_cc_job, daemon=True).start()
     if BRAIN_API_KEY:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
