@@ -5,7 +5,9 @@ An agent is a charter: a name, a mission, the ground it may write in, a schedule
 model. The bridge calls `tick` every minute as the hands user (so the ask token is in the environment and the
 permission hook works). Each enabled agent whose time has come opens one cc-job: a headless reasoner turn with
 the charter as its prompt. Writes inside its ground and its own folder pass; push, rm -rf and .env are refused;
-everything else raises a card for the person. The job is a tile on the board like any other. The agent files a
+anything else goes to the bridge's permission hook, which allows it only by a standing allow or the judged
+posture, and otherwise refuses it, since no console page is watching an unattended run (if exactly one
+conversation is answering at that moment, the card goes to that page). The job is a tile on the board like any other. The agent files a
 sitrep to <agents dir>/<id>/sitreps/<UTC stamp>.md before it ends, and the Agents page shows the newest.
 
 Storage: one JSON file per agent in CC_AGENTS_DIR (default ~/agents of the user running this). Nothing here
@@ -93,7 +95,7 @@ def load_permissions() -> dict:
             "fetch_tool": str(d.get("fetch_tool") or "") if str(d.get("fetch_tool") or "").startswith("/") else "",
             # the name agents' commits carry before "(via TAG)"; empty = "TAG (agent)" (no owner name in the template)
             "commit_owner": str(d.get("commit_owner") or "")[:60]}
-# Autonomy levels (2026-10-17, the Czar-General's ruling): 0 propose (writes only its state and sitrep), 1 branch
+# Autonomy levels (2026-10-17, the owner's ruling): 0 propose (writes only its state and sitrep), 1 branch
 # (commits on its own branch in its own worktree, never pushes; the default), 2 ship (may also push its own branch
 # onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
 LEVELS = {0: "propose", 1: "branch", 2: "ship"}
@@ -330,7 +332,7 @@ def prompt(a: dict, stamp: str) -> str:
               "`git push origin HEAD:main` only when (a) the repo's tests pass and you name the count in your sitrep, "
               "(b) the diff holds no secret, no private material and no employer name, (c) the change is one small "
               "reviewable step. Never force, never delete a branch, never push anything else. Name the pushed commit id "
-              "in your sitrep; the Inspector General audits every ship.\n\n"}[
+              "in your sitrep; an auditing agent may review every ship.\n\n"}[
             int(a.get("level", 1)) if int(a.get("level", 1)) in LEVELS else 1]
         + f"Before you end, write your sitrep to {sit} in this shape:\n"
         + f"SITREP {tag(a)} <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
@@ -369,8 +371,8 @@ def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     parts = ["claude", "-p", "--output-format", "text", "--max-budget-usd", str(a.get("budget_usd") or 1),
              "--settings", str(settings_path)]
     # Folders the turn may READ (2026-10-17: the first unattended runs were refused reading their own standard,
-    # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (the
-    # General and the Inspector read every report). Writing stays limited to the ground by the allow list.
+    # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (an
+    # agent that coordinates or audits others reads every report). Writing stays limited to the ground by the allow list.
     reads = [str(AGENTS_DIR), *load_permissions()["read_dirs"]]
     for g in a.get("ground") or []:
         reads += [g, str(Path(g).parent)]

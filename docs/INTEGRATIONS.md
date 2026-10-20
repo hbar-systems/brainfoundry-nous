@@ -5,9 +5,12 @@ Created: 2026-06-13
 The brain can read your email, calendar, and Drive, chat with you on Telegram,
 research the live web, and use any MCP server's tools. Connect these in the
 console's **Integrations** tab. Email and calendar use **app passwords / links —
-no OAuth.** Everything connected is **read-only** and treated as **untrusted**
-(the brain reasons over it but never obeys instructions hidden inside an email,
-invite, page, or tool result).
+no OAuth.** What these integrations bring in is **read-only** and treated as
+**untrusted** (the brain reasons over it but never obeys instructions hidden
+inside an email, invite, page, or tool result). Writes to a connected app
+(send an email, create an event) go only through the console's Send card: the
+reasoner proposes, you press Send, nothing leaves before that (see docs/CC.md,
+"Writes in connected apps").
 
 ## Email (IMAP) — ~2 minutes, any provider
 

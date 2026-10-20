@@ -1721,10 +1721,10 @@ function SpendPanel() {
       </div>
       <p style={{ color: s.over ? '#d97777' : 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '10px 0 0 0' }}>
         {s.cap == null
-          ? 'No limit set. Set one and your brain\'s agents ask you before running once it is reached.'
+          ? 'No limit set. Set one and your brain\'s scheduled agents stop starting once it is reached. Conversations and jobs are not limited.'
           : s.over
-            ? 'Over the limit: your agents ask before running. Raise the limit or start them yourself.'
-            : 'Over the limit, agents ask before running.'}
+            ? 'Over the limit: scheduled agents do not start. Raise the limit or start them yourself with Run now.'
+            : 'Over the limit, scheduled agents do not start. Conversations and jobs are not limited.'}
       </p>
       {s.billing === 'subscription' && (
         <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '6px 0 0 0' }}>

@@ -94,7 +94,7 @@ pip install alice-cli
 
 ## First things to do with a fresh brain
 
-1. **Write the persona.** Edit `api/brain_persona.md` on the server and describe who you are — role, current work, reasoning style. The brain injects this into every chat. A thin persona produces generic answers; a rich one produces specific ones.
+1. **Write the persona.** Open the console's Persona tab (or `PUT /persona`) and describe who you are — role, current work, reasoning style. The brain injects this into every chat. A thin persona produces generic answers; a rich one produces specific ones. The running brain reads its own copy, `brain_persona.local.md`, from its runtime volume; the Persona tab and `PUT /persona` write that copy, so editing `api/brain_persona.md` in the repository by hand does not reach a brain that already has a persona.
 
 2. **Ingest something.** Point ingestion at a folder of your notes:
    ```

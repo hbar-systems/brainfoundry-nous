@@ -32,6 +32,7 @@ Notes on three cells:
 - **Brain-apps.** Since 2026-10-16 an app runs in a sealed frame with no web address of its own, and the console refuses its requests, so the app cannot use your API key. It reaches the brain only through the console page, which checks what you approved at install; none of that returns local-only memory. Before that date an app could reach what the API key reaches. One exception remains: an app that ships server code (`entries.api`) runs it inside the brain's API with the API's authority. Read that code before installing.
 - **Telegram.** The CC tab has its own Telegram bot, separate from the brain's. A message to that bot is a turn of the Claude seat, so the Claude seat's row applies. Both bots' messages pass through Telegram's servers.
 - **Seats.** What a seat reads is sent to its company: Anthropic for Claude, OpenAI for Codex.
+- **"Public" is two fields today.** Public visitors: the public chat retrieves by `metadata.layer` and checks `metadata.scope` only when `PUBLIC_CHAT_SCOPE` is set (recommended `public`). Other brains: the ask door keeps only chunks whose `metadata.scope` is exactly `public`. A chunk marked public in one field and not the other is visible to one door and not the other. Unifying them is planned.
 
 ## How to keep something truly private today
 

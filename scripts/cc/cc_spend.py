@@ -9,7 +9,8 @@ an agent run, a paid tool call) in <bridge state dir>/spend.jsonl, append-only, 
 
 eur, tokens and minutes may be null when the place that spent does not know them (a job knows its
 minutes, not its price). Totals add what is known. Beside it, spend-cap.json holds the owner's cap:
-EUR for the last 30 days. Over the cap, scheduled agents wait and ask instead of running.
+EUR for the last 30 days. Over the cap, scheduled agents do not start (the bridge skips its minute check);
+Run now on the Agents page still works. The cap does not stop conversations or jobs.
 
 This is the person's view of their own spend. What anyone charges them for running the brain is
 not here and does not belong in this file.
