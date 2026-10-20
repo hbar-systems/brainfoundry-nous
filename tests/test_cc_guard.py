@@ -37,6 +37,13 @@ def test_injects_settings(cmd, want):
     assert G.check_job(cmd, "cards", S) == want
 
 
+def test_auto_posture_reaches_the_job():
+    assert G.check_job("claude -p hi", "auto", S) == f"claude --settings {Q} --permission-mode auto -p hi"
+    assert G.check_job("claude --permission-mode plan -p hi", "auto", S) == f"claude --settings {Q} --permission-mode plan -p hi"
+    assert G.check_job("claude -p hi", "cards", S) == f"claude --settings {Q} -p hi"
+    assert G.check_job("claude -p hi", "auto", None) == "claude -p hi"
+
+
 def test_injects_inside_sh_c():
     out = G.check_job("""bash -lc 'cd x && claude -p "hi there"'""", "cards", S)
     inner = shlex.split(out)[2]

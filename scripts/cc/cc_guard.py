@@ -221,9 +221,10 @@ def _calls(toks: list) -> list:
     return found
 
 
-def _check_args(args: list, posture: str, agent_ok) -> bool:
-    """Refuse the flags that loosen a job's reasoner. True when an accepted agents' --settings is present."""
-    agent, k = False, 0
+def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool]:
+    """Refuse the flags that loosen a job's reasoner. Returns (an accepted agents' --settings is present,
+    a --permission-mode is given)."""
+    agent, mode, k = False, False, 0
     while k < len(args):
         a = args[k]
         if a == "--":
@@ -236,6 +237,7 @@ def _check_args(args: list, posture: str, agent_ok) -> bool:
                 val = args[k + 1] if k + 1 < len(args) else ""
                 k += 1
             if name == "--permission-mode":
+                mode = True
                 if val == "bypassPermissions":
                     raise Refused("--permission-mode bypassPermissions is never allowed in a job")
                 if val in MODES_AUTO and posture != "auto":
@@ -249,7 +251,7 @@ def _check_args(args: list, posture: str, agent_ok) -> bool:
             elif posture != "auto":
                 raise Refused(f"{name} would let the job skip its cards; it needs the auto posture, the posture is {posture}")
         k += 1
-    return agent
+    return agent, mode
 
 
 def check_job(command: str, posture: str, settings: str | None, agent_ok=lambda path: False) -> str:
@@ -269,9 +271,16 @@ def check_job(command: str, posture: str, settings: str | None, agent_ok=lambda 
                 edits.append((toks[m][1], toks[m][2], shlex.quote(new)))
             continue
         _, w, end = call
-        agent = _check_args([t[3] for t in toks[w + 1:end]], posture, agent_ok)
+        agent, mode = _check_args([t[3] for t in toks[w + 1:end]], posture, agent_ok)
         if settings is not None and not agent:
-            edits.append((toks[w][2], toks[w][2], " --settings " + shlex.quote(settings)))
+            # The job's reasoner takes the turn's posture as well as its settings (2026-10-20): in auto the
+            # turn runs with --permission-mode auto, so a job without a mode of its own gets the same. Before,
+            # a job in the auto posture asked a card for every edit, and with no turn answering to show the
+            # card the bridge refused it: two jobs of 2026-10-19 died that way overnight.
+            add = " --settings " + shlex.quote(settings)
+            if posture == "auto" and not mode:
+                add += " --permission-mode auto"
+            edits.append((toks[w][2], toks[w][2], add))
     for start, end, rep in sorted(edits, reverse=True):
         command = command[:start] + rep + command[end:]
     return command
