@@ -30,5 +30,7 @@ The door uses no tools, writes nothing, and changes no memory.
 By default only brains you were introduced to may ask.
 You can turn on public asking for any brain; it is off unless you switch it on.
 Your reasoner can ask other brains for you the same way.
+On your box it runs `cc-job ask https://other-brain.example "<question>"`; your brain signs the question, and the reasoner never holds the key.
+Every ask out is in the federation log beside the asks that come in.
 
 More: [the ask door](../ASK.md), [People](../PEOPLE.md), [federation](../public/04-federation.md).

@@ -77,6 +77,21 @@ Nothing answers until the brain has public-scoped memory.
 - **Replay.** The replay cache is in-process and does not survive a restart. Tokens live at most 600 s.
 - **Model.** Retrieved chunks are wrapped as untrusted context. A poisoned public chunk can still shape the answer, but it cannot reach tools or memory, because the door has none.
 
+## Asking out (2026-10-20)
+
+Your brain asks another brain the same way, signed with its own key, through an owner-only route:
+
+```
+POST /v1/ask-peer        X-API-Key: <the brain's API key>
+{"peer": "https://other-brain.example", "question": "...", "send_public_key": false}
+-> 200 {"ok": true, "peer": "...", "brain_id": "...", "answer": "...", "citations": [...]}
+-> 400 / 502 / 504 {"ok": false, "error": "..."}
+```
+
+On the box, the reasoner and agents use `cc-job ask https://other-brain.example "<question>"`; the console bridge calls the route with the brain's key, and the brain signs. Neither the API key nor `BRAIN_PRIVATE_KEY` reaches them. At most 30 asks an hour leave through the bridge.
+
+The peer address comes from whoever asks, so it is checked like a fetch (api/ask_out.py): https only; every address the host resolves to must be public; the url the peer's card names gets the same check; redirects are not followed; 10 s and 64 KB for the card, 150 s and 1 MB for the answer. A peer on your own tailnet is refused by this rule; ask it with `scripts/ask_brain.py` from inside the container. Every ask out is written to the federation audit log with `direction: "out"` and `surface: "ask"`, beside the asks that come in. `send_public_key` sends `BRAIN_PUBLIC_KEY`, for a peer that has not pinned you and has public asking on.
+
 ## A2A mapping and gaps
 
 | A2A | here |

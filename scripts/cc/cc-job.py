@@ -10,6 +10,7 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job status <id>        state, exit code, last lines of the log
     cc-job tail <id> [n]      last n bytes of the log (default 4000)
     cc-job list               recent jobs
+    cc-job ask <https://peer> "<question>"   ask another brain; this brain signs it
     cc-job task add "<text>" [--due <ISO 8601>]   put a task on the person's list (the /tasks page)
     cc-job task list          the open tasks
 
@@ -24,7 +25,7 @@ import urllib.error
 import urllib.request
 
 
-def _call(method: str, route: str, body: dict | None = None) -> dict:
+def _call(method: str, route: str, body: dict | None = None, timeout: float = 30) -> dict:
     port = os.environ.get("CC_PORT", "7682")
     base = os.environ.get("CC_BASE", "/cc").rstrip("/")
     url = f"http://127.0.0.1:{port}{base}{route}"
@@ -32,7 +33,7 @@ def _call(method: str, route: str, body: dict | None = None) -> dict:
     r = urllib.request.Request(url, data=data, method=method,
                                headers={"Content-Type": "application/json", "X-CC-Ask": os.environ.get("CC_ASK_TOKEN", "")})
     try:
-        with urllib.request.urlopen(r, timeout=30) as resp:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
             return json.loads(resp.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         try:
@@ -81,6 +82,15 @@ def main(argv: list[str]) -> int:
             n = int(rest[1]) if len(rest) > 1 else 4000
             d = _call("GET", f"/jobs/{rest[0]}?tail={n}")
             print(d.get("tail", "") if d else "no such job"); return 0
+        if cmd == "ask" and len(rest) >= 2:
+            # Ask a peer brain (2026-10-20): the bridge has the brain sign it; no key here.
+            d = _call("POST", "/ask-peer", {"peer": rest[0], "question": " ".join(rest[1:])}, timeout=200)
+            if not d or not d.get("ok"):
+                print("refused:", (d or {}).get("error", "no answer")); return 1
+            print(d.get("answer", ""))
+            if d.get("citations"):
+                print("\nCited:\n" + "\n".join(f"  - {c}" for c in d["citations"]))
+            print(f"\n(from {d.get('brain_id')} at {d.get('peer')})"); return 0
         if cmd == "task" and rest and rest[0] == "add":
             # The reasoner's task-write path (2026-10-20): the bridge holds the brain's key and adds it.
             words, due, i = [], None, 1

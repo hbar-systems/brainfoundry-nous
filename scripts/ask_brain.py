@@ -27,63 +27,20 @@ import os
 import sys
 import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from api.identity.core import issue_federation_assertion  # noqa: E402
-
-ASSERTION_HEADER = "X-Brain-Assertion"
-TTL_SECONDS = 120
+from api.ask_out import (  # noqa: E402  (shared with the owner route POST /v1/ask-peer)
+    ASSERTION_HEADER, TTL_SECONDS, answer_of, audience_from_card, build_request,
+)
 
 
 def _get_json(url: str, timeout: float = 15) -> Dict[str, Any]:
     with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}),
                                 timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
-
-
-def audience_from_card(card: Dict[str, Any]) -> Optional[str]:
-    for ext in (card.get("capabilities") or {}).get("extensions") or []:
-        bid = (ext.get("params") or {}).get("brain_id")
-        if bid:
-            return bid
-    return None
-
-
-def build_request(*, question: str, audience: str, private_key: str, my_id: str,
-                  public_key: Optional[str] = None) -> Tuple[Dict[str, str], Dict[str, Any]]:
-    """Headers and JSON-RPC body for one ask. The token is bound to this question."""
-    import hashlib
-    token = issue_federation_assertion(
-        private_key_b64=private_key,
-        issuer_brain_id=my_id,
-        audience_brain_id=audience,
-        subject="ask",
-        ttl_seconds=TTL_SECONDS,
-        claims={"qh": hashlib.sha256(question.encode("utf-8")).hexdigest()},
-    )
-    params: Dict[str, Any] = {"message": {
-        "role": "user", "messageId": str(uuid.uuid4()),
-        "parts": [{"kind": "text", "text": question}],
-    }}
-    if public_key:
-        params["metadata"] = {"brainfoundry": {"public_key": public_key}}
-    body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "message/send", "params": params}
-    headers = {"Content-Type": "application/json", ASSERTION_HEADER: token}
-    return headers, body
-
-
-def answer_of(resp: Dict[str, Any]) -> Tuple[str, list]:
-    msg = resp.get("result") or {}
-    text = "\n".join(p.get("text", "") for p in msg.get("parts", []) if p.get("kind") == "text")
-    cites: list = []
-    for p in msg.get("parts", []):
-        if p.get("kind") == "data":
-            cites = (p.get("data") or {}).get("citations") or cites
-    return text, cites
 
 
 def main() -> int:

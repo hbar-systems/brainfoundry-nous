@@ -4049,6 +4049,34 @@ async def ask_door(http_request: Request):
                       context_id=req.get("context_id"))
 
 
+class AskPeerRequest(BaseModel):
+    peer: str                       # the other brain's base url, https
+    question: str
+    send_public_key: bool = False   # for a peer that has not pinned this brain and asks publicly
+
+
+@app.post("/v1/ask-peer")
+def ask_peer_endpoint(req: AskPeerRequest, api_key: str = Depends(get_api_key)):
+    """Owner only: ask another brain one question through its ask door, signed with this
+    brain's key (2026-10-20). The console bridge calls this for agents and the reasoner,
+    so the key never leaves the brain. Logic in api/ask_out.py; docs/ASK.md, "Asking out"."""
+    from api import ask_out
+    from api.tools import federation_audit
+
+    try:
+        r = ask_out.ask_peer(req.peer, req.question, my_id=os.getenv("BRAIN_ID", ""),
+                             private_key=os.getenv("BRAIN_PRIVATE_KEY", ""),
+                             public_key=os.getenv("BRAIN_PUBLIC_KEY") if req.send_public_key else None)
+    except ask_out.PeerError as e:
+        federation_audit.record_event(direction="out", peer_brain_id=(req.peer or "")[:200], query=req.question,
+                                      verified=False, outcome=f"error:{e.message}"[:120], surface="ask")
+        return JSONResponse(status_code=e.status, content={"ok": False, "error": e.message})
+    federation_audit.record_event(direction="out", peer_brain_id=r["brain_id"], query=req.question,
+                                  documents_used=len(r["citations"]), answer_len=len(r["answer"]),
+                                  verified=True, outcome="ok", surface="ask")
+    return {"ok": True, **r}
+
+
 @app.get("/settings/ask")
 def settings_get_ask(api_key: str = Depends(get_api_key)):
     return {"public_asking": settings_store.get_ask_public_enabled()}
