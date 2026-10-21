@@ -82,10 +82,10 @@ def test_cap_and_over(tmp_path):
 
 # ---- newcomer mode ----
 
-def test_new_brain_starts_as_newcomer_and_it_sticks(tmp_path):
+def test_new_brain_starts_with_the_full_console_and_it_sticks(tmp_path):
     st = L.Store(tmp_path)
-    assert st.mode() == "newcomer"
-    (tmp_path / "turns.jsonl").write_text("{}\n")   # used later: the decision was already written down
+    assert st.mode() == "operator"
+    st.set_mode("newcomer")   # the owner's own choice in Settings is kept
     assert st.mode() == "newcomer"
 
 
@@ -103,7 +103,8 @@ def test_brain_with_a_layout_starts_as_operator(tmp_path):
 
 def test_set_mode_and_save_keeps_it(tmp_path):
     st = L.Store(tmp_path)
-    assert st.mode() == "newcomer"
+    assert st.mode() == "operator"
+    assert st.set_mode("newcomer") == "newcomer"
     assert st.set_mode("operator") == "operator"
     st.save({"theme": "light"})
     assert st.mode() == "operator"

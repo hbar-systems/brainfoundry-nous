@@ -320,15 +320,13 @@ class Store:
         return lay
 
     def mode(self) -> str:
-        """The console mode. Decided once and written down: a brain with any layout state or any sign of
-        use (USED_SIGNS) starts in operator mode, a brand new one in newcomer mode."""
+        """The console mode. Every brain starts with the full console (hbar, 2026-10-21: surface
+        everything, hide nothing); newcomer stays only as a choice the owner makes in Settings."""
         with self.lock:
             d = self._read()
             if d.get("mode") in MODES:
                 return d["mode"]
-            used = any(d.get(k) for k in ("current", "history", "answers", "proposals", "decided")) or \
-                any((self.path.parent / f).exists() for f in USED_SIGNS)
-            d["mode"] = "operator" if used else "newcomer"
+            d["mode"] = "operator"
             self._write(d)
             return d["mode"]
 
