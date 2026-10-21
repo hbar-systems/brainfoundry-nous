@@ -328,11 +328,11 @@ def prompt(a: dict, stamp: str) -> str:
         + local_first_line()
         + {0: "5. Autonomy level 0 (propose): write only your state and sitrep; every change is a proposal.\n\n",
            1: "5. Autonomy level 1 (branch): commit on your own branch in your worktree, by exact path; never push.\n\n",
-           2: "5. Autonomy level 2 (ship): commit on your own branch in your worktree, by exact path. You may ship it with "
-              "`git push origin HEAD:main` only when (a) the repo's tests pass and you name the count in your sitrep, "
-              "(b) the diff holds no secret, no private material and no employer name, (c) the change is one small "
-              "reviewable step. Never force, never delete a branch, never push anything else. Name the pushed commit id "
-              "in your sitrep; an auditing agent may review every ship.\n\n"}[
+           2: "5. Autonomy level 2 (ship): commit on your own branch in your worktree, by exact path, when "
+              "(a) the repo's tests pass and you name the count in your sitrep, (b) the diff holds no secret, no "
+              "private material and no employer name, (c) the change is one small reviewable step. You do NOT push: "
+              "the gated push helper pushes on the owner's word. Name the commit id in your sitrep so the owner can "
+              "ship it; an auditing agent may review every commit.\n\n"}[
             int(a.get("level", 1)) if int(a.get("level", 1)) in LEVELS else 1]
         + f"Before you end, write your sitrep to {sit} in this shape:\n"
         + f"SITREP {tag(a)} <time UTC>\n1. STATE ON | DEGRADED | OFF, one line why\n2. DONE what changed, with full paths\n"
@@ -354,9 +354,7 @@ def settings(a: dict) -> dict:
     allow += [f"Bash({c})" for c in perm["bash_allow"]] + [t for t in perm["tools"] if t not in allow]
     if perm["fetch_tool"]:
         allow += [f"Bash(python3 {perm['fetch_tool']} *)"]
-    if lv == 2:
-        allow += ["Bash(git push origin HEAD:main)"]
-    deny = list(DENY) + list(CURL_WRITE_DENY) + (list(FORCE_DENY) if lv == 2 else list(PUSH_DENY))
+    deny = list(DENY) + list(CURL_WRITE_DENY) + list(PUSH_DENY)
     return {
         "hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
