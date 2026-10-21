@@ -89,16 +89,28 @@ export default function Update() {
     return () => clearInterval(t)
   }, [version?.running, version?.checkout])
 
+  // A member on a shared box (2026-10-21, docs/MULTI_INSTANCE.md): its api has no docker socket and
+  // no checkout, so the bridge's door (/cc/update) runs the update and reports the checkout, and the
+  // api still reports what runs. Anywhere else the door answers {member: null} and nothing changes.
+  const loadVersion = async () => {
+    const [api, door] = await Promise.all([
+      fetch('/api/bf/admin/version-info').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/cc/update/state', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ])
+    if (!(door && door.member && door.door && (!api || api.preflight_error))) return api
+    return {
+      ...(api || {}), checkout: door.checkout, latest: door.latest, behind_by: door.behind_by,
+      current: api?.running || door.checkout, rollback_to: null, preflight_error: null, door,
+    }
+  }
+
   // Version banner — call /admin/version-info on mount and after success.
   const refreshVersion = async () => {
     setVersionLoading(true)
     try {
-      const r = await fetch('/api/bf/admin/version-info')
-      if (r.ok) {
-        const data = await r.json()
-        setVersion(data)
-        return data
-      }
+      const data = await loadVersion()
+      if (data) setVersion(data)
+      return data
     } catch {
       // Silent — banner just shows "—" until next refresh.
     } finally {
@@ -107,7 +119,14 @@ export default function Update() {
     return null
   }
 
-  useEffect(() => { refreshVersion() }, [])
+  useEffect(() => {
+    refreshVersion().then((v) => {
+      if (!v?.door) return
+      if (v.door.running) { followDoor(0); return }   // a reload mid-update follows it on
+      // the door's fetch makes "commits behind" current (the api cannot fetch a member's checkout)
+      fetch('/cc/update/check', { method: 'POST' }).then(() => refreshVersion()).catch(() => {})
+    })
+  }, [])
 
   // Auto-scroll log box on each append.
   useEffect(() => {
@@ -231,7 +250,100 @@ export default function Update() {
     }
   }
 
-  const startUpdate = () => runJob('/api/bf/admin/update', 'update')
+  const startUpdate = () => (version?.door ? runDoorJob() : runJob('/api/bf/admin/update', 'update'))
+
+  // The member's door: start through the bridge, then follow the helper's log by byte offset. The
+  // update runs in a unit of its own on the box, so when it restarts the bridge (an Update that
+  // changes cc-bridge.py) the stream drops and this reconnects from the last line it saw.
+  const runDoorJob = async () => {
+    if (phase === 'running' || phase === 'rebuilding' || phase === 'verifying') return
+    setLogs([])
+    setErrorMsg(null)
+    setPostUpdateCommit(null)
+    setJobKind('update')
+    setPhase('running')
+    startCommitRef.current = version?.checkout || version?.current || null
+    apiUnchangedRef.current = false
+    let r
+    try {
+      r = await fetch('/cc/update', { method: 'POST' })
+    } catch (e) {
+      setErrorMsg(`Could not reach the bridge: ${e.message}`)
+      setPhase('error')
+      return
+    }
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      setErrorMsg(d.error || `HTTP ${r.status}`)
+      setPhase('error')
+      return
+    }
+    followDoor(0)
+  }
+
+  const followDoor = async (from) => {
+    setJobKind('update')
+    setPhase('running')
+    if (!startCommitRef.current) startCommitRef.current = version?.checkout || null
+    let offset = from
+    let finished = false
+    let rc
+    let sawRebuildMarker = false
+    const deadline = Date.now() + 40 * 60 * 1000
+    while (!finished && Date.now() < deadline) {
+      try {
+        const r = await fetch(`/cc/update/log?from=${offset}`, { headers: { 'Accept': 'text/event-stream' } })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const reader = r.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const frames = buffer.split('\n\n')
+          buffer = frames.pop()
+          for (const frame of frames) {
+            if (!frame.startsWith('data: ')) continue
+            const payload = frame.slice(6).trim()
+            if (payload === '[DONE]') continue
+            let parsed
+            try { parsed = JSON.parse(payload) } catch { continue }
+            if (parsed.type === 'log') {
+              appendLog({ kind: 'log', text: parsed.line })
+              if (typeof parsed.offset === 'number') offset = parsed.offset
+              if (/Rebuilding services/i.test(parsed.line || '')) sawRebuildMarker = true
+              if (/api image unchanged/i.test(parsed.line || '')) apiUnchangedRef.current = true
+            } else if (parsed.type === 'start' && offset === 0) {
+              appendLog({ kind: 'meta', text: `started in ${parsed.cwd}` })
+            } else if (parsed.type === 'done') {
+              rc = parsed.returncode
+              finished = true
+              appendLog({ kind: 'meta', text: `script exited (rc=${rc ?? 'unknown'})` })
+            } else if (parsed.type === 'error') {
+              appendLog({ kind: 'error', text: parsed.message })
+              finished = true
+            }
+          }
+        }
+      } catch {
+        // The bridge is restarting (or the network blinked): reconnect from the last offset.
+      }
+      if (!finished) await new Promise((res) => setTimeout(res, 3000))
+    }
+    if (rc === 0 && sawRebuildMarker) {
+      setPhase('rebuilding')
+      pollUntilUpdated()
+    } else if (rc === 0) {
+      setPhase('idle')
+      refreshVersion()
+    } else {
+      setErrorMsg(rc == null
+        ? 'The update stopped without a result. The full log is /var/lib/brain-update/<member>/update.log on the box.'
+        : `update_brain.sh exited with ${rc}; the log below says why.`)
+      setPhase('error')
+    }
+  }
 
   const startRevert = () => {
     const t = version?.rollback_to
@@ -257,9 +369,8 @@ export default function Update() {
 
     while (Date.now() < deadline) {
       try {
-        const r = await fetch('/api/bf/admin/version-info')
-        if (r.ok) {
-          const data = await r.json()
+        const data = await loadVersion()
+        if (data) {
           // Success means the checkout moved AND, when the image carries a commit, the
           // running api matches the checkout (recreated) or the api image was unchanged.
           const moved = data?.checkout && data.checkout !== startCommit

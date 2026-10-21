@@ -1520,6 +1520,120 @@ def _host_warnings(d: dict, member: str = "") -> list:
     return w
 
 
+
+# The member's Update door (2026-10-21, docs/MULTI_INSTANCE.md "Update from the console"). A member's
+# api has no docker socket, so its Update button comes here: the bridge asks the root helper, by
+# sudoers exactly "brain-member-update <m>" (or "<m> check", a git fetch), to run update_brain.sh for
+# the member's own checkout as the admin, in a unit of its own that outlives a restart of this bridge.
+# The page follows the helper's log from a byte offset and reconnects after such a restart.
+UPDATE_HELPER = "/usr/local/sbin/brain-member-update"
+UPDATE_STATE_ROOT = Path(os.environ.get("CC_UPDATE_STATE_ROOT", "/var/lib/brain-update"))
+_UPDATE_RC = re.compile(r"^brain-update rc=(\d+)$")
+
+
+def _update_log() -> Path:
+    return UPDATE_STATE_ROOT / MEMBER / "update.log"
+
+
+def _update_rc(text: str) -> int | None:
+    """The helper's last line, "brain-update rc=<n>"; None while it runs or before any run. Pure; tested."""
+    for ln in reversed(text.splitlines()[-5:]):
+        mt = _UPDATE_RC.match(ln.strip())
+        if mt:
+            return int(mt.group(1))
+    return None
+
+
+def _update_running() -> bool:
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", f"brain-update-{MEMBER}"], timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
+def _update_state() -> dict:
+    """What the member's Update page shows: whether the door is there, a run in flight or its result,
+    and the checkout's commit against origin/main as of the last fetch (git read-only, as this user)."""
+    if not MEMBER:
+        return {"member": None, "door": False}
+    d: dict = {"member": MEMBER, "door": Path(UPDATE_HELPER).exists(), "running": _update_running(),
+               "checkout": None, "latest": None, "behind_by": None, "last_rc": None, "log_bytes": 0}
+    try:
+        log = _update_log()
+        d["log_bytes"] = log.stat().st_size
+        d["last_rc"] = _update_rc(log.read_text(errors="replace")[-2000:])
+    except OSError:
+        pass
+    repo = os.environ.get("BRAIN_DIR") or f"/srv/brains/{MEMBER}"
+    git = ["git", "--no-optional-locks", "-c", f"safe.directory={repo}", "-C", repo]
+
+    def out(*a):
+        try:
+            r = subprocess.run([*git, *a], capture_output=True, text=True, timeout=10)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except Exception:
+            return None
+    d["checkout"] = out("rev-parse", "HEAD")
+    d["latest"] = out("rev-parse", "origin/main")
+    n = out("rev-list", "--count", "HEAD..origin/main")
+    d["behind_by"] = int(n) if n and n.isdigit() else None
+    return d
+
+
+def _update_door(check: bool = False) -> tuple[int, dict]:
+    """Start the member's update (or fetch, check=True) through the helper; never any other command."""
+    if not MEMBER:
+        return 404, {"error": "a brain alone on its box updates through its api (/admin/update)"}
+    cmd = ["sudo", "-n", UPDATE_HELPER, MEMBER] + (["check"] if check else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    except Exception as e:  # noqa: BLE001
+        return 502, {"error": f"{type(e).__name__}: {e}"[:300]}
+    if r.returncode != 0:
+        msg = (r.stderr or r.stdout).strip().splitlines()
+        return 409, {"error": (msg[-1] if msg else f"helper exited {r.returncode}")[:400], **_update_state()}
+    return 200, {"ok": True, "started": not check, **_update_state()}
+
+
+def _update_frames(path: Path, start: int, running, sleep=time.sleep, max_s: float = 2400.0):
+    """SSE frames of the helper's log from byte `start`, in /admin/update's shape plus each line's end
+    offset (the page reconnects from it): log lines, then "done" with the rc from the last line, or
+    with null when the unit stopped without writing one. Generator; tested with a fake clock."""
+    def frame(obj):
+        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+    pos, buf, waited, idle = max(0, int(start)), b"", 0.0, 0
+    yield frame({"type": "start", "cwd": os.environ.get("BRAIN_DIR") or f"/srv/brains/{MEMBER}", "offset": pos})
+    while waited < max_s:
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(pos)
+                chunk = fh.read(65536)
+        except OSError:
+            chunk = b""
+        if chunk:
+            idle = 0
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                pos += len(line) + 1
+                text = line.decode("utf-8", errors="replace")
+                yield frame({"type": "log", "line": text, "offset": pos})
+                mt = _UPDATE_RC.match(text.strip())
+                if mt:
+                    yield frame({"type": "done", "returncode": int(mt.group(1))})
+                    yield "data: [DONE]\n\n"
+                    return
+            continue
+        idle += 1
+        if idle >= 3 and not running():
+            yield frame({"type": "done", "returncode": None})
+            yield "data: [DONE]\n\n"
+            return
+        sleep(1.0)
+        waited += 1.0
+    yield frame({"type": "error", "message": "still running after 40 minutes; reload the page to follow on"})
+    yield "data: [DONE]\n\n"
+
 def _posture_current() -> str:
     v = os.environ.get("CC_POSTURE", "cards").strip().lower()
     return v if v in POSTURES else "cards"
@@ -3725,6 +3839,27 @@ class Handler(BaseHTTPRequestHandler):
                              "reasoners": list(REASONERS), "codex": _codex_status()})
         elif route == "/login/state":
             self._send(200, LOGIN.state())
+        elif route == "/update/state":
+            self._send(200, _update_state())
+        elif route == "/update/log":
+            if not MEMBER:
+                self._send(404, {"error": "no member update here"})
+                return
+            try:
+                start = int(self._query().get("from") or 0)
+            except ValueError:
+                start = 0
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                for fr in _update_frames(_update_log(), start, _update_running):
+                    self.wfile.write(fr.encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
         elif route == "/threads":
@@ -3918,6 +4053,9 @@ class Handler(BaseHTTPRequestHandler):
                         tokens=body.get("tokens"), minutes=body.get("minutes"), estimate=bool(body.get("estimate")))})
             except ValueError as e:
                 self._send(400, {"error": str(e)})
+            return
+        if route in ("/update", "/update/check"):
+            self._send(*_update_door(check=route == "/update/check"))
             return
         if route.startswith("/layout"):
             body = self._json(limit=40000)

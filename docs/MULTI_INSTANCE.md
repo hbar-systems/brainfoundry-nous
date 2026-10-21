@@ -39,7 +39,8 @@ with any port already listening. `--apply` then:
    `cc-hands-<handle>`, operator token `CC_OPERATOR_TOKEN_<HANDLE>` in `/etc/caddy/cc-<handle>.env`);
 8. appends `<handle> <n> <api port> <date>` to `/srv/brains/members.tsv` (640, root and the admin's
    group: it names every member) and writes the member count, no names, to `/srv/brains/count` (644);
-9. prints the Caddy site block for `<handle>.brainfoundry.ai` and `console.<handle>.brainfoundry.ai`.
+9. runs `scripts/member-update-door.sh <handle> --apply`: the console's Update button (below);
+10. prints the Caddy site block for `<handle>.brainfoundry.ai` and `console.<handle>.brainfoundry.ai`.
 
 By hand afterwards: paste the block into `/etc/caddy/Caddyfile` with the member's console password
 hash (`caddy hash-password`), `sudo systemctl restart caddy` (restart, not reload: Caddy reads the
@@ -48,10 +49,58 @@ new token file only at start), point both DNS names at the box. If the keypair w
 (nothing printed), then `docker compose up -d api`. The member then signs their reasoner in from
 their own console, as on any brain.
 
-`--update-tab` also mounts the docker socket into the member's api so the console's Update tab
-works. Leave it off on a shared box unless you accept the cost: that socket is root on the host,
-so a member whose brain is compromised would hold every member. Without it, the admin updates a
-member with `bash /srv/brains/<handle>/scripts/update_brain.sh /srv/brains/<handle>`.
+`--update-tab` also mounts the docker socket into the member's api, the single brain's way to the
+Update tab. Leave it off on a shared box: that socket is root on the host, so a member whose brain
+is compromised would hold every member. The Update button works without it (next section).
+
+## Update from the console (2026-10-21)
+
+A member's api has no docker socket and no view of its checkout, so its Update page goes to the
+member's bridge instead, and the bridge to one narrow root helper:
+
+```
+console Update button -> /cc/update (the member's bridge, behind its console login and operator token)
+  -> sudo -n /usr/local/sbin/brain-member-update <m>        (sudoers: exactly this line, and "<m> check")
+  -> transient unit brain-update-<m>: scripts/update_brain.sh /srv/brains/<m>, as the admin
+  -> /var/lib/brain-update/<m>/update.log (root, group <m>-brain, 640), last line "brain-update rc=<n>"
+page <- /cc/update/log?from=<byte> (SSE in /admin/update's shape, each line with its offset)
+```
+
+- **The helper** (`scripts/brain-member-update.sh`, installed root 755) takes a handle and nothing
+  else: no path, no command, no environment. `<m>` starts the update, `<m> check` runs `git fetch`
+  in the checkout (so "commits behind" is current; the page calls it on load). Callers: `<m>-cc`,
+  the checkout's owner, root. Another member's bridge is refused, and so is a handle that is not
+  in `members.tsv`.
+- **Before anything runs** (again inside the unit, right before the script) it refuses a checkout
+  that a member could have turned against the admin: a host-run file (`scripts/update_brain.sh`,
+  `scripts/backup_brain.sh`, both compose files, `.env`, `.git`, its config and hooks, the
+  directories holding them) that is not the admin's or root's, is group- or world-writable, or is a
+  symlink; any symlink in the directories the member's api writes (`brain-apps`, `extensions`,
+  `prepared_docs`, `input_samples`); a local change to tracked `scripts/` or `docker-compose.yml`.
+  Each refusal names the file. The admin looks, fixes, and presses again.
+- **As the admin, not root:** the script runs as the checkout's owner with a clean environment and
+  umask 027, exactly the manual path; the admin's docker group does the rebuild.
+- **In a unit of its own:** an Update that changes `cc-bridge.py` restarts the member's bridge
+  mid-run. The update does not belong to the bridge's cgroup, so it carries on, and the page
+  reconnects to the log from the last offset it saw. A second press while one runs is refused
+  (the unit exists). Each run is capped at 30 minutes.
+- **The page** (`ui/pages/update.js`) uses the door only when the api reports it cannot update
+  (`preflight_error`) and the bridge reports a member with the helper installed. The checkout and
+  "behind" come from the bridge, "running" from the api. A brain alone on its box: unchanged.
+
+Install for a member added before 2026-10-21, or refresh the helper after an Update that changed it:
+
+```
+bash scripts/member-update-door.sh <handle> --dry-run
+bash scripts/member-update-door.sh <handle> --apply
+```
+
+Not covered by the door: Revert (the button stays hidden on a member; the admin runs
+`scripts/revert_brain.sh /srv/brains/<m>`) and the daily automatic update (it lives in the api,
+which has no socket). The checks run before the script, not during it: a member's api could still
+plant a symlink while the update runs. The script's one copy into such a directory
+(`brain-apps/installed.json`) writes only when the target is missing, and GNU `cp` will not write
+through a dangling symlink. Still, that window is the one thing left open.
 
 ### The port block
 
@@ -72,10 +121,10 @@ scripts) and `scripts/cc/cc_member.py` (the bridge, `scripts/member_env.py`).
 | Network | Own compose network. The member's containers cannot reach another member's: the only container on two networks is the shared Ollama. |
 | Code | `/srv/brains` is 711 (no listing); each checkout is 2750, group `<handle>-brain` = that member's two users and the admin, readable by the group and never group-writable: `update_brain.sh` and `revert_brain.sh` run under umask 027 for a member's checkout, so the member's hands cannot edit a file root later runs (`install.sh` reruns as root when an update changes it). Update a member only through those scripts, never a bare `git pull` with the admin's default umask. |
 | Unix | `<handle>-cc` and `<handle>-hands` have no sudo and are not in the docker group (docker is root on the box). Homes 700; `split-hands.sh` then opens the hands' home 750 to its own bridge, through a group with that bridge as its only other member. A member's hands cannot read its own bridge's state, as on every CC box. |
-| Root verbs | A member's bridge gets exactly four, no wildcards: restart and status of `cc-bridge-<handle>` and `claude-tab-<handle>`. The single-brain verbs (`journalctl *`, `systemctl status *`, `docker ps *`, `brain-write`, the root Update) are not given: the first three read other members' units, the last two could rewrite what root runs next. |
+| Root verbs | A member's bridge gets exactly four, no wildcards: restart and status of `cc-bridge-<handle>` and `claude-tab-<handle>`. Its Update door is a fifth file of its own (`/etc/sudoers.d/brain-update-<handle>`): two exact command lines of the helper, not a verb the reasoner is told about. The single-brain verbs (`journalctl *`, `systemctl status *`, `docker ps *`, `brain-write`, the root Update) are not given: the first three read other members' units, the last two could rewrite what root runs next. |
 | Console | Own Caddy site with its own login. The CC and terminal routes carry the member's own operator token, which only Caddy adds; another member's console cannot present it. |
 | Terminal door | Runs as `<handle>-cc`, never as the admin: a member's console never holds an admin shell. |
-| Update | `update_brain.sh <checkout>` touches only that checkout, its own compose project (from `COMPOSE_PROJECT_NAME` in its `.env`), its own api image and container, and checks its own api port. The console's Update tab passes its own checkout. |
+| Update | `update_brain.sh <checkout>` touches only that checkout, its own compose project (from `COMPOSE_PROJECT_NAME` in its `.env`), its own api image and container, and checks its own api port. The console's Update tab passes its own checkout; on a member it goes through the door above. |
 
 ## What is shared
 
@@ -135,7 +184,8 @@ for u in cc-bridge claude-tab cc-bridge-watch cc-install-watch cc-work-pull; do
   sudo rm -f /etc/systemd/system/$u-<handle>.{service,path,timer}
 done
 sudo systemctl daemon-reload
-sudo rm -f /etc/sudoers.d/cc-bridge-<handle> /etc/sudoers.d/cc-hands-<handle>
+sudo rm -f /etc/sudoers.d/cc-bridge-<handle> /etc/sudoers.d/cc-hands-<handle> /etc/sudoers.d/brain-update-<handle>
+sudo rm -rf /var/lib/brain-update/<handle>
 sudo rm -f /etc/caddy/cc-<handle>.env /etc/systemd/system/caddy.service.d/cc-<handle>.conf
 # remove the two site blocks from /etc/caddy/Caddyfile, then:
 sudo systemctl daemon-reload && sudo systemctl restart caddy
@@ -164,8 +214,11 @@ test box with a brain on it (an hourly one is enough). About an afternoon.
 5. RAM idle: `free -m` and `docker stats --no-stream`, ten minutes after start.
 6. RAM during one CC turn: start a turn that reads a few files, and sample `free -m` and
    `ps -o rss= -u test1-hands | paste -sd+ | bc` every 2 s while it runs; keep the peak.
-7. Update: `bash /srv/brains/test1/scripts/update_brain.sh /srv/brains/test1` updates only
-   `brain-test1` (the first brain's containers keep their start times).
+7. Update: press Update in test1's console. Only `brain-test1` is updated (the first brain's
+   containers keep their start times). `sudo -l -U test1-cc` shows the two helper lines;
+   `sudo -u test1-hands sudo -n /usr/local/sbin/brain-member-update test1` is refused. Run
+   `sudo systemctl restart cc-bridge-test1` during the update: the page reconnects and the
+   update finishes.
 8. Remove the member (above) and check that nothing of it is left.
 
 Write the numbers into hbar.world's next-brains design note; they replace the estimates there.

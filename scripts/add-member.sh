@@ -18,8 +18,10 @@
 # and the box's one Ollama (the first brain's, 127.0.0.1 only) joins the member's network as "ollama".
 # It prints the Caddy site block for <m>.brainfoundry.ai and console.<m>.brainfoundry.ai; it never
 # edits the Caddyfile, DNS or the cloud.
-# --update-tab: also mount the docker socket so the member's console Update tab works. That socket is
-# root on the box: a member whose api is compromised then holds every member. Off by default.
+# The console's Update button works without the socket, through the member's bridge and a narrow root
+# helper (scripts/member-update-door.sh, 2026-10-21).
+# --update-tab: also mount the docker socket into the member's api (the single brain's way). That socket
+# is root on the box: a member whose api is compromised then holds every member. Off by default.
 #
 # Refuses: a bad or reserved handle, a block outside 1..99, a handle or block already in
 # /srv/brains/members.tsv, an existing checkout, user, unit or compose project, a port of the block in use.
@@ -138,6 +140,8 @@ CC_ENV=(env CC_MEMBER="$HANDLE" CC_MEMBER_N="$N" BRAIN_DIR="$DIR" BRAIN_USER="$A
         UI_PORT="$M_UI_PORT" API_PORT="$M_API_PORT" CADDY_ROUTES=0)
 run "${CC_ENV[@]}" bash "$DIR/scripts/cc/install.sh"
 run "${CC_ENV[@]}" bash "$DIR/scripts/cc/split-hands.sh"
+# the console's Update button: through the bridge and a narrow root helper, no docker socket (2026-10-21)
+run bash "$DIR/scripts/member-update-door.sh" "$HANDLE" --apply
 
 say "== 8 registry"
 LINE=$(printf '%s\t%s\t%s\t%s' "$HANDLE" "$N" "$M_API_PORT" "$(date -u +%Y-%m-%d)")
