@@ -91,6 +91,9 @@ run git clone -q "$ORIGIN" "$DIR"   # g-w below; scripts/update_brain.sh keeps i
 run sudo chgrp -R "$GROUP" "$DIR"
 run sudo chmod -R g+rX,g-w,o-rwx "$DIR"
 run sudo find "$DIR" -type d -exec chmod g+s {} +
+# the postgres container runs as its own uid (other here): it must read its init dir
+# (schema only, no secrets), or it restart-loops on "initdb.d: Permission denied" (2026-10-21)
+run sudo chmod -R o+rX "$DIR/vector-db"
 
 say "== 3 .env (fresh secrets, into the file only)"
 run python3 "$REPO/scripts/member_env.py" "$HANDLE" "$N" "$REPO/.env.example" "$DIR/.env"
