@@ -72,7 +72,7 @@ sudo systemctl disable --now ttyd.service 2>/dev/null || true
 sudo systemctl mask ttyd.service 2>/dev/null || true
 ttyd --version
 
-echo "== 2/6 reasoner CLI (user ${MEMBER:+$BRIDGE_USER, member $MEMBER}${MEMBER:-$BRAIN_USER})"
+if [ -n "$MEMBER" ]; then echo "== 2/6 reasoner CLI (user $BRIDGE_USER, member $MEMBER)"; else echo "== 2/6 reasoner CLI (user $BRAIN_USER)"; fi
 if [ -z "$MEMBER" ]; then   # a member's admin needs no reasoner; the member's own users get theirs below
     if [ ! -x "$HOME_DIR/.local/bin/claude" ]; then
         curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh
