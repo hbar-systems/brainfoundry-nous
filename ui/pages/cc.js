@@ -1129,6 +1129,8 @@ function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])            // attachments chosen for the next message
+  const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
+  const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
   // right margin anchored to that message (below it on a narrow screen), typed at leisure, kept
   // per thread in this browser, and sent with the next message as a structured block: which
@@ -2441,7 +2443,17 @@ function CC() {
     choose({ mode: 'agent', label: 'brain fix: ' + (text || 'screenshot').slice(0, 60), send: brief })
   }
 
+  // One press sends one message (2026-10-22, issue 8 in ops/2026-10-07_brain-use-issues.md): the page
+  // used to upload attachments with nothing on screen, the draft still in the box, so a second press
+  // sent the message again and re-uploaded the files (-1, -2 copies, "queued" duplicates). Now the box
+  // clears at once, an "attaching" line shows, and presses during the hand-off are ignored.
   async function send(forced) {
+    if (sendingRef.current) return
+    sendingRef.current = true
+    try { return await sendOnce(forced, () => { sendingRef.current = false }) } finally { sendingRef.current = false }
+  }
+
+  async function sendOnce(forced, release) {
     let text = (typeof forced === 'string' ? forced : draft).trim()
     const block = typeof forced === 'string' ? '' : notesBlock()
     if (!text && files.length === 0 && !block) return
@@ -2450,15 +2462,18 @@ function CC() {
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
     if (typeof forced !== 'string' && files.length > 0) {
       // Attachments go to the box first (in/<date>/), then the message names them.
-      const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
+      const sending = files, keptDraft = draft
+      const fd = new FormData(); sending.forEach(f => fd.append('file', f, f.name))
+      setDraft(''); setFiles([]); setAttaching(sending.length)
+      const restore = () => { setDraft(d0 => d0 || keptDraft); setFiles(f0 => [...sending, ...f0]) }
       let saved = []
       try {
         const r = await fetch('/cc/upload', { method: 'POST', body: fd })
         const d = await r.json().catch(() => ({}))
-        if (!r.ok || !d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
+        if (!r.ok || !d.ok) { restore(); setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
         saved = d.files || []
-      } catch { setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
-      setFiles([])
+      } catch { restore(); setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
+      finally { setAttaching(0) }
       text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ')
     }
     // A message sent while the thread answers is accepted by the bridge and queued there (2026-10-09):
@@ -2476,6 +2491,7 @@ function CC() {
     if ((busy || srvRunning) && realKey) {
       if (await queueOnServer(realKey)) { if (typeof forced !== 'string') setDraft(''); return }
     }
+    release()
     if (busy && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
     if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
@@ -2926,6 +2942,9 @@ function CC() {
               </span>
             ) : transcribing ? 'the bridge is transcribing the clip' : talkNote}
           </p>
+        )}
+        {attaching > 0 && (
+          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0' }}>attaching {attaching} file{attaching === 1 ? '' : 's'}, sending right after</p>
         )}
         {files.length > 0 && (
           <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
