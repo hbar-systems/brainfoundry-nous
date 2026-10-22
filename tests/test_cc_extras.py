@@ -376,3 +376,71 @@ def test_running_jobs_are_counted_per_thread(tmp_path):
                     os.killpg(r["pid"], 9)
                 except OSError:
                     pass
+
+
+def test_recent_sends_drops_a_copy_within_the_window_and_forgets_a_refused_one():
+    """2026-10-22, issue 8: the same message within 60 s is a second press; a copy the bridge did
+    not take (busy, idle) is forgotten so the page's retry through the other door goes through."""
+    clock = [1000.0]
+    r = X.RecentSends(60, clock=lambda: clock[0])
+    assert r.seen(("t", "hello")) is None
+    clock[0] += 3
+    assert r.seen(("t", "hello")) == 3
+    assert r.seen(("t2", "hello")) is None and r.seen(("t", "other")) is None
+    r.forget(("t", "other"))
+    assert r.seen(("t", "other")) is None
+    clock[0] += 61
+    assert r.seen(("t", "hello")) is None
+
+
+def _multipart(name: str, data: bytes):
+    boundary = "XYZ"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+            f"Content-Type: audio/mp4\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    h = FakeHandler({"Content-Length": str(len(body)), "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    h.rfile = io.BytesIO(body)
+    return h
+
+
+def test_uploads_same_file_within_a_minute_is_saved_once(tmp_path):
+    """2026-10-22, issue 8: four presses landed New Recording 116-1-2-3-4.m4a. The same name, size and
+    bytes within 60 s answer with the copy already on the box; other bytes, or later, save anew."""
+    clock = [1000.0]
+    up = X.Uploads(tmp_path / "in", clock=lambda: clock[0])
+    a = up.save_multipart(_multipart("New Recording 116.m4a", b"take-one"))["files"][0]
+    clock[0] += 3
+    b = up.save_multipart(_multipart("New Recording 116.m4a", b"take-one"))["files"][0]
+    assert b["path"] == a["path"] and b.get("duplicate") is True
+    c = up.save_multipart(_multipart("New Recording 116.m4a", b"take-two"))["files"][0]
+    assert c["path"] != a["path"]
+    clock[0] += 61
+    d = up.save_multipart(_multipart("New Recording 116.m4a", b"take-one"))["files"][0]
+    assert d["path"] not in (a["path"], c["path"]) and not d.get("duplicate")
+    assert len(list((tmp_path / "in").rglob("*.m4a"))) == 3
+
+
+def test_a_job_whose_process_died_is_ended_on_read_and_closeable(tmp_path):
+    """2026-10-22, issue 9: a record left running by a bridge restart (J1792407463161, 71 h). On read
+    its dead pid ends it (lost, no rc), written back once; the board shows it failed, so it closes."""
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"})
+    reg = tmp_path / "out" / "jobs" / "jobs.json"
+    live = j.start("sleep 30", str(tmp_path), "still running", thread="t-1")
+    try:
+        items = json.loads(reg.read_text())
+        items.append({"id": "Jghost", "title": "ghost", "pid": 2 ** 22 + 12345, "started": 1, "ended": None, "rc": None,
+                      "log": str(tmp_path / "nope.log"), "thread": "t-1"})
+        # a pid now held by a process that started long after the job did: reused, not the job
+        items.append({"id": "Jreused", "title": "reused", "pid": os.getpid(), "started": 1, "ended": None, "rc": None,
+                      "log": str(tmp_path / "nope.log"), "thread": "t-1"})
+        reg.write_text(json.dumps(items))
+        by = {r["id"]: r for r in j.list()}
+        assert by[live["id"]]["ended"] is None
+        for jid in ("Jghost", "Jreused"):
+            assert by[jid]["ended"] is not None and by[jid]["rc"] is None and by[jid]["lost"] is True
+        assert {r["id"]: r for r in json.loads(reg.read_text())}["Jghost"]["lost"] is True   # written back
+        assert j.get("Jghost")["lost"] is True
+        tiles = {t["key"]: t for t in X.board_tiles([], [], [dict(by["Jghost"], tail="")], [], [], set(), time.time())["tiles"]}
+        assert tiles["job:Jghost"]["state"] == "failed" and "restart" in tiles["job:Jghost"]["last"]
+        assert X.board_tiles([], [], [dict(by["Jghost"], tail="")], [], [], {"job:Jghost"}, time.time())["tiles"] == []
+    finally:
+        os.kill(live["pid"], 15)

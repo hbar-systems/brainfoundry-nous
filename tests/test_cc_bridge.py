@@ -1235,3 +1235,16 @@ def test_tick_off_without_cmd_and_runs_as_hands(monkeypatch, tmp_path):
     assert seen and seen[0][-3:] == ["bash", "-lc", "echo hi"]
     mod.TICK["running"] = True
     assert mod._tick_once() is None
+
+
+def test_duplicate_message_within_a_minute_is_dropped_as_taken(monkeypatch, tmp_path):
+    """2026-10-22, issue 8: a second press of the same message to the same thread answers 202 with
+    duplicate=True (the page already reads 202 as taken and removes its copy); another thread, other
+    text, or a copy that was refused and forgotten (the page's retry through /queue) goes through."""
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._duplicate("t-1", "hello") is None
+    d = m._duplicate("t-1", "hello")
+    assert d and d["duplicate"] is True and d["thread"] == "t-1" and d["queue"] == [] and "dropped" in d["reply"]
+    assert m._duplicate("t-2", "hello") is None and m._duplicate(None, "hello") is None
+    m.SENT.forget(("t-1", "hello"))
+    assert m._duplicate("t-1", "hello") is None

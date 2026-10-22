@@ -12,6 +12,7 @@ Imported by cc-bridge.py (same directory). Standard library only.
 from __future__ import annotations
 
 import email.parser
+import hashlib
 import email.policy
 import json
 import mimetypes
@@ -505,7 +506,7 @@ class Jobs:
                 cur = self._load()
                 for r in cur:
                     if r["id"] == jid:
-                        r["ended"] = int(time.time()); r["rc"] = rc
+                        r["ended"] = int(time.time()); r["rc"] = rc; r.pop("lost", None)
                         # by now the turn that started it has usually recorded its thread
                         r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
                         done = dict(r)
@@ -519,8 +520,29 @@ class Jobs:
         threading.Thread(target=_wait, daemon=True).start()
         return rec
 
+    def _reap(self) -> list:
+        """The registry with every job whose process is gone marked ended (2026-10-22, issue 9 in
+        ops/2026-10-07_brain-use-issues.md): a job whose process died in a bridge restart has no
+        `_wait` left to record its end, so it stayed "running" on the board for days and its tile
+        could not be closed. On read, a record with no end and a dead pid gets ended=now, rc=None
+        and lost=True, written back once. A process of this bridge that just exited is still a
+        zombie until `_wait` reaps it, so it reads alive; `_wait` overwrites a lost mark anyway."""
+        with self.lock:
+            items = self._load()
+            now, changed = int(time.time()), False
+            for r in items:
+                if r.get("ended") is None and not self._alive(r.get("pid"), r.get("started")):
+                    r["ended"], r["rc"], r["lost"] = now, None, True
+                    changed = True
+            if changed:
+                try:
+                    self._save(items)
+                except OSError:
+                    pass
+        return items
+
     def list(self, n: int = 30) -> list:
-        items = self._load()
+        items = self._reap()
         return [self._fill(r) for r in list(reversed(items))[:n]]
 
     def running_by_thread(self) -> dict:
@@ -529,7 +551,7 @@ class Jobs:
         threads; a record whose process is gone (the bridge restarted mid-job) does not count.
         Oldest first within a thread: {thread: [{"id", "title", "started"}]}."""
         out: dict = {}
-        for r in self._load():
+        for r in self._reap():
             if r.get("ended") is not None:
                 continue
             r = self._fill(r)
@@ -540,19 +562,34 @@ class Jobs:
         return out
 
     @staticmethod
-    def _alive(pid) -> bool:
+    def _alive(pid, started=None) -> bool:
         try:
             os.kill(int(pid), 0)
         except PermissionError:
-            return True       # the hands user's process: there, just not ours to signal
+            pass              # the hands user's process: there, just not ours to signal
         except (ProcessLookupError, TypeError, ValueError):
             return False
         except OSError:
             return True
+        # a pid the kernel handed to another process after a restart: it started after the job did
+        t0 = Jobs._proc_start(int(pid))
+        if started and t0 is not None and t0 > float(started) + 30:
+            return False
         return True
 
+    @staticmethod
+    def _proc_start(pid: int) -> float | None:
+        """When a process started, epoch seconds, from /proc (Linux); None where it cannot be read."""
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            ticks = int(stat.rsplit(")", 1)[1].split()[19])      # field 22, starttime
+            btime = next(int(ln.split()[1]) for ln in Path("/proc/stat").read_text().splitlines() if ln.startswith("btime "))
+            return btime + ticks / os.sysconf("SC_CLK_TCK")
+        except Exception:  # noqa: BLE001
+            return None
+
     def get(self, jid: str, tail_bytes: int = 4000) -> dict | None:
-        for r in self._load():
+        for r in self._reap():
             if r["id"] == jid:
                 out = self._fill(dict(r))
                 try:
@@ -646,9 +683,42 @@ def read_body(handler, limit: int) -> bytes | None:
     return None
 
 
+class RecentSends:
+    """One press, one message, on the bridge's side too (2026-10-22, issue 8 in
+    ops/2026-10-07_brain-use-issues.md): the same key seen again within `window` seconds is a
+    duplicate. `seen(key)` records the key and returns the age of an earlier copy, else None."""
+
+    def __init__(self, window: float = 60.0, clock=time.time):
+        self.window, self.clock = window, clock
+        self.lock = threading.Lock()
+        self.at: dict = {}
+
+    def seen(self, key) -> float | None:
+        now = self.clock()
+        with self.lock:
+            self.at = {k: t for k, t in self.at.items() if now - t < self.window}
+            t = self.at.get(key)
+            if t is not None:
+                return now - t
+            self.at[key] = now
+            return None
+
+    def forget(self, key) -> None:
+        """A copy that was not taken (busy, idle, refused) leaves no mark: the page's own retry of the
+        same text through the other door must go through."""
+        with self.lock:
+            self.at.pop(key, None)
+
+
 class Uploads:
-    def __init__(self, in_dir: Path):
+    def __init__(self, in_dir: Path, window: float = 60.0, clock=time.time):
         self.dir = in_dir
+        # (name, size, sha256) -> path: the same file sent again within the window is not saved again;
+        # the answer names the copy already on the box, so the message that follows is identical
+        # and RecentSends drops it (2026-10-22: New Recording 116-1-2-3-4.m4a)
+        self.recent = RecentSends(window, clock)
+        self.paths: dict = {}
+        self.lock = threading.Lock()   # two presses upload at once: the second waits and finds the first
 
     @staticmethod
     def _safe_name(name: str) -> str:
@@ -675,25 +745,33 @@ class Uploads:
             # the reasoner made today's folder closed to the bridge (hbar 2026-10-04); say so, do not die
             return {"error": f"today's folder {dest_dir} was made by the reasoner closed to the bridge; ask it: chmod g+w {dest_dir}; the fixups and umask rules prevent this from now on"}
         saved = []
-        for part in msg.iter_parts():
-            fn = part.get_filename()
-            if not fn:
-                continue
-            data = part.get_payload(decode=True) or b""
-            name = self._safe_name(fn)
-            dest = dest_dir / name
-            i = 1
-            while dest.exists():
-                dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
-            try:
-                dest.write_bytes(data)
-            except PermissionError:
-                return {"error": f"could not write into {dest_dir}: closed to the bridge"}
-            try:
-                os.chmod(dest, 0o664)
-            except OSError:
-                pass
-            saved.append({"name": dest.name, "path": str(dest), "size": len(data)})
+        with self.lock:
+            for part in msg.iter_parts():
+                fn = part.get_filename()
+                if not fn:
+                    continue
+                data = part.get_payload(decode=True) or b""
+                name = self._safe_name(fn)
+                fp = (name, len(data), hashlib.sha256(data).hexdigest())
+                prev = self.paths.get(fp)
+                if self.recent.seen(fp) is not None and prev and Path(prev).is_file() and Path(prev).stat().st_size == len(data):
+                    saved.append({"name": Path(prev).name, "path": prev, "size": len(data), "duplicate": True})
+                    continue
+                dest = dest_dir / name
+                i = 1
+                while dest.exists():
+                    dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
+                try:
+                    dest.write_bytes(data)
+                except PermissionError:
+                    return {"error": f"could not write into {dest_dir}: closed to the bridge"}
+                try:
+                    os.chmod(dest, 0o664)
+                except OSError:
+                    pass
+                self.paths = {k: v for k, v in self.paths.items() if k in self.recent.at}
+                self.paths[fp] = str(dest)
+                saved.append({"name": dest.name, "path": str(dest), "size": len(data)})
         if not saved:
             return {"error": "no file in the upload"}
         return {"ok": True, "files": saved}
@@ -1103,7 +1181,7 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
         key = f"job:{j.get('id')}"
         if key in dismissed:
             continue
-        failed = ended is not None and (j.get("rc") or 0) != 0
+        failed = ended is not None and ((j.get("rc") or 0) != 0 or bool(j.get("lost")))   # lost: closeable
         if ended is not None and not failed and now - float(ended) > horizon_s:
             continue
         if failed and now - float(ended) > 7 * 86400:
@@ -1114,7 +1192,8 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
                       "state": "answering" if ended is None else ("failed" if failed else "done"), "word": "running" if ended is None else None,
                       "started": iso(started) if started else None, "elapsed_s": int((float(ended) if ended is not None else now) - started) if started else 0,
                       "ago_s": int(now - float(ended)) if ended is not None else None, "steps": 0, "agents": 0,
-                      "last": (tail[-1][:180] if tail else ("exit %s" % j.get("rc") if ended is not None else "started")),
+                      "last": ("its process ended with a bridge restart; no exit code" if j.get("lost") else
+                               (tail[-1][:180] if tail else ("exit %s" % j.get("rc") if ended is not None else "started"))),
                       "cards": [], "links": [{"label": "log", "href": "/files?path=" + str(j.get("log") or ""), "kind": "file"}] if j.get("log") else [],
                       "tok": 0, "cost": None, "turns": 0, "href": "/files?path=" + str(j.get("log") or "") if j.get("log") else None})
     for pm in pending:

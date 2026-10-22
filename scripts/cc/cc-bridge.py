@@ -439,6 +439,18 @@ def _job_thread(run_id: str | None) -> str | None:
     r = RUNS.get(run_id or "") if "RUNS" in globals() else None
     return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
+# The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
+# issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
+SENT = cc_extras.RecentSends(60)
+
+
+def _duplicate(thread: str | None, message: str) -> dict | None:
+    age = SENT.seen((thread or "", message))
+    if age is None:
+        return None
+    print(f"duplicate dropped thread={(thread or 'new')[:8]} age={age:.1f}s", flush=True)
+    return {"duplicate": True, "thread": thread, "queue": _queue_view(thread) if thread else [],
+            "reply": f"Already sent {age:.0f} s ago; this copy was dropped."}
 # What a brain app makes (files.save, 2026-10-22) lands on the desk beside the reasoner's outputs.
 APP_OUTPUTS = cc_extras.Uploads(OUT_DIR)
 APP_SAVE_MAX = 60 * 1024 * 1024
@@ -4236,7 +4248,10 @@ class Handler(BaseHTTPRequestHandler):
             if not t or not m:
                 self._send(400, {"error": "thread and message needed"})
                 return
-            code, pl = _queue_add(t, m)
+            dup = _duplicate(t, m)
+            code, pl = (202, dup) if dup else _queue_add(t, m)
+            if code >= 300:
+                SENT.forget((t, m))
             self._send(code, pl)
             return
         if route == "/queue/cancel":
@@ -4500,7 +4515,13 @@ class Handler(BaseHTTPRequestHandler):
         if seat is not None and seat not in REASONERS:
             self._send(400, {"error": "reasoner must be claude or codex"})
             return
+        dup = _duplicate(str(req.get("thread") or "").strip() or None, message)
+        if dup:
+            self._send(202, dup)
+            return
         status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True, reasoner=seat)
+        if status >= 300:
+            SENT.forget((str(req.get("thread") or "").strip(), message))
         if status != 200 or not stream:
             self._send(status, payload)
 
