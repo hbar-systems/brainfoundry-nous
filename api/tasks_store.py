@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -80,6 +81,11 @@ def complete(task_id: str, done: bool = True) -> bool:
         for t in tasks:
             if t.get("id") == task_id:
                 t["done"] = done
+                # When it was finished (2026-10-22, for the weekly review); cleared when reopened.
+                if done:
+                    t["done_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                else:
+                    t.pop("done_at", None)
                 hit = True
         if hit:
             _save(tasks)
