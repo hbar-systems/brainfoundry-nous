@@ -26,6 +26,20 @@ import { APP_SANDBOX } from '../../lib/appLane'
 //
 // Created: 2026-05-08
 
+// The skin tokens an app may read (meta.theme, and the bf.theme push when the skin changes).
+const THEME_TOKENS = ['--bg', '--surface', '--surface2', '--text', '--text-dim', '--muted', '--accent',
+  '--border', '--user-bg', '--user-text', '--assistant-bg', '--assistant-text', '--code-bg', '--code-fg',
+  '--font-body', '--font-display', '--font-mono']
+
+function readTheme() {
+  if (typeof window === 'undefined') return { tokens: {} }
+  const root = document.documentElement
+  const cs = getComputedStyle(root)
+  const tokens = {}
+  for (const t of THEME_TOKENS) { const v = cs.getPropertyValue(t).trim(); if (v) tokens[t] = v }
+  return { tokens, theme: root.dataset.theme || null, font: root.dataset.font || null }
+}
+
 export default function AppHost() {
   const router = useRouter()
   const { id } = router.query
@@ -62,6 +76,8 @@ export default function AppHost() {
       fetch: (...a) => window.fetch(...a),
       ls,
       brainName: process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain',
+      theme: readTheme,
+      navigate: (route) => router.push(route),
     })
     return { bridge, seed: seedName(bridge.store) }
   }, [appInfo])
@@ -85,7 +101,28 @@ export default function AppHost() {
     }
 
     window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
+
+    // Skin changes (Settings, the layout file) reach the app as a bf.theme message.
+    let last = ''
+    const pushTheme = () => {
+      const t = readTheme()
+      const s = JSON.stringify(t)
+      if (s === last) return
+      last = s
+      const frame = iframeRef.current && iframeRef.current.contentWindow
+      try { if (frame) frame.postMessage({ type: 'bf.theme', ...t }, '*') } catch (_) { /* frame gone */ }
+    }
+    const obs = new MutationObserver(pushTheme)
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-font', 'style'] })
+    const el = iframeRef.current
+    const onLoad = () => { last = ''; pushTheme() }
+    if (el) el.addEventListener('load', onLoad)
+
+    return () => {
+      window.removeEventListener('message', onMessage)
+      obs.disconnect()
+      if (el) el.removeEventListener('load', onLoad)
+    }
   }, [lane])
 
   if (error) {

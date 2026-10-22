@@ -1,35 +1,45 @@
 {
   "dialect": "brain-apps-defaults/v1",
-  "comment": "COMPATIBILITY ALIAS since 2026-09-13 (unreleased 0.10.0): the shelf now lives in packs/base.json (this list plus oracle). load_pack('base') reads packs/base.json first and falls back to this file only when packs/base.json is absent (an older checkout). Edit packs/base.json, not this file. Original contract unchanged: pre-installed on first run only (install-if-absent); NEVER clobbers a populated installed.json; see seed_default_apps() in api/apps.py and project_rsync_installed_json_hazard.",
+  "comment": "COMPATIBILITY ALIAS since 2026-09-13 (unreleased 0.10.0): the shelf now lives in packs/base.json (kept equal to packs/base.json; updated 2026-10-22). load_pack('base') reads packs/base.json first and falls back to this file only when packs/base.json is absent (an older checkout). Edit packs/base.json, not this file. Original contract unchanged: pre-installed on first run only (install-if-absent); NEVER clobbers a populated installed.json; see seed_default_apps() in api/apps.py and project_rsync_installed_json_hazard.",
   "apps": [
-    {
-      "id": "daybook",
-      "repo_url": "https://github.com/hbar-systems/brain-app-daybook",
-      "ref": "HEAD"
-    },
     {
       "id": "thread-consolidator",
       "repo_url": "https://github.com/hbar-systems/brain-app-thread-consolidator",
       "ref": "HEAD"
     },
     {
-      "id": "self-portrait",
-      "repo_url": "https://github.com/hbar-systems/brain-app-self-portrait",
+      "id": "daybook",
+      "repo_url": "https://github.com/hbar-systems/brain-app-daybook",
       "ref": "HEAD"
     },
     {
-      "id": "hbar-ink",
-      "repo_url": "https://github.com/hbar-systems/hbar.ink",
+      "id": "mirror",
+      "repo_url": "https://github.com/hbar-systems/hbar-mirror-app",
       "ref": "HEAD"
     },
     {
-      "id": "poker-journal",
-      "repo_url": "https://github.com/hbar-systems/hbar-poker-journal",
+      "id": "toolbox",
+      "repo_url": "https://github.com/hbar-systems/brain-app-toolbox",
       "ref": "HEAD"
     },
     {
-      "id": "quantum-room",
-      "repo_url": "https://github.com/hbar-systems/hbar-university-quantum-room",
+      "id": "clip",
+      "repo_url": "https://github.com/hbar-systems/brain-app-clip",
+      "ref": "HEAD"
+    },
+    {
+      "id": "today",
+      "repo_url": "https://github.com/hbar-systems/brain-app-today",
+      "ref": "HEAD"
+    },
+    {
+      "id": "people",
+      "repo_url": "https://github.com/hbar-systems/brain-app-people",
+      "ref": "HEAD"
+    },
+    {
+      "id": "weekly-review",
+      "repo_url": "https://github.com/hbar-systems/brain-app-weekly-review",
       "ref": "HEAD"
     }
   ]

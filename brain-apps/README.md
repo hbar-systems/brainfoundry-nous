@@ -44,6 +44,17 @@ enforcement at the brain API is the durable gate.
 | `memory.write` | `memory.write` + `requires_layers` | `{ layer, content, source?, metadata?, privacy? }` | `{ id, doc_name, privacy }` |
 | `llm.complete` | `llm.invoke` + `requires_layers` | `{ messages: [{role, content}, ...] }` | `{ text, model, sources: [...] }` |
 | `storage.set` / `storage.remove` / `storage.clear` | — (the app's own store only) | `{ key, value }` / `{ key }` / `{}` | `{ saved: true }`; sent for you by the `localStorage` shim |
+| `meta.theme` | — | — | `{ tokens, theme, font }`: the console skin; the host also posts `bf.theme` on change (2026-10-22) |
+| `ui.open` | — | `{ route }` | opens `/files`, `/tasks`, `/chat`, `/cc`, `/graph`, `/upload` or `/apps/<id>` (optional `?query`); nothing else |
+| `memory.search` | `memory.read` + read layers | `{ query, limit? }` (limit at most 20) | `{ results: [{ content, document_name, similarity, metadata }] }`, declared read layers, open view only |
+| `tasks.list` / `tasks.add` / `tasks.complete` | `tasks.read` / `tasks.write` | `{ include_done? }` / `{ text, due? }` / `{ id, done? }` | `{ tasks }` / `{ task }` (source `app:<id>`) / `{ ok }` |
+| `calendar.upcoming` | `calendar.read` | `{ max_results? }` | `{ source, events, trust: 'untrusted' }` (`GET /integrations/calendar/events`) |
+| `email.recent` | `email.read` | `{ query?, max_results?, unread_only? }` | `{ source, messages, trust: 'untrusted' }` (`GET /integrations/email/messages`) |
+| `web.fetch` | `network.outbound` | `{ url }` | `{ url, title, text, trust: 'untrusted' }` through the guarded fetch_url (`POST /tools/fetch-url`) |
+| `files.save` | `files.write` | `{ name, text }` or `{ name, base64, mime? }` | `{ path, route }` in the Files desk (`out/<date>/`, CC bridge `POST /files/save`); `no_files_door` without CC |
+| `audio.transcribe` | `audio.transcribe` | `{ base64, mime?, name? }` | `{ text }` through the CC bridge's speech door; `no_speech_door` when not set up |
+
+The base shelf (2026-10-22) builds on these through one design kit, `brain-app-kit` (a sibling repo; each app vendors `kit/`).
 
 ### `llm.complete`
 
@@ -120,8 +131,11 @@ A pack is a domain bundle: brain-apps plus tool ids, governance `.md` files,
 and an optional compute spoke. Files live at `packs/<name>.json`, validated
 against `api/schemas/brain-pack.schema.json`, each with its own `version`.
 
-- `packs/base.json` is what every instance ships with: the former
-  `defaults.json` shelf plus oracle. Always installed. `defaults.json` stays as
+- `packs/base.json` is what every instance ships with: since 2026-10-22
+  thread-consolidator, daybook, mirror, toolbox, clip, today, people,
+  weekly-review. The former showcase apps are opt-in packs: `writing`
+  (hbar-ink), `self` (self-portrait, oracle), `play` (poker-journal,
+  quantum-room). Always installed. `defaults.json` stays as
   a compatibility alias and is read as base only when `packs/base.json` is
   absent.
 - First run: `seed_default_apps()` reads `BRAIN_PACKS` (comma list, default

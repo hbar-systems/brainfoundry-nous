@@ -44,8 +44,31 @@
 //                        app id (2026-10-16). Sent by the shim (ui/lib/appLane.js);
 //                        no permission, the app reaches only its own store.
 //
+// Added 2026-10-22 for the base shelf (toolbox, clip, today, people, weekly-review). Each is gated
+// by one manifest permission; the host calls the brain with the owner key, the iframe sees only the
+// result. External content (pages, mail, calendar) comes back marked trust: 'untrusted'.
+//   meta.theme        -> { tokens: { '--bg': ..., ... }, theme, font }  (no permission). The host
+//                        also posts { type: 'bf.theme', tokens, ... } to the frame when the skin changes.
+//   ui.open           -> { route }  opens a console screen (/files, /tasks, /chat, /cc, /graph,
+//                        /upload, /apps/<id>, with an optional ?query). No permission; no other URL.
+//   memory.search     -> { query, limit? (<=20) }  permission 'memory.read'; searches only the
+//                        read-mode layers in requires_layers, open view only (never local-only).
+//                        result -> { results: [{ content, document_name, similarity, metadata }] }
+//   tasks.list        -> { include_done? }  permission 'tasks.read'. result -> { tasks: [...] }
+//   tasks.add         -> { text, due? }     permission 'tasks.write'. result -> { task }
+//   tasks.complete    -> { id, done? }      permission 'tasks.write'. result -> { ok }
+//   calendar.upcoming -> { max_results? }   permission 'calendar.read'. result -> { source, events, trust }
+//   email.recent      -> { query?, max_results?, unread_only? }  permission 'email.read'.
+//                        result -> { source, messages, trust }
+//   web.fetch         -> { url }  permission 'network.outbound'; the brain's guarded fetch_url
+//                        (http/https, no private addresses). result -> { url, title, text, trust }
+//   files.save        -> { name, text } or { name, base64, mime? }  permission 'files.write'; lands
+//                        in the owner's Files desk (out/<date>/), through the CC bridge.
+//                        result -> { path, route }; error 'no_files_door' on a brain without CC.
+//   audio.transcribe  -> { base64, mime?, name? }  permission 'audio.transcribe'; the CC bridge's
+//                        speech door. result -> { text }; error 'no_speech_door' when it is not set up.
+//
 // Reserved-but-unimplemented intents (will land when first app needs them):
-//   memory.read       -> { layer, query, limit? }   (must use the open view)
 //   federation.query  -> { peer, path, body? }
 //   federation.send   -> { peer, message }
 
@@ -100,7 +123,17 @@ function acceptMessage(event, frameWindow) {
   return true
 }
 
-function makeBridge({ appInfo, fetch, ls, brainName }) {
+// Console screens an app may open (ui.open). Anything else is refused.
+const OPEN_ROUTE_RE = /^\/(files|tasks|chat|cc|graph|upload|apps\/[a-z0-9][a-z0-9-]{1,62}[a-z0-9])(\?[^#\s]{0,1000})?$/
+
+function b64ToBlob(b64, mime) {
+  const bin = atob(String(b64))
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new Blob([bytes], { type: mime || 'application/octet-stream' })
+}
+
+function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
   const store = loadStore(appInfo.id, ls)
   function saveStore() {
     const s = JSON.stringify(store)
@@ -250,10 +283,121 @@ function makeBridge({ appInfo, fetch, ls, brainName }) {
         .catch(e => ({ ok: false, error: { code: 'llm_complete_network_error', detail: String(e) } }))
     }
 
+    // ---- the base-shelf intents (2026-10-22) ----
+    const perms = appInfo.permissions || []
+    const denied = (p) => Promise.resolve({ ok: false, error: { code: 'permission_denied', detail: `app did not declare ${p}` } })
+    // One call to the brain (or the CC bridge) with the owner's authority; the reply carries only `pick(body)`.
+    const call = (url, init, code, pick) => fetch(url, init)
+      .then(r => r.json().catch(() => ({})).then(body => ({ status: r.status, ok: r.ok, body })))
+      .then(({ status, ok, body }) => ok
+        ? { ok: true, result: pick(body) }
+        : { ok: false, error: { code, status, detail: (body && (body.detail || body.error)) || `HTTP ${status}` } })
+      .catch(e => ({ ok: false, error: { code: code + '_network_error', detail: String(e) } }))
+    const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const clampInt = (v, lo, hi, d) => (Number.isInteger(v) ? Math.max(lo, Math.min(hi, v)) : d)
+
+    if (type === 'meta.theme') {
+      const t = typeof theme === 'function' ? theme() : null
+      return Promise.resolve({ ok: true, result: t || { tokens: {} } })
+    }
+    if (type === 'ui.open') {
+      const route = String(payload.route || '')
+      if (!OPEN_ROUTE_RE.test(route)) return Promise.resolve({ ok: false, error: { code: 'route_not_allowed', detail: route } })
+      if (typeof navigate !== 'function') return Promise.resolve({ ok: false, error: { code: 'no_navigation' } })
+      navigate(route)
+      return Promise.resolve({ ok: true, result: { route } })
+    }
+    if (type === 'memory.search') {
+      if (!perms.includes('memory.read')) return denied('memory.read')
+      const query = String(payload.query || '').trim()
+      if (!query) return Promise.resolve({ ok: false, error: { code: 'missing_query' } })
+      const layers = [...new Set((appInfo.requires_layers || []).filter(l => l.mode === 'read').map(l => l.layer))]
+      if (!layers.length) return Promise.resolve({ ok: false, error: { code: 'layer_not_declared', detail: 'app declared no read layer' } })
+      // Fixed fields only: an app cannot ask for include_local_only.
+      return call('/api/bf/documents/search', json('POST', { query, limit: clampInt(payload.limit, 1, 20, 8), layers }),
+        'memory_search_failed', b => ({
+          results: (b.results || []).map(x => ({
+            content: x.content, document_name: x.document_name, similarity: x.similarity, metadata: x.metadata || {},
+          })),
+        }))
+    }
+    if (type === 'tasks.list') {
+      if (!perms.includes('tasks.read')) return denied('tasks.read')
+      return call(`/api/bf/tasks${payload.include_done ? '?include_done=true' : ''}`, { method: 'GET' },
+        'tasks_failed', b => ({ tasks: b.tasks || [] }))
+    }
+    if (type === 'tasks.add') {
+      if (!perms.includes('tasks.write')) return denied('tasks.write')
+      const text = String(payload.text || '').trim()
+      if (!text) return Promise.resolve({ ok: false, error: { code: 'missing_text' } })
+      return call('/api/bf/tasks', json('POST', { text, due: payload.due || null, source: `app:${appInfo.id}` }),
+        'tasks_failed', b => ({ task: b.task }))
+    }
+    if (type === 'tasks.complete') {
+      if (!perms.includes('tasks.write')) return denied('tasks.write')
+      const id = String(payload.id || '')
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) return Promise.resolve({ ok: false, error: { code: 'bad_id' } })
+      return call(`/api/bf/tasks/${id}/complete?done=${payload.done === false ? 'false' : 'true'}`, { method: 'POST' },
+        'tasks_failed', b => ({ ok: !!b.ok }))
+    }
+    if (type === 'calendar.upcoming') {
+      if (!perms.includes('calendar.read')) return denied('calendar.read')
+      return call(`/api/bf/integrations/calendar/events?max_results=${clampInt(payload.max_results, 1, 50, 15)}`, { method: 'GET' },
+        'calendar_failed', b => ({ source: b.source || null, events: b.events || [], trust: 'untrusted' }))
+    }
+    if (type === 'email.recent') {
+      if (!perms.includes('email.read')) return denied('email.read')
+      const q = new URLSearchParams({ max_results: String(clampInt(payload.max_results, 1, 50, 15)) })
+      if (payload.query) q.set('query', String(payload.query).slice(0, 200))
+      if (payload.unread_only) q.set('unread_only', 'true')
+      return call(`/api/bf/integrations/email/messages?${q}`, { method: 'GET' },
+        'email_failed', b => ({ source: b.source || null, messages: b.messages || [], trust: 'untrusted' }))
+    }
+    if (type === 'web.fetch') {
+      if (!perms.includes('network.outbound')) return denied('network.outbound')
+      const url = String(payload.url || '').trim()
+      if (!/^https?:\/\//i.test(url)) return Promise.resolve({ ok: false, error: { code: 'bad_url' } })
+      return call('/api/bf/tools/fetch-url', json('POST', { url }),
+        'fetch_failed', b => ({ url: b.url, title: b.title || '', text: b.text || '', trust: 'untrusted' }))
+    }
+    if (type === 'files.save') {
+      if (!perms.includes('files.write')) return denied('files.write')
+      const name = String(payload.name || '').trim()
+      if (!name) return Promise.resolve({ ok: false, error: { code: 'missing_name' } })
+      const body = { name, app: appInfo.id }
+      if (typeof payload.base64 === 'string') { body.base64 = payload.base64; body.mime = String(payload.mime || '') }
+      else body.text = String(payload.text == null ? '' : payload.text)
+      return fetch('/cc/files/save', json('POST', body))
+        .then(r => r.json().catch(() => ({})).then(b => ({ status: r.status, ok: r.ok, b })))
+        .then(({ status, ok, b }) => {
+          if (status === 404 || status === 502) return { ok: false, error: { code: 'no_files_door', detail: 'this brain has no Files desk (CC is not installed)' } }
+          if (!ok || !b.ok) return { ok: false, error: { code: 'files_save_failed', status, detail: b.error || `HTTP ${status}` } }
+          return { ok: true, result: { path: b.path, route: `/files?path=${encodeURIComponent(b.path)}` } }
+        })
+        .catch(e => ({ ok: false, error: { code: 'no_files_door', detail: String(e) } }))
+    }
+    if (type === 'audio.transcribe') {
+      if (!perms.includes('audio.transcribe')) return denied('audio.transcribe')
+      if (typeof payload.base64 !== 'string' || !payload.base64) return Promise.resolve({ ok: false, error: { code: 'missing_audio' } })
+      let fd
+      try {
+        fd = new FormData()
+        fd.append('file', b64ToBlob(payload.base64, payload.mime), String(payload.name || 'audio.webm'))
+      } catch (e) { return Promise.resolve({ ok: false, error: { code: 'bad_audio', detail: String(e) } }) }
+      return fetch('/cc/transcribe', { method: 'POST', body: fd })
+        .then(r => r.json().catch(() => ({})).then(b => ({ status: r.status, ok: r.ok, b })))
+        .then(({ status, ok, b }) => {
+          if (status === 404 || status === 409) return { ok: false, error: { code: 'no_speech_door', detail: b.error || 'transcription is not set up on this brain' } }
+          if (!ok || !b.ok) return { ok: false, error: { code: 'transcribe_failed', status, detail: b.error || `HTTP ${status}` } }
+          return { ok: true, result: { text: b.text || '' } }
+        })
+        .catch(e => ({ ok: false, error: { code: 'transcribe_network_error', detail: String(e) } }))
+    }
+
     return Promise.resolve({ ok: false, error: { code: 'unknown_intent', type } })
   }
 
   return { handleIntent, store }
 }
 
-module.exports = { makeBridge, acceptMessage, seedName, loadStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_MAX_CHARS }
+module.exports = { makeBridge, OPEN_ROUTE_RE, acceptMessage, seedName, loadStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_MAX_CHARS }

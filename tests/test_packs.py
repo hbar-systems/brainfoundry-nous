@@ -62,19 +62,27 @@ def _fake_install(monkeypatch, fail=()):
 
 # ── the shipped base pack ──────────────────────────────────────────────────
 
-def test_shipped_base_pack_is_valid_and_is_defaults_plus_oracle():
+def test_shipped_base_pack_is_valid_and_is_the_base_shelf():
+    # 2026-10-22: the base shelf is three memory apps plus five everyday tools; the showcase apps
+    # moved to opt-in packs (writing, self, play). defaults.json (the alias) stays equal to base.
     base = json.load(open(os.path.join(ROOT, "brain-apps", "packs", "base.json")))
     apps._validate_pack(base, "base")  # raises on schema failure
-    defaults = json.load(open(os.path.join(ROOT, "brain-apps", "defaults.json")))
-    default_ids = [a["id"] for a in defaults["apps"]]
     base_ids = [a["id"] for a in base["apps"]]
-    assert base_ids[: len(default_ids)] == default_ids
-    assert base_ids[len(default_ids):] == ["oracle"]
-    oracle = next(a for a in base["apps"] if a["id"] == "oracle")
-    assert oracle["repo_url"] == "https://github.com/hbar-systems/brain-app-oracle"
+    assert base_ids == ["thread-consolidator", "daybook", "mirror",
+                        "toolbox", "clip", "today", "people", "weekly-review"]
+    defaults = json.load(open(os.path.join(ROOT, "brain-apps", "defaults.json")))
+    assert [a["id"] for a in defaults["apps"]] == base_ids
+
+
+def test_opt_in_packs_hold_the_former_showcase_apps():
+    want = {"writing": ["hbar-ink"], "self": ["self-portrait", "oracle"], "play": ["poker-journal", "quantum-room"]}
+    for name, ids in want.items():
+        pack = json.load(open(os.path.join(ROOT, "brain-apps", "packs", f"{name}.json")))
+        apps._validate_pack(pack, name)
+        assert pack["requires"] == ["base"]
+        assert [a["id"] for a in pack["apps"]] == ids
+    oracle = next(a for a in json.load(open(os.path.join(ROOT, "brain-apps", "packs", "self.json")))["apps"] if a["id"] == "oracle")
     assert oracle["ref"] == "v0.1.0"
-    assert base["requires"] == []
-    assert base["compute"] is None
 
 
 # ── loader + alias ─────────────────────────────────────────────────────────

@@ -1,0 +1,24 @@
+{
+  "dialect": "brain-apps-pack/v1",
+  "name": "self",
+  "version": "0.1.0",
+  "description": "Opt-in: self-knowledge apps. Self-portrait (nine choices, the brain reads how your mind works) and oracle. Moved out of the base shelf on 2026-10-22.",
+  "requires": [
+    "base"
+  ],
+  "apps": [
+    {
+      "id": "self-portrait",
+      "repo_url": "https://github.com/hbar-systems/brain-app-self-portrait",
+      "ref": "HEAD"
+    },
+    {
+      "id": "oracle",
+      "repo_url": "https://github.com/hbar-systems/brain-app-oracle",
+      "ref": "v0.1.0"
+    }
+  ],
+  "tools": [],
+  "md": [],
+  "compute": null
+}

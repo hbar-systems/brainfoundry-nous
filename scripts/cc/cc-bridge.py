@@ -439,6 +439,9 @@ def _job_thread(run_id: str | None) -> str | None:
     r = RUNS.get(run_id or "") if "RUNS" in globals() else None
     return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
+# What a brain app makes (files.save, 2026-10-22) lands on the desk beside the reasoner's outputs.
+APP_OUTPUTS = cc_extras.Uploads(OUT_DIR)
+APP_SAVE_MAX = 60 * 1024 * 1024
 SYSTEM += (
     f" Files: anything you produce for the person (audio, images, video, documents, data) goes under {OUT_DIR}/<date>/ "
     f"with a clear name, and you end the answer with <pane>/files?path=<that folder or file></pane> so they see and hear it "
@@ -4095,6 +4098,34 @@ class Handler(BaseHTTPRequestHandler):
             d = FILES.write(str(body.get("path") or ""), str(body.get("text") if body.get("text") is not None else ""),
                             body.get("mtime") if isinstance(body.get("mtime"), int) else None)
             self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
+            return
+        if route == "/files/save":
+            # A brain app's result (2026-10-22, the base shelf: Toolbox and friends). The console's
+            # app host sends it after checking the app declared files.write; it lands in out/<date>/
+            # under a safe name, never over an existing file. Text, or base64 bytes.
+            body = self._json(limit=APP_SAVE_MAX * 4 // 3 + 8192)
+            if not body:
+                self._send(413, {"ok": False, "error": "nothing to save, or larger than 60 MB"})
+                return
+            name = str(body.get("name") or "").strip()
+            if not name:
+                self._send(400, {"ok": False, "error": "a file name is needed"})
+                return
+            try:
+                if isinstance(body.get("base64"), str):
+                    import base64 as _b64
+                    data = _b64.b64decode(body["base64"], validate=False)
+                else:
+                    data = str(body.get("text") if body.get("text") is not None else "").encode("utf-8")
+                if len(data) > APP_SAVE_MAX:
+                    self._send(413, {"ok": False, "error": "larger than 60 MB"})
+                    return
+                path = APP_OUTPUTS.save_bytes(name, data)
+            except Exception as e:  # noqa: BLE001
+                self._send(400, {"ok": False, "error": f"could not save: {type(e).__name__}"})
+                return
+            print(f"files/save from app {str(body.get('app') or '?')[:64]}: {path}", flush=True)
+            self._send(200, {"ok": True, "path": path, "size": len(data)})
             return
         if route == "/upload":
             try:

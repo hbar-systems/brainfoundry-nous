@@ -1022,6 +1022,67 @@ def calendar_status(api_key: str = Depends(get_api_key)):
     return calendar_ics.status()
 
 
+# ── Structured reads for brain-apps (2026-10-22) ────────────────────────────
+# The base shelf (Today, Weekly review, Clip) reads calendar, mail and pages as data, not as a
+# reasoner's tool output. Owner key only: an app reaches these through the console bridge
+# (ui/lib/appBridge.js calendar.upcoming / email.recent / web.fetch), gated by the permission the
+# owner approved at install. Everything here is written by strangers: replies say trust "untrusted",
+# and an app that hands it to a model wraps it as reference data.
+
+@app.get("/integrations/calendar/events")
+async def calendar_events(max_results: int = 15, api_key: str = Depends(get_api_key)):
+    from api.integrations import calendar_ics, google
+    n = max(1, min(int(max_results), 50))
+    if calendar_ics.is_configured():
+        source, getter = "ics", calendar_ics.list_events
+    elif google.is_configured() and google.is_connected():
+        source, getter = "google-calendar", google.list_events
+    else:
+        return {"source": None, "events": [], "connected": False, "trust": "untrusted"}
+    try:
+        events = await getter(max_results=n)
+    except Exception as e:
+        raise HTTPException(502, f"calendar read failed: {type(e).__name__}")
+    return {"source": source, "events": events or [], "connected": True, "trust": "untrusted"}
+
+
+@app.get("/integrations/email/messages")
+async def email_messages(query: str = "", max_results: int = 15, unread_only: bool = False,
+                         api_key: str = Depends(get_api_key)):
+    from api.integrations import email_imap, google
+    n = max(1, min(int(max_results), 50))
+    try:
+        if email_imap.is_configured():
+            source = "imap"
+            msgs = await email_imap.list_messages(query=query[:200], max_results=n, unread_only=unread_only)
+        elif google.is_configured() and google.is_connected():
+            source = "gmail"
+            q = query[:200] + (" is:unread" if unread_only else "")
+            msgs = await google.list_messages(query=q.strip(), max_results=n)
+        else:
+            return {"source": None, "messages": [], "connected": False, "trust": "untrusted"}
+    except Exception as e:
+        raise HTTPException(502, f"email read failed: {type(e).__name__}")
+    return {"source": source, "messages": msgs or [], "connected": True, "trust": "untrusted"}
+
+
+class FetchUrlRequest(BaseModel):
+    url: str = ""
+
+
+@app.post("/tools/fetch-url")
+async def tools_fetch_url(req: FetchUrlRequest, api_key: str = Depends(get_api_key)):
+    """One page's readable text through the guarded fetch_url tool (http/https only, private
+    addresses and redirects into them refused). Not a tool dispatch: no model is involved."""
+    from api.tools import fetch_url as _fetch
+    res = await _fetch.run(url=(req.url or "").strip())
+    if not res.ok:
+        raise HTTPException(400, res.error or "fetch failed")
+    meta = res.meta or {}
+    return {"url": meta.get("url"), "title": meta.get("title") or "", "text": meta.get("text") or "",
+            "chars": meta.get("chars", 0), "trust": "untrusted"}
+
+
 @app.post("/integrations/calendar/ics")
 async def calendar_set_ics(req: SetCalendarIcsRequest, api_key: str = Depends(get_api_key)):
     """Save a calendar ICS feed URL and verify it parses. No OAuth."""

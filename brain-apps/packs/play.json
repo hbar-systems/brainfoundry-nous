@@ -1,0 +1,24 @@
+{
+  "dialect": "brain-apps-pack/v1",
+  "name": "play",
+  "version": "0.1.0",
+  "description": "Opt-in: showcase and delight. Poker journal and trainer, and the quantum room. Moved out of the base shelf on 2026-10-22.",
+  "requires": [
+    "base"
+  ],
+  "apps": [
+    {
+      "id": "poker-journal",
+      "repo_url": "https://github.com/hbar-systems/hbar-poker-journal",
+      "ref": "HEAD"
+    },
+    {
+      "id": "quantum-room",
+      "repo_url": "https://github.com/hbar-systems/hbar-university-quantum-room",
+      "ref": "HEAD"
+    }
+  ],
+  "tools": [],
+  "md": [],
+  "compute": null
+}

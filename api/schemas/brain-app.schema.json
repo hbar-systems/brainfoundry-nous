@@ -153,7 +153,13 @@
           "federation.send",
           "federation.receive",
           "secrets.read",
-          "network.outbound"
+          "network.outbound",
+          "tasks.read",
+          "tasks.write",
+          "calendar.read",
+          "email.read",
+          "files.write",
+          "audio.transcribe"
         ]
       },
       "uniqueItems": true

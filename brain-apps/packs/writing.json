@@ -1,0 +1,19 @@
+{
+  "dialect": "brain-apps-pack/v1",
+  "name": "writing",
+  "version": "0.1.0",
+  "description": "Opt-in: hbar.ink, the writing instrument (thought drops that sync to the brain, publish pipeline). Moved out of the base shelf on 2026-10-22.",
+  "requires": [
+    "base"
+  ],
+  "apps": [
+    {
+      "id": "hbar-ink",
+      "repo_url": "https://github.com/hbar-systems/hbar.ink",
+      "ref": "HEAD"
+    }
+  ],
+  "tools": [],
+  "md": [],
+  "compute": null
+}
