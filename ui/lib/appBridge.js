@@ -57,9 +57,9 @@
 //   tasks.list        -> { include_done? }  permission 'tasks.read'. result -> { tasks: [...] }
 //   tasks.add         -> { text, due? }     permission 'tasks.write'. result -> { task }
 //   tasks.complete    -> { id, done? }      permission 'tasks.write'. result -> { ok }
-//   calendar.upcoming -> { max_results? }   permission 'calendar.read'. result -> { source, events, trust }
+//   calendar.upcoming -> { max_results? }   permission 'calendar.read'. result -> { source, connected, events, trust }
 //   email.recent      -> { query?, max_results?, unread_only? }  permission 'email.read'.
-//                        result -> { source, messages, trust }
+//                        result -> { source, connected, messages, trust }
 //   web.fetch         -> { url }  permission 'network.outbound'; the brain's guarded fetch_url
 //                        (http/https, no private addresses). result -> { url, title, text, trust }
 //   files.save        -> { name, text } or { name, base64, mime? }  permission 'files.write'; lands
@@ -343,7 +343,7 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
     if (type === 'calendar.upcoming') {
       if (!perms.includes('calendar.read')) return denied('calendar.read')
       return call(`/api/bf/integrations/calendar/events?max_results=${clampInt(payload.max_results, 1, 50, 15)}`, { method: 'GET' },
-        'calendar_failed', b => ({ source: b.source || null, events: b.events || [], trust: 'untrusted' }))
+        'calendar_failed', b => ({ source: b.source || null, connected: b.connected !== false, events: b.events || [], trust: 'untrusted' }))
     }
     if (type === 'email.recent') {
       if (!perms.includes('email.read')) return denied('email.read')
@@ -351,7 +351,7 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
       if (payload.query) q.set('query', String(payload.query).slice(0, 200))
       if (payload.unread_only) q.set('unread_only', 'true')
       return call(`/api/bf/integrations/email/messages?${q}`, { method: 'GET' },
-        'email_failed', b => ({ source: b.source || null, messages: b.messages || [], trust: 'untrusted' }))
+        'email_failed', b => ({ source: b.source || null, connected: b.connected !== false, messages: b.messages || [], trust: 'untrusted' }))
     }
     if (type === 'web.fetch') {
       if (!perms.includes('network.outbound')) return denied('network.outbound')
