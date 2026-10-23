@@ -200,6 +200,18 @@ The brain gives priority to documents in named folders during search. The folder
 
 Everything else in your corpus is searched by similarity. You can ignore the tier structure entirely — it only matters if you organize your documents into folders.
 
+### RAG context limits
+
+How much retrieved text reaches the model. Cloud models get whole documents up to a count; the local Ollama fallback has a small window, so it also gets per-document and total character caps.
+
+| Variable | Default | Applies to | What it does |
+|----------|---------|------------|--------------|
+| `RAG_MAX_DOCS_CLOUD` | `6` | Cloud models | Most documents put in the prompt (full text) |
+| `RAG_MAX_DOCS_LOCAL` | `5` | Local model | Most documents put in the prompt |
+| `RAG_PER_DOC_CHARS` | `1500` | Local model | Each document cut to this many characters |
+| `RAG_CONTEXT_CHAR_BUDGET` | `7000` | Local model | Total characters of retrieved text |
+| `RAG_MIN_SIMILARITY` | `0.0` | Both | Drop matches below this similarity; `0.0` keeps all |
+
 ### Network
 
 | Variable | Default | Description |
