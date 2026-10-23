@@ -26,7 +26,7 @@ def model_error() -> Optional[str]:
 # EMBED_SPOKE=0 turns it off with one variable. The probe (GET /api/tags) is remembered for
 # EMBED_SPOKE_PROBE_SECONDS. A vector that comes back with the wrong width, or any error,
 # falls back to in-process for that call, so a call never fails because of the spoke.
-EMBED_SPOKE_URL = os.environ.get("OLLAMA_SPOKE_URL", "").strip().rstrip("/")
+EMBED_SPOKE_URL = (os.environ.get("OLLAMA_SPOKE_URL", "").split(",")[0]).strip().rstrip("/")   # the first spoke, when several
 EMBED_SPOKE_MODEL = os.environ.get("EMBED_SPOKE_MODEL", "bge-large")
 EMBED_SPOKE_ON = os.environ.get("EMBED_SPOKE", "1").strip().lower() not in ("0", "false", "off", "no")
 EMBED_SPOKE_PROBE_SECONDS = float(os.environ.get("EMBED_SPOKE_PROBE_SECONDS", "30"))

@@ -37,7 +37,7 @@ Two profiles, split by trust rather than by topic (`profiles/*.env`):
 How it stays private:
 - The pod's only public port is SSH. Ollama listens on the pod's localhost.
 - The box reaches it through an SSH tunnel that listens on `GPU_BIND`. Set this to an address of yours, such as the box's Tailscale address, in `~/.config/gpu/config`.
-- Set the brain's `OLLAMA_SPOKE_URL=http://<GPU_BIND>:11500` once. While the pod is up, local inference goes there. When it is down, the brain falls back to its own Ollama. No restart is needed in either direction.
+- Add `http://<GPU_BIND>:11500` to the brain's `OLLAMA_SPOKE_URL` once. It is a comma list, so it sits next to any spoke you already have, such as a laptop. While the pod is up, local inference goes there. When it is down, the brain falls back to its own Ollama. No restart is needed in either direction.
 
 What it does not claim: a rented GPU is someone else's hardware. Nothing is logged by a model company, nothing is kept after `down`, and the traffic is encrypted end to end. But the host could in principle see the running pod. A machine of your own uses the same spoke setting without a pod.
 

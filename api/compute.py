@@ -141,8 +141,8 @@ def snapshot(declared: Optional[List[Dict[str, Any]]] = None, *, get: Optional[C
     if routed is None:
         from api import providers as _p
         routed = [{"role": "box", "url": clean_url(_p.OLLAMA_URL)}]
-        if _p.OLLAMA_SPOKE_URL:
-            routed.append({"role": "spoke", "url": clean_url(_p.OLLAMA_SPOKE_URL)})
+        for _u in (getattr(_p, "OLLAMA_SPOKE_URLS", None) or ([_p.OLLAMA_SPOKE_URL] if _p.OLLAMA_SPOKE_URL else [])):
+            routed.append({"role": "spoke", "url": clean_url(_u)})
         routed = [r for r in routed if r["url"]]
     key = (tuple((r["role"], r["url"]) for r in routed),
            tuple(sorted((str(d.get("box") or ""), str(d.get("url") or "")) for d in (declared or []) if isinstance(d, dict))))

@@ -158,7 +158,7 @@ def reasoner_is_local(model: Optional[str], *, resolve=None,
             from api import providers as _p
             resolve = resolve or _p._resolve
             if ollama_urls is None:
-                ollama_urls = [_p.OLLAMA_URL] + ([_p.OLLAMA_SPOKE_URL] if _p.OLLAMA_SPOKE_URL else [])
+                ollama_urls = [_p.OLLAMA_URL] + list(getattr(_p, "OLLAMA_SPOKE_URLS", None) or ([_p.OLLAMA_SPOKE_URL] if _p.OLLAMA_SPOKE_URL else []))
         client_type = resolve(model)[0]
     except Exception:
         return False
@@ -259,7 +259,7 @@ def _endpoint_host(model: Optional[str]) -> str:
         from api import providers as _p
         if _p._resolve(model or "")[0] != "ollama":
             return "(closed provider)"
-        url = _p.ollama_url()
+        url = _p.ollama_url(model)
         return (urlparse(url).hostname or url or "").lower()
     except Exception:
         return "(unknown)"

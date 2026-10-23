@@ -150,6 +150,13 @@ brain uses its own Ollama at `OLLAMA_URL` again, and comes back when the spoke d
 probe is one `GET /api/tags` every 30 seconds at most; `GET /health` shows `box`, `spoke`
 and `spoke_up`. The spoke must serve the model the brain is set to. (Added 2026-09-23.)
 
+**Several spokes.** `OLLAMA_SPOKE_URL` takes a comma-separated list in order of preference,
+e.g. `http://100.84.44.71:11434,http://100.97.177.63:11500` (a laptop, then the rented GPU of
+`scripts/gpu/gpu.sh`). A request goes to the first spoke that answers and lists the requested
+model; with none, to the box. Local-only memory may reach a spoke only when every address in the
+list is on your own network. The embedding spoke is the first entry. `GET /health` adds `spokes`,
+each with `up`. (Added 2026-10-23.)
+
 The same spoke can carry the embeddings: when it serves `bge-large` (Ollama's copy of
 BAAI/bge-large-en-v1.5, the brain's default embedding model, 1024 dimensions, nothing
 re-indexed), every embedding for ingest and search is computed there; when it does not answer

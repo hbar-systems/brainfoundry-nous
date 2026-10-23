@@ -2364,6 +2364,7 @@ def health_check():
         "box": OLLAMA_URL,
         "spoke": _providers.OLLAMA_SPOKE_URL or None,
         "spoke_up": _providers.spoke_up() if _providers.OLLAMA_SPOKE_URL else None,
+        "spokes": _providers.spokes_status(),
         "models": 0,
         "error": None
     }

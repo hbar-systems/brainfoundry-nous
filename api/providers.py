@@ -29,36 +29,82 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 # inference goes there while it answers, and back to the box's own Ollama (OLLAMA_URL) when
 # it does not: a laptop sleeps, and the local path must not break with it. The probe is one
 # GET /api/tags with a short timeout, remembered for OLLAMA_SPOKE_PROBE_SECONDS.
-OLLAMA_SPOKE_URL = os.getenv("OLLAMA_SPOKE_URL", "").strip().rstrip("/")
+#
+# Several spokes (2026-10-23): OLLAMA_SPOKE_URL takes a comma-separated list, in order of
+# preference (a laptop, a rented GPU behind a tunnel, ...). A request goes to the first spoke
+# that answers and lists the requested model; with no model named, to the first that answers;
+# with none answering, to the box. OLLAMA_SPOKE_URL (singular, below) stays the first entry for
+# the code that needs one address (the embedding spoke).
+OLLAMA_SPOKE_URLS = [u.strip().rstrip("/") for u in os.getenv("OLLAMA_SPOKE_URL", "").split(",") if u.strip()]
+OLLAMA_SPOKE_URL = OLLAMA_SPOKE_URLS[0] if OLLAMA_SPOKE_URLS else ""
 OLLAMA_SPOKE_PROBE_SECONDS = float(os.getenv("OLLAMA_SPOKE_PROBE_SECONDS", "30"))
 _spoke_state = {"at": 0.0, "up": False}
+_spokes: dict = {}   # url -> {"at", "up", "models"}
+
+
+def _probe_spoke(url: str, now: float, probe=None) -> dict:
+    """One spoke's state, probed at most once per window. `probe` is injectable for tests."""
+    st = _spokes.setdefault(url, {"at": 0.0, "up": False, "models": set()})
+    if st["at"] and now - st["at"] < OLLAMA_SPOKE_PROBE_SECONDS:
+        return st
+    models: set = set()
+    try:
+        if probe is not None:
+            up = bool(probe())
+        else:
+            import requests as _req
+            r = _req.get(f"{url}/api/tags", timeout=2)
+            up = r.ok
+            if up:
+                models = {m.get("name", "") for m in r.json().get("models", [])}
+    except Exception:
+        up = False
+    if up != st["up"]:
+        print(f"[spoke] {url} {'answers' if up else 'not answering'}", flush=True)
+    st.update(at=now, up=up, models=models)
+    return st
 
 
 def spoke_up(now: float | None = None, probe=None) -> bool:
-    """Is the spoke answering? Cached; `probe` is injectable for tests."""
-    if not OLLAMA_SPOKE_URL:
+    """Is any spoke answering? Cached per spoke; `probe` is injectable for tests."""
+    if not OLLAMA_SPOKE_URLS:
         return False
     import time as _t
     now = _t.time() if now is None else now
-    if now - _spoke_state["at"] < OLLAMA_SPOKE_PROBE_SECONDS:
-        return _spoke_state["up"]
-    if probe is None:
-        def probe():
-            import requests as _req
-            return _req.get(f"{OLLAMA_SPOKE_URL}/api/tags", timeout=2).ok
-    try:
-        up = bool(probe())
-    except Exception:
-        up = False
-    if up != _spoke_state["up"]:
-        print(f"[spoke] {OLLAMA_SPOKE_URL} {'answers, local inference goes there' if up else 'not answering, back to ' + OLLAMA_URL}", flush=True)
+    up = any([_probe_spoke(u, now, probe)["up"] for u in OLLAMA_SPOKE_URLS])
     _spoke_state.update(at=now, up=up)
     return up
 
 
-def ollama_url() -> str:
-    """Where local inference goes right now: the spoke while it answers, else the box's own."""
-    return OLLAMA_SPOKE_URL if spoke_up() else OLLAMA_URL
+def spokes_status() -> list:
+    """Every configured spoke with its last known state, for the health view."""
+    import time as _t
+    now = _t.time()
+    return [{"url": u, "up": _probe_spoke(u, now)["up"]} for u in OLLAMA_SPOKE_URLS]
+
+
+def _ollama_endpoints() -> list:
+    """Every answering spoke, in order, then the box."""
+    import time as _t
+    now = _t.time()
+    return [u for u in OLLAMA_SPOKE_URLS if _probe_spoke(u, now)["up"]] + [OLLAMA_URL]
+
+
+def ollama_url(model: str | None = None) -> str:
+    """Where local inference goes right now: a spoke that answers (and lists `model`, when one
+    is named), else the box's own."""
+    if not OLLAMA_SPOKE_URLS:
+        return OLLAMA_URL
+    import time as _t
+    now = _t.time()
+    up = [u for u in OLLAMA_SPOKE_URLS if _probe_spoke(u, now)["up"]]
+    if model:
+        for u in up:
+            names = _spokes[u]["models"]
+            if not names or model in names or f"{model}:latest" in names:
+                return u
+        return OLLAMA_URL
+    return up[0] if up else OLLAMA_URL
 
 # ── Ollama generation budget (added 2026-06-08) ─────────────────────────────
 # Ollama defaults num_ctx to 4096 and reserves nothing for output. With RAG, the
@@ -255,14 +301,18 @@ def get_available_models() -> list:
     """
     models = hosted_models()
 
-    try:
-        import requests as _req
-        r = _req.get(f"{ollama_url()}/api/tags", timeout=3)
-        if r.ok:
-            for m in r.json().get("models", []):
-                models.append({"name": m["name"], "provider": "ollama", "size": m.get("size")})
-    except Exception:
-        pass
+    seen = set()
+    for url in _ollama_endpoints():   # every answering spoke and the box (2026-10-23)
+        try:
+            import requests as _req
+            r = _req.get(f"{url}/api/tags", timeout=3)
+            if r.ok:
+                for m in r.json().get("models", []):
+                    if m["name"] not in seen:
+                        seen.add(m["name"])
+                        models.append({"name": m["name"], "provider": "ollama", "size": m.get("size")})
+        except Exception:
+            pass
 
     return models
 
@@ -280,16 +330,20 @@ def _local_ollama_models() -> set:
     now = time.time()
     if _ollama_tags_cache["tags"] and now - _ollama_tags_cache["at"] < _OLLAMA_TAGS_TTL:
         return _ollama_tags_cache["tags"]
-    try:
-        import requests as _req
-        r = _req.get(f"{ollama_url()}/api/tags", timeout=3)
-        if r.ok:
-            tags = {m["name"] for m in r.json().get("models", []) if m.get("name")}
-            _ollama_tags_cache["at"] = now
-            _ollama_tags_cache["tags"] = tags
-            return tags
-    except Exception:
-        pass
+    tags, ok = set(), False
+    for url in _ollama_endpoints():   # every answering spoke and the box (2026-10-23)
+        try:
+            import requests as _req
+            r = _req.get(f"{url}/api/tags", timeout=3)
+            if r.ok:
+                ok = True
+                tags |= {m["name"] for m in r.json().get("models", []) if m.get("name")}
+        except Exception:
+            pass
+    if ok:
+        _ollama_tags_cache["at"] = now
+        _ollama_tags_cache["tags"] = tags
+        return tags
     return _ollama_tags_cache["tags"]
 
 
@@ -537,7 +591,7 @@ async def complete(model: str, messages: list, max_tokens: int = 2048) -> str:
                        "stream": False, "options": _ollama_options()}
             if system_msg:
                 payload["system"] = system_msg
-            resp = await http.post(f"{ollama_url()}/api/chat", json=payload)
+            resp = await http.post(f"{ollama_url(payload.get('model'))}/api/chat", json=payload)
             resp.raise_for_status()
             data = resp.json()
             text = data["message"]["content"]
@@ -685,7 +739,7 @@ async def _run_ollama_tools(model, conv, tools, dispatch_fn, max_tokens, max_rou
         for _ in range(max_rounds):
             payload = {"model": model, "messages": conv, "tools": tools,
                        "stream": False, "options": _ollama_options(num_predict=max_tokens)}
-            resp = await http.post(f"{ollama_url()}/api/chat", json=payload)
+            resp = await http.post(f"{ollama_url(payload.get('model'))}/api/chat", json=payload)
             resp.raise_for_status()
             j = resp.json() or {}
             if on_usage:
@@ -806,7 +860,7 @@ async def stream(model: str, messages: list, max_tokens: int = 2048):
             if system_msg:
                 payload["system"] = system_msg
             _last: dict = {}
-            async with http.stream("POST", f"{ollama_url()}/api/chat", json=payload) as resp:
+            async with http.stream("POST", f"{ollama_url(payload.get('model'))}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if line:

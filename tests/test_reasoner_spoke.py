@@ -48,3 +48,39 @@ def test_spoke_asleep_falls_back_and_recovers(monkeypatch, tmp_path):
     assert p.spoke_up(now=t0, probe=down) is False
     assert p.ollama_url() == "http://ollama:11434"                 # cached: the box, no probe
     assert p.spoke_up(now=t0 + 100, probe=lambda: True) is True   # window passed: probed, back
+
+
+def test_several_spokes_route_by_model(monkeypatch, tmp_path):
+    # 2026-10-23: a comma list; the request goes to the first answering spoke that lists the model.
+    p = _providers(monkeypatch, tmp_path, "http://100.84.0.1:11434, http://100.97.0.2:11500/")
+    assert p.OLLAMA_SPOKE_URLS == ["http://100.84.0.1:11434", "http://100.97.0.2:11500"]
+    assert p.OLLAMA_SPOKE_URL == "http://100.84.0.1:11434"          # first entry, for single-address users
+    import time
+    now = time.time()
+    p._spokes["http://100.84.0.1:11434"] = {"at": now, "up": True, "models": {"qwen2.5:7b"}}
+    p._spokes["http://100.97.0.2:11500"] = {"at": now, "up": True, "models": {"gpt-oss:20b"}}
+    assert p.ollama_url("gpt-oss:20b") == "http://100.97.0.2:11500"
+    assert p.ollama_url("qwen2.5:7b") == "http://100.84.0.1:11434"
+    assert p.ollama_url() == "http://100.84.0.1:11434"                # no model named: first answering
+    assert p.ollama_url("llama3.2:3b") == "http://ollama:11434"       # no spoke has it: the box
+
+
+def test_several_spokes_first_asleep(monkeypatch, tmp_path):
+    p = _providers(monkeypatch, tmp_path, "http://100.84.0.1:11434,http://100.97.0.2:11500")
+    import time
+    now = time.time()
+    p._spokes["http://100.84.0.1:11434"] = {"at": now, "up": False, "models": set()}
+    p._spokes["http://100.97.0.2:11500"] = {"at": now, "up": True, "models": {"gpt-oss:20b"}}
+    assert p.ollama_url() == "http://100.97.0.2:11500"
+    assert p.spoke_up() is True
+    p._spokes["http://100.97.0.2:11500"]["up"] = False
+    assert p.ollama_url() == "http://ollama:11434"
+
+
+def test_several_spokes_all_count_for_privacy(monkeypatch, tmp_path):
+    # Local-only memory may go to a model only when every address it could reach is the owner's.
+    p = _providers(monkeypatch, tmp_path, "http://100.84.0.1:11434,https://ollama.example.com")
+    from api import privacy
+    importlib.reload(privacy)
+    urls = [p.OLLAMA_URL] + p.OLLAMA_SPOKE_URLS
+    assert privacy.reasoner_is_local("llama3.2:3b", resolve=lambda m: ("ollama", m), ollama_urls=urls) is False
