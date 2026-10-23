@@ -293,6 +293,50 @@ function PathLink({ path, children, style, copy }) {
     </span>
   )
 }
+// A commit hash in a message is a chip (2026-10-23, hbar: "I can click on it and a small card will appear
+// that quickly describes what it is ... a good safety security feature practice too"): GET /cc/commit looks
+// it up across the world's repositories; the card says what it changed, where, and whether origin has it.
+const SHA_INLINE = /^[0-9a-f]{7,12}$/
+const looksLikeSha = (s) => SHA_INLINE.test(s) && /[0-9]/.test(s) && /[a-f]/.test(s)
+function CommitLink({ sha }) {
+  const card = useCard()
+  const [info, setInfo] = useState(null)
+  useEffect(() => {
+    if (!card.open || info) return
+    fetch('/cc/commit?sha=' + encodeURIComponent(sha), { cache: 'no-store' }).then(r => r.json()).then(setInfo).catch(() => setInfo({ ok: false, error: 'the bridge did not answer' }))
+  }, [card.open])
+  const repoName = info && info.repo ? info.repo.split('/repos/').pop().replace(/^.*\/world$/, 'world') : ''
+  return (
+    <span style={{ position: 'relative', display: 'inline' }}>
+      <a data-nopick="1" onClick={(e) => { e.stopPropagation(); card.toggle() }} title={`commit ${sha} (click: what it is)`}
+        style={{ ...mono, fontSize: '0.88em', color: C.gold, cursor: 'pointer', backgroundColor: C.codeBg, border: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '4px', padding: '0 5px' }}>{sha}</a>
+      {card.open && (
+        <InfoCard boxRef={card.boxRef}>
+          {!info ? <span style={{ ...mono, fontSize: '11px', color: C.faint }}>looking it up...</span>
+            : !info.ok ? <span style={{ ...mono, fontSize: '11px', color: C.dim }}>{info.error}</span>
+            : <>
+              <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', overflowWrap: 'anywhere' }}>{info.subject}</span>
+              <span style={{ display: 'block', ...mono, color: C.faint, fontSize: '10.5px', margin: '2px 0 6px 0', overflowWrap: 'anywhere' }}>
+                {repoName} · {info.short} · {(info.date || '').slice(0, 16).replace('T', ' ')} · {info.author}
+              </span>
+              <span style={{ display: 'inline-block', ...mono, fontSize: '10.5px', padding: '0 6px', borderRadius: '8px', marginBottom: '6px',
+                             border: `1px solid ${info.pushed ? C.line : C.gold}`, color: info.pushed ? C.dim : C.gold }}>
+                {info.pushed ? 'on origin' : 'not pushed'}{info.branches && info.branches.length ? ' · ' + info.branches.join(', ') : ''}
+              </span>
+              <span style={{ display: 'block', ...mono, fontSize: '11px', color: C.dim, borderLeft: `2px solid ${C.line}`, paddingLeft: '8px', marginBottom: '8px' }}>
+                {(info.files || []).map(f => <span key={f.path} style={{ display: 'block', overflowWrap: 'anywhere' }}>{f.path} <span style={{ color: C.faint }}>+{f.add} -{f.del}</span></span>)}
+                {info.files_total > (info.files || []).length ? <span style={{ display: 'block', color: C.faint }}>and {info.files_total - info.files.length} more</span> : null}
+              </span>
+            </>}
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <CopyDoor text={info && info.sha ? info.sha : sha} />
+            <CardDoor onClick={() => { card.setOpen(false); ccEmit('cc-send-text', `Tell me about commit ${sha}: what it changes, why, whether it is safe, and whether it is pushed.`) }} title="Ask about it in this thread">ask about it</CardDoor>
+          </span>
+        </InfoCard>
+      )}
+    </span>
+  )
+}
 // Inline card replies (2026-10-15, hbar: "say I press go deeper, it responds right there IN THE CARD").
 // POST /cc/brief: two to four sentences from the reasoner outside any thread; nothing is posted unless
 // the person presses "post to thread".
@@ -626,6 +670,7 @@ function mdComponents(base) {
       // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
       // message if any, else the world (the bridge falls back to the world's root when the guess misses)
       const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
+      if (s && looksLikeSha(s.trim())) return <CommitLink sha={s.trim()} />
       if (isAbs || isFile) {
         const rel = s.trim()
         const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)

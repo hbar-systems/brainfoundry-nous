@@ -444,3 +444,19 @@ def test_a_job_whose_process_died_is_ended_on_read_and_closeable(tmp_path):
         assert X.board_tiles([], [], [dict(by["Jghost"], tail="")], [], [], {"job:Jghost"}, time.time())["tiles"] == []
     finally:
         os.kill(live["pid"], 15)
+
+
+def test_commit_info_finds_a_commit_and_refuses_a_non_hash(tmp_path):
+    import subprocess as sp
+    d = str(tmp_path)
+    sp.run(["git", "init", "-q", d], check=True)
+    Path(d, "a.txt").write_text("x\n")
+    sp.run(["git", "-C", d, "add", "a.txt"], check=True)
+    sp.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "add a"], check=True)
+    sha = sp.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    repos = X.commit_repos(d)
+    out = X.commit_info(sha[:7], repos)
+    assert out["ok"] and out["subject"] == "add a"
+    assert out["files"][0]["path"] == "a.txt" and out["pushed"] is False
+    assert not X.commit_info("added", repos)["ok"]
+    assert not X.commit_info("abcdef0", repos)["ok"]

@@ -3930,6 +3930,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 peers = None
             self._send(200, cc_extras.box_map(facts, peers, self_ip))
+        elif route == "/commit":
+            # a commit hash in a message opens a small card (2026-10-23): read-only git across the world
+            extra = (os.environ.get("CC_BRAIN_REPO") or "/home/hbar/brain",)
+            self._send(200, cc_extras.commit_info(self._query().get("sha", ""), cc_extras.commit_repos(WORLD_DIR, extra)))
         elif route == "/compute":
             # Which models live on which machine (2026-10-15): the facts' declared Ollama endpoints go to the
             # brain api, which reads each live and marks every model local or closed (api/privacy.py).

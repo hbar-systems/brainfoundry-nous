@@ -1479,3 +1479,62 @@ def load_shelf(path) -> dict:
         return {**base, "exists": True, "agents": [], "legions": [], "about": "",
                 "errors": [f"not valid JSON: {type(e).__name__}"]}
     return {**base, "exists": True, **parse_shelf(obj)}
+
+
+# Commit cards (2026-10-23, hbar: "when you put these numbers in terms of the commits, I can click on it
+# and a small card will appear that quickly describes what it is ... a good safety practice too").
+# A short hash in a message is looked up in the world's repositories (the world itself, systems/*/repos/*,
+# then any extra roots such as the brain checkout): subject, repository, author, date, files touched, and
+# whether origin already has it. Read-only git; the first repository that holds the object wins.
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def commit_repos(world: str, extra: tuple = ()) -> list:
+    out = []
+    if world and Path(world, ".git").exists():
+        out.append(Path(world))
+        for g in sorted(Path(world, "systems").glob("*/repos/*/.git")):
+            out.append(g.parent)
+        for g in sorted(Path(world, "systems").glob("*/.git")):   # the few systems with a top-level .git
+            out.append(g.parent)
+    for e in extra:
+        if e and Path(e, ".git").exists() and Path(e) not in out:
+            out.append(Path(e))
+    return out
+
+
+def _git(repo, *args, timeout: int = 6) -> tuple:
+    try:
+        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), *args],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+    except Exception:
+        return 1, ""
+
+
+def commit_info(sha: str, repos: list) -> dict:
+    sha = (sha or "").strip().lower()
+    if not SHA_RE.match(sha):
+        return {"ok": False, "error": "not a commit hash (7 to 40 hex characters)"}
+    for repo in repos:
+        rc, _ = _git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
+        if rc != 0:
+            continue
+        rc, head = _git(repo, "show", "-s", "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b", sha)
+        if rc != 0:
+            continue
+        full, subject, author, date, body = (head.rstrip("\n").split("\x1f") + [""] * 5)[:5]
+        _, stat = _git(repo, "show", "--format=", "--numstat", sha)
+        files = []
+        for line in stat.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3:
+                files.append({"path": parts[2], "add": parts[0], "del": parts[1]})
+        _, remotes = _git(repo, "branch", "-r", "--contains", full)
+        _, local = _git(repo, "branch", "--contains", full, "--format=%(refname:short)")
+        _, url = _git(repo, "remote", "get-url", "origin")
+        return {"ok": True, "sha": full, "short": full[:7], "subject": subject[:300], "body": body.strip()[:600],
+                "author": author[:120], "date": date, "repo": str(repo), "origin": url.strip()[:200],
+                "pushed": bool(remotes.strip()), "branches": [b for b in local.split() if b][:6],
+                "files": files[:12], "files_total": len(files)}
+    return {"ok": False, "error": f"{sha} is not in any repository of the world"}
