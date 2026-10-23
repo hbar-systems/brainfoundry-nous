@@ -2409,7 +2409,8 @@ def health_check():
     
     # Each branch above rebuilds the dict; the spoke's state must survive that (2026-09-25).
     ollama_status.update({"box": OLLAMA_URL, "spoke": _providers.OLLAMA_SPOKE_URL or None,
-                          "spoke_up": _providers.spoke_up() if _providers.OLLAMA_SPOKE_URL else None})
+                          "spoke_up": _providers.spoke_up() if _providers.OLLAMA_SPOKE_URL else None,
+                          "spokes": _providers.spokes_status()})
 
     # Test embedding model
     from api.embeddings.model import is_model_loaded, model_error, spoke_status
