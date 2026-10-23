@@ -2958,7 +2958,7 @@ function CC() {
             </Btn>
             {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
             {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
-            <Btn onClick={() => sendFix()} disabled={(!draft.trim() && files.length === 0) || !loggedIn} title="Send this (and any screenshot) as a brain fix: a thread of its own that only touches the brain's engine and console; this conversation carries on (/fix does the same)">fix the brain ↗</Btn>
+            {/* the "fix the brain" button left the send row 2026-10-23 (hbar: never used); /fix does the same */}
             <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : 'send'}</Btn>
           </div>
           )}
