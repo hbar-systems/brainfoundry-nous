@@ -98,6 +98,9 @@ export default function Guide() {
             <a key={k} onClick={() => setTab(k)} style={{ ...mono, fontSize: '12px', padding: '8px 2px', cursor: 'pointer', color: tab === k ? T.ink : T.dim, borderBottom: tab === k ? `2px solid ${T.gold}` : '2px solid transparent' }}>{label}</a>
           ))}
         </div>
+        <p style={{ ...mono, fontSize: '12px', margin: '-8px 0 18px 0' }}>
+          <a href="/welcome?replay=1" target="_top" style={{ color: T.dim }}>Watch the welcome again &rarr;</a>
+        </p>
         {tab === 'tutorial' && (
           <div>
             <p style={{ fontSize: '14px', color: T.dim, lineHeight: 1.6, margin: '0 0 16px 0' }}>

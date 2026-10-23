@@ -8395,6 +8395,29 @@ def onboarding_complete(api_key: str = Depends(get_api_key)) -> dict:
     return {"ok": True, "completed": True}
 
 
+class WelcomeSeenRequest(BaseModel):
+    version: int
+
+
+@app.get("/onboarding/welcome")
+def onboarding_welcome(api_key: str = Depends(get_api_key)) -> dict:
+    """What the welcome film needs: the version the owner has seen (0 = never)
+    and the first name it greets. The name is the first word of BRAIN_OWNER,
+    blank while that is still the template's placeholder."""
+    owner = (os.getenv("BRAIN_OWNER") or "").strip()
+    name = "" if owner.lower() in ("", "your name") else owner.split()[0][:32]
+    return {"seen_version": settings_store.get_welcome_seen_version(), "name": name}
+
+
+@app.post("/onboarding/welcome/seen")
+def onboarding_welcome_seen(req: WelcomeSeenRequest, api_key: str = Depends(get_api_key)) -> dict:
+    """The film ended (Talk to it pressed). Never lowers the stored version."""
+    if req.version < 1 or req.version > 1000:
+        raise HTTPException(status_code=400, detail="version must be 1 to 1000")
+    settings_store.set_welcome_seen_version(req.version)
+    return {"ok": True, "seen_version": settings_store.get_welcome_seen_version()}
+
+
 @app.get("/onboarding/facts")
 def onboarding_facts(api_key: str = Depends(get_api_key)) -> dict:
     """List the facts the owner's brain has formed during onboarding, so the

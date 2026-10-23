@@ -492,6 +492,24 @@ def set_onboarding_completed(done: bool) -> None:
         _save(data)
 
 
+# ── Welcome film (ui/public/onboarding/index.html) ─────────────────────────
+# The highest film version this brain's owner has seen through to the end.
+# Kept on the server so the film plays once per person, not once per browser.
+# 0 = never seen. The console replays it when the film's version is higher.
+def get_welcome_seen_version() -> int:
+    try:
+        return int(_load().get("welcome_seen_version", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_welcome_seen_version(version: int) -> None:
+    with _LOCK:
+        data = _load()
+        data["welcome_seen_version"] = max(int(data.get("welcome_seen_version", 0) or 0), int(version))
+        _save(data)
+
+
 # ── "Your mind" panel (persistent self-model surface) ───────────────────────
 # The live fact panel is not onboarding-only: it is an always-on, dismissable,
 # re-openable window into what the brain knows about its owner. This per-brain

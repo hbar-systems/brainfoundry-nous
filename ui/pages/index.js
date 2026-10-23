@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { loadModelsAndDefault } from '../lib/defaultModel'
 import CC from './cc'
+import { WELCOME_VERSION } from '../lib/welcome'
 
 // First-use checklist (unreleased 0.10.0). Server-driven from
 // GET /onboarding/first-use: add a model key -> drop ten files (progress
@@ -468,13 +469,22 @@ export function Dashboard() {
 
 // D54 (2026-09-18): when CC is enabled on this brain, "/" is CC, the mind you speak
 // into; the dashboard lives at /dashboard. The api says which via /apps/list.ccHome.
+// Before either, a fresh brain (no documents, no chats) whose owner has not seen
+// the welcome film at WELCOME_VERSION goes to /welcome once (seen is kept on the
+// server, so once per person, not per browser). Any failure falls through to home.
 export default function Home() {
+  const router = useRouter()
   const [ccHome, setCcHome] = useState(null)
   useEffect(() => {
-    fetch('/api/bf/apps/list')
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => setCcHome(!!(d && d.ccHome)))
-      .catch(() => setCcHome(false))
+    const json = u => fetch(u).then(r => (r.ok ? r.json() : null)).catch(() => null)
+    Promise.all([json('/api/bf/onboarding/first-use'), json('/api/bf/onboarding/welcome')])
+      .then(([fu, w]) => {
+        if (fu && fu.fresh && w && (w.seen_version || 0) < WELCOME_VERSION) {
+          router.replace('/welcome')
+          return
+        }
+        json('/api/bf/apps/list').then(d => setCcHome(!!(d && d.ccHome)))
+      })
   }, [])
   if (ccHome === null) return null
   return ccHome ? <CC /> : <Dashboard />

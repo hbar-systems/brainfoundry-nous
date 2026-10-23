@@ -66,3 +66,13 @@ def test_cheap_extraction_model_falls_back_to_local_without_cloud_key(tmp_path):
     # a frontier model for a per-turn extraction call.
     m = p.cheap_extraction_model()
     assert m == p.LOCAL_FALLBACK_MODEL or "claude-opus" not in m
+
+
+# ── welcome film seen-version (once per person, never lowered) ────────────
+def test_welcome_seen_version(tmp_path):
+    ss = _settings(tmp_path)
+    assert ss.get_welcome_seen_version() == 0
+    ss.set_welcome_seen_version(2)
+    ss.set_welcome_seen_version(1)
+    importlib.reload(ss)
+    assert ss.get_welcome_seen_version() == 2
