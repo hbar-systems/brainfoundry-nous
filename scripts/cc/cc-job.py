@@ -13,6 +13,8 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job ask <https://peer> "<question>"   ask another brain; this brain signs it
     cc-job task add "<text>" [--due <ISO 8601>]   put a task on the person's list (the /tasks page)
     cc-job task list          the open tasks
+    cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
+    cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
 
 Jobs never run sudo. A claude started by a job gets the turn's permission settings, and the flags
 that would loosen the owner's posture are refused by the bridge (2026-10-19, cc_guard.py). The person sees every job on the CC page and can ask about it.
@@ -107,6 +109,25 @@ def main(argv: list[str]) -> int:
                 print("refused:", d.get("error", "no answer")); return 1
             t = d["task"]
             print(f"task {t['id']} added{' due ' + t['due'] if t.get('due') else ''}: {t['text']}"); return 0
+        if cmd == "task" and rest and rest[0] == "done":
+            # Close (or with --undo reopen) tasks on the person's word (2026-10-24).
+            ids = [w for w in rest[1:] if w != "--undo"]
+            if not ids:
+                print('cc-job task done <id>... [--undo]'); return 2
+            d = _call("POST", "/tasks/done", {"ids": ids, "done": "--undo" not in rest,
+                                              "thread": os.environ.get("CC_THREAD_ID", "").strip()})
+            for i, ok in (d.get("results") or {}).items():
+                print(f"{i} {('reopened' if '--undo' in rest else 'closed') if ok else 'not found'}")
+            if not d.get("results"):
+                print("refused:", d.get("error", "no answer"))
+            return 0 if d.get("ok") else 1
+        if cmd == "threads":
+            # Thread ids and titles (2026-10-24), to link a thread as /talk?thread=<id>.
+            words = [w.lower() for w in rest]
+            for t in _call("GET", "/threads/brief").get("threads", []):
+                if all(w in t["title"].lower() for w in words):
+                    print(f"{t['id']}  {str(t.get('last') or '')[:16]:16}  {t['title']}")
+            return 0
         if cmd == "task" and rest and rest[0] == "list":
             d = _call("GET", "/tasks")
             if "tasks" not in d:

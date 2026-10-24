@@ -51,7 +51,7 @@ def list_tasks(include_done: bool = False) -> List[Dict[str, Any]]:
 
 
 def add(text: str, due: Optional[str] = None, created: Optional[str] = None,
-        source: Optional[str] = None) -> Dict[str, Any]:
+        source: Optional[str] = None, thread: Optional[str] = None) -> Dict[str, Any]:
     text = (text or "").strip()
     if not text:
         raise ValueError("task text required")
@@ -67,6 +67,9 @@ def add(text: str, due: Optional[str] = None, created: Optional[str] = None,
     # write path (cc-job task add, through the CC bridge), so the Tasks page can say so.
     if source:
         task["source"] = str(source).strip()[:120]
+    # The thread that made it (2026-10-24): the Tasks page links back to it (/talk?thread=<id>).
+    if thread:
+        task["thread"] = str(thread).strip()[:64]
     with _LOCK:
         tasks = _load()
         tasks.append(task)

@@ -45,7 +45,9 @@ export default function Tasks() {
       <div style={{ flex: 1 }}>
         <div style={{ color: t.done ? 'var(--muted)' : 'var(--text)', fontSize: 14, textDecoration: t.done ? 'line-through' : 'none' }}>{t.text}</div>
         {t.due && <div style={{ color: 'var(--text-dim)', fontSize: 11.5, marginTop: 2 }}>⏰ {fmtDue(t.due)}{t.reminded ? ' · reminded' : ''}</div>}
-        {t.source && <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>from {t.source}</div>}
+        {t.source && <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>from {t.thread
+          ? <a href={`/talk?thread=${encodeURIComponent(t.thread)}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{t.source}</a>
+          : t.source}</div>}
       </div>
       <button onClick={() => del(t)} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 15 }} title="delete">×</button>
     </div>
