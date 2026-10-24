@@ -54,6 +54,12 @@ function JobsLight({ jobs, size = 8, fontSize = '10px' }) {
 
 function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '') }
 function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
+// The panel above the composer (hbar 2026-10-24): fixed asks, so the organizer thread needs no typing for the three daily questions.
+const PANEL = {
+  threads: 'Read the threads of the last 48 hours: the <recent> block, the day\'s commits in the world and in nous, ops/steward/done.tsv and ops/steward/queue.md, cc-job list. Report in detail in fixed blocks: done, running, open, owed by me. End with choices.',
+  where: 'Where were we? This thread\'s last state in five lines: what was decided, what is running (cc-job list), what is owed by me, the next step. End with choices.',
+  decide: 'Help me decide which activity to do now. List the open tracks with one line and a probability each, from NOW.md\'s owed list, the idea register and cc-job task list, then recommend one. End with choices.',
+}
 const SLASH = [
   { c: '/new', d: 'start a new thread' },
   { c: '/stop', d: 'stop the answer in progress; the thread keeps everything up to here (Esc does the same)' },
@@ -66,6 +72,7 @@ const SLASH = [
   { c: '/file', d: '/file <path> [where]: the reasoner moves an artifact from out/ or in/ into the world where it belongs and commits (no push)' },
   { c: '/voice', d: 'the brain reads its answers aloud: /voice on, /voice off, /voice list (click a name), /voice <name>' },
   { c: '/talk', d: 'speak instead of typing: /talk listens (a pause or a second /talk ends it); /talk free on|off is hands-free, what you say sends by itself and listening restarts after the answer' },
+  { c: '/thoughts', d: 'just thoughts: /thoughts on|off; what you say or attach is filed to the memo tape as a memo, not acted on; you sign the bits later' },
   { c: '/jobs', d: 'list jobs running on the box' },
   { c: '/help', d: 'this list' },
 ]
@@ -1174,6 +1181,7 @@ function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState([])            // attachments chosen for the next message
+  const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
@@ -2435,6 +2443,13 @@ function CC() {
       setTurns(t => [...t, { who: 'brain', text: on ? 'Voice on. Answers are read aloud as they finish; "listen" under any answer replays it, "stop" stops it.' : 'Voice off.' }])
       return true
     }
+    if (cmd === 'thoughts') {
+      const on = arg ? !/^(off|stop|no)$/i.test(arg.trim()) : !thoughts
+      setThoughts(on)
+      setTurns(t => [...t, { who: 'brain', text: on ? 'Just thoughts. Speak, type or attach; each message is filed to the memo tape as a memo and not acted on. You sign the bits on the tape later. /thoughts off to leave.' : 'Back to asking.' }])
+      if (on && !listening && !transcribing && canTalk) startListening('')
+      return true
+    }
     if (cmd === 'talk') {
       const a0 = (arg || '').trim().toLowerCase()
       if (a0.startsWith('free') || a0.startsWith('hands')) {
@@ -2500,6 +2515,7 @@ function CC() {
 
   async function sendOnce(forced, release) {
     let text = (typeof forced === 'string' ? forced : draft).trim()
+    if (thoughts && typeof forced !== 'string' && !text.startsWith('/')) text = ('just thoughts: ' + text).trim()
     const block = typeof forced === 'string' ? '' : notesBlock()
     if (!text && files.length === 0 && !block) return
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
@@ -2940,14 +2956,23 @@ function CC() {
             ))}
           </p>
         )}
+        {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode. */}
+        {loggedIn && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: paneMode ? '6px' : '10px' }}>
+            <Btn small onClick={() => send(PANEL.threads)} disabled={active} title="What the other threads did: done, running, open, owed by you">read the threads</Btn>
+            <Btn small onClick={() => send(PANEL.where)} disabled={active} title="This thread's last state in five lines">where were we?</Btn>
+            <Btn small onClick={() => send(PANEL.decide)} disabled={active} title="The open tracks with a probability each, and one recommendation">help decide</Btn>
+            <Btn small accent={thoughts} onClick={() => slash(thoughts ? '/thoughts off' : '/thoughts on')} title="Speak, type or attach; filed to the memo tape, not acted on">{thoughts ? 'thoughts: on' : 'just thoughts'}</Btn>
+          </div>
+        )}
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
-            placeholder={paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
-                     border: `1px solid ${listening ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
+                     border: `1px solid ${listening || thoughts ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
           <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
           {!paneMode && (
           <div style={{ display: 'flex', gap: '8px', flex: '0 0 auto', marginLeft: 'auto' }}>
