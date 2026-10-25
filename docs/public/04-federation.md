@@ -164,6 +164,10 @@ The script calls the owner-only route `POST /v1/radio/subscribe-token` (`X-API-K
 
 The station reads `issuer_endpoint`, fetches `GET /identity` there, checks that `brain_id` equals `iss`, and verifies the signature, audience, subject and expiry. Nothing of the memory leaves the brain except the note the brain chose to send. The route needs `BRAIN_PRIVATE_KEY`, `BRAIN_ID` and a public https URL (`BRAIN_PUBLIC_URL`); without them it answers 503 with the reason.
 
+The listen is the first harmonics event. The route also posts the token to the station, scores the taste note against the first twelve titles the station returned, and appends one signed row to the brain's own ledger (`coherence_events`: cos, sin, score, content hash, the brain's signature).
+When the station countersigns with a receipt that verifies against its `/api/radio/identity`, the receipt is stored beside the row; otherwise the row is marked `orfeo.music:unsigned` and carries no peer signature.
+The record is a measurement of coherence, never money and never a balance to spend.
+
 ## Status
 
 The bidirectional HTTPS federation handshake is working. Two independent brain instances on separate servers can exchange ED25519-signed assertions, each fetching the peer's public key live from `/identity` and verifying signature, audience, issuer, and expiry server-side.

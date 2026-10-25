@@ -4012,7 +4012,13 @@ def radio_subscribe_token(req: RadioSubscribeRequest, http_request: Request,
         raise HTTPException(503, "no public https base URL: set BRAIN_PUBLIC_URL")
     taste = _rt.collect_taste(search_similar_documents)
     token = _rt.issue_token(taste=taste, private_key=private_key, brain_id=brain_id, endpoint=endpoint)
-    return {"token": token, "url": _rt.station_url(station, token), "taste": taste}
+    # The listen is the first harmonics event: exchange with the station server to server and
+    # record it. A station that cannot be reached leaves event null with a reason; the token stands.
+    out = _rt.run_listen_event(station=station, token=token, taste=taste, brain_id=brain_id)
+    resp = {"token": token, "url": _rt.station_url(station, token), "taste": taste, "event": out.get("event")}
+    if out.get("event") is None:
+        resp["event_reason"] = out.get("reason", "")
+    return resp
 
 
 @app.get("/.well-known/agent-card.json")

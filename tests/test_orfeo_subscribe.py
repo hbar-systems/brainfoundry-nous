@@ -50,6 +50,60 @@ def _parts(token):
     return json.loads(_b64d(h)), json.loads(_b64d(c)), _b64d(s), f"{h}.{c}".encode()
 
 
+STATION_KEYS = generate_brain_keypair()
+LIBRARY = [{"id": str(i), "title": f"Track {i}", "artist": f"Artist {i}"} for i in range(1, 15)]
+SEQ = [str(i) for i in range(14, 0, -1)]
+
+
+def _context():
+    return rt.build_context(SEQ, LIBRARY)
+
+
+class _R:
+    def __init__(self, code, data):
+        self.status_code, self._d = code, data
+
+    def json(self):
+        return self._d
+
+
+class _Station:
+    """A mocked orfeo: subscribe, library and identity. Mutate the attributes to change its answers."""
+
+    def __init__(self):
+        self.reachable, self.key, self.sign, self.tamper = True, True, True, None
+        self.posted = []
+
+    def _receipt(self, token, taste):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        claims = _parts(token)[1]
+        payload = {"typ": "RADIO_RECEIPT", "v": 1, "iss": "orfeo.music", "brain_id": claims["iss"],
+                   "jti": claims["jti"], "n": len(SEQ),
+                   "content_hash": rt.receipt_content_hash(taste, _context()), "iat": 1}
+        if self.tamper:
+            payload.update(self.tamper)
+        sk = Ed25519PrivateKey.from_private_bytes(_b64d(STATION_KEYS[0]))
+        data = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        return {"payload": payload, "sig": base64.urlsafe_b64encode(sk.sign(data)).decode().rstrip("=")}
+
+    def post(self, url, body):
+        if not self.reachable:
+            raise OSError("station down")
+        self.posted.append((url, body))
+        claims = _parts(body["token"])[1]
+        rec = self._receipt(body["token"], claims["taste"]) if self.sign else None
+        return _R(200, {"render": "personal", "brain_id": claims["iss"], "sequence": SEQ, "receipt": rec})
+
+    def get(self, url):
+        if not self.reachable:
+            raise OSError("station down")
+        if url.endswith("/api/radio/library"):
+            return _R(200, {"tracks": LIBRARY})
+        if url.endswith("/api/radio/identity"):
+            return _R(200, {"brain_id": "orfeo.music", "public_key": STATION_KEYS[1] if self.key else None})
+        return _R(404, {})
+
+
 @pytest.fixture
 def env(monkeypatch):
     seen = {"calls": []}
@@ -64,7 +118,15 @@ def env(monkeypatch):
     monkeypatch.setenv("BRAIN_ID", "test-brain")
     monkeypatch.setenv("BRAIN_PRIVATE_KEY", PRIV)
     monkeypatch.setenv("BRAIN_PUBLIC_URL", "https://b.example")
-    return types.SimpleNamespace(client=TestClient(m.app), seen=seen, result=result)
+    st = _Station()
+    monkeypatch.setattr(rt, "_http_post", st.post)
+    monkeypatch.setattr(rt, "_http_get", st.get)
+    from api import harmonics as h
+    rows = []
+    monkeypatch.setattr(h, "coherence", lambda c, r: (0.6, 0.8, 0.48))
+    monkeypatch.setattr(h, "record_event", lambda **kw: rows.append(kw) or len(rows))
+    monkeypatch.setattr(h, "standing", lambda *a, **k: 0.48)
+    return types.SimpleNamespace(client=TestClient(m.app), seen=seen, result=result, station=st, rows=rows)
 
 
 def _post(env, body=None, key=OWNER_KEY):
@@ -161,3 +223,70 @@ def test_script_needs_key(monkeypatch):
     monkeypatch.delenv("BRAIN_API_KEY", raising=False)
     monkeypatch.delenv("API_KEY", raising=False)
     assert orfeo_subscribe.main([]) == 2
+
+
+def test_event_written_with_verified_receipt(env):
+    body = _post(env).json()
+    ev = body["event"]
+    assert ev["score"] == 0.48 and ev["cos"] == 0.6 and ev["sin"] == 0.8 and ev["standing_after"] == 0.48
+    assert ev["receipt"] == "verified" and ev["receipt_hash_match"] is True
+    assert env.station.posted[0][0] == "https://orfeo.music/api/radio/subscribe"
+    row = env.rows[0]
+    assert row["peer_pubkey"] == STATION_KEYS[1] and row["role"] == "contributor"
+    assert row["score"] == 0.48 and row["content_hash"].startswith("sha256:")
+    assert row["peer_sig"] and json.loads(row["peer_payload"])["typ"] == "RADIO_RECEIPT"
+    ctx = _context()
+    assert ctx.count(" | ") == 11 and ctx.startswith("Track 14 - Artist 14 | Track 13")
+
+
+def test_station_without_key_records_unsigned(env):
+    env.station.sign, env.station.key = False, False
+    ev = _post(env).json()["event"]
+    assert ev["receipt"] == "none"
+    assert env.rows[0]["peer_pubkey"] == "orfeo.music:unsigned" and env.rows[0]["peer_sig"] is None
+
+
+def test_forged_receipt_is_not_stored(env):
+    env.station.tamper = {"jti": "someone-else"}
+    ev = _post(env).json()["event"]
+    assert ev["receipt"].startswith("refused")
+    assert env.rows[0]["peer_pubkey"] == "orfeo.music:unsigned" and env.rows[0]["peer_sig"] is None
+
+
+def test_receipt_signed_by_other_key_is_refused(env, monkeypatch):
+    other = generate_brain_keypair()
+    ident = env.station.get
+
+    def get(url):
+        if url.endswith("/identity"):
+            return _R(200, {"public_key": other[1]})
+        return ident(url)
+
+    monkeypatch.setattr(rt, "_http_get", get)
+    assert _post(env).json()["event"]["receipt"].startswith("refused")
+    assert env.rows[0]["peer_pubkey"] == "orfeo.music:unsigned"
+
+
+def test_hash_mismatch_flagged_not_fatal(env):
+    env.station.tamper = {"content_hash": "00" * 32}
+    ev = _post(env).json()["event"]
+    assert ev["receipt"] == "verified" and ev["receipt_hash_match"] is False
+
+
+def test_unreachable_station_still_returns_token(env):
+    env.station.reachable = False
+    body = _post(env).json()
+    assert body["event"] is None and body["event_reason"]
+    assert body["token"] and body["url"].startswith("https://orfeo.music/radio?token=")
+    assert env.rows == []
+
+
+def test_ledger_failure_leaves_event_null(env, monkeypatch):
+    from api import harmonics as h
+
+    def boom(**kw):
+        raise RuntimeError("DATABASE_URL not configured")
+
+    monkeypatch.setattr(h, "record_event", boom)
+    body = _post(env).json()
+    assert body["event"] is None and "DATABASE_URL" in body["event_reason"] and body["token"]

@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS coherence_events (
 );
 CREATE INDEX IF NOT EXISTS ce_role_idx ON coherence_events (role);
 CREATE INDEX IF NOT EXISTS ce_peer_idx ON coherence_events (peer_pubkey);
+-- 2026-10-25: the peer's countersignature (a station's receipt), kept beside the row.
+-- Idempotent, so brains whose table already exists migrate on start.
+ALTER TABLE coherence_events ADD COLUMN IF NOT EXISTS peer_sig TEXT;
+ALTER TABLE coherence_events ADD COLUMN IF NOT EXISTS peer_payload TEXT;
 """
 
 
@@ -173,12 +177,16 @@ def record_event(
     score: float,
     content_hash: str,
     event_timestamp: Optional[int] = None,
+    peer_sig: Optional[str] = None,
+    peer_payload: Optional[str] = None,
     conn=None,
 ) -> int:
     """Append one signed event to the append-only ledger. Returns the row id.
 
     The event is signed with this brain's ED25519 key over the canonical
-    payload (SPEC s4). `role` is 'contributor' or 'receiver'.
+    payload (SPEC s4). `role` is 'contributor' or 'receiver'. `peer_sig` and
+    `peer_payload` hold the peer's countersignature and the payload it signed,
+    when the peer gave one; they are not part of this brain's signed payload.
     """
     ts = int(event_timestamp if event_timestamp is not None else time.time())
     sig_payload = {
@@ -202,10 +210,11 @@ def record_event(
             cur.execute(
                 """INSERT INTO coherence_events
                     (peer_pubkey, role, cos, sin, score, content_hash, sig,
-                     event_timestamp)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     event_timestamp, peer_sig, peer_payload)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
-                (peer_pubkey, role, cos, sin, score, content_hash, sig, ts),
+                (peer_pubkey, role, cos, sin, score, content_hash, sig, ts,
+                 peer_sig, peer_payload),
             )
             row = cur.fetchone()
         if owns_conn:

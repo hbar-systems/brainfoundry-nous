@@ -119,3 +119,149 @@ def issue_token(*, taste: str, private_key: str, brain_id: str, endpoint: str) -
 
 def station_url(station: str, token: str) -> str:
     return f"{station}/radio?token={quote(token, safe='')}"
+
+
+# ─── The first harmonics event (2026-10-25) ─────────────────────────────────
+# After issuing the token the brain performs the exchange itself: it posts the token to the
+# station, gets the sequence and the station's receipt, scores taste against the station's
+# render with the harmonics module's own coherence(), and appends one ledger row. Never money.
+
+import base64
+import hashlib
+import json
+import time
+
+import httpx
+
+UNSIGNED_PEER = "orfeo.music:unsigned"
+CONTEXT_TRACKS = 12
+HTTP_TIMEOUT = 10.0
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _http_get(url: str) -> httpx.Response:
+    return httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=False)
+
+
+def _http_post(url: str, body: Dict[str, Any]) -> httpx.Response:
+    return httpx.post(url, json=body, timeout=HTTP_TIMEOUT, follow_redirects=False)
+
+
+def build_context(sequence: List[str], tracks: List[Dict[str, Any]], n: int = CONTEXT_TRACKS) -> str:
+    """R: the ordered 'title - artist' of the first n tracks of the returned sequence, joined by ' | '."""
+    by_id = {str(t.get("id")): t for t in tracks or []}
+    parts = []
+    for tid in (sequence or [])[:n]:
+        t = by_id.get(str(tid))
+        if not t:
+            continue
+        title, artist = str(t.get("title") or "").strip(), str(t.get("artist") or t.get("channel") or "").strip()
+        parts.append(f"{title} - {artist}" if artist else title)
+    return " | ".join(parts)
+
+
+def receipt_content_hash(taste: str, context: str) -> str:
+    """The hash the station puts in its receipt: sha256 hex of taste + ' | ' + R."""
+    return hashlib.sha256((taste + " | " + context).encode("utf-8")).hexdigest()
+
+
+def verify_receipt(receipt: Any, public_key_b64: str, *, brain_id: str, jti: str, n: int,
+                   taste: str, context: str) -> Dict[str, Any]:
+    """Check the station's receipt. Returns {ok, reason, hash_match}.
+
+    ok needs a valid ED25519 signature by the station's published key, typ RADIO_RECEIPT,
+    iss orfeo.music, and brain_id, jti and n equal to this exchange. hash_match reports
+    whether the receipt's content_hash equals our own taste + R hash; a mismatch does not
+    void the receipt (the two sides may order R differently) but is recorded."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("payload"), dict) or not receipt.get("sig"):
+        return {"ok": False, "reason": "receipt malformed", "hash_match": False}
+    payload, sig = receipt["payload"], str(receipt["sig"])
+    if sig.startswith("ed25519:"):
+        sig = sig[len("ed25519:"):]
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(_b64d(public_key_b64))
+        raw = _b64d(sig)
+    except Exception:
+        return {"ok": False, "reason": "receipt key or signature unreadable", "hash_match": False}
+    signed = False
+    # The station's canonical form is not fixed by the contract: accept sorted-key compact JSON
+    # (the harmonics module's form) or compact JSON in the payload's own key order.
+    for data in (json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                 json.dumps(payload, separators=(",", ":"))):
+        try:
+            pub.verify(raw, data.encode("utf-8"))
+            signed = True
+            break
+        except Exception:
+            continue
+    if not signed:
+        return {"ok": False, "reason": "receipt signature invalid", "hash_match": False}
+    if payload.get("typ") != "RADIO_RECEIPT" or payload.get("iss") != AUDIENCE:
+        return {"ok": False, "reason": "receipt is not an orfeo.music radio receipt", "hash_match": False}
+    if payload.get("brain_id") != brain_id or payload.get("jti") != jti or payload.get("n") != n:
+        return {"ok": False, "reason": "receipt is for another exchange", "hash_match": False}
+    h = str(payload.get("content_hash") or "")
+    h = h[len("sha256:"):] if h.startswith("sha256:") else h
+    return {"ok": True, "reason": "", "hash_match": h == receipt_content_hash(taste, context)}
+
+
+def _token_jti(token: str) -> str:
+    try:
+        return str(json.loads(_b64d(token.split(".")[1])).get("jti") or "")
+    except Exception:
+        return ""
+
+
+def run_listen_event(*, station: str, token: str, taste: str, brain_id: str,
+                     http_get: Optional[Callable] = None, http_post: Optional[Callable] = None) -> Dict[str, Any]:
+    """Perform the exchange and write the ledger row. Returns the route's `event` value:
+    {score, cos, sin, standing_after, receipt, ...} or {"event": None, "reason": ...}. Never raises."""
+    http_get, http_post = http_get or _http_get, http_post or _http_post
+
+    def fail(reason: str) -> Dict[str, Any]:
+        return {"event": None, "reason": reason}
+
+    try:
+        r = http_post(f"{station}/api/radio/subscribe", {"token": token})
+        if r.status_code != 200:
+            return fail(f"station answered {r.status_code}")
+        body = r.json()
+        if body.get("render") != "personal" or not isinstance(body.get("sequence"), list):
+            return fail(f"station did not render: {body.get('reason') or body.get('render')}")
+        sequence = [str(x) for x in body["sequence"]]
+        lib = http_get(f"{station}/api/radio/library")
+        if lib.status_code != 200:
+            return fail(f"station library answered {lib.status_code}")
+        context = build_context(sequence, lib.json().get("tracks") or [])
+        if not context:
+            return fail("station sequence matched no track in its library")
+        pubkey, receipt_state, receipt = None, "none", body.get("receipt")
+        ident = http_get(f"{station}/api/radio/identity")
+        if ident.status_code == 200:
+            pubkey = ident.json().get("public_key") or None
+        check = {"ok": False, "reason": "station has no receipt key", "hash_match": False}
+        if receipt and pubkey:
+            check = verify_receipt(receipt, pubkey, brain_id=brain_id, jti=_token_jti(token),
+                                   n=len(sequence), taste=taste, context=context)
+            receipt_state = "verified" if check["ok"] else "refused: " + check["reason"]
+        elif receipt:
+            receipt_state = "refused: station publishes no key"
+        from api import harmonics as h
+        cos, sin, score = h.coherence(taste, context)
+        ch = h.content_hash(taste, context)
+        verified = bool(receipt and pubkey and check["ok"])
+        h.record_event(
+            peer_pubkey=pubkey if verified else UNSIGNED_PEER,
+            role="contributor", cos=cos, sin=sin, score=score, content_hash=ch,
+            event_timestamp=int(time.time()),
+            peer_sig=receipt["sig"] if verified else None,
+            peer_payload=json.dumps(receipt["payload"], separators=(",", ":")) if verified else None,
+        )
+        return {"event": {"score": score, "cos": cos, "sin": sin, "standing_after": h.standing(),
+                          "receipt": receipt_state, "receipt_hash_match": bool(check.get("hash_match"))}}
+    except Exception as e:
+        return fail(f"{type(e).__name__}: {e}"[:200])
