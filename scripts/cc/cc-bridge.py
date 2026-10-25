@@ -2619,6 +2619,21 @@ def _persona() -> str:
         return ""
 
 
+# Language settings (Settings page, hbar 2026-10-25): the api's two lines (answer language,
+# learning language with balance) ride at the end of the <persona> block, so they win over a
+# persona that names a language. Read from the api, cached a minute; empty when unset.
+_LANG_CACHE = {"at": 0.0, "lines": ""}
+
+
+def _language_lines() -> str:
+    if time.time() - _LANG_CACHE["at"] < 60:
+        return _LANG_CACHE["lines"]
+    res = _brain_api("GET", "/settings/language")
+    lines = res.get("lines") if isinstance(res, dict) and isinstance(res.get("lines"), str) else ""
+    _LANG_CACHE.update(at=time.time(), lines=lines.strip())
+    return _LANG_CACHE["lines"]
+
+
 def _memory(query: str) -> list[dict]:
     if not BRAIN_API_KEY:
         return []
@@ -2678,6 +2693,9 @@ def _compose(message: str, recent: str = "", first_use: str = "") -> tuple[str, 
     LAST_SOURCES = list(dict.fromkeys(c["source"] for c in chunks))[:12]
     parts = []
     persona = _persona()
+    lang = _language_lines()
+    if lang:
+        persona = (persona + "\n\n" + lang).strip()
     if persona:
         parts.append("<persona>\n" + persona + "\n</persona>")
     if chunks:

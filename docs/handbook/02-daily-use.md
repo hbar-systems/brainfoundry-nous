@@ -34,6 +34,15 @@ On the Integrations page you can connect email (with an app password, not your r
 The brain reads them and treats what they say as information, never as orders.
 Writing to a connected app (sending an email, creating an event) always shows a card first.
 
+## Language
+
+In Settings, the Language block has two choices and one slider.
+Answer language: by default the brain answers in the language you write in; pick one to fix it (English, Russian, German, Slovak, Spanish, French, Italian, Ukrainian, or "other" and write the name).
+Language I am learning: off by default; pick one and the brain answers in that language, then repeats the same answer under a thin rule in your own language, so you read both.
+Balance: how much of the answer is in the language you are learning, from 0 (a sentence or two) to 100 (everything); 50 to start.
+These two settings win over anything the persona says about language; the Persona page says so in one line.
+Saving takes effect on the next message; the settings stay through Update. (2026-10-25)
+
 ## Update
 
 The Update page has one button, "Pull latest".

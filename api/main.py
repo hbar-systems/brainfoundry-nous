@@ -1403,6 +1403,42 @@ def settings_set_greeting(req: SetGreetingRequest, api_key: str = Depends(get_ap
     return {"ok": True, "greeting": settings_store.get_greeting()}
 
 
+# Language (hbar 2026-10-25): answer language, learning language with balance.
+# Stored in the settings sidecar; api/language_prefs turns them into the two
+# lines appended to the chat system prompt (both /chat/completions and
+# /chat/rag). The setting wins over a persona that says "answer in Russian".
+class SetLanguageRequest(BaseModel):
+    answer: Optional[str] = None
+    learning: Optional[str] = None
+    balance: Optional[int] = None
+
+
+def _language_prompt_lines() -> str:
+    try:
+        from api import language_prefs as _lp
+        return _lp.prompt_lines_from(settings_store.get_language())
+    except Exception:
+        return ""
+
+
+@app.get("/settings/language")
+def settings_get_language(api_key: str = Depends(get_api_key)):
+    from api import language_prefs as _lp
+    cfg = settings_store.get_language()
+    return {**cfg, "options": _lp.LANGUAGES, "lines": _lp.prompt_lines_from(cfg)}
+
+
+@app.post("/settings/language")
+def settings_set_language(req: SetLanguageRequest, api_key: str = Depends(get_api_key)):
+    from api import language_prefs as _lp
+    try:
+        settings_store.set_language(answer=req.answer, learning=req.learning, balance=req.balance)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    cfg = settings_store.get_language()
+    return {"ok": True, **cfg, "lines": _lp.prompt_lines_from(cfg)}
+
+
 @app.get("/settings/max-tokens")
 def settings_get_max_tokens(api_key: str = Depends(get_api_key)):
     return {
@@ -2488,10 +2524,12 @@ async def chat_completion(request: dict, api_key: str = Depends(get_api_key)):
 
         # Inject brain persona as system message (if caller didn't provide one)
 
-        if BRAIN_PERSONA:
+        _lang_lines = _language_prompt_lines()
+        if BRAIN_PERSONA or _lang_lines:
             has_system = any(m.get("role") == "system" for m in messages)
             if not has_system:
-                messages = [{"role": "system", "content": BRAIN_PERSONA}] + messages
+                _sys = BRAIN_PERSONA + ("\n\n" + _lang_lines if _lang_lines else "")
+                messages = [{"role": "system", "content": _sys.strip()}] + messages
 
 
         do_stream = request.get("stream", False)
@@ -2946,6 +2984,11 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
                   "still setting it up. You have not been given a persona "
                   "yet. Answer helpfully and directly. Never recite setup, "
                   "template, or configuration instructions back to the user.")
+    # Language settings (Settings page, hbar 2026-10-25): two lines after the
+    # persona; they win over a persona that names a language.
+    _lang_lines = _language_prompt_lines()
+    if _lang_lines:
+        prompt += "\n\n" + _lang_lines
     # When this turn will carry retrieved documents or web results, lead the
     # system prompt with the standing untrusted-context policy so the
     # do-not-follow rule is stated once, globally, above any persona text.

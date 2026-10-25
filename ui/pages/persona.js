@@ -60,6 +60,7 @@ export default function Persona() {
         <p style={line}>This document is your brain's system prompt.</p>
         <p style={line}>It is loaded on every turn — who the brain is, how it thinks, what it knows about you.</p>
         <p style={line}>Edit it freely. Saving takes effect on the very next message.</p>
+        <p style={line}>Language is set in <a href="/settings" style={{ color: 'var(--accent)' }}>Settings</a> (Language); that setting wins over a language named here.</p>
       </div>
 
       {!loaded ? (

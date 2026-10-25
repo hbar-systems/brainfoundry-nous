@@ -472,6 +472,50 @@ def set_greeting(text: str) -> None:
         _save(data)
 
 
+# ── Language (hbar 2026-10-25) ───────────────────────────────────────────────
+# answer: "auto" (the language the person writes in), a code from
+# api/language_prefs.LANGUAGES, or free text ("other"). learning: "off", a code
+# or free text. balance: 0..100, how much of the answer is in the learning
+# language. The lines they produce are appended to the chat system prompt
+# (api/language_prefs.prompt_lines) and win over the persona's own wording.
+LANGUAGE_VALUE_MAX = 40
+
+
+def _lang_value(v, default: str) -> str:
+    if not isinstance(v, str):
+        raise ValueError(f"language must be str, got {type(v).__name__}")
+    v = " ".join(v.strip().split())[:LANGUAGE_VALUE_MAX]
+    return v or default
+
+
+def get_language() -> Dict[str, Any]:
+    d = _load().get("language")
+    d = d if isinstance(d, dict) else {}
+    answer = d.get("answer") if isinstance(d.get("answer"), str) and d.get("answer").strip() else "auto"
+    learning = d.get("learning") if isinstance(d.get("learning"), str) and d.get("learning").strip() else "off"
+    balance = d.get("balance")
+    if not isinstance(balance, int) or isinstance(balance, bool):
+        balance = 50
+    return {"answer": answer, "learning": learning, "balance": max(0, min(100, balance))}
+
+
+def set_language(answer: Optional[str] = None, learning: Optional[str] = None,
+                 balance: Optional[int] = None) -> None:
+    with _LOCK:
+        data = _load()
+        cur = get_language()
+        if answer is not None:
+            cur["answer"] = _lang_value(answer, "auto")
+        if learning is not None:
+            cur["learning"] = _lang_value(learning, "off")
+        if balance is not None:
+            if not isinstance(balance, int) or isinstance(balance, bool):
+                raise ValueError(f"balance must be int, got {type(balance).__name__}")
+            cur["balance"] = max(0, min(100, balance))
+        data["language"] = cur
+        _save(data)
+
+
 # ── First-run onboarding ("become-you") ─────────────────────────────────────
 # A brand-new brain runs the first-run experience (brain speaks first, live
 # fact extraction, "your mind" panel) until the owner completes or dismisses it.

@@ -1621,6 +1621,97 @@ function CCPanel() {
   )
 }
 
+// ---------- Language (hbar 2026-10-25) ----------
+// Answer language (auto = the language you write in), learning language (off by
+// default) and, when learning is on, the balance: how much of the answer is in
+// the language you are learning. Saved on the server through /settings/language;
+// the api appends two lines to the chat system prompt. The setting wins over a
+// persona that names a language.
+const LANG_CODES = ['en', 'ru', 'de', 'sk', 'es', 'fr', 'it', 'uk']
+function LanguagePanel() {
+  const [cfg, setCfg] = useState(null)
+  const [opts, setOpts] = useState({})
+  const [answerOther, setAnswerOther] = useState('')
+  const [learnOther, setLearnOther] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const isKnown = v => v === 'auto' || v === 'off' || LANG_CODES.includes(v)
+  const show = d => {
+    setCfg({ answer: d.answer || 'auto', learning: d.learning || 'off', balance: typeof d.balance === 'number' ? d.balance : 50 })
+    if (d.options) setOpts(d.options)
+    setAnswerOther(isKnown(d.answer) ? '' : (d.answer || ''))
+    setLearnOther(isKnown(d.learning) ? '' : (d.learning || ''))
+  }
+  useEffect(() => {
+    fetch('/api/bf/settings/language', { cache: 'no-store' }).then(r => (r.ok ? r.json() : false)).then(d => (d ? show(d) : setCfg(false))).catch(() => setCfg(false))
+  }, [])
+  const save = async (patch) => {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetch('/api/bf/settings/language', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.detail || `not saved (${r.status})`)
+      show({ ...d, options: opts })
+      setMsg('Saved. The next message uses it.')
+      setTimeout(() => setMsg(null), 4000)
+    } catch (e) { setMsg(e.message) }
+    setBusy(false)
+  }
+  if (cfg === null) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>reading…</p>
+  if (cfg === false) return <p style={{ color: 'var(--muted)', fontSize: 13, paddingTop: 16 }}>The api did not answer; the language setting needs the current brain version (Update page).</p>
+  const name = c => (opts[c] ? `${opts[c]} (${c})` : c)
+  const answerSel = isKnown(cfg.answer) ? cfg.answer : 'other'
+  const learnSel = isKnown(cfg.learning) ? cfg.learning : 'other'
+  const row = { display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap', fontSize: 13, color: 'var(--text)' }
+  const otherBox = (value, setValue, key) => (
+    <>
+      <input value={value} onChange={e => setValue(e.target.value)} placeholder="which language" maxLength={40} style={{ ...INPUT, width: 160 }} />
+      <button style={BTN} disabled={busy || !value.trim()} onClick={() => save({ [key]: value.trim() })}>Save</button>
+    </>
+  )
+  return (
+    <div style={{ paddingTop: 4 }}>
+      <div style={row}>
+        <span style={{ minWidth: 150, color: 'var(--text-dim)' }}>Answer language</span>
+        <select value={answerSel} disabled={busy} style={{ ...INPUT, width: 180 }}
+          onChange={e => { const v = e.target.value; if (v === 'other') { setCfg({ ...cfg, answer: answerOther || ' ' }) } else save({ answer: v }) }}>
+          <option value="auto">the language I write in</option>
+          {LANG_CODES.map(c => <option key={c} value={c}>{name(c)}</option>)}
+          <option value="other">other…</option>
+        </select>
+        {answerSel === 'other' && otherBox(answerOther, setAnswerOther, 'answer')}
+      </div>
+      <div style={row}>
+        <span style={{ minWidth: 150, color: 'var(--text-dim)' }}>Language I am learning</span>
+        <select value={learnSel} disabled={busy} style={{ ...INPUT, width: 180 }}
+          onChange={e => { const v = e.target.value; if (v === 'other') { setCfg({ ...cfg, learning: learnOther || ' ' }) } else save({ learning: v }) }}>
+          <option value="off">off</option>
+          {LANG_CODES.map(c => <option key={c} value={c}>{name(c)}</option>)}
+          <option value="other">other…</option>
+        </select>
+        {learnSel === 'other' && otherBox(learnOther, setLearnOther, 'learning')}
+      </div>
+      {cfg.learning !== 'off' && (
+        <div style={row}>
+          <span style={{ minWidth: 150, color: 'var(--text-dim)' }}>Balance</span>
+          <input type="range" min={0} max={100} step={5} value={cfg.balance} disabled={busy}
+            onChange={e => setCfg({ ...cfg, balance: Number(e.target.value) })}
+            onMouseUp={e => save({ balance: Number(e.target.value) })}
+            onTouchEnd={e => save({ balance: Number(e.target.value) })}
+            onKeyUp={e => save({ balance: Number(e.target.value) })}
+            style={{ width: 180, accentColor: 'var(--accent)' }} />
+          <span style={{ fontFamily: 'DM Mono, monospace', minWidth: 40 }}>{cfg.balance}%</span>
+          <span style={{ color: 'var(--muted)', fontSize: 12 }}>{cfg.balance === 0 ? 'a sentence or two' : cfg.balance === 100 ? 'the whole answer' : 'of the answer'} in the language you are learning; the rest, and then the whole answer again under a rule, in your own language.</span>
+        </div>
+      )}
+      <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, margin: '12px 0 0 0' }}>
+        These win over anything the persona says about language. Default: the brain answers in the language you write in.
+      </p>
+      {msg && <div style={{ color: msg.startsWith('Saved') ? 'var(--accent)' : '#d97777', fontSize: 12, marginTop: 8 }}>{msg}</div>}
+    </div>
+  )
+}
+
 // ---------- The console: newcomer or full (2026-10-17, new-mind standard section 2) ----------
 // One switch. Off: the menu shows the everyday pages, the rest sit under "more". On: every page.
 // Persona and layout live here now; their own pages stay where they were.
@@ -1861,6 +1952,10 @@ export default function Settings() {
             textDecoration: 'none', fontSize: 13, fontWeight: 600,
           }}>Open the persona editor</a>
         </div>
+      </Section>
+
+      <Section title="Language" subtitle="Which language the brain answers in, and a language you are learning.">
+        <LanguagePanel />
       </Section>
 
       <Section title="Appearance" subtitle="Palette and typography for the chat surface.">
