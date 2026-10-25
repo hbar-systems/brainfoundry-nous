@@ -310,9 +310,8 @@ SYSTEM += (
     "<profile>{\"answers\": {...}}</profile> block exactly as that file says. That block only PROPOSES; the "
     "person applies it with one click at /profile, so say that it is waiting for them."
     " Listening on orfeo: when the person asks to listen on orfeo, or to listen with their brain, run "
-    "`python scripts/orfeo_subscribe.py` in the brain repository (it reads BRAIN_API_KEY from the environment; "
-    "if that is missing, say so in one line and give that command for their terminal) and answer with the "
-    "printed link as a markdown link. The brain signs a taste note from its own memory; orfeo verifies it and "
+    "`cc-job radio` (optionally `cc-job radio <https station>`) and answer with the printed link as a markdown "
+    "link; if it is refused, say its one-line reason. The brain signs a taste note from its own memory; orfeo verifies it and "
     "plays in their order; nothing else of their memory leaves the brain."
 )
 
@@ -2214,6 +2213,19 @@ def _task_add(body: dict) -> tuple[int, dict]:
         return 502, {"ok": False, "error": "the brain did not take the task"}
     print(f"task added {d['task'].get('id')} from thread {tid or 'unknown'}", flush=True)
     return 200, {"ok": True, "task": d["task"]}
+
+
+def _radio_link(body: dict) -> tuple[int, dict]:
+    """Listen on a radio brain (2026-10-25): the bridge, which holds the brain's own key, asks the api
+    for a signed taste-note token and returns the link; the reasoner has no key of its own."""
+    station = str((body or {}).get("station") or "https://orfeo.music").strip()
+    if not station.startswith("https://"):
+        return 400, {"ok": False, "error": "station must be https"}
+    r = _brain_api("POST", "/v1/radio/subscribe-token", {"station": station})
+    if not r or not isinstance(r, dict) or not r.get("url"):
+        reason = (r or {}).get("detail") if isinstance(r, dict) else None
+        return 503, {"ok": False, "error": reason or "the brain's api issued no token (BRAIN_API_KEY on the bridge; BRAIN_PUBLIC_URL, BRAIN_PRIVATE_KEY and BRAIN_ID on the brain)"}
+    return 200, {"ok": True, "url": r["url"], "taste": r.get("taste", ""), "event": r.get("event")}
 
 
 def _task_done(body: dict) -> tuple:
@@ -4149,7 +4161,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -4539,6 +4551,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False, "error": "not the reasoner"})
                 return
             self._send(*_task_done(req))
+            return
+        if route == "/radio/link":
+            if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                self._send(403, {"ok": False, "error": "not the reasoner"})
+                return
+            self._send(*_radio_link(req))
             return
         if route == "/jobs/start":
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):

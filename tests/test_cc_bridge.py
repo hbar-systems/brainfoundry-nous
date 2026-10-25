@@ -1281,3 +1281,20 @@ def test_activity_lights_shape(monkeypatch, tmp_path):
     assert a["jobs"] == {"running": 3, "ids": ["J1", "J2", "J5"]}
     assert a["agents"]["running"] == [{"id": "J1", "title": "LAW-1 \"Magistrate\""}]
     assert m.cc_extras.Jobs.is_agent({"title": "A-007 Sentinel"}) and not m.cc_extras.Jobs.is_agent({"title": "palette: build"})
+
+
+def test_radio_link_returns_the_brain_link(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: {"url": "https://orfeo.music/radio?token=t.t.t", "taste": "afro house", "event": {"score": 0.21}} if path == "/v1/radio/subscribe-token" and body == {"station": "https://orfeo.music"} else None)
+    code, out = m._radio_link({})
+    assert code == 200 and out["ok"] and out["url"].startswith("https://orfeo.music/radio?token=")
+    assert out["event"]["score"] == 0.21
+
+
+def test_radio_link_refuses_without_token_or_https(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: None)
+    code, out = m._radio_link({"station": "https://orfeo.music"})
+    assert code == 503 and not out["ok"]
+    code, out = m._radio_link({"station": "http://orfeo.music"})
+    assert code == 400

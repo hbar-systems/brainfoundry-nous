@@ -15,6 +15,7 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job task list          the open tasks
     cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
     cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
+    cc-job radio [https://station]   a link to listen on a radio brain with this brain (orfeo.music by default)
     cc-job halt ["reason"] [--kill]   the kill switch (2026-10-25): writes ~/.cc-bridge/HALT; no new
                               job, tick or agent starts until resume; --kill also ends running jobs
     cc-job halt --status      halted or not, budget halts, running jobs
@@ -176,6 +177,15 @@ def main(argv: list[str]) -> int:
             if not d.get("results"):
                 print("refused:", d.get("error", "no answer"))
             return 0 if d.get("ok") else 1
+        if cmd == "radio":
+            # Listen on a radio brain (2026-10-25): the bridge asks the api for a signed taste-note link.
+            station = rest[0] if rest else "https://orfeo.music"
+            d = _call("POST", "/radio/link", {"station": station}, timeout=60)
+            if not d.get("ok"):
+                print("refused:", d.get("error", "no answer")); return 1
+            ev = d.get("event") or {}
+            tail = f"  (harmonics score {ev.get('score')})" if isinstance(ev, dict) and ev.get("score") is not None else ""
+            print(d["url"] + tail); return 0
         if cmd == "threads":
             # Thread ids and titles (2026-10-24), to link a thread as /talk?thread=<id>.
             words = [w.lower() for w in rest]
