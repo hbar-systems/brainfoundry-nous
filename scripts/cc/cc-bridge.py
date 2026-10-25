@@ -485,6 +485,18 @@ SYSTEM += (
     f"with a clear name, and you end the answer with <pane>/files?path=<that folder or file></pane> so they see and hear it "
     f"beside the chat. Files the person attaches arrive under {IN_DIR}/<date>/ and are named in the message; read them from there."
 )
+# Decks (2026-10-25, docs/DECK.md): spoken or typed words, or last year's PPTX, become Marp markdown the
+# reasoner rewrites, then an editable PPTX and a PDF rendered on the box.
+DECK_REPO = os.environ.get("BRAIN_DIR") or (f"/srv/brains/{MEMBER}" if MEMBER else os.environ.get("CC_BRAIN_REPO", "/home/hbar/brain"))
+DECK_PY = os.environ.get("DECK_PYTHON") or str(HANDS_HOME / ".local/deck-venv/bin/python")  # the reasoner runs as the hands
+SYSTEM += (
+    f" Decks: when the person asks for slides or a deck from their words, a recording or an old PPTX, run "
+    f"`{DECK_PY} {DECK_REPO}/scripts/deck/make-deck.py <input> --out {OUT_DIR}/<date> --draft-only` (input: a .txt "
+    f"of their words, an audio file, a .pptx), then rewrite deck.md yourself: one idea per slide, at most six short "
+    f"bullets, their own words kept in the <!-- --> speaker notes, nothing invented, a doubtful fact flagged in the notes; "
+    f"then run the same command on that deck.md without --draft-only. Answer with the slide count and "
+    f"<pane>/files?path=<the deck folder></pane>; deck.pptx opens and edits in PowerPoint, deck.pdf is for sharing."
+)
 if WORLD_DIR and SAME_ROOT:
     # Filing (2026-09-24, asked for by the operator: "all material gets organised within hbar.world").
     # out/ and in/ are the desk; the world is the archive. The reasoner files on the person's word.
