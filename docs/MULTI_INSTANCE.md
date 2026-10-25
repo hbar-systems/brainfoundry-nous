@@ -197,6 +197,48 @@ awk 'NF && $1 !~ /^#/' /srv/brains/members.tsv | wc -l | sudo tee /srv/brains/co
 
 Then the DNS names. The Ollama link timer drops the network by itself (it no longer exists).
 
+## Removing a member (by hand, 2026-10-25)
+
+Run on friends-1 the same evening two fresh members were renamed (removed and re-added under other
+handles). It is the list above, with what the box taught; there is no `remove-member.sh` yet. As the
+admin, with `m` the handle; nothing here reads `.env`.
+
+1. **Carry first.** The persona is not in the checkout: it lives in the `api_runtime` volume and dies
+   with `down -v`: `docker compose --project-directory /srv/brains/$m exec -T api cat
+   /app/runtime/brain_persona.local.md > carry/persona-$m.md`. The console password exists only as the
+   bcrypt line in the Caddy site block (`grep -E "^ +$m " /etc/caddy/Caddyfile`); carry that line if the
+   same password should open another block. Memory: `backup_brain.sh` or `export.sh` (above).
+2. **Back up** `/etc/caddy/Caddyfile` and `/srv/brains/members.tsv`; note `console.<other>` answers 401.
+3. **The stack:** `docker compose --project-directory /srv/brains/$m down -v --rmi local --remove-orphans`.
+   The network stays "in use": the shared Ollama sits on it. `docker network disconnect
+   brain-${m}_llm-network brain-ollama-1 && docker network rm brain-${m}_llm-network`.
+4. **Units:** for `u` in cc-bridge claude-tab cc-bridge-watch cc-install-watch cc-work-pull and `ext`
+   in service path timer, when `/etc/systemd/system/$u-$m.$ext` exists: `systemctl disable --now`,
+   `rm`. Then `systemctl daemon-reload; systemctl reset-failed`. (The watch .service files have no
+   [Install]; systemd says so and removes them anyway.)
+5. **Sudoers:** `rm /etc/sudoers.d/{cc-bridge-$m,cc-hands-$m,brain-update-$m}; visudo -c`.
+   `rm -rf /var/lib/brain-update/$m` (exists only after a first Update).
+6. **Caddy token and unit:** `rm /etc/caddy/cc-$m.env /etc/systemd/system/caddy.service.d/cc-$m.conf`
+   (split-hands.sh writes one drop-in per member, so no unit edit), then `systemctl daemon-reload`
+   before any caddy restart: a missing `EnvironmentFile=` without `-` fails the start.
+7. **Users:** `pkill -u $m-cc; pkill -u $m-hands; userdel -r $m-cc; userdel -r $m-hands; groupdel
+   $m-brain` (the admin's membership in `$m-brain` goes with the group; `userdel` warns about a missing
+   mail spool, harmless).
+8. **Checkout and registry:** `rm -rf /srv/brains/$m`; `sed -i "/^$m\t/d" /srv/brains/members.tsv`;
+   `awk 'NF && $1 !~ /^#/' /srv/brains/members.tsv | wc -l | tr -d ' ' | tee /srv/brains/count;
+   chmod 644 /srv/brains/count`.
+9. **Caddyfile:** drop `$m.brainfoundry.ai { }` and `console.$m.brainfoundry.ai { }` (match braces, not
+   line counts); `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`; restart only on
+   Valid; `console.<other>` 401 again.
+10. **Leftovers:** `getent passwd|group`, `ls /etc/systemd/system /etc/systemd/system/caddy.service.d
+    /etc/caddy /etc/sudoers.d /srv/brains /home`, `docker ps -a`, `volume ls`, `network ls`, `images`,
+    all grepped for `$m`; `ss -Htln` shows no port of the block. Then the two DNS names.
+
+Doing it over ssh: upload the script with `cat > file` over stdin and byte-compare it, then run
+`bash file </dev/null`. Never put hashes or `{$VAR}` in a double-quoted ssh string (they expand), and
+inside a script that itself arrives on stdin every `docker compose exec -T` needs `</dev/null`, or it
+reads the rest of the script as its input and the script ends there.
+
 ## The cut-over test (before anyone moves in)
 
 One scratch member, `test1`, beside the brain a box already runs. Not on hbar's own box: use a
