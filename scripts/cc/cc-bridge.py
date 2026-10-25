@@ -381,6 +381,7 @@ import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
+import cc_halt  # noqa: E402   the kill switch (2026-10-25): HALT file + budget HALT, docs/KILL_SWITCH.md
 
 # A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md): CC_MEMBER names this bridge's
 # units (cc-bridge-<m>, claude-tab-<m>) and narrows the root verbs the prompt names to the four the
@@ -858,6 +859,11 @@ def _tick_once() -> int | None:
     Unset CC_TICK_CMD = off. Every job it opens still runs under the permission hook and its budget."""
     if not TICK["cmd"] or TICK["running"]:
         return None
+    why = cc_halt.halted(HANDS_HOME)
+    if why:                                      # the kill switch (2026-10-25): no standing order while halted
+        print(f"tick skipped: {why}", flush=True)
+        TICK["last"] = time.time()
+        return None
     TICK["running"] = True
     try:
         r = subprocess.run(_as_hands(["bash", "-lc", TICK["cmd"]]), capture_output=True, text=True, timeout=600)
@@ -905,7 +911,7 @@ def _agents_loop() -> None:
     while True:
         # Over the owner's spend cap, scheduled agents do not start; they wait, and Settings says so.
         # Run now on the Agents page is the owner's own press, so it still works (that press is the ask).
-        if SPEND.over_cap():
+        if SPEND.over_cap() or cc_halt.halted(HANDS_HOME):
             time.sleep(60)
             continue
         code, d = _agents_call(["tick"])
@@ -1526,6 +1532,7 @@ def _host_system() -> dict:
     except OSError:
         d["judgments"] = 0
     d["jobs_running"] = sum(1 for j in JOBS.list() if j.get("ended") is None)
+    d["halt"] = cc_halt.halted(HANDS_HOME)       # the kill switch (2026-10-25): "HALT: <reason>" or None
     members = _box_members()
     if MEMBER:
         own = (BRIDGE_UNIT, TAB_UNIT, cc_member.unit("cc-work-pull", MEMBER) + ".timer",
@@ -3450,6 +3457,19 @@ def _tg_turn(chat_id, text: str) -> None:
         _tg_send(chat_id, reply)
 
 
+def _halt_from(word: str, where: str) -> str:
+    """halt or resume, as the hands user through the installed cc-job (the one writer of the HALT file),
+    so the shell, the phone and the page share one code path and one log line each (2026-10-25)."""
+    argv = [str(HANDS_HOME / ".local" / "bin" / "cc-job"), word] + ([f"from {where}"] if word == "halt" else [])
+    try:
+        r = subprocess.run(_as_hands(argv), capture_output=True, text=True, timeout=30)
+        out = ((r.stdout or "") + (r.stderr or "")).strip() or f"cc-job {word}: rc {r.returncode}"
+    except Exception as e:  # noqa: BLE001
+        out = f"cc-job {word} failed: {type(e).__name__}"
+    print(f"{word} from {where}: {out.splitlines()[0][:200]}", flush=True)
+    return out[:1500]
+
+
 def _tg_handle(update: dict) -> None:
     ev = cc_extras.Telegram.parse_update(update)
     if not ev:
@@ -3499,6 +3519,10 @@ def _tg_handle(update: dict) -> None:
             TG.call("sendMessage", chat_id=chat_id, text=f"could not take the attachment ({type(e).__name__})"); return
     if not text:
         return
+    if text.lower() in ("halt", "resume"):
+        # The kill switch from the phone (2026-10-25): the whole message is the word, owner only (checked
+        # above). Same path as the shell: cc-job halt / resume as the hands, which writes the HALT file.
+        TG.call("sendMessage", chat_id=chat_id, text=_halt_from(text.lower(), "the phone (telegram)")); return
     if text == "/new":
         TG.save(thread=None); TG.call("sendMessage", chat_id=chat_id, text="new conversation"); return
     if text == "/stop":
@@ -4475,6 +4499,11 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/jobs/start":
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"error": "not the reasoner"})
+                return
+            why = cc_halt.refusal(HANDS_HOME, WORLD_DIR, str(req.get("title", "")))
+            if why:                              # the kill switch (2026-10-25): HALT file, or a post's weekly budget spent
+                print(f"job refused: {why} ({str(req.get('title', ''))[:60]})", flush=True)
+                self._send(409, {"error": why})
                 return
             d = JOBS.start(str(req.get("command", "")), req.get("cwd") or None, str(req.get("title", "")),
                            thread=str(req.get("thread") or ""), run=str(req.get("run") or ""))

@@ -395,6 +395,7 @@ SUDOERS
         # cc-job: commands that outlive a turn, started through the bridge (scripts/cc/cc-job.py).
         $SUDO_AS_BRIDGE mkdir -p "$BRIDGE_HOME/.local/bin" "$BRIDGE_HOME/out" "$BRIDGE_HOME/in"
         $SUDO_AS_BRIDGE cp "$BRAIN_DIR/scripts/cc/cc-job.py" "$BRIDGE_HOME/.local/bin/cc-job"
+        $SUDO_AS_BRIDGE cp "$BRAIN_DIR/scripts/cc/cc_halt.py" "$BRIDGE_HOME/.local/bin/cc_halt.py"   # the kill switch's module, imported by cc-job (2026-10-25)
         $SUDO_AS_BRIDGE chmod 755 "$BRIDGE_HOME/.local/bin/cc-job"
         echo "box hands on: edits and commands raise a card; root verbs in /etc/sudoers.d/cc-bridge$SFX$HELPER_NOTE; cc-job installed"
     else

@@ -15,6 +15,10 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job task list          the open tasks
     cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
     cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
+    cc-job halt ["reason"] [--kill]   the kill switch (2026-10-25): writes ~/.cc-bridge/HALT; no new
+                              job, tick or agent starts until resume; --kill also ends running jobs
+    cc-job halt --status      halted or not, budget halts, running jobs
+    cc-job resume             removes the HALT file
 
 Jobs never run sudo. A claude started by a job gets the turn's permission settings, and the flags
 that would loosen the owner's posture are refused by the bridge (2026-10-19, cc_guard.py). The person sees every job on the CC page and can ask about it.
@@ -25,6 +29,52 @@ import shlex
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+# The kill switch's shared module (2026-10-25): beside this file in the repo, and install.sh copies
+# it beside the installed cc-job. Without it, halt/resume still work on the file alone.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cc_halt
+except Exception:  # noqa: BLE001
+    cc_halt = None
+
+HANDS_HOME = Path(os.environ.get("HOME") or Path.home())
+
+
+def _halt_cmd(rest: list[str]) -> int:
+    """cc-job halt ["reason"] [--kill] | cc-job halt --status | cc-job resume (routed here as ["--resume"])."""
+    by = os.environ.get("USER") or "hands"
+    halt_file = HANDS_HOME / ".cc-bridge" / "HALT"
+    if "--resume" in rest:
+        if cc_halt:
+            was = cc_halt.clear_halt(HANDS_HOME, by=by)
+        else:
+            was = halt_file.exists(); halt_file.unlink(missing_ok=True)
+        print("resumed: new jobs, the tick and agents may start again" if was else "was not halted"); return 0
+    if "--status" in rest:
+        why = cc_halt.halted(HANDS_HOME) if cc_halt else (f"HALT: {halt_file.read_text().strip().splitlines()[0]}" if halt_file.exists() else None)
+        print(why or "not halted (no HALT file)")
+        if cc_halt:
+            b = cc_halt.budget_halts(os.environ.get("CC_WORLD_DIR", ""))
+            print("budget halts: " + (", ".join(f"{k} ({v})" for k, v in b.items()) if b else "none"))
+            running = cc_halt.running_jobs(HANDS_HOME / "out" / "jobs" / "jobs.json")
+            print(f"running jobs: {len(running)}" + ("".join(f"\n  {r['id']}  {r.get('title', '')[:70]}" for r in running)))
+        print(f"file: {halt_file}"); return 0 if not why else 3
+    kill = "--kill" in rest
+    reason = " ".join(w for w in rest if w != "--kill").strip() or f"halted by {by}"
+    if cc_halt:
+        cc_halt.set_halt(HANDS_HOME, reason, by=by)
+    else:
+        halt_file.parent.mkdir(parents=True, exist_ok=True); halt_file.write_text(reason + "\n")
+    print(f"HALT: {reason}\nno new job, tick or agent starts until: cc-job resume")
+    if kill:
+        if not cc_halt:
+            print("--kill needs cc_halt.py beside cc-job; running jobs were left alone"); return 1
+        ids = cc_halt.kill_jobs(HANDS_HOME / "out" / "jobs" / "jobs.json")
+        cc_halt.log(HANDS_HOME, f"kill by {by}: {' '.join(ids) if ids else 'no running jobs'}")
+        print("ended running jobs: " + (" ".join(ids) if ids else "none were running"))
+    return 0
 
 
 def _call(method: str, route: str, body: dict | None = None, timeout: float = 30) -> dict:
@@ -48,6 +98,10 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__); return 2
     cmd, rest = argv[0], argv[1:]
+    if cmd == "halt":
+        return _halt_cmd(rest)
+    if cmd == "resume":
+        return _halt_cmd(["--resume"])
     try:
         if cmd == "run":
             cwd, title = None, ""
@@ -71,7 +125,8 @@ def main(argv: list[str]) -> int:
                                               "thread": os.environ.get("CC_THREAD_ID", "").strip() or "unknown",
                                               "run": os.environ.get("CC_RUN_ID", "").strip() or None})
             if d.get("error"):
-                print("refused:", d["error"]); return 1
+                # The kill switch (2026-10-25): the bridge says HALT: <reason>; print it as it is.
+                print(d["error"] if str(d["error"]).startswith("HALT") else "refused: " + str(d["error"])); return 1
             print(f"started {d['id']} (log {d['log']}); check with: cc-job status {d['id']}"); return 0
         if cmd == "status" and rest:
             d = _call("GET", f"/jobs/{rest[0]}")

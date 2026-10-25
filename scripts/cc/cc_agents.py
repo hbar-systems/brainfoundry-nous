@@ -28,6 +28,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cc_halt  # noqa: E402   the kill switch (2026-10-25): no agent run while ~/.cc-bridge/HALT exists
+
 AGENTS_DIR = Path(os.environ.get("CC_AGENTS_DIR") or (Path.home() / "agents"))
 HOOK_DIR = Path(os.environ.get("CC_HOOK_DIR") or Path(__file__).resolve().parent)
 HOOK_PYTHON = os.environ.get("CC_HOOK_PYTHON", "/usr/bin/python3")
@@ -467,6 +470,8 @@ def main(argv: list[str]) -> int:
             out = {"ok": True, "agent": update(argv[2], json.loads(sys.stdin.read() or "{}"))}
         elif cmd == "delete":
             out = delete(argv[2])
+        elif cmd in ("run", "tick") and cc_halt.halted(Path.home()):
+            out = {"ok": False, "error": cc_halt.halted(Path.home()), "started": []}
         elif cmd == "run":
             out = {"ok": True, "agent": run(argv[2])}
         elif cmd == "tick":
