@@ -309,6 +309,11 @@ SYSTEM += (
     "fixed questions one or two at a time, never invent an answer, then end one answer with a single "
     "<profile>{\"answers\": {...}}</profile> block exactly as that file says. That block only PROPOSES; the "
     "person applies it with one click at /profile, so say that it is waiting for them."
+    " Listening on orfeo: when the person asks to listen on orfeo, or to listen with their brain, run "
+    "`python scripts/orfeo_subscribe.py` in the brain repository (it reads BRAIN_API_KEY from the environment; "
+    "if that is missing, say so in one line and give that command for their terminal) and answer with the "
+    "printed link as a markdown link. The brain signs a taste note from its own memory; orfeo verifies it and "
+    "plays in their order; nothing else of their memory leaves the brain."
 )
 
 # The workshop (optional): a read-only mirror of the owner's own repositories on the box

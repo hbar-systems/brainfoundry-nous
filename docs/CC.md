@@ -338,3 +338,7 @@ One permission file for all agents (2026-10-18): the hands' `~/agents/permission
 Spend cap: Settings holds a EUR limit for the last 30 days (scripts/cc/cc_spend.py). Over it, scheduled agents do not start; Run now still works. The cap does not stop conversations or jobs.
 
 Autonomy levels (2026-10-17): every agent has a level the owner sets on the page. 0 propose: writes only its state and sitrep. 1 branch (default): commits on its own branch in its own worktree, never pushes. 2 ship: may also push its own branch onto main of the repo in its worktree (`git push origin HEAD:main`), only after the repo's tests pass and with no secret or private material in the diff; force pushes, branch deletion and every other push stay refused. No agent can change its own level.
+
+## Listening on orfeo (2026-10-25)
+
+Say "listen on orfeo" in the chat. The reasoner runs `scripts/orfeo_subscribe.py` on the brain: the brain builds a taste note from its own memory (local-only chunks excluded), signs it as a federation assertion addressed to the station, and the script prints a link to orfeo.music/radio with the token. Orfeo verifies the signature against this brain's /identity and plays its library in your order; it never stores the token. The script needs BRAIN_API_KEY in the environment; without it the reasoner gives you the command for the terminal. Route: POST /v1/radio/subscribe-token. Tests: tests/test_orfeo_subscribe.py.
