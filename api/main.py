@@ -3991,6 +3991,30 @@ def _ask_base_url(http_request: Request) -> str:
     return str(http_request.base_url).rstrip("/")
 
 
+class RadioSubscribeRequest(BaseModel):
+    station: str = "https://orfeo.music"
+
+
+@app.post("/v1/radio/subscribe-token")
+def radio_subscribe_token(req: RadioSubscribeRequest, http_request: Request,
+                          api_key: str = Depends(get_api_key)):
+    """Owner-gated: a signed taste note for a radio station (logic in api/radio_taste.py)."""
+    from api import radio_taste as _rt
+    private_key, brain_id = os.getenv("BRAIN_PRIVATE_KEY"), os.getenv("BRAIN_ID")
+    if not private_key or not brain_id:
+        raise HTTPException(503, "BRAIN_PRIVATE_KEY and BRAIN_ID must be set to sign a token")
+    try:
+        station = _rt.normalise_station(req.station)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    endpoint = _ask_base_url(http_request)
+    if not endpoint.startswith("https://"):
+        raise HTTPException(503, "no public https base URL: set BRAIN_PUBLIC_URL")
+    taste = _rt.collect_taste(search_similar_documents)
+    token = _rt.issue_token(taste=taste, private_key=private_key, brain_id=brain_id, endpoint=endpoint)
+    return {"token": token, "url": _rt.station_url(station, token), "taste": taste}
+
+
 @app.get("/.well-known/agent-card.json")
 def ask_agent_card(http_request: Request):
     """Public A2A Agent Card: who this brain is, where to ask, how to sign."""

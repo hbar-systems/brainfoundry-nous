@@ -152,6 +152,18 @@ curl -X POST https://brain-b.example.com/v1/federation/assertion \
 
 A successful response returns the decoded claims. A failure returns a structured error with one of the four codes above.
 
+## Subscribing to a radio brain
+
+A brain can hand a station a short note about its owner's taste, signed, instead of letting the station into its memory.
+
+```
+python scripts/orfeo_subscribe.py            # prints https://orfeo.music/radio?token=...
+```
+
+The script calls the owner-only route `POST /v1/radio/subscribe-token` (`X-API-Key`, body `{"station": "https://orfeo.music"}`). The brain searches its own memory (open chunks only), reduces the hits to a note of at most 600 characters, and signs it as an assertion with `aud` set to the station, `sub` `radio.subscribe`, a ten-minute expiry, and the extra claims `taste` and `issuer_endpoint`.
+
+The station reads `issuer_endpoint`, fetches `GET /identity` there, checks that `brain_id` equals `iss`, and verifies the signature, audience, subject and expiry. Nothing of the memory leaves the brain except the note the brain chose to send. The route needs `BRAIN_PRIVATE_KEY`, `BRAIN_ID` and a public https URL (`BRAIN_PUBLIC_URL`); without them it answers 503 with the reason.
+
 ## Status
 
 The bidirectional HTTPS federation handshake is working. Two independent brain instances on separate servers can exchange ED25519-signed assertions, each fetching the peer's public key live from `/identity` and verifying signature, audience, issuer, and expiry server-side.
