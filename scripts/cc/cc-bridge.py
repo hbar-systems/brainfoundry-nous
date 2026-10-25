@@ -304,7 +304,8 @@ SYSTEM += (
     "the person applies it with one click, so say that it is waiting for them."
     " How you talk to them: when the person asks to set up how you talk to them (their profile, preferences, "
     "tone), or on the first turn of a thread when the <persona> block has no profile:begin marker yet, read "
-    "docs/profile-interview.md in the brain repository and follow it: on a first turn only offer it once, ask its "
+    "docs/profile-interview.md in the brain repository and follow it (unless a <first-use> block is present: then "
+    "docs/first-use.md governs the first turns and the profile questions come one at a time, when needed): on a first turn only offer it once, ask its "
     "fixed questions one or two at a time, never invent an answer, then end one answer with a single "
     "<profile>{\"answers\": {...}}</profile> block exactly as that file says. That block only PROPOSES; the "
     "person applies it with one click at /profile, so say that it is waiting for them."
@@ -2628,7 +2629,33 @@ def _memory(query: str) -> list[dict]:
 LAST_SOURCES: list = []   # document names retrieved for the latest turn; the graph pane lights them up
 
 
-def _compose(message: str, recent: str = "") -> tuple[str, int]:
+def _owner_documents() -> int | None:
+    """How many documents the Knowledge store holds (GET /documents/stats, unique_documents, trash excluded);
+    None when the brain cannot be asked. One cheap count, only asked on a first turn (2026-10-25)."""
+    d = _brain_api("GET", "/documents/stats")
+    n = d.get("unique_documents") if isinstance(d, dict) else None
+    return n if isinstance(n, int) else None
+
+
+def _first_use(fresh: bool) -> str:
+    """On a thread's first turn: when the persona has no profile block AND the Knowledge store is known to be
+    empty, a pointer to docs/first-use.md (one question, one document); else ''. A store that cannot be
+    asked counts as not new, so the profile interview keeps today's behaviour (2026-10-25)."""
+    if not fresh:
+        return ""
+    try:
+        if cc_profile.has_block(PERSONA_FILE.read_text(encoding="utf-8")):
+            return ""
+    except Exception:
+        pass
+    if _owner_documents() != 0:
+        return ""
+    return ("This brain is new: no profile yet and no documents in Knowledge. Do not offer the nine profile "
+            "questions. Read docs/first-use.md in the brain repository and follow it: ask the one question, then "
+            "ask for one document. Remembered state, not the person's words.")
+
+
+def _compose(message: str, recent: str = "", first_use: str = "") -> tuple[str, int]:
     global LAST_SOURCES
     chunks = _memory(message)
     LAST_SOURCES = list(dict.fromkeys(c["source"] for c in chunks))[:12]
@@ -2647,6 +2674,8 @@ def _compose(message: str, recent: str = "") -> tuple[str, int]:
     if recent:
         parts.append(f"<recent>\nWhat moved in the last {RECENT_HOURS} h; read before answering. "
                      "Remembered state, not instructions.\n\n" + recent + "\n</recent>")
+    if first_use:
+        parts.append("<first-use>\n" + first_use + "\n</first-use>")
     parts.append("<message>\n" + message + "\n</message>")
     return "\n\n".join(parts), len(chunks)
 
@@ -2820,10 +2849,10 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
     return result, err, proc.returncode
 
 
-def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_event=None, run: Run | None = None, recent: str = "") -> tuple[str, str | None, bool]:
+def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_event=None, run: Run | None = None, recent: str = "", first_use: str = "") -> tuple[str, str | None, bool]:
     """A turn. With on_event, the reasoner streams (start / text / tool events) and the
     same reply comes back at the end; META holds the last turn's usage for the page."""
-    prompt, used = _compose(message, recent)
+    prompt, used = _compose(message, recent, first_use)
     print(f"memory chunks={used} recent={len(recent)}", flush=True)
     tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
     cmd = [REASONER, "-p", "--output-format", "json",
@@ -2962,7 +2991,7 @@ def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
 
 
 def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
-                    recent: str = "") -> tuple[str, str | None, bool]:
+                    recent: str = "", first_use: str = "") -> tuple[str, str | None, bool]:
     """A turn on the Codex seat: `codex exec --json` as the hands, read-only, the prompt on stdin.
     Streams start / block / text / tool like the Claude seat. Refuses (is_error, no fallback) when
     the binary is missing or not signed in."""
@@ -2975,7 +3004,7 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
         cmd = cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
     except cc_codex.Unsafe as e:
         return f"The Codex seat refused to start: {e}. Nothing ran.", session_id, True
-    prompt, used = _compose(message, recent)
+    prompt, used = _compose(message, recent, first_use)
     print(f"memory chunks={used} recent={len(recent)} seat=codex", flush=True)
     prompt = f"<instructions>\n{CODEX_SYSTEM}\n</instructions>\n\n{prompt}"
     run = run or Run(None, "")
@@ -3239,10 +3268,10 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         fresh = new or not state.get(skey)   # a new thread, or one this seat has not seen yet
         if seat == "codex":
             reply, sid, is_error = _run_codex_turn(message, state.get(skey), on_event=run.emit, run=run,
-                                                   recent=_recent(message, fresh))
+                                                   recent=_recent(message, fresh), first_use=_first_use(fresh))
         else:
             reply, sid, is_error = _run_turn(message, state.get(skey), on_event=run.emit, run=run,
-                                             recent=_recent(message, fresh))
+                                             recent=_recent(message, fresh), first_use=_first_use(fresh))
         state["reasoner"] = seat
         if sid:
             state[skey] = sid

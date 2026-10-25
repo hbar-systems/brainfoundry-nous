@@ -171,3 +171,41 @@ def test_bridge_speech_history_and_persona_cut(monkeypatch, tmp_path):
     m.PERSONA_FILE.write_text(P.replace_block("You are Lyra.\n" + "x" * 9000, P.to_persona_md(FULL)))
     got = m._persona()
     assert len(got) <= m.PERSONA_MAX and P.has_block(got)
+
+
+# ---- first use (2026-10-25): a new brain asks one question, not nine ----
+def _bridge_fu(monkeypatch, tmp_path):
+    import importlib.util
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CC_CWD", str(tmp_path / "brain"))
+    monkeypatch.setenv("BRAIN_API_KEY", "test-key")
+    spec = importlib.util.spec_from_file_location("cc_bridge_fu", ROOT / "scripts" / "cc" / "cc-bridge.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cc_bridge_fu"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_first_use_branch(monkeypatch, tmp_path):
+    m = _bridge_fu(monkeypatch, tmp_path)
+    m.PERSONA_FILE = tmp_path / "persona.md"
+    m.PERSONA_FILE.write_text("# Name\nplain persona\n")
+    monkeypatch.setattr(m, "_owner_documents", lambda: 0)
+    assert "docs/first-use.md" in m._first_use(True)          # new brain: no marker, no documents
+    assert m._first_use(False) == ""                           # not a first turn
+    monkeypatch.setattr(m, "_owner_documents", lambda: 3)
+    assert m._first_use(True) == ""                            # has documents: profile interview as before
+    monkeypatch.setattr(m, "_owner_documents", lambda: None)
+    assert m._first_use(True) == ""                            # store cannot be asked: not treated as new
+    monkeypatch.setattr(m, "_owner_documents", lambda: 0)
+    m.PERSONA_FILE.write_text(P.replace_block("x\n", P.to_persona_md({"tone": "direct"})) + "\n")
+    assert m._first_use(True) == ""                            # profile already set
+    prompt, _ = m._compose("hello", "", "pointer")
+    assert "<first-use>\npointer\n</first-use>" in prompt
+
+
+def test_first_use_doc_exists_and_covers_questions():
+    doc = (ROOT / "docs" / "first-use.md").read_text()
+    assert "What do you want to work on?" in doc
+    for q in P.QUESTIONS:
+        assert q["id"] in doc, q["id"]
