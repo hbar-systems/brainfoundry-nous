@@ -67,9 +67,12 @@ def env(base: dict) -> dict:
     return out
 
 
-def build_cmd(bin_path: str, cwd: str, session_id: str | None = None, model: str = "") -> list[str]:
+def build_cmd(bin_path: str, cwd: str, session_id: str | None = None, model: str = "",
+              extra: list[str] | None = None) -> list[str]:
     """`codex exec` for one turn. The prompt goes in on stdin ("-"), never on the command line
-    (sudo logs arguments). A resumed turn takes the sandbox from -c (`exec resume` has no -s/-C)."""
+    (sudo logs arguments). A resumed turn takes the sandbox from -c (`exec resume` has no -s/-C).
+    `extra` is more `-c k=v` pairs (the local seat's provider, cc_local.py); the read-only check
+    below runs over the whole line either way."""
     if session_id and not _SID.match(session_id):
         raise Unsafe("not a Codex session id")
     if model and not _MODEL.match(model):
@@ -78,6 +81,7 @@ def build_cmd(bin_path: str, cwd: str, session_id: str | None = None, model: str
         cmd = [bin_path, "exec", "resume", *_COMMON]
     else:
         cmd = [bin_path, "exec", *_COMMON, "-s", MODE, "-C", cwd, "--color", "never"]
+    cmd += list(extra or [])
     if model:
         cmd += ["-m", model]
     if session_id:

@@ -22,7 +22,8 @@ the bridge; the CLI keeps its own credentials in the brain user's home.
 
 Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method}
-  POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"} -> {"reply","session_id","ms","error","reasoner"}
+  POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
+  GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line"}  (live GET <base>/models, 5 s)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
@@ -37,6 +38,7 @@ Endpoints (JSON):
 Configuration (environment, all optional):
   CC_BIND=127.0.0.1  CC_PORT=7682  CC_BASE=/cc  CC_CWD=$HOME/brain
   CC_BIN=$HOME/.local/bin/claude  CC_TOOLS=Read,Grep,Glob  CC_TIMEOUT=300
+  CC_LOCAL_BASE_URL=<OpenAI-compatible endpoint, e.g. http://100.x.y.z:8000/v1>  CC_LOCAL_MODEL=<name>  CC_LOCAL_API_KEY=<key>   (Local seat)
   CC_CODEX_BIN=<hands home>/.local/bin/codex  CC_CODEX_MODEL=<optional model name>
   BRAIN_API_URL=http://127.0.0.1:8010  BRAIN_API_KEY=<the brain's own api key>  CC_MEMORY_K=6
 The api key reaches the bridge through a mode-600 env file (see install.sh),
@@ -385,6 +387,7 @@ import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
+import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_halt  # noqa: E402   the kill switch (2026-10-25): HALT file + budget HALT, docs/KILL_SWITCH.md
@@ -407,7 +410,8 @@ if MEMBER and os.environ.get("CC_MEMBER_N", "").strip():
 # The Codex seat (2026-10-15; scripts/cc/cc_codex.py, docs/CC.md "Codex seat"): a second reasoner,
 # chosen per thread. Read-only by construction; refused, never silently replaced, when the binary is
 # missing or not signed in.
-REASONERS = ("claude", "codex")
+REASONERS = ("claude", "codex", "local")
+READ_ONLY_SEATS = ("codex", "local")
 CODEX_BIN = cc_codex.binary(HANDS_HOME, os.environ.get("CC_CODEX_BIN", ""))
 CODEX_MODEL = os.environ.get("CC_CODEX_MODEL", "").strip()
 CODEX_SYSTEM = SYSTEM_CORE + (
@@ -2299,6 +2303,8 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
             entry["reasoner"] = state["reasoner"]
         if state.get("codex_id"):
             entry["codex"] = state["codex_id"]
+        if state.get("local_id"):
+            entry["local"] = state["local_id"]
         threads.append(entry)
         _threads_save(threads)
     sid = state["brain_session_id"]
@@ -2322,6 +2328,8 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
                 th["claude"] = state["session_id"]
             if state.get("codex_id"):
                 th["codex"] = state["codex_id"]
+            if state.get("local_id"):
+                th["local"] = state["local_id"]
             if state.get("reasoner") in REASONERS:
                 th["reasoner"] = state["reasoner"]
     _threads_save(threads)
@@ -3017,6 +3025,13 @@ def _codex_status(fresh: bool = False) -> dict:
     return dict(st)
 
 
+def _local_status(live: bool = True) -> dict:
+    """The Local seat's state for the page: configured, answering, `local: <model> at <host>`. live:
+    a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down never stalls it.
+    Never carries the key."""
+    return cc_local.status(os.environ, live=live)
+
+
 def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
     """Which seat answers: the one this turn asks for, else the thread's own, else Claude."""
     for r in (requested, (thread_entry or {}).get("reasoner"), state.get("reasoner")):
@@ -3026,25 +3041,29 @@ def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
 
 
 def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
-                    recent: str = "", first_use: str = "") -> tuple[str, str | None, bool]:
-    """A turn on the Codex seat: `codex exec --json` as the hands, read-only, the prompt on stdin.
+                    recent: str = "", first_use: str = "", seat: str = "codex") -> tuple[str, str | None, bool]:
+    """A turn on the Codex seat (seat="local": the same machinery on a self-hosted model, cc_local.py): `codex exec --json` as the hands, read-only, the prompt on stdin.
     Streams start / block / text / tool like the Claude seat. Refuses (is_error, no fallback) when
     the binary is missing or not signed in."""
     META.clear()
-    META.update({"reasoner": "codex", "model": CODEX_MODEL or "codex"})
-    no = cc_codex.refusal(_codex_status(fresh=True))
+    local = seat == "local"
+    name = "Local" if local else "Codex"
+    lst = cc_local.settings(os.environ) if local else {}
+    model = (lst["model"] if local else CODEX_MODEL)
+    META.update({"reasoner": seat, "model": model or seat})
+    no = cc_local.probe(lst) if local else cc_codex.refusal(_codex_status(fresh=True))
     if no:
         return no, session_id, True
     try:
-        cmd = cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
+        cmd = cc_local.build_cmd(CODEX_BIN, RUN_CWD, lst, session_id) if local else cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
     except cc_codex.Unsafe as e:
-        return f"The Codex seat refused to start: {e}. Nothing ran.", session_id, True
+        return f"The {name} seat refused to start: {e}. Nothing ran.", session_id, True
     prompt, used = _compose(message, recent, first_use)
-    print(f"memory chunks={used} recent={len(recent)} seat=codex", flush=True)
+    print(f"memory chunks={used} recent={len(recent)} seat={seat}", flush=True)
     prompt = f"<instructions>\n{CODEX_SYSTEM}\n</instructions>\n\n{prompt}"
     run = run or Run(None, "")
     on_event = on_event or (lambda k, p: None)
-    env = cc_codex.env(_run_env(run))
+    env = cc_local.env(_run_env(run), lst["key"]) if local else cc_codex.env(_run_env(run))
     proc = subprocess.Popen(_as_hands(cmd, env), cwd=RUN_CWD, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     run.proc = proc
@@ -3077,7 +3096,7 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
             item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
             if kind == "thread.started":
                 sid = ev.get("thread_id") or sid
-                on_event("start", {"model": CODEX_MODEL or "codex", "session_id": sid, "reasoner": "codex"})
+                on_event("start", {"model": model or seat, "session_id": sid, "reasoner": seat})
             elif kind in ("item.started", "item.completed"):
                 b = cc_codex.brief(item)
                 if b and item.get("id") not in shown:
@@ -3105,15 +3124,17 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
         said = "".join(run.partial).strip()
         return (said + "\n\n" if said else "") + "(stopped by you)", sid, False
     if proc.returncode == -9 and not texts:
-        return f"The Codex seat went silent for over {TIMEOUT_S // 60} minutes and was stopped.", sid, True
+        return f"The {name} seat went silent for over {TIMEOUT_S // 60} minutes and was stopped.", sid, True
     if failed or (proc.returncode != 0 and not texts):
         err = (failed or last_err or err_tail or "no output")[:600]
+        if local and cc_codex.is_auth_error(err):
+            return "The Local seat's endpoint refused the key (check CC_LOCAL_API_KEY in the bridge's env file). Nothing fell back to another seat.", sid, True
         if cc_codex.is_auth_error(err):
             _codex_status(fresh=True)
             return "The Codex seat's sign-in needs renewing: use Sign in with ChatGPT, then send again. Nothing fell back to the Claude seat.", sid, True
-        return f"The Codex seat could not answer this turn: {err}", sid, True
+        return f"The {name} seat could not answer this turn: {err}", sid, True
     META.update({"in": int(usage.get("input_tokens") or 0), "cached": int(usage.get("cached_input_tokens") or 0),
-                 "out": int(usage.get("output_tokens") or 0), "steps": steps, "cost": None})
+                 "out": int(usage.get("output_tokens") or 0), "steps": steps, "cost": 0 if local else None})
     return (texts[-1] if texts else "(no answer)"), sid, False
 
 
@@ -3247,7 +3268,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         if explicit is None:
             return 404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."}
         state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
-                 "prompt_hash": PROMPT_HASH, "codex_id": explicit.get("codex"), "reasoner": explicit.get("reasoner")}
+                 "prompt_hash": PROMPT_HASH, "codex_id": explicit.get("codex"), "local_id": explicit.get("local"), "reasoner": explicit.get("reasoner")}
     else:
         state = _load_state()
         # A thread started under older instructions carries their conclusions ("I can't
@@ -3298,12 +3319,12 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         on_run(run)
     t0 = time.time()
     seat = _reasoner_pick(reasoner, explicit, {} if new else state)
-    skey = "codex_id" if seat == "codex" else "session_id"   # each seat keeps its own session in the thread
+    skey = {"codex": "codex_id", "local": "local_id"}.get(seat, "session_id")   # each seat keeps its own session in the thread
     try:
         fresh = new or not state.get(skey)   # a new thread, or one this seat has not seen yet
-        if seat == "codex":
+        if seat in READ_ONLY_SEATS:
             reply, sid, is_error = _run_codex_turn(message, state.get(skey), on_event=run.emit, run=run,
-                                                   recent=_recent(message, fresh), first_use=_first_use(fresh))
+                                                   recent=_recent(message, fresh), first_use=_first_use(fresh), seat=seat)
         else:
             reply, sid, is_error = _run_turn(message, state.get(skey), on_event=run.emit, run=run,
                                              recent=_recent(message, fresh), first_use=_first_use(fresh))
@@ -3313,15 +3334,15 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
             state["prompt_hash"] = PROMPT_HASH
             if explicit is None:
                 _save_state(state)
-        elif seat == "codex" and new and explicit is None:
+        elif seat in READ_ONLY_SEATS and new and explicit is None:
             # a refused first turn of a new thread (no Codex session yet) still lands in that new
             # thread, not in whichever thread was current before
             _save_state(state)
         reply, proposal = _extract_proposal(reply)
-        if seat == "codex" and proposal:
+        if seat in READ_ONLY_SEATS and proposal:
             # the read-only seat raises no cards: a proposal is shown as text, never queued for a write
             proposal = None
-            reply = (reply + "\n\n(The Codex seat is read-only and raises no cards; ask the Claude seat to make this change.)").strip()
+            reply = (reply + f"\n\n(The {'Local' if seat == 'local' else 'Codex'} seat is read-only and raises no cards; ask the Claude seat to make this change.)").strip()
         reply, pane = _extract_pane(reply)
         reply, _lay, _lay_err = cc_layout.parse_marker(reply)
         if _lay is not None:
@@ -3357,7 +3378,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 cur = _load_state()
                 if cur.get("brain_session_id") == state.get("brain_session_id"):
                     cur["session_id"] = state.get("session_id"); cur["prompt_hash"] = PROMPT_HASH
-                    cur["codex_id"] = state.get("codex_id"); cur["reasoner"] = seat
+                    cur["codex_id"] = state.get("codex_id"); cur["local_id"] = state.get("local_id"); cur["reasoner"] = seat
                     _save_state(cur)
             run.thread = state.get("brain_session_id") or run.thread
             run.title = state.get("title") or run.title
@@ -3377,14 +3398,14 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                  "proposal": (card or {}).get("id"),
                  "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"),
-                 "tools": f"codex:{cc_codex.MODE}" if seat == "codex" else ALLOWED_TOOLS, "via": source, "reasoner": seat,
+                 "tools": f"{seat}:{cc_codex.MODE}" if seat in READ_ONLY_SEATS else ALLOWED_TOOLS, "via": source, "reasoner": seat,
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "tok_fresh": META.get("in_fresh"), "tok_cache_write": META.get("cache_write"),
                  "model": META.get("model")})
     if META.get("cost") is not None or META.get("in") or META.get("out"):
-        _spend("conversation turn", "OpenAI" if seat == "codex" else "Anthropic", usd=META.get("cost"),
+        _spend("conversation turn", {"codex": "OpenAI", "local": "self-hosted"}.get(seat, "Anthropic"), usd=META.get("cost"),
                tokens=int(META.get("in") or 0) + int(META.get("out") or 0), minutes=ms / 60000,
-               estimate=_auth_status().get("method") != "api-key")
+               estimate=seat != "local" and _auth_status().get("method") != "api-key")
     payload = {"reply": reply, "session_id": sid, "ms": ms, "error": is_error, "proposal": card, "pane": pane, "meta": dict(META),
                "thread": run.thread, "title": run.title, "run": run.id, "sources": list(LAST_SOURCES),
                "stopped": bool(run.stopped), "reasoner": seat}
@@ -3991,7 +4012,7 @@ class Handler(BaseHTTPRequestHandler):
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0,
-                             "reasoners": list(REASONERS), "codex": _codex_status(), "activity": _activity()})
+                             "reasoners": list(REASONERS), "codex": _codex_status(), "local": _local_status(live=False), "activity": _activity()})
         elif route == "/activity":
             self._send(200, _activity())
         elif route == "/login/state":
@@ -4017,6 +4038,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
+        elif route == "/local/status":
+            self._send(200, _local_status())
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
         elif route == "/threads":
@@ -4495,7 +4518,7 @@ class Handler(BaseHTTPRequestHandler):
             # today's instructions so the hash rule does not immediately reset it.
             _save_state({"session_id": th.get("claude"), "brain_session_id": th["brain"],
                          "title": th.get("title"), "prompt_hash": PROMPT_HASH,
-                         "codex_id": th.get("codex"), "reasoner": th.get("reasoner")})
+                         "codex_id": th.get("codex"), "local_id": th.get("local"), "reasoner": th.get("reasoner")})
             print(f"thread switched to {th['brain'][:8]}", flush=True)
             self._send(200, {"ok": True, "current": th["brain"]})
             return
@@ -4676,7 +4699,7 @@ class Handler(BaseHTTPRequestHandler):
             run.attach(sink)
         seat = req.get("reasoner")
         if seat is not None and seat not in REASONERS:
-            self._send(400, {"error": "reasoner must be claude or codex"})
+            self._send(400, {"error": "reasoner must be claude, codex or local"})
             return
         dup = _duplicate(str(req.get("thread") or "").strip() or None, message)
         if dup:
