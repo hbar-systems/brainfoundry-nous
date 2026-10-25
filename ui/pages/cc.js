@@ -9,6 +9,7 @@ import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '.
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
+import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -1444,6 +1445,8 @@ function CC() {
   const sendRef = useRef(null)
   const chooseRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
+  const activity = useActivity()                // the activity lights (2026-10-25): /cc/activity every 5 s while visible
+  const lightOf = (brain) => (activity && activity.threads && activity.threads[brain]) || null
   const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
   const [pending, setPending] = useState([])    // permits proposed earlier, still waiting (survive reload)
   const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
@@ -2688,6 +2691,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
+      <style>{LIGHT_CSS}</style>
       <MdPopup />
       <AgentPopup />
       <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
@@ -2748,7 +2752,7 @@ function CC() {
                                      style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
                             : <a onClick={() => switchThread(th)}
                                  style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
-                                {th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
+                                <Light a={lightOf(th.brain) || (th.running ? { state: 'working', via: 'turn' } : null)} style={{ marginRight: '8px' }} />{th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
                                 {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
                                 <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
                               </a>}
@@ -2959,7 +2963,12 @@ function CC() {
         {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode. */}
         {loggedIn && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: paneMode ? '6px' : '10px' }}>
-            <Btn small onClick={() => send(PANEL.threads)} disabled={active} title="What the other threads did: done, running, open, owed by you">read the threads</Btn>
+            <Btn small onClick={() => send(PANEL.threads)} disabled={active} title="What the other threads did: done, running, open, owed by you">{(() => {
+              // one light for the other threads: pulsing while any of them works (a turn, else a job), a fade when one just finished
+              const others = Object.entries((activity && activity.threads) || {}).filter(([k]) => k !== cur).map(([, v]) => v)
+              const w = others.find(v => v.state === 'working' && v.via === 'turn') || others.find(v => v.state === 'working') || others.find(v => v.state === 'done') || null
+              return <Light a={w} style={{ marginRight: '6px' }} title={w ? `${others.filter(v => v.state === 'working').length} other thread(s) working` : 'the other threads are idle'} />
+            })()}read the threads</Btn>
             <Btn small onClick={() => send(PANEL.where)} disabled={active} title="This thread's last state in five lines">where were we?</Btn>
             <Btn small onClick={() => send(PANEL.decide)} disabled={active} title="The open tracks with a probability each, and one recommendation">help decide</Btn>
             <Btn small accent={thoughts} onClick={() => slash(thoughts ? '/thoughts off' : '/thoughts on')} title="Speak, type or attach; filed to the memo tape, not acted on">{thoughts ? 'thoughts: on' : 'just thoughts'}</Btn>

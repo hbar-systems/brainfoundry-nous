@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
+import { useActivity, Light, LIGHT, LIGHT_CSS } from '../lib/activity'
 
 // Panes: several conversations with the brain side by side, like terminal windows (2026-10-06).
 //
@@ -56,6 +57,7 @@ function load() {
 export default function Panes() {
   const [panes, setPanes] = useState([])
   const [threads, setThreads] = useState([])
+  const activity = useActivity()                    // the activity lights (2026-10-25)
   const [running, setRunning] = useState({})       // thread -> { waiting } from the box
   const [states, setStates] = useState({})         // pane id -> what the pane says it is doing
   const [picker, setPicker] = useState(null)       // pane id whose thread list is open
@@ -219,6 +221,9 @@ export default function Panes() {
       const what = s.steps ? `${s.steps} step${s.steps === 1 ? '' : 's'}` : (s.writing ? 'writing' : 'thinking')
       return { kind: 'busy', color: C.gold, text: ['answering', el, what].filter(Boolean).join(' · '), tip: s.last || '' }
     }
+    const act = activity && activity.threads && activity.threads[p.thread]   // a job started here still runs, or just finished
+    if (act && act.state === 'working') return { kind: 'busy', light: 'job', color: LIGHT.job, text: 'a job runs from here' }
+    if (act && act.state === 'done') return { kind: 'done', color: LIGHT.done, text: 'a job just finished' }
     return { kind: 'idle', color: C.line, text: s.lastMs ? `idle · last ${(s.lastMs / 1000).toFixed(0)} s` : '' }
   }
 
@@ -234,14 +239,14 @@ export default function Panes() {
   return (
     <>
       <Head><title>Panes · BrainFoundry</title></Head>
-      <style>{`@keyframes panepulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } } .pane-menu a:hover { background: var(--surface); }`}</style>
+      <style>{LIGHT_CSS + ' .pane-menu a:hover { background: var(--surface); }'}</style>
       <div style={{ height: 'calc(100vh - var(--nav-h, 52px))', display: 'flex', flexDirection: 'column', backgroundColor: C.bg, boxSizing: 'border-box', padding: '6px 8px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0 4px 6px', flexWrap: 'wrap', position: 'relative' }}>
           <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>side by side</span>
           {!narrow && [1, 2, 3, 4].map(n => <Chip key={n} on={panes.length === n} onClick={() => setCount(n)} title={`${n} pane${n > 1 ? 's' : ''}`}>{n}</Chip>)}
           {narrow && panes.map((p, i) => (
             <Chip key={p.id} on={front === i} onClick={() => setFront(i)} title={title(p.thread)}>
-              {i + 1}{stateOf(p).kind !== 'idle' ? ' ·' : ''}
+              {i + 1}{stateOf(p).kind !== 'idle' ? <Light a={{ state: stateOf(p).kind === 'done' ? 'done' : 'working' }} kind={stateOf(p).light || 'turn'} size={6} style={{ marginLeft: '5px' }} /> : ''}
             </Chip>
           ))}
           {narrow && panes.length < MAX && <Chip onClick={() => { setPanes(ps => [...ps, fresh()]); setFront(panes.length) }}>+</Chip>}
@@ -288,7 +293,7 @@ export default function Panes() {
             const vi = visible.indexOf(p)
             const place = vi < 0 ? {} : { gridColumn: 2 * (vi % cols) + 1, gridRow: 2 * Math.floor(vi / cols) + 1 }
             return (
-              <div key={p.id} style={{ ...place, display: hidden ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, border: `1px solid ${st.kind === 'busy' ? C.gold : st.kind === 'waiting' ? C.warn : C.line}`, borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
+              <div key={p.id} style={{ ...place, display: hidden ? 'none' : 'flex', flexDirection: 'column', minHeight: 0, border: `1px solid ${st.kind === 'busy' ? st.color : st.kind === 'waiting' ? C.warn : C.line}`, borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
                 {/* the one header line: number, state, title (click renames), what it is doing, the menu */}
                 <div draggable={!narrow && panes.length > 1 && renaming !== p.id}
                      onDragStart={e => { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move' }}
@@ -296,8 +301,8 @@ export default function Panes() {
                      onDrop={e => { e.preventDefault(); swap(e.dataTransfer.getData('text/plain'), p.id) }}
                      style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px 4px 10px', borderBottom: `1px solid ${C.line}`, backgroundColor: C.card, height: '28px', boxSizing: 'border-box', cursor: !narrow && panes.length > 1 ? 'grab' : 'default' }}>
                   <span style={{ ...mono, fontSize: '11px', color: C.dim }} title="Drag this bar onto another pane to swap places">{i + 1}</span>
-                  <span title={st.kind === 'busy' ? 'answering' : st.kind === 'waiting' ? 'a card waits for your yes' : 'idle'}
-                        style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, backgroundColor: st.color, animation: st.kind === 'busy' ? 'panepulse 1.2s ease-in-out infinite' : 'none' }} />
+                  <span title={st.kind === 'busy' ? (st.text || 'answering') : st.kind === 'waiting' ? 'a card waits for your yes' : st.kind === 'done' ? st.text : 'idle'} className={st.kind === 'busy' ? 'cc-light-on' : st.kind === 'done' ? 'cc-light-done' : undefined}
+                        style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, backgroundColor: st.color }} />
                   {renaming === p.id
                     ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
                              onKeyDown={e => { if (e.key === 'Enter') finishRename(p); else if (e.key === 'Escape') setRenaming(null) }} onBlur={() => finishRename(p)}

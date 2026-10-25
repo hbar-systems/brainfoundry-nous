@@ -1248,3 +1248,36 @@ def test_duplicate_message_within_a_minute_is_dropped_as_taken(monkeypatch, tmp_
     assert m._duplicate("t-2", "hello") is None and m._duplicate(None, "hello") is None
     m.SENT.forget(("t-1", "hello"))
     assert m._duplicate("t-1", "hello") is None
+
+
+def test_activity_lights_shape(monkeypatch, tmp_path):
+    """2026-10-25: the activity lights. /cc/activity (and health's `activity`) says which threads work
+    (a turn in flight: via turn; a running cc-job of theirs: via job), which just finished a job (done,
+    within 10 min), how many jobs run and which of them are standing agents (title by agent tag)."""
+    import json
+    import time
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    now = int(time.time())
+    reg = m.JOBS.dir / "jobs.json"
+    reg.write_text(json.dumps([
+        {"id": "J1", "title": "LAW-1 \"Magistrate\"", "pid": __import__("os").getpid(), "started": now - 5, "ended": None, "thread": "b-agent"},
+        {"id": "J2", "title": "palette: build", "pid": __import__("os").getpid(), "started": now - 8, "ended": None, "thread": "b-job"},
+        {"id": "J3", "title": "quick", "pid": 1, "started": now - 400, "ended": now - 120, "rc": 0, "thread": "b-done"},
+        {"id": "J4", "title": "old", "pid": 1, "started": now - 9000, "ended": now - 8000, "rc": 0, "thread": "b-idle"},
+        {"id": "J5", "title": "nobody's", "pid": __import__("os").getpid(), "started": now - 10, "ended": None, "thread": "unknown"},
+    ]))
+    turn = m.Run("b-turn", "hello"); m.RUNS[turn.id] = turn
+    try:
+        a = m._activity()
+    finally:
+        m.RUNS.pop(turn.id, None)
+    assert set(a) == {"threads", "jobs", "agents"}
+    t = a["threads"]
+    assert t["b-turn"]["state"] == "working" and t["b-turn"]["via"] == "turn" and t["b-turn"]["since"].endswith("Z")
+    assert t["b-agent"] == {"state": "working", "via": "job", "since": t["b-agent"]["since"]}
+    assert t["b-job"]["state"] == "working" and t["b-job"]["via"] == "job"
+    assert t["b-done"]["state"] == "done"
+    assert "b-idle" not in t and "unknown" not in t
+    assert a["jobs"] == {"running": 3, "ids": ["J1", "J2", "J5"]}
+    assert a["agents"]["running"] == [{"id": "J1", "title": "LAW-1 \"Magistrate\""}]
+    assert m.cc_extras.Jobs.is_agent({"title": "A-007 Sentinel"}) and not m.cc_extras.Jobs.is_agent({"title": "palette: build"})

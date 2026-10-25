@@ -561,6 +561,46 @@ class Jobs:
             out.setdefault(str(th), []).append({k: r.get(k) for k in ("id", "title", "started")})
         return out
 
+    # a standing agent's job is titled by its tag (cc_agents.tag): "A-007 Sentinel" or "LAW-1 Magistrate"
+    AGENT_TITLE = re.compile(r'^(?:A-\d{3,}|[A-Z]{2,6}-\d+)(?:\s|"|$)')
+
+    @classmethod
+    def is_agent(cls, rec: dict) -> bool:
+        return bool(cls.AGENT_TITLE.match(str(rec.get("title") or "")))
+
+    def activity(self, runs: list, now: float | None = None, done_s: int = 600) -> dict:
+        """The activity lights (hbar 2026-10-25: "different colors and lighting on and off meaning it is
+        working"). `runs` is [(thread, started_epoch)] for every turn in flight. A thread is "working"
+        while a turn runs in it (via "turn") or a job it started still runs (via "job"); "done" when its
+        last job ended within done_s; idle threads are absent. Nothing is stored; one read of the registry.
+        {"threads": {id: {"state", "via", "since"}}, "jobs": {"running", "ids"}, "agents": {"running": [{id, title}]}}"""
+        now = time.time() if now is None else now
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(t)))  # noqa: E731
+        turn = {str(th): float(t0) for th, t0 in runs if th}
+        busy: dict = {}        # thread -> earliest start of a job still running
+        ended: dict = {}       # thread -> latest end of a job that finished within done_s
+        ids: list = []
+        agents: list = []
+        for r in self._reap():
+            r = self._fill(r)
+            th = str(r.get("thread")) if self.known(r.get("thread")) else None
+            if r.get("ended") is None:
+                if not self._alive(r.get("pid"), r.get("started")):
+                    continue
+                ids.append(r["id"])
+                if self.is_agent(r):
+                    agents.append({"id": r["id"], "title": r.get("title")})
+                if th:
+                    busy[th] = min(busy.get(th, now), float(r.get("started") or now))
+            elif th and now - float(r["ended"]) <= done_s:
+                ended[th] = max(ended.get(th, 0), float(r["ended"]))
+        threads = {th: {"state": "working", "via": "turn", "since": iso(t0)} for th, t0 in turn.items()}
+        for th, t0 in busy.items():
+            threads.setdefault(th, {"state": "working", "via": "job", "since": iso(t0)})
+        for th, t1 in ended.items():
+            threads.setdefault(th, {"state": "done", "via": "job", "since": iso(t1)})
+        return {"threads": threads, "jobs": {"running": len(ids), "ids": ids}, "agents": {"running": agents}}
+
     @staticmethod
     def _alive(pid, started=None) -> bool:
         try:
@@ -1189,6 +1229,7 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
         tail = [l for l in str(j.get("tail") or "").splitlines() if l.strip() and not l.startswith("# ")]
         th = j.get("thread") if Jobs.known(j.get("thread")) else None
         tiles.append({"key": key, "kind": "job", "run": j.get("id"), "thread": th, "title": j.get("title") or j.get("command") or "job",
+                      "agent": Jobs.is_agent(j),       # the activity lights (2026-10-25): an agent's job glows green, a job amber
                       "state": "answering" if ended is None else ("failed" if failed else "done"), "word": "running" if ended is None else None,
                       "started": iso(started) if started else None, "elapsed_s": int((float(ended) if ended is not None else now) - started) if started else 0,
                       "ago_s": int(now - float(ended)) if ended is not None else None, "steps": 0, "agents": 0,

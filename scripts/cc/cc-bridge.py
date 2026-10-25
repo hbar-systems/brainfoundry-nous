@@ -26,6 +26,7 @@ Endpoints (JSON):
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
+  GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
@@ -775,6 +776,13 @@ def _runs_prune() -> None:
 
 def _cards_waiting() -> int:
     return sum(r.waiting for r in _runs_active())
+
+
+def _activity() -> dict:
+    """The activity lights (2026-10-25): which threads work (a turn in flight, or a cc-job started from
+    them still running), which just finished a job, how many jobs and which agents run. Cheap: the run
+    registry plus one read of jobs.json; polled every 5 s by the console while its tab is visible."""
+    return JOBS.activity([(r.thread, r.started) for r in _runs_active()])
 BOX_NO_REMEMBER = ("rm", "dd", "mkfs", "shutdown", "reboot", "chmod", "chown", "curl", "wget", "ssh", "scp",
                    "kill", "pkill", "userdel", "passwd", "sudo", "mv", "truncate", "shred")
 
@@ -3919,7 +3927,9 @@ class Handler(BaseHTTPRequestHandler):
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0,
-                             "reasoners": list(REASONERS), "codex": _codex_status()})
+                             "reasoners": list(REASONERS), "codex": _codex_status(), "activity": _activity()})
+        elif route == "/activity":
+            self._send(200, _activity())
         elif route == "/login/state":
             self._send(200, LOGIN.state())
         elif route == "/update/state":

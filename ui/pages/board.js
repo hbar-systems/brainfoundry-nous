@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
+import { LIGHT, LIGHT_CSS } from '../lib/activity'
 
 // Mission control: one board for all running work (2026-10-06).
 //
@@ -62,7 +63,9 @@ function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
                border: `1px solid ${t.state === 'waiting' ? C.warn : t.state === 'failed' ? C.bad : C.line}`, borderLeft: `3px solid ${st.color}`,
                cursor: t.href ? 'pointer' : 'default', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: st.color, flexShrink: 0, animation: t.state === 'answering' ? 'boardpulse 1.2s ease-in-out infinite' : 'none' }} />
+        {/* the activity light (2026-10-25): a turn pulses in the accent, a job amber, a standing agent green; done fades once */}
+        <span className={t.state === 'answering' ? 'cc-light-on' : t.state === 'done' ? 'cc-light-done' : undefined}
+              style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: t.state === 'answering' ? (t.kind === 'job' ? (t.agent ? LIGHT.agent : LIGHT.job) : LIGHT.turn) : st.color, flexShrink: 0 }} />
         <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: st.color }}>{t.word || st.word}</span>
         <span style={{ flex: 1 }} />
         <span style={{ ...mono, fontSize: '11px', color: C.dim, whiteSpace: 'nowrap' }}>
@@ -141,7 +144,7 @@ export default function Board() {
   return (
     <>
       <Head><title>Board · BrainFoundry</title></Head>
-      <style>{`@keyframes boardpulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
+      <style>{LIGHT_CSS}</style>
       <div style={{ minHeight: 'calc(100vh - var(--nav-h, 52px))', backgroundColor: C.bg, boxSizing: 'border-box', padding: '10px 12px 40px', color: C.ink }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0 2px 10px', flexWrap: 'wrap' }}>
           <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>mission control</span>
