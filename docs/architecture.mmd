@@ -1,0 +1,112 @@
+%%{init: {"flowchart": {"nodeSpacing": 15, "rankSpacing": 35, "wrappingWidth": 170}}}%%
+%% brainfoundry-nous architecture, drawn from the code as of 2026-10-25.
+flowchart TD
+
+  subgraph US["User surface"]
+    console["Console UI + owner-key proxy [ui/pages/, ui/lib/]"]
+    publicchat["Public chat site [apps/public-chat/]"]
+    apps["Brain apps: install, iframe mount [api/apps.py, api/apps_mount.py]"]
+    telegram["Telegram bot [api/integrations/telegram.py]"]
+  end
+
+  subgraph RT["Brain runtime (FastAPI)"]
+    chat["Chat, sessions, documents routes [api/main.py]"]
+    providers["Model routing, BYOK, tool loop [api/providers.py]"]
+    settings["Runtime settings, encrypted keys [api/settings_store.py]"]
+    onboarding["First-run trial reasoner [api/onboarding/]"]
+    commands["Commands, autonomy tick, tasks [api/hbar_commands.py, api/autonomy.py, api/tasks_store.py]"]
+  end
+
+  subgraph MEM["Memory and knowledge"]
+    rag["Ingest, chunk, embed, retrieve [api/main.py, api/embeddings/model.py]"]
+    privacy["Privacy gate, public scope, memory type [api/privacy.py, api/public_scope.py, api/memory_type.py]"]
+    inject["Injection scan, untrusted wrapper [api/injection_scan.py, api/security/untrusted.py]"]
+    vault["Private vault [api/vault.py]"]
+  end
+
+  subgraph GOV["Governance and federation"]
+    nodeos["BrainKernel: permits, proposals, audit [nodeos/main.py]"]
+    kernel["Kernel registry, rate limiters [api/kernel/]"]
+    identity["ED25519 identity, assertions [api/identity/]"]
+    fed["Federation DM, ask door, publisher [api/federation_dm.py, api/ask.py, api/federation_publisher.py]"]
+    economy["Substrate, harmonics, compute meter [api/substrate.py, api/harmonics.py, api/compute_meter.py]"]
+  end
+
+  subgraph TOOLS["Tools and integrations"]
+    registry["Tool registry, tiers, approvals, egress [api/tools/]"]
+    web["Web search, fetch, research, factcheck [api/tools/web_search.py, api/research.py, api/factcheck.py]"]
+    braincall["brain_call [api/tools/brain_call.py]"]
+    integrations["Gmail, Calendar, IMAP, MCP [api/integrations/]"]
+  end
+
+  subgraph HANDS["Hands and box scripts"]
+    bridge["CC bridge, jobs, agents [scripts/cc/cc-bridge.py, cc-job.py]"]
+    gpu["gpu-run [scripts/gpu/gpu-run.sh]"]
+    ops["Update, backup, export, vault setup [scripts/update_brain.sh, backup_brain.sh, export.sh]"]
+  end
+
+  ollama(("Ollama, box + spokes"))
+  hosted(("Hosted model APIs: Anthropic, OpenAI, Groq, Gemini, xAI, OpenRouter"))
+  pg[("Postgres + pgvector")]
+  tgapi(("Telegram Bot API"))
+  webext(("Brave Search, open web"))
+  gapis(("Google APIs, IMAP, MCP servers"))
+  onecli(("One CLI"))
+  peers(("Peer brains, hbar.social relay"))
+  github(("GitHub"))
+  runpod(("RunPod"))
+
+  console -->|"proxies with owner key"| chat
+  console -->|"mints permits"| nodeos
+  publicchat -->|"POST /v1/public/chat"| chat
+  tgapi -->|"webhook"| telegram
+  telegram -->|"answers from memory"| chat
+  commands -->|"pings due tasks"| tgapi
+  console -->|"opens app tabs"| apps
+  apps -->|"mounts app APIs"| chat
+  apps -->|"clones pinned SHA"| github
+
+  chat -->|"assembles prompt, streams"| providers
+  providers -->|"calls local models"| ollama
+  providers -->|"BYOK calls"| hosted
+  console -->|"edits settings"| settings
+  settings -->|"keys, model, layers"| providers
+  console -->|"first-run panel"| onboarding
+  onboarding -->|"first session"| chat
+  chat -->|"dispatches /v1/brain/command"| commands
+  commands -->|"starts agentic turns"| providers
+  chat -->|"stores sessions"| pg
+
+  chat -->|"retrieves top-k"| rag
+  rag -->|"stores chunks"| pg
+  rag -->|"filters per reasoner"| privacy
+  chat -->|"upload passes through"| inject
+  inject -->|"scans, quarantines"| rag
+  chat -->|"scan now, 10-min scan"| vault
+  vault -->|"ingests local-only"| rag
+  ops -->|"exports, restores"| pg
+
+  chat -->|"verifies permits"| nodeos
+  kernel -->|"rate limits"| chat
+  identity -->|"signs, verifies"| fed
+  fed -->|"DMs, asks, publishes"| peers
+  privacy -->|"public scope only"| fed
+  providers -->|"meters tokens"| economy
+  economy -->|"attests, scores"| pg
+  nodeos -->|"pushes allowlisted branches"| github
+
+  providers -->|"runs tools by tier"| registry
+  registry -->|"YELLOW read"| web
+  registry -->|"YELLOW read"| braincall
+  registry -->|"standing auth"| integrations
+  registry -->|"RED, needs approval"| telegram
+  web -->|"searches, fetches"| webext
+  braincall -->|"asks"| peers
+  integrations -->|"reads"| gapis
+  inject -->|"wraps as untrusted"| registry
+
+  bridge -->|"searches memory, asks peers"| chat
+  bridge -->|"permit hook"| nodeos
+  bridge -->|"one-read"| onecli
+  gpu -->|"rents pod per job"| runpod
+  ops -->|"pulls, rebuilds"| github
