@@ -1859,6 +1859,13 @@ def _ensure_runtime_indexes() -> None:
     except Exception as e:
         print(f"[startup] harmonics init skipped: {e}", flush=True)
 
+    # contribution submissions table
+    try:
+        from api import submissions
+        submissions.init_tables()
+    except Exception as e:
+        print(f"[startup] submissions init skipped: {e}", flush=True)
+
     # compute meter — compute_events ledger (read-only token metering)
     try:
         from api import compute_meter
@@ -1972,6 +1979,13 @@ try:
     app.include_router(_harmonics_router)
 except Exception as e:
     print(f"[startup] harmonics router mount skipped: {e}", flush=True)
+
+# Mount contribution submissions (public POST, owner list/decide)
+try:
+    from api import submissions as _submissions
+    app.include_router(_submissions.build_router(get_api_key))
+except Exception as e:
+    print(f"[startup] submissions router mount skipped: {e}", flush=True)
 
 # Mount compute meter router (/meter/usage, /meter/ledger — read-only metering)
 try:
