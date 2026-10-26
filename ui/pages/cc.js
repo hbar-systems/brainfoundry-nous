@@ -942,7 +942,18 @@ function ProposalCard({ p, onDecide }) {
   )
 }
 
-function Pane({ pane, onClose, side, onSide }) {
+// The pages a pane can switch to from its own header (hbar 2026-10-26: "change the tab WITHIN one of
+// these windows"): the same surfaces the reasoner may open with <pane>.
+const PANE_ROUTES = [
+  ['/upload', 'Knowledge'], ['/files', 'Files'], ['/terminal', 'Terminal'], ['/tasks', 'Tasks'],
+  ['/board', 'Board'], ['/agents', 'Agents'], ['/graph', 'Memory graph'], ['/apps', 'Apps'],
+  ['/research', 'Research'], ['/integrations', 'Integrations'], ['/trace', 'Trace'], ['/permits', 'Permits'],
+  ['/boxes', 'Boxes'], ['/economy', 'Economy'], ['/federation', 'Federation'], ['/persona', 'Persona'],
+  ['/profile', 'Profile'], ['/layout', 'Layout'], ['/settings', 'Settings'], ['/update', 'Update'],
+  ['/guide', 'Guide'], ['/dashboard', 'Dashboard'], ['/future', 'Future'],
+]
+
+function Pane({ pane, onClose, side, onSide, onRoute }) {
   // A summoned surface (D54): an existing console page, same origin and auth, shown
   // beside the conversation and dismissed with one click. Pages hide their own nav
   // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
@@ -990,7 +1001,14 @@ function Pane({ pane, onClose, side, onSide }) {
         <div style={{ width: '1px', height: '100%', backgroundColor: drag ? C.gold : C.line }} />
       </div>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
-        <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>
+        {onRoute ? (
+          <select value={pane.route} onChange={e => { const r = PANE_ROUTES.find(x => x[0] === e.target.value); onRoute({ route: e.target.value, title: r ? r[1] : e.target.value }) }}
+                  title="Show another page in this pane"
+                  style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', background: 'transparent', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '3px 6px', cursor: 'pointer', maxWidth: '45%' }}>
+            {!PANE_ROUTES.some(x => x[0] === pane.route) && <option value={pane.route}>{pane.title || pane.route}</option>}
+            {PANE_ROUTES.map(([r, label]) => <option key={r} value={r}>{label}</option>)}
+          </select>
+        ) : <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>}
         <span style={{ display: 'flex', gap: '8px' }}>
           {inline && <Btn small onClick={onSide} title="Put it on the other side of the conversation">{side === 'left' ? 'to right' : 'to left'}</Btn>}
           <Btn small onClick={() => { try { document.activeElement && document.activeElement.blur() } catch {}; setFull(x => !x) }} title={full ? 'Back (Escape)' : 'The pane alone, the whole screen; Escape comes back'}>{full ? 'exit full' : 'full screen'}</Btn>
@@ -2596,7 +2614,14 @@ function CC() {
       loadLatest()
       loadThreads()
     } catch (e) {
-      if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: 'The bridge did not answer. Is cc-bridge running on the box?', error: true }])
+      // A dropped stream (laptop asleep, network switch, proxy timeout) is not a dead bridge: the turn
+      // runs on the box regardless. Ask /cc/health before blaming the bridge (hbar 2026-10-26).
+      let up = false
+      try { up = (await fetch('/cc/health', { cache: 'no-store' })).ok } catch {}
+      const msg = up
+        ? 'The connection to the box dropped mid-answer; the bridge is up and the turn keeps running there. Its answer shows here when it finishes (or reload the thread).'
+        : 'The bridge did not answer and /cc/health is down too. cc-bridge may be restarting; try again in a minute.'
+      if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: msg, error: true }])
     } finally {
       markRunning(key, false)
       if (curRef.current === key && queueRef.current.length) flushLocal()
@@ -3081,7 +3106,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onClose={() => { setPane(null); loadHealth() }} />}
+      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={openPane} onClose={() => { setPane(null); loadHealth() }} />}
       </div>
     </LearnCtx.Provider>
   )
