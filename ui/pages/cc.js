@@ -902,6 +902,7 @@ function ProposalCard({ p, onDecide }) {
   const [remember, setRemember] = useState(false)
   const decided = p.decided
   const box = p.platform === 'box'
+  const run = p.platform === 'box-run'   // the Local seat's one command (2026-10-26): the card shows the exact command
   if (p.auto) {
     const ok = p.outcome && p.outcome.ok
     return (
@@ -917,9 +918,10 @@ function ProposalCard({ p, onDecide }) {
   return (
     <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}`, backgroundColor: C.card }}>
       <p style={{ ...mono, color: C.gold, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
-        {box ? `on this box · ${p.method || 'action'}` : `proposed write · ${p.method || 'POST'} · ${p.platform || ''}`}
+        {box ? `on this box · ${p.method || 'action'}` : run ? 'local seat proposes · one command on this box, run as the hands' : `proposed write · ${p.method || 'POST'} · ${p.platform || ''}`}
       </p>
-      <p style={{ margin: '0 0 10px 0', color: C.ink, fontSize: '14px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: box ? "'JetBrains Mono', ui-monospace, monospace" : 'inherit' }}>{p.summary || 'an action in a connected app'}</p>
+      <p style={{ margin: '0 0 10px 0', color: C.ink, fontSize: '14px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: box || run ? "'JetBrains Mono', ui-monospace, monospace" : 'inherit' }}>{p.summary || 'an action in a connected app'}</p>
+      {run && p.why ? <p style={{ margin: '-4px 0 10px 0', color: C.dim, fontSize: '12px' }}>the model says: {p.why}</p> : null}
       {decided ? (
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? (box ? 'allowed' : 'sent') : (box ? 'refused' : 'cancelled')} · permit {p.id}</p>
       ) : (
@@ -2144,7 +2146,7 @@ function CC() {
     }
     if (action === 'approve') {
       const text = data.ok
-        ? `Done: ${data.summary || 'the action ran'}.` + (data.result && data.result.status ? ` One answered ${data.result.status}.` : '')
+        ? `Done: ${data.summary || 'the action ran'}.` + (data.result && data.result.status ? ` One answered ${data.result.status}.` : '') + (data.result && data.result.out ? `\n\n\`\`\`\n${data.result.out}\n\`\`\`` : '')
         : `Not done. ${(data.result && data.result.error) || data.error || 'the write failed'}`
       setTurns(t => [...t, { who: 'brain', text, error: !data.ok }])
     } else {

@@ -1340,3 +1340,46 @@ def test_direct_local_get_reads_jobs_and_tasks(monkeypatch, tmp_path):
     assert not m._is_direct_local("100.64.0.7", None)               # another machine on the tailnet
     assert m._get_local_ok("/jobs") and m._get_local_ok("/jobs/J12") and m._get_local_ok("/tasks")
     assert not m._get_local_ok("/threads/brief") and not m._get_local_ok("/state") and not m._get_local_ok("/files")
+
+
+def test_local_seat_box_proposal_parse(monkeypatch, tmp_path):
+    # the Local seat's write lane (2026-10-26): one <box-proposal> command, cut out of the reply
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    r, p, e = m._extract_box_proposal('I would add it.\n<box-proposal>{"command": "touch /tmp/x", "summary": "make x"}</box-proposal>')
+    assert r == "I would add it." and p == {"command": "touch /tmp/x", "summary": "make x"} and e is None
+    assert m._extract_box_proposal("plain answer") == ("plain answer", None, None)
+    r, p, e = m._extract_box_proposal("a <box-proposal>{not json}</box-proposal>")
+    assert r == "a" and p is None and "JSON" in e
+    assert m._extract_box_proposal('<box-proposal>{"command": "  "}</box-proposal>')[2] == "the proposal named no command"
+    assert m._extract_box_proposal('<box-proposal>{"command": "' + "x" * 4001 + '"}</box-proposal>')[2] == "the proposed command is too long"
+    assert "<box-proposal>" in m.LOCAL_SYSTEM or not m.BOX_ENABLED
+    assert "<box-proposal>" not in m.CODEX_SYSTEM
+
+
+def test_local_seat_box_proposal_becomes_a_card_that_runs_only_on_send(monkeypatch, tmp_path):
+    import pytest
+    pytest.importorskip("permitd")
+    monkeypatch.setenv("CC_BOX", "1")
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m.GATE is not None
+    ran = []
+    monkeypatch.setattr(m, "_as_hands", lambda cmd, env=None: cmd)
+
+    class P:
+        returncode, stdout, stderr = 0, "hello\n", ""
+    monkeypatch.setattr(m.subprocess, "run", lambda cmd, **k: (ran.append(cmd), P())[1])
+    card = m._propose_box_run({"command": "echo hello", "summary": "say hello"})
+    assert card["platform"] == "box-run" and card["summary"] == "echo hello" and card["why"] == "say hello"
+    assert card["remember_ok"] is False and ran == []              # nothing ran before the press
+    pm = m.GATE.get(card["id"])
+    out = m._run_permit(card["id"], pm)
+    assert out["ok"] and out["result"]["out"] == "hello" and ran == [["/bin/bash", "-c", "echo hello"]]
+    # a second press of the same permit does not run the command again: permits are single use
+    try:
+        again = m._run_permit(card["id"], pm)
+    except Exception:
+        again = {"ok": False}
+    assert not again["ok"] and len(ran) == 1
+    # no CC_BOX: no card, said plainly
+    monkeypatch.setattr(m, "BOX_ENABLED", False)
+    assert "not enabled" in m._propose_box_run({"command": "echo hi", "summary": ""})["error"]
