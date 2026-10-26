@@ -38,6 +38,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy ONLY the api package from repo root into /app/api
 COPY api /app/api
+# The Knowledge page's chat import (api/chat_import.py) runs the same prep and select as the CLI.
+COPY scripts/import_chats.py /app/scripts/import_chats.py
 
 # VERSION file is the single source of truth for BRAIN_VERSION (read at
 # api startup). Lives at /app/VERSION so api.main can resolve it via

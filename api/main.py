@@ -4478,16 +4478,21 @@ def request_upload_permit(api_key: str = Depends(get_api_key)):
     CLI flow: permit -> POST /documents/upload (proposes) -> web-UI approval
     -> re-POST /documents/upload with proposal_id (persists chunks).
     """
+    return _issue_upload_permit("cli", "CLI upload proposal")
+
+
+def _issue_upload_permit(agent_id: str, reason: str) -> dict:
+    """A NodeOS upload loop permit (300 s) for proposals made server-side."""
     node_id = os.getenv("BRAIN_ID") or os.getenv("BRAIN_NODE_ID") or "my-brain-01"
     try:
         resp = requests.post(
             f"{NODEOS_URL}/v1/loops/request",
             json={
                 "node_id": node_id,
-                "agent_id": "cli",
+                "agent_id": agent_id,
                 "loop_type": "upload",
                 "ttl_seconds": 300,
-                "reason": "CLI upload proposal",
+                "reason": reason,
             },
             headers=_nodeos_headers(),
             timeout=5,
@@ -4797,6 +4802,78 @@ async def extract_document_text(
     }
 
 
+def _propose_document_text(text: str, *, filename: str, content_type: str, size: int, permit_id: str,
+                           layer: Optional[str] = None, privacy: Optional[str] = None) -> dict:
+    """Path A of /documents/upload: propose to NodeOS, scan, persist the text under
+    the proposal_id. Returns the 202 PENDING body. Nothing is in memory yet."""
+    layer_suffix = f" [layer={layer}]" if layer else ""
+    if privacy:
+        layer_suffix += f" [privacy={privacy}]"
+    proposal = _nodeos_propose_memory(
+        memory_type="document_embedding",
+        content=f"Document upload: {filename} ({len(text)} chars, {content_type}){layer_suffix}",
+        permit_id=permit_id,
+        source_refs={"filename": filename, "content_type": content_type, "size": size, "layer": layer, "privacy": privacy},
+    )
+    # Prompt-injection scan — surfaced to the operator at approval time,
+    # never auto-blocked. A poisoned doc is visible before it lands in
+    # memory; the operator decides.
+    try:
+        from api import injection_scan
+        scan = injection_scan.scan_text(text)
+    except Exception as _scan_err:
+        scan = None
+    _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size, scan=scan, privacy=privacy)
+    print(f"[upload] proposed proposal_id={proposal['proposal_id']} (text persisted, injection_risk={scan.get('risk') if scan else 'n/a'})", flush=True)
+    return {
+        "filename": filename,
+        "status": "PENDING",
+        "proposal_id": proposal["proposal_id"],
+        "message": "Memory proposal submitted to NodeOS. Approve the proposal — no file re-upload needed.",
+        "injection_scan": scan,
+        "privacy": privacy,  # None: inherit the existing level, else open
+    }
+
+
+@app.post("/documents/import-chats")
+def import_chat_history(
+    file: UploadFile = File(...),
+    newest: int = Form(50),
+    api_key: str = Depends(get_api_key),
+):
+    """The Knowledge page's import card (2026-10-25, docs/IMPORT.md): a ChatGPT or
+    Claude export zip in, prep + select --newest N (default 50) in a scratch folder
+    under the runtime volume, then one Path A proposal per selected conversation
+    under an upload permit. Every document comes back PENDING for the person's
+    approval below the card; nothing is written to memory here."""
+    from api import chat_import
+    import time as _time
+    permit = {"id": None, "at": 0.0}
+
+    def propose(name: str, text: str) -> dict:
+        for _ in range(2):
+            if not permit["id"] or _time.monotonic() - permit["at"] > 240:  # permits live 300 s
+                permit["id"] = _issue_upload_permit("console", "chat history import")["permit_id"]
+                permit["at"] = _time.monotonic()
+            try:
+                return _propose_document_text(text, filename=name, content_type="text/markdown",
+                                              size=len(text.encode("utf-8")), permit_id=permit["id"])
+            except HTTPException as e:
+                if e.status_code != 502:
+                    raise
+                permit["id"] = None  # expired or refused: one fresh permit, then give up
+                last = e
+        raise last
+
+    try:
+        res = chat_import.run(file.file, RUNTIME_DIR, propose, newest=newest)
+    except chat_import.NotAnExport as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    print(f"[import-chats] {res['conversations']} found, {res['selected']} selected, {res['proposed']} proposed "
+          f"({','.join(res['sources'])}) manifest={res['manifest_id']}" + (f" stopped: {res['stopped']}" if res['stopped'] else ""), flush=True)
+    return res
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: Optional[UploadFile] = File(None),
@@ -4919,35 +4996,10 @@ async def upload_document(
                     detail="permit_id is required to propose a document upload. "
                            "Obtain a loop permit from NodeOS first (POST /v1/loops/request)."
                 )
-            layer_suffix = f" [layer={layer}]" if layer else ""
-            if privacy:
-                layer_suffix += f" [privacy={privacy}]"
-            proposal = _nodeos_propose_memory(
-                memory_type="document_embedding",
-                content=f"Document upload: {filename} ({len(text)} chars, {content_type}){layer_suffix}",
-                permit_id=permit_id,
-                source_refs={"filename": filename, "content_type": content_type, "size": size, "layer": layer, "privacy": privacy},
-            )
-            # Prompt-injection scan — surfaced to the operator at approval time,
-            # never auto-blocked. A poisoned doc is visible before it lands in
-            # memory; the operator decides.
-            try:
-                from api import injection_scan
-                scan = injection_scan.scan_text(text)
-            except Exception as _scan_err:
-                scan = None
-            _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size, scan=scan, privacy=privacy)
-            print(f"[upload] proposed proposal_id={proposal['proposal_id']} (text persisted, injection_risk={scan.get('risk') if scan else 'n/a'})", flush=True)
             return JSONResponse(
                 status_code=202,
-                content={
-                    "filename": filename,
-                    "status": "PENDING",
-                    "proposal_id": proposal["proposal_id"],
-                    "message": "Memory proposal submitted to NodeOS. Approve the proposal — no file re-upload needed.",
-                    "injection_scan": scan,
-                    "privacy": privacy,  # None: inherit the existing level, else open
-                },
+                content=_propose_document_text(text, filename=filename, content_type=content_type, size=size,
+                                               permit_id=permit_id, layer=layer, privacy=privacy),
             )
 
         # Path B: proposal_id provided — verify it is APPROVED before writing.

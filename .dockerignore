@@ -21,6 +21,8 @@ vector-db
 
 # Repo content not needed at runtime in the api image
 scripts
+# except the chat import tool the api runs (api/chat_import.py, 2026-10-25)
+!scripts/import_chats.py
 tests
 notes
 docs

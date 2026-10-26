@@ -13,6 +13,10 @@ Nothing in this path writes memory directly; every document goes through the sam
 
 The zip comes to the brain through the console's Files upload, not by email.
 
+### The Knowledge page card (2026-10-25)
+
+The short way: the card "Import your ChatGPT or Claude history" at the top of the Knowledge page (/upload) takes the zip and calls `POST /documents/import-chats` (`api/chat_import.py`). The api runs steps 2 to 4 with `--newest 50` in a scratch folder under its runtime volume (removed afterwards), proposing each conversation through the same permit and Path A as a Knowledge upload. It answers with the counts (conversations, selected, proposed, flagged, sources, manifest id); the proposals wait in Pending on the same page, one approval each or Approve all. Nothing is remembered before that. Projects are left out, as in `select`.
+
 ## 2. Prep: one document per conversation
 
 ```

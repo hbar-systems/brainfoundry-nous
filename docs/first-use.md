@@ -14,6 +14,7 @@ A new brain must not open with a wall of questions. It asks one, takes one docum
 
 - Ask for ONE document of that work: the thing they would open first (a draft, a plan, a notes file, a spreadsheet, a project folder's index). Say where to put it: the Knowledge page at /upload, or the file's path on the box if they already have it there.
 - If they have none, ask for a few sentences typed here instead. That counts as the document.
+- If they have used ChatGPT or Claude, tell them once that the card "Import your ChatGPT or Claude history" at the top of the Knowledge page (/upload) takes the export zip and puts the newest 50 conversations up for their approval (added 2026-10-25).
 - Read it (when it is on the box, read the file, not a memory chunk; say which one you read). Do not ask for more documents yet.
 
 ## The proposed organisation

@@ -106,6 +106,9 @@ export default function Guide() {
             <p style={{ fontSize: '14px', color: T.dim, lineHeight: 1.6, margin: '0 0 16px 0' }}>
               Seven things to do once. Each turns done by itself when your brain has seen it happen. Nothing here is required; it is the shortest way to know what you have.
             </p>
+            <p style={{ fontSize: '14px', color: T.dim, lineHeight: 1.6, margin: '0 0 16px 0' }}>
+              Used ChatGPT or Claude before? Bring that history in with the card "Import your ChatGPT or Claude history" at the top of the <a href="/upload" target="_top" style={{ color: T.gold }}>Knowledge page</a>.
+            </p>
             {health === false && <p style={{ fontSize: '13px', color: '#d08a7a' }}>The bridge on the box is not answering, so the checks cannot run. The guide tab still reads.</p>}
             {rows.map((s, i) => (
               <div key={s.key} style={{ display: 'flex', gap: '14px', padding: '12px 0', borderBottom: `1px solid ${T.line}`, opacity: s.done ? 0.6 : 1 }}>
