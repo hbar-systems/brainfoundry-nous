@@ -65,7 +65,7 @@ const SLASH = [
   { c: '/new', d: 'start a new thread' },
   { c: '/stop', d: 'stop the answer in progress; the thread keeps everything up to here (Esc does the same)' },
   { c: '/model', d: 'pick the model: /model sonnet, /model opus, or a full id; /model alone for the default' },
-  { c: '/seat', d: 'who answers this thread: /seat claude (the default; edits pass your Allow) or /seat codex (Codex, read-only: reads and answers, never writes)' },
+  { c: '/seat', d: 'who answers this thread: /seat claude (the default; edits pass your Allow) /seat codex (Codex, read-only: reads and answers, never writes) or /seat local (a self-hosted model, read-only; its writes come as cards)' },
   { c: '/posture', d: 'own-box actions: /posture cards (every edit and command asks), /posture auto (the vendor classifier decides), /posture judged (TypeSafe scores each action; harmless runs, the rest ask)' },
   { c: '/pane', d: 'open a pane beside the chat: /pane /graph' },
   { c: '/files', d: 'open the files pane: what the brain made, what you gave it, your repositories' },
@@ -492,13 +492,19 @@ function codexWords(cx) {
   if (!cx.signedIn) return 'codex: not signed in'
   return `codex: signed in${cx.method === 'chatgpt' ? ' with ChatGPT' : cx.method === 'api-key' ? ' with an API key' : ''}`
 }
-function SeatLine({ seat, onPick, codex, onOpenPane, onRecheck }) {
+// The Local seat (2026-10-26): the Codex machinery on a self-hosted model (scripts/cc/cc_local.py).
+// Its chip shows once CC_LOCAL_BASE_URL is set, or while a thread sits on it; its words are
+// health.local.line, read from configuration only (no live probe on the health poll).
+const SEATS = ['claude', 'codex', 'local']
+const seatName = (s, local) => s === 'codex' ? 'Codex (read-only)' : s === 'local' ? ((local && local.label) || 'Local (read-only)') : 'Claude'
+function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
   const ready = !!(codex && codex.installed && codex.signedIn)
+  const localOn = !!(local && local.configured)
   return (
     <span data-nopick="1" style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
       <span style={lbl}>seat</span>
-      <Chip on={seat !== 'codex'} onClick={() => onPick('claude')} title="Claude answers; on this box its edits and commands pass your Allow">Claude</Chip>
+      <Chip on={seat !== 'codex' && seat !== 'local'} onClick={() => onPick('claude')} title="Claude answers; on this box its edits and commands pass your Allow">Claude</Chip>
       <Chip on={seat === 'codex'} onClick={() => onPick('codex')}
         title={ready ? 'Codex answers this thread, read-only: it reads files and runs read-only commands, never writes' : codexWords(codex) + '; a turn on this seat is refused until it is'}>
         {(codex && codex.label) || 'Codex (read-only)'}
@@ -509,6 +515,15 @@ function SeatLine({ seat, onPick, codex, onOpenPane, onRecheck }) {
           {codex && codex.installed && !codex.signedIn ? <> · <a onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>Sign in with ChatGPT</a></> : null}
           {' '}· <a onClick={onRecheck} title="read the Codex status again" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>recheck</a>
         </span>
+      ) : null}
+      {localOn || seat === 'local' ? (
+        <>
+          <Chip on={seat === 'local'} onClick={() => onPick('local')}
+            title={localOn ? 'a self-hosted model answers this thread, read-only like Codex; a write it wants comes to you as a card' : ((local && local.line) || 'local model: no endpoint configured') + '; a turn on this seat is refused until it is'}>
+            {seatName('local', local)}
+          </Chip>
+          <span style={{ ...mono, fontSize: '10px', color: localOn ? C.faint : '#d08a7a' }}>{(local && local.line) || 'local model: status unknown'}</span>
+        </>
       ) : null}
     </span>
   )
@@ -1781,7 +1796,7 @@ function CC() {
   const seatKey = cur || 'new'
   const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || 'claude')
   const seatRef = useRef('claude'); seatRef.current = seat
-  const pickSeat = (s) => setSeatPick({ key: seatKey, seat: s === 'codex' ? 'codex' : 'claude' })
+  const pickSeat = (s) => setSeatPick({ key: seatKey, seat: SEATS.includes(s) ? s : 'claude' })
   const recheckCodex = () => fetch('/cc/codex/status?fresh=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
     .then(cx => { if (cx) setHealth(h => (h ? { ...h, codex: cx } : h)) }).catch(() => {})
   // The thread's look (the tool line, 2026-10-13): read from the thread record on the box, changed here
@@ -2426,11 +2441,14 @@ function CC() {
     }
     if (cmd === 'seat') {
       const s = (arg || '').toLowerCase()
-      if (s !== 'claude' && s !== 'codex') { setTurns(t => [...t, { who: 'brain', text: `Seat: ${seatRef.current === 'codex' ? 'Codex (read-only)' : 'Claude'}. Say /seat claude or /seat codex.` }]); return true }
+      const lc = health && health.local
+      if (!SEATS.includes(s)) { setTurns(t => [...t, { who: 'brain', text: `Seat: ${seatName(seatRef.current, lc)}. Say /seat claude, /seat codex or /seat local.` }]); return true }
       pickSeat(s)
       const cx = health && health.codex
       setTurns(t => [...t, { who: 'brain', text: s === 'codex'
         ? `Seat: Codex (read-only), from the next message in this thread. It reads files and answers; it cannot write, run changing commands or reach the network. ${codexWords(cx)}.`
+        : s === 'local'
+        ? `Seat: ${seatName('local', lc)}, from the next message in this thread. A self-hosted model reads and answers; a write it proposes comes to you as a card. ${(lc && lc.line) || 'local model: status unknown'}.`
         : 'Seat: Claude, from the next message in this thread.' }])
       return true
     }
@@ -2494,7 +2512,7 @@ function CC() {
       return true
     }
     if (cmd === 'help' || cmd === '') {
-      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /seat claude|codex (who answers this thread; Codex is read-only), /files, /jobs, /talk (speak instead of typing; /talk free on for hands-free), /voice on|off|list, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
+      setTurns(t => [...t, { who: 'brain', text: 'Here: /new (new thread), /model sonnet|opus|<id> (or /model alone for the default), /posture cards|auto|judged (how much your own box asks), /seat claude|codex|local (who answers this thread; Codex and Local are read-only; Local asks for writes by card), /files, /jobs, /talk (speak instead of typing; /talk free on for hands-free), /voice on|off|list, /guide (the guide and tutorial), /pane /graph (open a pane), /help. Other slash commands go to the reasoner.' }])
       return true
     }
     return false
@@ -2840,7 +2858,7 @@ function CC() {
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} onOpenPane={openPane} onRecheck={recheckCodex} />
+                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={recheckCodex} />
                 <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
                   title="learning mode: bold phrases and code terms get a 'learn' door with a mini lesson (one small side call each, nothing posted here)">learn {look.learn ? 'on' : 'off'}</Chip>
                 <Recall />

@@ -1342,6 +1342,16 @@ def test_direct_local_get_reads_jobs_and_tasks(monkeypatch, tmp_path):
     assert not m._get_local_ok("/threads/brief") and not m._get_local_ok("/state") and not m._get_local_ok("/files")
 
 
+def test_console_offers_the_local_seat(monkeypatch, tmp_path):
+    # the Local seat chip (2026-10-26): SeatLine gets health.local, /seat local and pickSeat accept it
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    assert "const SEATS = ['claude', 'codex', 'local']" in src
+    assert "SEATS.includes(s) ? s : 'claude'" in src
+    assert "local={health && health.local}" in src
+    assert "onPick('local')" in src and "local.line" in src
+    assert "/seat claude|codex|local" in src
+
+
 def test_local_seat_box_proposal_parse(monkeypatch, tmp_path):
     # the Local seat's write lane (2026-10-26): one <box-proposal> command, cut out of the reply
     m = _load(monkeypatch, tmp_path, with_key=False)
