@@ -1329,3 +1329,14 @@ def test_actions_refuse_bad_input(monkeypatch, tmp_path):
     assert m._action_job({"id": "J1", "act": "rule"})[0] == 400
     assert m._action_job({"id": "J1", "act": "done"})[0] == 404
     assert m._actions()["next"] == [] and m._actions()["next_box"] is False
+
+
+def test_direct_local_get_reads_jobs_and_tasks(monkeypatch, tmp_path):
+    # GET /jobs, /jobs/<id> and /tasks open to a direct call on this box (2026-10-26), the /notify rule:
+    # loopback and no X-Forwarded-For, so cc-job list answers from cron without CC_ASK_TOKEN.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._is_direct_local("127.0.0.1", None) and m._is_direct_local("::1", "")
+    assert not m._is_direct_local("127.0.0.1", "203.0.113.9")     # came through the proxy
+    assert not m._is_direct_local("100.64.0.7", None)               # another machine on the tailnet
+    assert m._get_local_ok("/jobs") and m._get_local_ok("/jobs/J12") and m._get_local_ok("/tasks")
+    assert not m._get_local_ok("/threads/brief") and not m._get_local_ok("/state") and not m._get_local_ok("/files")

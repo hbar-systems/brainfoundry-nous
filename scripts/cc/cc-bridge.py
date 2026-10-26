@@ -3525,6 +3525,17 @@ def _tg_send(chat_id, text: str, **extra) -> dict | None:
     return out
 
 
+def _is_direct_local(client_ip: str, forwarded_for) -> bool:
+    """A call from a program on this box: loopback and no X-Forwarded-For (the proxy always adds one)."""
+    return client_ip in ("127.0.0.1", "::1") and not forwarded_for
+
+
+def _get_local_ok(route: str) -> bool:
+    """GET reads a direct local call may make without a token (2026-10-26): the job list and a job's
+    tail, and the task list, so cc-job list and task list work from cron, where no turn set CC_ASK_TOKEN."""
+    return route == "/tasks" or route == "/jobs" or route.startswith("/jobs/")
+
+
 NOTIFY_SENT: list = []          # send times of /notify lines in the last hour
 NOTIFY_LOCK = threading.Lock()
 
@@ -4082,6 +4093,9 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return _hmac.compare_digest(self.headers.get("X-CC-Operator", ""), OPERATOR_TOKEN)
 
+    def _direct_local(self) -> bool:
+        return _is_direct_local(self.client_address[0], self.headers.get("X-Forwarded-For"))
+
     def do_GET(self) -> None:  # noqa: N802
         route = self._route()
         if self._foreign_page():
@@ -4090,7 +4104,8 @@ class Handler(BaseHTTPRequestHandler):
         if route not in ("/health", "/tasks", "/threads/brief") and not route.startswith("/jobs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
-        if (route.startswith("/jobs") or route in ("/tasks", "/threads/brief")) and not self._operator_ok() and not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+        if (route.startswith("/jobs") or route in ("/tasks", "/threads/brief")) and not self._operator_ok() and not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN) \
+                and not (_get_local_ok(route) and self._direct_local()):
             self._send(403, {"error": "not the operator, not the reasoner"})
             return
         if route == "/threads/brief":
@@ -4704,8 +4719,7 @@ class Handler(BaseHTTPRequestHandler):
             # One plain line to the owner's Telegram (2026-10-26, the box watch's alert route). Open to
             # the console, the ask token, or a direct call on this box: the proxy always adds
             # X-Forwarded-For, so a call without it came from a local program, never from outside.
-            local = self.client_address[0] in ("127.0.0.1", "::1") and not self.headers.get("X-Forwarded-For")
-            if not (local or self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
+            if not (self._direct_local() or self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
                 self._send(403, {"ok": False, "error": "only programs on this server may notify"})
                 return
             body = self._json(limit=2000) or {}
