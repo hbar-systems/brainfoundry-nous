@@ -1298,3 +1298,22 @@ def test_radio_link_refuses_without_token_or_https(monkeypatch, tmp_path):
     assert code == 503 and not out["ok"]
     code, out = m._radio_link({"station": "http://orfeo.music"})
     assert code == 400
+
+
+def test_notify_rate_limit_and_flood_line(monkeypatch, tmp_path):
+    # /notify (2026-10-26): a box program's line to the owner's Telegram, 10 an hour, then one flood note.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._notify("watch: red")[0] == 409          # no bot, no owner: refused, nothing sent
+    sent = []
+
+    class FakeTG:
+        def owner(self):
+            return 42
+        def call(self, method, **p):
+            sent.append(p["text"])
+            return {"ok": True}
+    monkeypatch.setattr(m, "TG", FakeTG())
+    assert m._notify("   ")[0] == 400
+    codes = [m._notify(f"line {i}")[0] for i in range(12)]
+    assert codes[:11] == [200] * 11 and codes[11] == 429
+    assert len(sent) == 11 and sent[0] == "line 0" and sent[10].startswith("More alerts this hour")

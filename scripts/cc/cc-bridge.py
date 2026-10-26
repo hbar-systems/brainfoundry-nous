@@ -3525,6 +3525,34 @@ def _tg_send(chat_id, text: str, **extra) -> dict | None:
     return out
 
 
+NOTIFY_SENT: list = []          # send times of /notify lines in the last hour
+NOTIFY_LOCK = threading.Lock()
+
+
+def _notify(text: str) -> tuple:
+    """A line from a program on this box to the owner's Telegram: 10 an hour, then one flood note."""
+    text = " ".join(text.split())[:400]
+    if not text:
+        return 400, {"ok": False, "error": "empty text"}
+    if TG is None or TG.owner() is None:
+        return 409, {"ok": False, "error": "no Telegram owner pinned on this brain"}
+    with NOTIFY_LOCK:
+        now = time.time()
+        NOTIFY_SENT[:] = [t for t in NOTIFY_SENT if now - t < 3600]
+        n = len(NOTIFY_SENT)
+        if n > 10:
+            return 429, {"ok": False, "error": "flood: over 10 lines this hour"}
+        NOTIFY_SENT.append(now)
+    if n == 10:
+        text = "More alerts this hour than 10; the rest wait in the box's watch log."
+    print(f"notify: {text[:80]}", flush=True)
+    try:
+        out = _tg_send(TG.owner(), text) or {}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"ok": False, "error": f"Telegram did not take it ({type(e).__name__})"}
+    return (200, {"ok": True}) if out.get("ok") else (502, {"ok": False, "error": "Telegram did not take it"})
+
+
 def _tg_turn(chat_id, text: str) -> None:
     st = TG.state()
     thread = st.get("thread")
@@ -4214,7 +4242,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/notify") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -4586,6 +4614,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/login/code":
             ok = LOGIN.send_code(str(req.get("code", "")))
             self._send(200 if ok else 409, {"ok": ok, "phase": LOGIN.phase})
+            return
+        if route == "/notify":
+            # One plain line to the owner's Telegram (2026-10-26, the box watch's alert route). Open to
+            # the console, the ask token, or a direct call on this box: the proxy always adds
+            # X-Forwarded-For, so a call without it came from a local program, never from outside.
+            local = self.client_address[0] in ("127.0.0.1", "::1") and not self.headers.get("X-Forwarded-For")
+            if not (local or self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
+                self._send(403, {"ok": False, "error": "only programs on this server may notify"})
+                return
+            body = self._json(limit=2000) or {}
+            self._send(*_notify(str(body.get("text") or "")))
             return
         if route == "/ask-peer":
             if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
