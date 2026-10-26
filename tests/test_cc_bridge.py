@@ -1317,3 +1317,15 @@ def test_notify_rate_limit_and_flood_line(monkeypatch, tmp_path):
     codes = [m._notify(f"line {i}")[0] for i in range(12)]
     assert codes[:11] == [200] * 11 and codes[11] == 429
     assert len(sent) == 11 and sent[0] == "line 0" and sent[10].startswith("More alerts this hour")
+
+
+def test_actions_refuse_bad_input(monkeypatch, tmp_path):
+    # standing-page actions (2026-10-26): ids and verbs are checked before anything runs
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._action_next({"id": "nope", "act": "take"})[0] == 400
+    assert m._action_next({"id": "1025-abcdef", "act": "delete"})[0] == 400
+    m.WORLD_DIR = ""
+    assert m._action_next({"id": "1025-abcdef", "act": "take"})[0] == 409
+    assert m._action_job({"id": "J1", "act": "rule"})[0] == 400
+    assert m._action_job({"id": "J1", "act": "done"})[0] == 404
+    assert m._actions()["next"] == [] and m._actions()["next_box"] is False

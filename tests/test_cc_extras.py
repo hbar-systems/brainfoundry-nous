@@ -460,3 +460,29 @@ def test_commit_info_finds_a_commit_and_refuses_a_non_hash(tmp_path):
     assert out["files"][0]["path"] == "a.txt" and out["pushed"] is False
     assert not X.commit_info("added", repos)["ok"]
     assert not X.commit_info("abcdef0", repos)["ok"]
+
+
+def test_next_rows_open_candidates_newest_first(tmp_path):
+    # standing-page actions (2026-10-26): only candidates with a real id, newest first
+    p = tmp_path / "next.tsv"
+    head = "id\tts_utc\tthread\tagent_or_job\trepo\twhat\twhy\tcost\tstate\truled_by\tnote\n"
+    p.write_text(head + "1025-aaaaaa\tt1\tth\t\tworld\tfirst\twhy1\t10 min\tcandidate\t\t\n"
+                 "1025-bbbbbb\tt2\tth\t\tworld\ttaken one\tw\t\ttaken\tme\t\n"
+                 "# a comment\n"
+                 "1026-cccccc\tt3\tth\t\t-\tsecond\twhy2\t\tcandidate\t\t\n")
+    rows = X.next_rows(p)
+    assert [r["id"] for r in rows] == ["1026-cccccc", "1025-aaaaaa"]
+    assert rows[1]["what"] == "first" and rows[1]["cost"] == "10 min"
+    assert X.next_rows(tmp_path / "missing.tsv") == []
+
+
+def test_job_report_asks_status_and_choices():
+    assert X.job_report_asks("all fine\nSTATUS: done") is None
+    assert X.job_report_asks("") is None
+    tail = ('Two ways.\n<choices>[{"label": "Keep it private", "send": "x"}, "Publish"]</choices>\n'
+            "STATUS: needs-you - pick one")
+    a = X.job_report_asks(tail)
+    assert a["status"] == "needs-you" and a["line"] == "pick one"
+    assert a["options"] == ["Keep it private", "Publish"]
+    b = X.job_report_asks("**STATUS: blocked** no key\n<choices>not json</choices>")
+    assert b["status"] == "blocked" and b["options"] == []

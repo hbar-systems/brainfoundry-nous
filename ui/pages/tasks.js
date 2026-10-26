@@ -8,6 +8,27 @@ async function api(path, opts = {}) {
   return r.json()
 }
 
+// The owner's standing actions (2026-10-26): open next-box rows and job reports that wait on the owner,
+// through the console bridge (/cc/actions, owner token only). Without the bridge, or for anyone else,
+// the page shows only the tasks.
+async function cc(path, body) {
+  const r = await fetch(`/cc${path}`, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status)
+  return d
+}
+
+function Act({ children, onClick, primary, busy, title }) {
+  return (
+    <button onClick={onClick} disabled={busy} title={title}
+      style={{ background: primary ? 'var(--accent)' : 'transparent', color: primary ? 'var(--bg)' : 'var(--text-dim)', border: primary ? 'none' : '1px solid var(--border)',
+               borderRadius: 7, padding: '4px 11px', fontSize: 12, fontWeight: primary ? 600 : 400, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>{children}</button>
+  )
+}
+
+const label = { color: 'var(--muted)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, margin: '26px 0 4px 0' }
+const rowStyle = { display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--surface2)' }
+
 function fmtDue(due) {
   if (!due) return ''
   try { return new Date(due).toLocaleString() } catch { return due }
@@ -18,9 +39,23 @@ export default function Tasks() {
   const [text, setText] = useState('')
   const [due, setDue] = useState('')
   const [err, setErr] = useState(null)
+  const [acts, setActs] = useState(null)   // { next: [], jobs: [] } from the bridge, null when it does not answer the owner
+  const [busy, setBusy] = useState('')
+  const [said, setSaid] = useState('')
 
   const load = () => api('/tasks?include_done=true').then(d => setTasks(d.tasks || [])).catch(e => setErr(e.message))
-  useEffect(() => { load() }, [])
+  const loadActs = () => cc('/actions').then(setActs).catch(() => setActs(null))
+  useEffect(() => { load(); loadActs() }, [])
+
+  const press = async (key, path, body) => {
+    setBusy(key); setErr(null); setSaid('')
+    try {
+      const d = await cc(path, body)
+      setSaid(d.line || (d.sent_to ? 'Sent to its thread; it starts there now.' : d.note || 'Done.'))
+      await loadActs()
+    } catch (e) { setErr(e.message) }
+    setBusy('')
+  }
 
   const add = async () => {
     if (!text.trim()) return
@@ -40,8 +75,7 @@ export default function Tasks() {
   const inp = { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 12px', fontSize: 14, fontFamily: 'inherit' }
 
   const Row = (t) => (
-    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--surface2)' }}>
-      <input type="checkbox" checked={!!t.done} onChange={() => toggle(t)} style={{ accentColor: 'var(--accent)', width: 16, height: 16 }} />
+    <div key={t.id} style={{ ...rowStyle, alignItems: 'center' }}>
       <div style={{ flex: 1 }}>
         <div style={{ color: t.done ? 'var(--muted)' : 'var(--text)', fontSize: 14, textDecoration: t.done ? 'line-through' : 'none' }}>{t.text}</div>
         {t.due && <div style={{ color: 'var(--text-dim)', fontSize: 11.5, marginTop: 2 }}>⏰ {fmtDue(t.due)}{t.reminded ? ' · reminded' : ''}</div>}
@@ -49,7 +83,8 @@ export default function Tasks() {
           ? <a href={`/talk?thread=${encodeURIComponent(t.thread)}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{t.source}</a>
           : t.source}</div>}
       </div>
-      <button onClick={() => del(t)} style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 15 }} title="delete">×</button>
+      <Act primary={!t.done} onClick={() => toggle(t)}>{t.done ? 'reopen' : 'done'}</Act>
+      <Act onClick={() => del(t)} title="delete the task">drop</Act>
     </div>
   )
 
@@ -72,9 +107,51 @@ export default function Tasks() {
         </div>
 
         {err && <div style={{ color: '#c0392b', fontSize: 12, marginBottom: 12 }}>{err}</div>}
+        {said && <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 12 }}>{said}</div>}
+
+        {acts && acts.jobs && acts.jobs.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={label}>Reports waiting on you</div>
+            {acts.jobs.map(j => (
+              <div key={j.id} style={rowStyle}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: 'var(--text)', fontSize: 14 }}>{j.title || j.id}</div>
+                  <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 2 }}>{j.status}{j.line ? `: ${j.line}` : ''}</div>
+                  <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>job {j.id}{j.thread
+                    ? <> · <a href={`/talk?thread=${encodeURIComponent(j.thread)}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{j.thread_title || 'its thread'}</a></>
+                    : ' · no known thread, a ruling is only recorded'}</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    {(j.options || []).map(o => (
+                      <Act key={o} primary busy={!!busy} onClick={() => press(`j${j.id}`, '/actions/job', { id: j.id, act: 'rule', choice: o })}
+                        title="send this ruling to the job's thread">{o}</Act>
+                    ))}
+                    <Act busy={!!busy} onClick={() => press(`j${j.id}`, '/actions/job', { id: j.id, act: 'done' })} title="settled; take it off this list">done</Act>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {open.length === 0 && done.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13 }}>No tasks yet.</div>}
         {open.map(Row)}
+        {acts && acts.next_box && (
+          <div style={{ marginTop: 8 }}>
+            <div style={label}>Next, proposed by agents (nothing runs by itself)</div>
+            {acts.next.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13, padding: '8px 0' }}>None open.</div>}
+            {acts.next.map(n => (
+              <div key={n.id} style={rowStyle}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: 'var(--text)', fontSize: 14 }}>{n.what}</div>
+                  <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 2 }}>{n.why}</div>
+                  <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>{n.id} · {n.repo}{n.cost ? ` · cost ${n.cost}` : ''} · {(n.ts || '').slice(0, 10)}</div>
+                </div>
+                <Act primary busy={!!busy} onClick={() => press(`n${n.id}`, '/actions/next', { id: n.id, act: 'take' })} title="mark it taken: you or the central thread start it">take</Act>
+                <Act busy={!!busy} onClick={() => press(`n${n.id}`, '/actions/next', { id: n.id, act: 'drop' })}>drop</Act>
+              </div>
+            ))}
+          </div>
+        )}
         {done.length > 0 && (
           <div style={{ marginTop: 22 }}>
             <div style={{ color: 'var(--muted)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Done</div>

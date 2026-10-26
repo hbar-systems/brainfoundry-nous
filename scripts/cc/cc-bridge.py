@@ -3866,6 +3866,83 @@ BOARD_FILE = STATE_DIR / "board.json"       # {"dismissed": [tile keys]}
 _BOARD_RESULTS: dict = {}                   # (thread, stamp) -> the last answer, read once from the brain's record
 
 
+# Standing-page actions (2026-10-26, next-box row 1025-2cf936; hbar: "perhaps we need more buttons for
+# action in our contexts"). GET /actions lists the world's open next-box rows and the finished jobs whose
+# report asks the owner (STATUS: needs-you or blocked, options from its <choices>); POST /actions/next
+# takes or drops a row through the world's own scripts/next.sh, run as the hands; POST /actions/job rules
+# on a report (the chosen option goes into the job's thread as a queued message and starts there) or
+# marks it done. Owner token only: none of these routes is open to the ask token or a local program.
+RULINGS_FILE = STATE_DIR / "job-rulings.json"
+
+
+def _rulings() -> dict:
+    try:
+        return json.loads(RULINGS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _actions() -> dict:
+    nxt = cc_extras.next_rows(Path(WORLD_DIR) / "ops" / "next.tsv") if WORLD_DIR else []
+    ruled, titles = _rulings(), {t.get("brain"): t.get("title") for t in _threads_load()}
+    asks = []
+    for j in JOBS.list(40):
+        if j.get("ended") is None or j["id"] in ruled:
+            continue
+        a = cc_extras.job_report_asks((JOBS.get(j["id"], 6000) or {}).get("tail", ""))
+        if a:
+            th = j.get("thread") if cc_extras.Jobs.known(j.get("thread")) else None
+            asks.append({"id": j["id"], "title": j.get("title"), "ended": j.get("ended"), "rc": j.get("rc"),
+                         "thread": th, "thread_title": titles.get(th) if th else None, **a})
+    return {"next": nxt, "next_box": bool(WORLD_DIR) and (Path(WORLD_DIR) / "scripts" / "next.sh").exists(), "jobs": asks}
+
+
+def _action_next(req: dict) -> tuple:
+    rid, act = str(req.get("id") or "").strip(), str(req.get("act") or "").strip()
+    note = " ".join(str(req.get("note") or "").split())[:200] or "from the console's buttons"
+    if not cc_extras.NEXT_ID.fullmatch(rid) or act not in ("take", "drop"):
+        return 400, {"ok": False, "error": "id (MMDD-xxxxxx) and act take or drop needed"}
+    script = Path(WORLD_DIR) / "scripts" / "next.sh" if WORLD_DIR else None
+    if not script or not script.exists():
+        return 409, {"ok": False, "error": "no next box on this box (CC_WORLD_DIR/scripts/next.sh)"}
+    try:
+        r = subprocess.run(_as_hands(["bash", str(script), act, rid, note], env=_hands_env({"CC_THREAD": "console"})),
+                           capture_output=True, text=True, timeout=20, cwd=WORLD_DIR)
+    except Exception as e:  # noqa: BLE001
+        return 500, {"ok": False, "error": f"next.sh did not run: {type(e).__name__}"}
+    print(f"next box {act} {rid} from the console: rc {r.returncode}", flush=True)
+    if r.returncode != 0:
+        return 409, {"ok": False, "error": (r.stderr or r.stdout).strip()[:300] or f"next.sh exited {r.returncode}"}
+    return 200, {"ok": True, "line": r.stdout.strip()[:300]}
+
+
+def _action_job(req: dict) -> tuple:
+    jid, act = str(req.get("id") or "").strip()[:40], str(req.get("act") or "").strip()
+    choice = " ".join(str(req.get("choice") or "").split())[:300]
+    if act not in ("done", "rule") or (act == "rule" and not choice):
+        return 400, {"ok": False, "error": "act done, or rule with a choice"}
+    j = JOBS.get(jid, 6000)
+    if not j:
+        return 404, {"ok": False, "error": "no such job"}
+    sent = None
+    th = j.get("thread") if cc_extras.Jobs.known(j.get("thread")) else None
+    if act == "rule" and th:
+        msg = f"Ruling on job {jid} ({j.get('title') or ''}): {choice}"
+        with RUNS_LOCK:
+            code, _ = _queue_push(th, msg, "ruling")
+        if code >= 300:
+            return code, {"ok": False, "error": "the thread's queue is full; rule again once it drains"}
+        _drain_async(th)
+        sent = th
+    d = _rulings()
+    d[jid] = {"act": act, "choice": choice, "thread": sent, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    RULINGS_FILE.write_text(json.dumps(dict(list(d.items())[-500:]), indent=1))
+    print(f"job {jid} {act}{': ' + choice[:80] if choice else ''} from the console", flush=True)
+    return 200, {"ok": True, "sent_to": sent,
+                 "note": None if sent or act == "done" else "the job has no known thread; the ruling is recorded, nobody was told"}
+
+
 def _board_dismissed() -> set:
     try:
         return set(json.loads(BOARD_FILE.read_text()).get("dismissed") or [])
@@ -4183,6 +4260,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _state(t))
         elif route == "/board":
             self._send(200, _board())
+        elif route == "/actions":
+            self._send(200, _actions())
         elif route == "/agents":
             self._send(*_agents_call(["list"]))
         elif route.startswith("/layout"):
@@ -4566,6 +4645,12 @@ class Handler(BaseHTTPRequestHandler):
             # the person dismissed a finished job from the "other conversations" strip (2026-10-11)
             jid = str(req.get("id", "")).strip()[:40]
             self._send(200, {"ok": JOBS.mark_seen(jid) if jid else False})
+            return
+        if route == "/actions/next":
+            self._send(*_action_next(req))
+            return
+        if route == "/actions/job":
+            self._send(*_action_job(req))
             return
         if route == "/board/dismiss":
             key = str(req.get("key", "")).strip()[:200]

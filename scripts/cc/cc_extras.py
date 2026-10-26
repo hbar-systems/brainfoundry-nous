@@ -1079,6 +1079,56 @@ def usage_summary(lines, now: float | None = None, titles: dict | None = None, i
 BOARD_ORDER = {"waiting": 0, "failed": 1, "answering": 2, "done": 3}
 
 
+# Standing-page actions (2026-10-26, next-box row 1025-2cf936): the /tasks page shows the owner's open
+# next-box rows (ops/next.tsv in the world, scripts/next.sh) and the finished jobs whose report asks for
+# them, each with its own buttons, so a ruling is a press, not a typed message.
+NEXT_ID = re.compile(r"\d{4}-[0-9a-f]{6}")
+
+
+def next_rows(path, limit: int = 30) -> list:
+    """Open candidates of a next box (ops/next.tsv: id ts thread agent repo what why cost state ruled_by note),
+    newest first; [] when there is no box."""
+    try:
+        lines = Path(path).read_text().splitlines()[1:]
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if not line.strip() or line.startswith("#"):
+            continue
+        c = (line.split("\t") + [""] * 11)[:11]
+        if c[8] == "candidate" and NEXT_ID.fullmatch(c[0]):
+            out.append({"id": c[0], "ts": c[1], "thread": c[2], "repo": c[4], "what": c[5], "why": c[6], "cost": c[7]})
+    return out[::-1][:limit]
+
+
+_STATUS = re.compile(r"STATUS:\s*\**\s*(needs-you|blocked)\b\W*(.*)", re.I)
+_CHOICES = re.compile(r"<choices>(.*?)</choices>", re.S)
+
+
+def job_report_asks(tail: str):
+    """A finished job's report that waits on the owner (sky.py's rule: the last STATUS line says needs-you
+    or blocked), with the options it names: a <choices> JSON list of labels or {"label"} objects, the same
+    block the answers use. None when the report does not ask."""
+    st = None
+    for m in _STATUS.finditer(tail or ""):
+        st = m
+    if not st:
+        return None
+    options = []
+    for block in _CHOICES.findall(tail or "")[-1:]:
+        try:
+            items = json.loads(block)
+        except ValueError:
+            items = []
+        for it in items if isinstance(items, list) else []:
+            label = it.get("label") if isinstance(it, dict) else it
+            label = " ".join(str(label or "").split())[:120]
+            if label and label not in options:
+                options.append(label)
+    return {"status": st.group(1).lower(), "line": st.group(2).strip()[:300], "options": options[:6]}
+
+
 def last_sentence(text: str, n: int = 180) -> str:
     """The last meaningful line of a piece of prose: its final sentence, without markdown noise."""
     s = re.sub(r"```.*?```", " ", text or "", flags=re.S)
