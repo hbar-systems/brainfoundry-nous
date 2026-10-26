@@ -200,7 +200,10 @@ Then the DNS names. The Ollama link timer drops the network by itself (it no lon
 ## Removing a member (by hand, 2026-10-25)
 
 Run on friends-1 the same evening two fresh members were renamed (removed and re-added under other
-handles). It is the list above, with what the box taught; there is no `remove-member.sh` yet. As the
+handles). It is the list above, with what the box taught. Since 2026-10-26 it is a script:
+`bash scripts/remove-member.sh <m> --dry-run`, then `--apply [--carry DIR]` (carries persona and hash
+line into DIR, default `~/member-carry/<m>-<stamp>`; the Caddyfile edit is `scripts/caddy_sites.py`,
+validated before the restart; tests/test_remove_member.py runs the dry run only). By hand, as the
 admin, with `m` the handle; nothing here reads `.env`.
 
 1. **Carry first.** The persona is not in the checkout: it lives in the `api_runtime` volume and dies
