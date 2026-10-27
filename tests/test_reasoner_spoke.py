@@ -10,6 +10,18 @@ from __future__ import annotations
 import importlib
 import os
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_modules():
+    # Tests here reload providers (and privacy) under a patched environment. Reload again
+    # once monkeypatch has put the environment back, so later files do not inherit these spokes.
+    yield
+    from api import privacy, providers
+    importlib.reload(providers)
+    importlib.reload(privacy)
+
 
 def _providers(monkeypatch, tmp_path, spoke: str | None):
     monkeypatch.setenv("SETTINGS_PATH", str(tmp_path / "settings.json"))

@@ -97,6 +97,7 @@ def m(monkeypatch, tmp_path):
     monkeypatch.setattr(_p, "_local_ollama_models", lambda: set())
     monkeypatch.setattr(_p, "OLLAMA_URL", "http://ollama:11434")
     monkeypatch.setattr(_p, "OLLAMA_SPOKE_URL", "")
+    monkeypatch.setattr(_p, "OLLAMA_SPOKE_URLS", [])  # the spoke list (daea836); no spoke here
     monkeypatch.setattr(_ss, "get_retrieval_architecture", lambda: "flat")
     monkeypatch.setattr(_ss, "get_agentic_tools_enabled", lambda: False)
     monkeypatch.setattr(_ss, "get_web_search_enabled", lambda: False)
