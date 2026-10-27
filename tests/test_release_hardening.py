@@ -86,6 +86,18 @@ def test_falls_back_to_peer_when_no_xff_even_if_trusted(monkeypatch):
 
 # ── #2  Postgres password fail-closed (import-time guard) ─────────────────────
 
+# No embedding model needed to reach the guard: stub sentence_transformers when it is
+# not installed (same stand-in as tests/conftest.py), then import.
+_IMPORT_MAIN = (
+    "import sys, types\n"
+    "try:\n    import sentence_transformers\n"
+    "except ImportError:\n"
+    "    _st = types.ModuleType('sentence_transformers'); _st.SentenceTransformer = object\n"
+    "    sys.modules['sentence_transformers'] = _st\n"
+    "import api.main\n"
+)
+
+
 def _import_main(tmp_path, **env_overrides):
     """Import api.main in a subprocess with a prod-like env; return CompletedProcess.
 
@@ -104,7 +116,7 @@ def _import_main(tmp_path, **env_overrides):
     })
     env.update(env_overrides)
     return subprocess.run(
-        [sys.executable, "-c", "import api.main"],
+        [sys.executable, "-c", _IMPORT_MAIN],
         cwd=str(ROOT), env=env, capture_output=True, text=True,
     )
 
