@@ -13,9 +13,15 @@ import os
 import pathlib
 import subprocess
 import tarfile
+import tempfile
 import uuid
 
 import pytest
+
+# Run alone, nothing earlier has set these; importing api.main refuses to start without the
+# identity secret (same preamble as test_submissions, 2026-10-27).
+os.environ.setdefault("BRAIN_IDENTITY_SECRET", "test-only-secret")
+os.environ.setdefault("BRAIN_RUNTIME_DIR", tempfile.mkdtemp(prefix="vault-test-"))
 
 from api import privacy as pv
 from tests.test_memory_privacy import (  # noqa: F401  (fixtures by name)

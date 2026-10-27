@@ -21,9 +21,15 @@ import os
 import subprocess
 import sys
 import pathlib
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# Run alone, nothing earlier has set these; importing api.main refuses to start without the
+# identity secret (same preamble as test_submissions, 2026-10-27).
+os.environ.setdefault("BRAIN_IDENTITY_SECRET", "test-only-secret")
+os.environ.setdefault("BRAIN_RUNTIME_DIR", tempfile.mkdtemp(prefix="hardening-test-"))
 
 
 # ── #3  PublicRateLimiter daily cap default ──────────────────────────────────
