@@ -5,6 +5,7 @@ harmonics ledger are replaced in-process.
 """
 import json
 import os
+import pathlib
 import sys
 import tempfile
 import types
@@ -55,6 +56,8 @@ def env(monkeypatch):
     monkeypatch.setenv("BRAIN_ID", THIS)
     monkeypatch.setattr(m, "BRAIN_API_KEY", KEY)
     monkeypatch.setenv("BRAIN_API_KEY", KEY)
+    # test_federation_audit reloads federation_audit under its own tmp path; pin ours.
+    monkeypatch.setattr(federation_audit, "FEDERATION_AUDIT_PATH", pathlib.Path(os.environ["FEDERATION_AUDIT_PATH"]))
     S.set_store(S.MemStore())
     S._limiter.hits.clear()
     replay_cache.clear()
