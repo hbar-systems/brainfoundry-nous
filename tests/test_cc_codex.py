@@ -274,7 +274,8 @@ def test_page_has_the_chatgpt_door_and_sends_the_seat():
     assert "Sign in with a Claude subscription" in src          # the Claude door stays beside it
     assert "reasoner: seatRef.current" in src and "'/cc/codex/status?fresh=1'" in src
     assert "Codex (read-only)" in src
-    assert "<select" not in src
+    # the seat is no dropdown; the one <select> is the pane page switcher (78c3284)
+    assert src.count("<select") == 1 and "<select value={pane.route}" in src
 
 
 def test_door_runs_the_device_code_login_as_the_hands():
