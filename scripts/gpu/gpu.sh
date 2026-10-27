@@ -66,6 +66,12 @@ load_profile() {
 
 st() { echo "$STATE/$1.env"; }
 
+answers() {  # answers <port> <model>: the model is listed at the tunnel.
+  # Host: localhost because the pod's Ollama listens on its loopback and refuses (403) a Host it
+  # does not count as local, such as a tailnet address in GPU_BIND (2026-10-27).
+  curl -s --max-time 3 -H 'Host: localhost' "http://$BIND:$1/api/tags" | grep -q "\"$2\""
+}
+
 ssh_to() {  # ssh_to <profile> <command...>, from the profile's state
   local s; s=$(st "$1"); shift
   # shellcheck disable=SC1090
@@ -157,8 +163,8 @@ EOF
   echo "WATCH=$!" >> "$(st "$p")"
   trap - ERR
 
-  for _ in $(seq 1 15); do curl -s --max-time 3 "http://$BIND:$PORT/api/tags" | grep -q "\"$MODEL\"" && break; sleep 2; done
-  if curl -s --max-time 3 "http://$BIND:$PORT/api/tags" | grep -q "\"$MODEL\""; then
+  for _ in $(seq 1 15); do answers "$PORT" "$MODEL" && break; sleep 2; done
+  if answers "$PORT" "$MODEL"; then
     say "$p: up. $MODEL answers at http://$BIND:$PORT until $(date -d @$(( started + MAX_MIN * 60 )) +%H:%M) (box time)"
   else
     say "$p: the pod runs but $MODEL does not answer through the tunnel yet; see $STATE/$p.tunnel.log, or gpu.sh down $p"
@@ -190,7 +196,7 @@ cmd_status() {
     [ -e "$f" ] || continue; any=1
     ( . "$f"
       tun=down; [ -n "${TUNNEL:-}" ] && kill -0 "$TUNNEL" 2>/dev/null && tun=up
-      ans=no; curl -s --max-time 3 "http://$BIND:$PORT/api/tags" | grep -q "\"$MODEL\"" && ans=yes
+      ans=no; answers "$PORT" "$MODEL" && ans=yes
       echo "$PROFILE  pod $POD  $MODEL  tunnel $tun  answers $ans  $(( (now - STARTED) / 60 )) min used, $(( (DEADLINE - now) / 60 )) min left  http://$BIND:$PORT" )
   done
   [ "$any" = 1 ] || echo "nothing is up"
