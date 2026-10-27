@@ -164,9 +164,9 @@ def test_levels_shape_permissions(ag):
     assert ag.load(b["id"])["level"] == 1 and "Bash(git push*)" in ag.settings(b)["permissions"]["deny"]
     assert "never push" in ag.prompt(b, "x")
     s2 = ag.settings(ag.create({**BODY, "level": 2}))["permissions"]
-    assert "Bash(git push origin HEAD:main)" in s2["allow"] and "Bash(git push*)" not in s2["deny"]
-    for f in ("Bash(git push --force*)", "Bash(git push * --delete*)", "Bash(git push * :*)", "Bash(git push * +*)"):
-        assert f in s2["deny"]
+    # level 2 commits but never pushes; the gated helper pushes on the owner's word (d2991dc)
+    assert not any("git push" in r for r in s2["allow"]) and "Bash(git push*)" in s2["deny"]
+    assert "You do NOT push" in ag.prompt(ag.create({**BODY, "level": 2}), "x")
     with pytest.raises(ValueError):
         ag.create({**BODY, "level": 3})
 
