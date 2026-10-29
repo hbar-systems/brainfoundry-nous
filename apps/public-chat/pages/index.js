@@ -16,6 +16,11 @@ export default function Home() {
   const [error, setError] = useState(null)
   const endRef = useRef(null)
   const inputRef = useRef(null)
+  const [info, setInfo] = useState({ name: '', label: '' })
+
+  useEffect(() => {
+    fetch('/api/info').then((r) => (r.ok ? r.json() : null)).then((j) => { if (j) setInfo(j) }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -122,7 +127,7 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Nous — public demo</title>
+        <title>{info.name || 'Nous — public demo'}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="noindex" />
       </Head>
@@ -141,9 +146,14 @@ export default function Home() {
           alignItems: 'baseline',
           gap: '12px',
         }}>
-          <span style={{ fontSize: '20px', color: '#c9a96e', fontFamily: 'Lora, Georgia, serif' }}>ℏ Nous</span>
-          <span style={{ fontSize: '12px', color: '#6b5f52' }}>public demo brain</span>
+          <span style={{ fontSize: '20px', color: '#c9a96e', fontFamily: 'Lora, Georgia, serif' }}>ℏ {info.name || 'Nous'}</span>
+          <span style={{ fontSize: '12px', color: '#6b5f52' }}>{info.name ? 'AI brain' : 'public demo brain'}</span>
         </header>
+        {info.label && (
+          <div style={{ padding: '10px 24px', fontSize: '13px', color: '#c9a96e', borderBottom: '1px solid #2a2420' }}>
+            {info.label}
+          </div>
+        )}
 
         <main style={{
           flex: 1,

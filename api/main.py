@@ -3531,6 +3531,13 @@ def _load_public_persona() -> str:
 
 PUBLIC_PERSONA = _load_public_persona()
 
+# Label for agent-run public brains (D57; ops/2026-10-27_yury-public-brain/plan.md section 5).
+# PUBLIC_CHAT_FOOTER is appended by the server after every public-chat reply, so the model
+# cannot drop it; PUBLIC_BRAIN_NAME and the footer are served to the page by /v1/public/info.
+# Both unset = nous behaviour (no footer, page shows its built-in name).
+_PUBLIC_CHAT_FOOTER = os.getenv("PUBLIC_CHAT_FOOTER", "").strip()
+_PUBLIC_BRAIN_NAME = os.getenv("PUBLIC_BRAIN_NAME", "").strip()
+
 # Vendor-disavowal: when a stranger asks "are you ChatGPT?" / "are you Claude?"
 # / etc., the 1b model unreliably defends the brainfoundry identity from the
 # persona alone. To guarantee a disavowal regardless of model behavior, we
@@ -3804,6 +3811,12 @@ def _build_public_prompt(user_message: str, history: list, relevant_docs: list) 
     return prompt
 
 
+@app.get("/v1/public/info")
+async def public_info():
+    """Name and label the public chat page shows; empty strings on brains that set neither."""
+    return {"name": _PUBLIC_BRAIN_NAME, "label": _PUBLIC_CHAT_FOOTER}
+
+
 @app.post("/v1/public/chat")
 async def public_chat(request: dict, http_request: Request):
     """Public chat endpoint backing nous.brainfoundry.ai (bare domain).
@@ -3942,6 +3955,8 @@ async def public_chat(request: dict, http_request: Request):
                 max_tokens=_PUBLIC_MAX_TOKENS_OUT,
             ):
                 yield f"data: {json.dumps({'token': text}, ensure_ascii=False)}\n\n"
+            if _PUBLIC_CHAT_FOOTER:
+                yield f"data: {json.dumps({'token': chr(10) + chr(10) + '-- ' + _PUBLIC_CHAT_FOOTER}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as stream_err:
             # Don't leak provider internals to strangers; log server-side.
