@@ -2,7 +2,9 @@
 // Pure functions, no React: run under node by tests/test_cc_bridge.py, like pathlinks.js.
 //
 // Choices: the reasoner may end an answer with
-//   <choices>[{"label": "...", "send": "...", "mode": "reply|agent"}]</choices>
+//   <choices>[{"label": "...", "send": "...", "mode": "reply|agent", "p": 65}]</choices>
+// "p" (optional, hbar 2026-10-29): the reasoner's probability that this is the right pick, 1 to 99
+// (a 0..1 fraction is read as a share); shown on the button as "65%".
 // The page cuts the block out of the text and draws it as buttons. "reply" sends `send` as the next
 // message in the thread; "agent" starts it as a new thread that runs beside this one.
 // Money: amounts with a currency become highlighted chips in rendered answers.
@@ -16,7 +18,13 @@ function clean(c) {
   const label = String(c.label || '').trim().slice(0, 80)
   const send = String(c.send || c.label || '').trim().slice(0, 2000)
   if (!label || !send) return null
-  return { label, send, mode: c.mode === 'agent' ? 'agent' : 'reply' }
+  const out = { label, send, mode: c.mode === 'agent' ? 'agent' : 'reply' }
+  let p = Number(c.p)
+  if (Number.isFinite(p) && p > 0) {
+    if (p <= 1) p = p * 100
+    out.p = Math.min(99, Math.max(1, Math.round(p)))
+  }
+  return out
 }
 
 // text -> { body, choices }  (choices: [] when there is no block or it does not parse)

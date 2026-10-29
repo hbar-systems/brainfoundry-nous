@@ -840,6 +840,15 @@ console.log(JSON.stringify({
     assert d["money"] == ["EUR 34", "€27-31", "$0.39", "1,200 USD", "£5"]
 
 
+def test_ui_choices_probability():
+    # 2026-10-29 (hbar): choices carry a probability, shown as a percentage on the button.
+    import json
+    out = _node(r"""
+const L = require('./choices')
+console.log(JSON.stringify(L.splitChoices('x <choices>[{"label":"A","p":65},{"label":"B","p":0.3},{"label":"C","p":"no"},{"label":"D","p":140}]</choices>').choices.map(c => c.p === undefined ? null : c.p)))""")
+    assert json.loads(out) == [65, 30, None, 99]
+
+
 def test_ui_actionable_phrases():
     # 2026-10-15: status phrases become pressable ("not pushed" -> send an agent with the sentence).
     import json

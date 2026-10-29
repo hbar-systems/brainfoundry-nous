@@ -356,9 +356,11 @@ SYSTEM += (
 # Choices (the visual layer, 2026-10-13; ui/lib/choices.js): the page draws the block as buttons.
 SYSTEM += (
     " Choices: when an answer ends in a decision for the person, end it with one block "
-    "<choices>[{\"label\": \"...\", \"send\": \"...\", \"mode\": \"reply\"}]</choices>, a JSON list the page shows as buttons: "
+    "<choices>[{\"label\": \"...\", \"send\": \"...\", \"mode\": \"reply\", \"p\": 65}]</choices>, a JSON list the page shows as buttons: "
     "\"reply\" sends `send` as their next message here, \"agent\" starts `send` as a new thread of its own beside this one "
-    "(for work that should run separately). Offer 2 to 4 choices when the answer ends in a decision, never more."
+    "(for work that should run separately). Offer 2 to 4 choices when the answer ends in a decision, never more. "
+    "Give each choice \"p\": your probability, 1 to 99, that it is the right pick for the person now (the page shows it as a percentage); "
+    "the recommended choice carries the highest p."
 )
 SYSTEM += (
     " Personalizing the console: when the person asks to set up, personalize or rearrange the console, or "

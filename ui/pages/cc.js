@@ -885,7 +885,7 @@ function Choices({ choices, onChoice }) {
           <button onClick={() => { mark(i); onChoice(c) }}
             title={(c.mode === 'agent' ? 'starts a new thread beside this one: ' : 'sends: ') + c.send}
             style={{ ...pill, backgroundColor: used.has(i) ? C.gold : 'transparent', color: used.has(i) ? C.onAccent : C.gold }}>
-            {c.label}{c.mode === 'agent' ? ' ↗' : ''}
+            {c.label}{c.p ? <span style={{ opacity: 0.7 }}>{' · ' + c.p + '%'}</span> : null}{c.mode === 'agent' ? ' ↗' : ''}
           </button>
           {c.mode !== 'agent' && (
             <button onClick={() => { mark(i); onChoice({ ...c, mode: 'agent' }) }}
