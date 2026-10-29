@@ -1,0 +1,11 @@
+{
+ "id": "public",
+ "name": "public chat only",
+ "audience": "public",
+ "mode": "newcomer",
+ "answers": {},
+ "items": [
+  "access:public-chat"
+ ],
+ "evidence": "nous and yury-ai public brains: nous 3c6b6de (public chat footer, /v1/public/info)."
+}

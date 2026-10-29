@@ -26,6 +26,8 @@ import threading
 import time
 from pathlib import Path
 
+import cc_catalog
+
 VERSION = 1
 HISTORY_CAP = 10
 PROPOSAL_CAP = 20
@@ -234,9 +236,16 @@ def validate_answers(answers) -> dict:
     return out
 
 
-def from_answers(answers: dict) -> dict:
-    """Turn interview answers into a layout. Unanswered questions leave the default."""
+def from_answers(answers: dict, preset: str | None = None) -> dict:
+    """Turn interview answers into a layout. Unanswered questions leave the default, or the preset's
+    answer when a preset is named (cc_catalog presets, 2026-10-29): the preset is the start, the
+    owner's answers only adjust it."""
     a = validate_answers(answers)
+    if preset is not None:
+        try:
+            a = {**cc_catalog.load_preset(preset)["answers"], **a}
+        except cc_catalog.CatalogError as e:
+            raise LayoutError(str(e)) from None
     lay = json.loads(json.dumps(DEFAULT))
     if "first" in a:
         lay["view"] = a["first"]
@@ -262,7 +271,8 @@ def from_answers(answers: dict) -> dict:
 
 
 def parse_marker(text: str):
-    """The reasoner's <layout>...</layout> block: either {"answers": {...}} or a full layout.
+    """The reasoner's <layout>...</layout> block: either {"answers": {...}} (optionally with "preset"),
+    or a full layout.
     Returns (text without the block, layout or None, error or None). Never applies anything."""
     m = re.search(r"<layout>\s*(.*?)\s*</layout>", text or "", re.S)
     if not m:
@@ -270,7 +280,10 @@ def parse_marker(text: str):
     clean = (text[:m.start()] + text[m.end():]).strip()
     try:
         obj = json.loads(m.group(1))
-        lay = from_answers(obj["answers"]) if isinstance(obj, dict) and set(obj) == {"answers"} else validate(obj)
+        if isinstance(obj, dict) and "answers" in obj and set(obj) <= {"answers", "preset"}:
+            lay = from_answers(obj["answers"], obj.get("preset"))
+        else:
+            lay = validate(obj)
     except (ValueError, KeyError, TypeError) as e:
         return clean, None, str(e)[:200]
     return clean, lay, None
@@ -337,6 +350,26 @@ class Store:
             d["mode"] = m
             self._write(d)
         return m
+
+    def arrangement(self) -> dict | None:
+        """The brain's arrangement of catalog items (docs/PERSONALIZATION.md), or None when unset.
+        Beside mode, not in the layout, so a shared layout pack never carries it."""
+        try:
+            arr = self._read().get("arrangement")
+            return cc_catalog.validate_arrangement(arr) if arr is not None else None
+        except (cc_catalog.CatalogError, LayoutError):
+            return None
+
+    def set_arrangement(self, arrangement: dict) -> dict:
+        try:
+            arr = cc_catalog.validate_arrangement(arrangement)
+        except cc_catalog.CatalogError as e:
+            raise LayoutError(str(e)) from None
+        with self.lock:
+            d = self._read()
+            d["arrangement"] = arr
+            self._write(d)
+        return arr
 
     def answers(self) -> dict:
         try:

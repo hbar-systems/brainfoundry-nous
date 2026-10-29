@@ -1,0 +1,11 @@
+{
+ "id": "family-telegram",
+ "name": "family, Telegram only",
+ "audience": "member",
+ "mode": "newcomer",
+ "answers": {},
+ "items": [
+  "access:telegram"
+ ],
+ "evidence": "Elena, ops/2026-10-24_next-three-members.md (her door is Telegram and voice notes); amended ops/brain-interview/elena/2026-10-25_sponsor-view.md: she will open the console after all, then switch her to org or a member arrangement."
+}

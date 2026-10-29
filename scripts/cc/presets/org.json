@@ -1,0 +1,25 @@
+{
+ "id": "org",
+ "name": "organisation brain",
+ "audience": "member",
+ "mode": "newcomer",
+ "answers": {},
+ "items": [
+  "access:console",
+  "tab:_cc",
+  "tab:_chat",
+  "tab:_knowledge",
+  "tab:_files",
+  "tab:_apps",
+  "tab:_settings",
+  "view:talk",
+  "panel:files",
+  "door:choices",
+  "door:highlight",
+  "door:permit-card",
+  "door:job-tile",
+  "door:desk-link",
+  "look:default"
+ ],
+ "evidence": "university and health members on showcase-1 (mind/claude/project_showcase_box.md); the standard tier of cc_layout.TIERS minus _guide (a candidate)."
+}
