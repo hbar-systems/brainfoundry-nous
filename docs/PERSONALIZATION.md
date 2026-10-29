@@ -22,7 +22,7 @@ Code: `scripts/cc/cc_catalog.py` (the catalog, the validator, presets), `scripts
 | preset | audience | mode | access | items | evidence |
 |---|---|---|---|---|---|
 | owner | owner | operator | console, Telegram | every standard item an owner may see (32) | each item's own; answers not yet measured |
-| family-telegram | member | newcomer | Telegram | access:telegram | Elena, ops/2026-10-24_next-three-members.md; amended 10-25: she will open the console after all |
+| member | member | newcomer | console, Telegram | the org items plus access:telegram (16) | paul, alexander, elena, christos, ijaz; hbar 2026-10-29: "nobody here needs telegram only", so Telegram is an extra door, never the only one (replaces family-telegram) |
 | public | public | newcomer | public chat | access:public-chat | nous, yury-ai public brains (nous 3c6b6de) |
 | org | member | newcomer | console | console, the six standard tabs a member may see, talk, files, the five doors, stock look (15) | university and health on showcase-1 |
 

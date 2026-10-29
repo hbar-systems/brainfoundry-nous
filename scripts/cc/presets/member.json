@@ -1,0 +1,26 @@
+{
+ "id": "member",
+ "name": "member brain (a friend)",
+ "audience": "member",
+ "mode": "newcomer",
+ "answers": {},
+ "items": [
+  "access:console",
+  "access:telegram",
+  "tab:_cc",
+  "tab:_chat",
+  "tab:_knowledge",
+  "tab:_files",
+  "tab:_apps",
+  "tab:_settings",
+  "view:talk",
+  "panel:files",
+  "door:choices",
+  "door:highlight",
+  "door:permit-card",
+  "door:job-tile",
+  "door:desk-link",
+  "look:default"
+ ],
+ "evidence": "paul, alexander, elena on friends-1; christos and ijaz next. hbar 2026-10-29: \"nobody here needs telegram only\": every member gets the console, Telegram is an extra door, never the only one. Replaces family-telegram."
+}

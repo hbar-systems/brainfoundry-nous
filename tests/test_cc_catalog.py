@@ -39,12 +39,13 @@ def test_catalog_covers_the_console():
 
 
 def test_presets_load():
-    assert C.preset_ids() == ("family-telegram", "org", "owner", "public")
+    assert C.preset_ids() == ("member", "org", "owner", "public")
     for name in C.preset_ids():
         p = C.load_preset(name)
         assert any(x in C.ACCESS for x in p["items"])
     assert C.load_preset("public")["items"] == ["access:public-chat"]
-    assert "access:console" not in C.load_preset("family-telegram")["items"]
+    member = C.load_preset("member")["items"]
+    assert "access:console" in member and "access:telegram" in member  # 2026-10-29: no Telegram-only preset
 
 
 @pytest.mark.parametrize("items,aud", [

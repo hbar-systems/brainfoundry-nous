@@ -309,7 +309,7 @@ Sharing: "write the pack" at `/layout` writes `brain-app.yaml` (brain-app/v1, de
 
 Design only, not built: a one-click "install this pack" from the layout page (today: the Apps page, by repository URL); the install approval screen showing the proposal summary; a pack catalogue; per-pane (not global) layouts; free accent colours beyond the short list at `/layout`; skins as a first-class "OS skin" (ops/ideas.md) with the loop/mind surface; syncing a browser's dragged heights; live preview of a proposal before applying; hiding `<layout>` while the answer is still streaming (the finished answer drops it).
 
-Catalog and arrangement (2026-10-29): which tabs, panes, doors, apps, seats and access a brain shows is one catalog with a per-brain arrangement and four presets (owner, family-telegram, public, org), in `docs/PERSONALIZATION.md`. The interview now starts from a preset and the answers adjust it.
+Catalog and arrangement (2026-10-29): which tabs, panes, doors, apps, seats and access a brain shows is one catalog with a per-brain arrangement and four presets (owner, member, public, org), in `docs/PERSONALIZATION.md`. The interview now starts from a preset and the answers adjust it.
 
 ## Tasks from the reasoner (2026-10-20)
 

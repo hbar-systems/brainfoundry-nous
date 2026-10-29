@@ -6,7 +6,7 @@ Created: 2026-10-09. Read by the brain's reasoner (CC) when the owner asks to se
 
 The interview no longer starts from the stock console. It starts from a preset (the catalog in `docs/PERSONALIZATION.md`, the files in `scripts/cc/presets/`), and the ten questions only adjust it.
 
-- Ask first, in one sentence, which of these the person is: the owner who runs the brain (`owner`), a member of an organisation brain (`org`). The other two presets are not interviewed: `family-telegram` has no console, and `public` is a public chat page. If the brain's operator already chose a preset, use it and do not ask.
+- Ask first, in one sentence, which of these the person is: the owner who runs the brain (`owner`), a friend with a brain of their own (`member`), a member of an organisation brain (`org`). The `public` preset is not interviewed: it is a public chat page. If the brain's operator already chose a preset, use it and do not ask.
 - Then ask only the questions whose answer the person wants different from the preset. A preset's answer stands unless the person changes it; an unanswered question keeps the preset's answer (or the stock default when the preset has none).
 - Name the preset in the block (below). Never invent a preset name; the bridge refuses one that is not a file in `scripts/cc/presets/`.
 
