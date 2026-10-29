@@ -183,4 +183,23 @@ function remarkAgents() {
   return (tree) => { walk(tree) }
 }
 
-module.exports = { splitChoices, splitMoney, remarkMoney, splitAct, sentenceAround, remarkActions, splitAgents, remarkAgents, ACT_PHRASES, MAX_CHOICES }
+
+// Synopsis for a highlighted phrase (hbar 2026-10-29: "there should be short synopsis appearing"):
+// the words that follow the bold term in its own paragraph or list item, up to two sentences or 240
+// characters; when the term ends its block, the sentence it sits in. No model call.
+function synopsis(block, term) {
+  const b = String(block == null ? '' : block).replace(/\s+/g, ' ').trim()
+  const t = String(term == null ? '' : term).replace(/\s+/g, ' ').trim()
+  if (!b || !t) return ''
+  const at = b.indexOf(t)
+  let rest = at >= 0 ? b.slice(at + t.length) : b
+  rest = rest.replace(/^[\s.:;,\u2013\u2014-]+/, '').trim()
+  if (rest.length < 12) return at >= 0 ? (sentenceAround(b, t) || '').slice(0, 240) : ''
+  const parts = rest.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) || [rest]
+  let out = ''
+  for (const s of parts.slice(0, 2)) { if ((out + s).length > 240) break; out += s }
+  if (!out) out = rest.slice(0, 237).replace(/\s\S*$/, '') + '...'
+  return out.trim()
+}
+
+module.exports = { synopsis, splitChoices, splitMoney, remarkMoney, splitAct, sentenceAround, remarkActions, splitAgents, remarkAgents, ACT_PHRASES, MAX_CHOICES }

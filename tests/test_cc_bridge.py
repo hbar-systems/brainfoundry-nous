@@ -849,6 +849,22 @@ console.log(JSON.stringify(L.splitChoices('x <choices>[{"label":"A","p":65},{"la
     assert json.loads(out) == [65, 30, None, 99]
 
 
+def test_ui_highlight_synopsis():
+    # 2026-10-29 (hbar): the card of a bold phrase shows a short synopsis, the words after it.
+    import json
+    out = _node(r"""
+const L = require('./choices')
+console.log(JSON.stringify({
+  after: L.synopsis('The AI label. It is committed as 3c6b6de. The notice needs no new code. A third sentence.', 'The AI label.'),
+  end: L.synopsis('Pushes wait for the word of hbar on Mondays.', 'hbar'),
+  none: L.synopsis('', 'x'),
+}))""")
+    d = json.loads(out)
+    assert d["after"] == "It is committed as 3c6b6de. The notice needs no new code."
+    assert d["end"] == "Pushes wait for the word of hbar on Mondays."
+    assert d["none"] == ""
+
+
 def test_ui_actionable_phrases():
     # 2026-10-15: status phrases become pressable ("not pushed" -> send an agent with the sentence).
     import json

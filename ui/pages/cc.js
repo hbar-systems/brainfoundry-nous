@@ -7,7 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp } from '../lib/layout'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
-import { splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
+import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 
@@ -390,17 +390,19 @@ function Highlight({ children, node }) {
   const card = useCard()
   const brief = useBrief()
   const ctxRef = useRef('')
+  const synRef = useRef('')
   const txt = hastText(node).trim()
   if (!txt || txt.length > 160) return <strong>{children}</strong>
   const post = (k) => { card.setOpen(false); ccEmit('cc-send-text', k === 'deeper' ? `Go deeper on "${txt}": the evidence, the state, and the next step.` : `What exactly do you need from me on "${txt}"? Give me the choices.`) }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); card.toggle() }} title="click: go deeper or send an agent"
+      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); const blk = e.currentTarget.closest && e.currentTarget.closest('p, li, td, blockquote'); synRef.current = synopsis(blk ? blk.textContent : '', txt); card.toggle() }} title="click: go deeper or send an agent"
         style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
       {txt.length <= 80 && <LearnDoor term={txt} />}
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
-          <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>{txt}</span>
+          <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', marginBottom: synRef.current ? '4px' : '8px' }}>{txt}</span>
+          {synRef.current && <span style={{ display: 'block', color: C.dim, fontSize: '12.5px', lineHeight: 1.45, marginBottom: '8px', maxWidth: '360px' }}>{synRef.current}</span>}
           <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             <CardDoor accent onClick={() => brief.ask('deeper', txt, ctxRef.current)} title="A short answer here, in the card">go deeper</CardDoor>
             <CopyDoor text={txt} />
