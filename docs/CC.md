@@ -300,6 +300,54 @@ sudo cp /etc/caddy/Caddyfile.bak.<stamp> /etc/caddy/Caddyfile && sudo systemctl 
 ```
 Remove `BRAIN_CC_ENABLED` from .env and restart the api; the tab disappears. `claude auth logout` forgets the account; removing `~/.claude` and `~/.cc-bridge` forgets everything else.
 
+## Bridge settings, the rest (2026-10-30)
+
+The settings named in the sections above are explained where they are used. These are the others the bridge and its helpers read from their environment (`~/.cc-bridge/env` for the bridge; the hands' environment for the hooks and cc-job). Defaults are the code's own; leave a setting out to keep it. Token settings are named here, never their values.
+
+| Setting | Default | Read by | What it does |
+|---|---|---|---|
+| `CC_BIND` | `127.0.0.1` | cc-bridge.py | Address the bridge listens on |
+| `CC_PORT` | `7682` | cc-permit-hook.py, cc-job.py | Bridge port the hook and cc-job call |
+| `CC_BASE` | `/cc` | cc-permit-hook.py, cc-job.py | Path prefix of the bridge routes |
+| `CC_CWD` | `~/brain` | cc-bridge.py | The brain repository the bridge reads (persona file, scripts) |
+| `CC_BRAIN_REPO` | `/home/hbar/brain` | cc-bridge.py | Brain repository for the deck and extra read paths when `BRAIN_DIR` is unset and no member is set |
+| `CC_BIN` | `<hands home>/.local/bin/claude` | cc-bridge.py | The reasoner binary |
+| `CC_CODEX_BIN` | found in the hands' home | cc-bridge.py | The Codex binary for the Codex and local seats |
+| `CC_HANDS_HOME` | `/home/<CC_HANDS_USER>`, else the bridge's home | cc-bridge.py | Home of the hands user |
+| `CC_MODEL` | empty (the reasoner's default) | cc-bridge.py | Model of the reasoner; the model switch writes it |
+| `CC_TIMEOUT` | `900` with `CC_BOX=1`, else `300` | cc-bridge.py | Seconds of silence before a turn is stopped |
+| `CC_TOOL_TIMEOUT` | `1800` | cc-bridge.py | Seconds of silence allowed while a tool runs |
+| `CC_LOCAL_RUN_TIMEOUT` | `120` | cc-bridge.py | Seconds a command approved on a local-seat card may run |
+| `CC_PERMIT_TTL` | `900` | cc-bridge.py, cc-permit-hook.py | Seconds a card waits for an answer; then it is refused |
+| `CC_POSTURE` | `cards` | cc-bridge.py, cc_agents.py | `cards`, `auto` or `judged`; `auto` also covers standing agents |
+| `CC_JUDGE_SAFE` | `0.80` | cc-bridge.py | Judged posture: least "safe to run unasked" score |
+| `CC_JUDGE_INTENT` | `0.60` | cc-bridge.py | Judged posture: least "serves the last request" score |
+| `CC_JUDGE_RISK` | `1.0` | cc-bridge.py | Judged posture: highest risk score (0..3; 1 is "mild") |
+| `CC_OPERATOR_TOKEN` | empty | cc-bridge.py | Token Caddy adds to page routes after the owner's login (see "Two users") |
+| `CC_ASK_TOKEN` | empty | cc-permit-hook.py, cc-job.py | Token that lets the hands ask, never decide |
+| `CC_HOOK_PYTHON` | `/usr/bin/python3` with a hands user, else the bridge's Python | cc-bridge.py, cc_agents.py | Python that runs the permission hook |
+| `CC_HOOK_DIR` | the folder of cc_agents.py | cc_agents.py | Folder holding the hook scripts for standing agents |
+| `CC_AGENTS_DIR` | `<hands home>/agents` | cc-bridge.py, cc_agents.py | Where standing agents' files and sitreps live |
+| `CC_EDITS_DIR` | `~/.cache/cc-edits` | cc-post-hook.py | Per-thread log of edited paths, read by the world's pre-commit guard |
+| `CC_MEMORY_K` | `6` | cc-bridge.py | Brain memories fetched in front of a turn |
+| `CC_CHUNK_MAX` | `4000` | cc-bridge.py | Characters kept of each memory chunk |
+| `CC_RECENT_HOURS` | `48` | cc-bridge.py | Hours of recent work put in front of a new thread or a "recap" |
+| `CC_LEARN_MODEL` | `haiku` | cc-bridge.py | Model of the lesson side call (learning deck) |
+| `CC_BRIEF_MODEL` | `CC_LEARN_MODEL` | cc-bridge.py | Model of the short brief side call |
+| `CC_INGEST_SUMMARY` | `~/.world-propose/summary.json` | cc-bridge.py | Summary of memory proposals waiting for approval |
+| `CC_INVOICES_FILE` | `<world>/ops/finance/invoices.tsv` | cc-bridge.py | Invoices shown on the spend view |
+| `CC_PRICES_FILE` | empty (built-in list prices) | cc_extras.py | JSON of USD per million tokens per model family, overriding the built-in table |
+| `CC_EUR_PER_USD` | `0.92` | cc_spend.py | Exchange rate for spend in euros |
+| `CC_TRANSCRIBE_MAX` | `10485760` (10 MB) | cc-bridge.py | Largest clip accepted for transcription |
+| `CC_VOICE_ID` | ElevenLabs stock voice "George" | cc-bridge.py | ElevenLabs voice; `/voice use` writes it |
+| `CC_VOICE_SPEED` | `1.2` | cc-bridge.py | ElevenLabs speaking speed (0.7 to 1.2) |
+| `CC_VOICE_PART_CHARS` | `420` | cc-bridge.py | Characters per speech part, so speech starts within seconds |
+| `CC_VOICE_SPOKE_PROBE_SECONDS` | `30` | cc-bridge.py | Seconds between checks that the voice spoke answers |
+| `CC_MEMBER` | empty (the single brain) | cc-bridge.py | Member name on a shared box (docs/MULTI_INSTANCE.md): unit names and root verbs |
+| `CC_MEMBER_N` | empty | cc-bridge.py | Member's port block, 1..99 (ports from 8100 + 10 n) |
+| `CC_BRAINS_ROOT` | `/srv/brains` | cc-bridge.py | Root of the members' brains on a shared box |
+| `CC_UPDATE_STATE_ROOT` | `/var/lib/brain-update` | cc-bridge.py | Where the member update helper writes its log and state |
+
 ## Troubleshooting
 
 - The CC page says the bridge is not answering: on the server, `systemctl status cc-bridge`; run the install script again.
