@@ -216,7 +216,7 @@ export default function Chat() {
     const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
     const header = `# ${title}\n\n> Exported from ${brainName} on ${now}\n\n---\n\n`
     const body = messages.map(m => {
-      const role = m.role === 'user' ? 'You' : (selectedModel || 'Brain')
+      const role = m.role === 'user' ? 'You' : (m.model || 'Brain')
       const content = typeof m.content === 'string' ? m.content : ''
       return `## ${role}\n\n${content}\n`
     }).join('\n')
@@ -1345,14 +1345,14 @@ export default function Chat() {
         const toolEvents = Array.isArray(data?.rag_metadata?.tool_events) ? data.rag_metadata.tool_events : []
         const pendingApprovals = Array.isArray(data?.rag_metadata?.pending_approvals) ? data.rag_metadata.pending_approvals : []
         if (data?.rag_metadata?.privacy) setTurnLocalOnly(data.rag_metadata.privacy.local_only_used ? data.rag_metadata.privacy : null)
-        setMessages([...updated, { role: 'assistant', content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents, pendingApprovals }])
+        setMessages([...updated, { role: 'assistant', model: data.model || selectedModel, content: data.choices[0].message.content, sources, webSearch, corroboration, toolEvents, pendingApprovals }])
         fetchSessions()
       } else {
         // Streaming path — consume SSE into a typewriter buffer. Deltas land
         // in revealRef.full the moment they arrive; a rAF reveals them at the
         // chosen cps, turning the provider's bursty stream into a calm, even
         // reading cadence. 'instant' pace skips the typewriter entirely.
-        setMessages([...updated, { role: 'assistant', content: '' }])
+        setMessages([...updated, { role: 'assistant', model: selectedModel, content: '' }])
 
         const paceObj = SCROLL_PACE_OPTIONS.find(p => p.value === scrollPace) || SCROLL_PACE_OPTIONS[2]
         const cps = paceObj.cps
@@ -2222,7 +2222,7 @@ export default function Chat() {
                 wordBreak: 'break-word',
               }}>
                 <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '6px', fontWeight: '500' }}>
-                  {msg.role === 'user' ? 'You' : (selectedModel || 'Brain')}
+                  {msg.role === 'user' ? 'You' : (msg.model || 'Brain')}
                 </div>
                 {msg.imageDataUrls && msg.imageDataUrls.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
