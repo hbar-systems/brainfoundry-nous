@@ -123,6 +123,19 @@ function IdentityOnboarding({ onStart }) {
   )
 }
 
+// 640 px and under: the sessions Panel is hidden, or a drawer over the conversation when opened; the
+// conversation Panel takes the full width; the height follows the visible viewport (dvh) so the composer
+// stays above the browser bar. Desktop is untouched.
+const CHAT_PHONE_CSS = `@media (max-width: 640px) {
+  .bf-chat-group { height: calc(100dvh - var(--nav-h, 52px) - env(safe-area-inset-top, 0px)) !important; }
+  .bf-chat-side, .bf-chat-side-handle { display: none !important; }
+  .bf-chat-side.bf-chat-side--open { display: flex !important; position: fixed !important; z-index: 300; left: 0; bottom: 0;
+    top: calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px)); width: min(86vw, 340px) !important; flex: none !important;
+    box-shadow: 8px 0 32px rgba(0,0,0,0.5); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .bf-chat-scrim { position: fixed; inset: 0; z-index: 299; background: rgba(0,0,0,0.45); }
+  .bf-chat-main { flex: 1 1 100% !important; }
+}`
+
 export default function Chat() {
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
@@ -287,7 +300,20 @@ export default function Chat() {
   // onExpand callbacks keep `sidebarOpen` in sync for any code that still
   // reads it (e.g. arrow direction on the toggle button).
   const sidebarPanelRef = useRef(null)
+  // A phone (640 px and under, hbar 2026-10-30): the sessions list is a drawer over the conversation,
+  // opened by the same button, and the conversation keeps the full width (CHAT_PHONE_CSS).
+  const [phone, setPhone] = useState(false)
+  const [drawer, setDrawer] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(max-width: 640px)')
+    const on = () => { setPhone(mq.matches); if (!mq.matches) setDrawer(false) }
+    on()
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on)
+    return () => { mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on) }
+  }, [])
   const toggleSidebar = () => {
+    if (phone) { setDrawer(d => !d); return }
     const p = sidebarPanelRef.current
     if (!p) return
     if (p.isCollapsed()) p.expand()
@@ -1166,6 +1192,7 @@ export default function Chat() {
   const [sessionLoading, setSessionLoading] = useState(false)
 
   const loadSessionMessages = sessionId => {
+    setDrawer(false)
     // Update currentSessionId IMMEDIATELY so the sidebar highlight + chat
     // header reflect the click without waiting for the network round-trip.
     // setMessages([]) is intentional — we'd rather show a loading state
@@ -1545,9 +1572,12 @@ export default function Chat() {
 
   return (
     <>
+    <style>{CHAT_PHONE_CSS}</style>
+    {phone && drawer && <div className="bf-chat-scrim" onClick={() => setDrawer(false)} />}
     <PanelGroup
       direction="horizontal"
       autoSaveId="bf-chat-panels"
+      className="bf-chat-group"
       style={{
         // Subtract nav height (--nav-h content + PWA safe-area-top) so
         // the chat column fills exactly the viewport below the nav.
@@ -1563,6 +1593,7 @@ export default function Chat() {
           or click the toggle in the chat header / footer button. */}
       <Panel
         ref={sidebarPanelRef}
+        className={'bf-chat-side' + (drawer ? ' bf-chat-side--open' : '')}
         collapsible
         collapsedSize={0}
         defaultSize={22}
@@ -1752,7 +1783,7 @@ export default function Chat() {
           flexShrink: 0,
         }}>
           <button
-            onClick={() => sidebarPanelRef.current?.collapse()}
+            onClick={() => { if (phone) setDrawer(false); else sidebarPanelRef.current?.collapse() }}
             style={{
               width: '100%',
               background: 'none',
@@ -1776,10 +1807,10 @@ export default function Chat() {
         </div>
       </Panel>
 
-      <PanelResizeHandle className="bf-resize-handle" />
+      <PanelResizeHandle className="bf-resize-handle bf-chat-side-handle" />
 
       {/* Main */}
-      <Panel defaultSize={78} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Panel defaultSize={78} className="bf-chat-main" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Chat header */}
         <div style={{
@@ -1793,10 +1824,10 @@ export default function Chat() {
         }}>
           <button
             onClick={toggleSidebar}
-            title={sidebarOpen ? 'Collapse sidebar' : 'Show sidebar'}
+            title={(phone ? drawer : sidebarOpen) ? 'Collapse sidebar' : 'Show sidebar'}
             style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }}
           >
-            {sidebarOpen ? '◀' : '▶'}
+            {(phone ? drawer : sidebarOpen) ? '◀' : '▶'}
           </button>
 
           {/* Focus mode toggle — minimal hbar.ink-style surface. Hides

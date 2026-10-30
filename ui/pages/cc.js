@@ -94,6 +94,23 @@ const IcoMic = () => <svg {...ico}><rect x="9" y="2" width="6" height="12" rx="3
 const IcoStop = () => <svg {...ico}><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
 const IcoSend = () => <svg {...ico}><path d="M12 19V5M5 12l7-7 7 7" /></svg>
 
+// A phone (hbar 2026-10-30, iPhone at 390 px): the title takes its own line, the chip rows scroll sideways
+// instead of wrapping, and the column is sized to the visible viewport (dvh) so the composer stays above
+// the browser bar. Desktop is untouched: everything here sits under the 640 px query.
+const CC_PHONE_CSS = `@media (max-width: 640px) {
+  .cc-shell { min-height: 0 !important; }
+  .cc-col { height: calc(100dvh - var(--nav-h, 52px) - env(safe-area-inset-top, 0px)) !important; padding: 10px 12px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
+  .cc-head { flex-direction: column; align-items: stretch !important; gap: 6px !important; position: relative; }
+  .cc-title { letter-spacing: 0.08em !important; }
+  .cc-title a { white-space: nowrap; }
+  .cc-row { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .cc-row::-webkit-scrollbar { display: none; }
+  .cc-row > * { flex: 0 0 auto; white-space: nowrap; }
+  .cc-chips { position: static !important; }
+  .cc-threads-pop { white-space: normal; }
+  .cc-conv { min-height: 140px !important; }
+}`
+
 function Btn({ children, onClick, disabled, primary, small, title, accent }) {
   const off = !!disabled
   return (
@@ -2739,16 +2756,17 @@ function CC() {
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
       <style>{LIGHT_CSS}</style>
+      <style>{CC_PHONE_CSS}</style>
       <MdPopup />
       <AgentPopup />
-      <div style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
-      <div style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
+      <div className={paneMode ? undefined : 'cc-shell'} style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
+      <div className={paneMode ? undefined : 'cc-col'} style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
-        <div style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: slimHero ? '6px' : '14px' }}>
+        <div className="cc-head" style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: slimHero ? '6px' : '14px' }}>
           <div style={{ minWidth: 0 }}>
             {!paneMode && !hidden.hero && <>
-            <p style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: slimHero ? 0 : '0 0 4px 0' }}>
+            <p className="cc-title" style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: slimHero ? 0 : '0 0 4px 0' }}>
               cc · reasoning from inside the brain
               {slimHero && <a onClick={() => setHeroPref(true)} title="Show the full title again; this stays until you hide it" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>show title</a>}
               <a onClick={() => { setHeroPref(false); hide('hero', true) }} title="Hide this title; it comes back with reset layout" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>hide</a>
@@ -2768,7 +2786,7 @@ function CC() {
               </p>
             )}
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+          <div className="cc-chips cc-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
@@ -2777,7 +2795,7 @@ function CC() {
             {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/agents' }} title="Standing agents: create one, it runs on its schedule and files a sitrep">agents</Btn>}
             {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
             {showThreads && (
-              <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
+              <div className="cc-threads-pop" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
                 {finishedCount > 0 && (
                   <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
@@ -2868,7 +2886,7 @@ function CC() {
           </div>
         )}
 
-        <div ref={convRef} onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
+        <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
           ...(look.accent ? { '--accent': look.accent, borderRadius: '8px', backgroundColor: look.tint ? `color-mix(in srgb, ${look.accent} ${look.tint}%, transparent)` : undefined } : {}),
           ...(lookDensity === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
           <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
@@ -2999,7 +3017,7 @@ function CC() {
           <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
         {latest.length > 0 && (!paneMode || paneDetails) && (
-          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <p className="cc-row" style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span>latest:</span>
             {latest.map(f => (
               <a key={f.path} onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(f.path), title: 'Files' })} title={f.path}
@@ -3009,7 +3027,7 @@ function CC() {
         )}
         {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode. */}
         {loggedIn && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: paneMode ? '6px' : '10px' }}>
+          <div className="cc-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: paneMode ? '6px' : '10px' }}>
             <Btn small onClick={() => send(PANEL.threads)} disabled={active} title="What the other threads did: done, running, open, owed by you">{(() => {
               // one light for the other threads: pulsing while any of them works (a turn, else a job), a fade when one just finished
               const others = Object.entries((activity && activity.threads) || {}).filter(([k]) => k !== cur).map(([, v]) => v)
