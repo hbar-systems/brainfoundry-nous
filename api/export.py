@@ -86,7 +86,8 @@ _SELECTS = {
 
 # Files that must NEVER land in an archive, whatever directory is walked.
 _NEVER = {"settings.json", ".env", "tool_audit.jsonl", "federation_audit.jsonl",
-          "autonomy.jsonl", "quarantine_audit.jsonl", "tool_approvals.json"}
+          "autonomy.jsonl", "quarantine_audit.jsonl", "memory_audit.jsonl",
+          "tool_approvals.json"}
 _NAME_RE = re.compile(r"^brain-export-[A-Za-z0-9._-]+\.tar\.gz$")
 
 

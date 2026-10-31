@@ -179,6 +179,9 @@ async def handle_hbar_command(
             cur.close()
         finally:
             conn.close()
+        if deleted:
+            from api import memory_audit as _maudit
+            _maudit.record(action="forget", document_name=doc_name, chunks=deleted)
         return {"forgotten": deleted > 0, "id": mem_id}
 
     if cmd == "memories":

@@ -4700,6 +4700,9 @@ def _stream_ingest_path_b(
             cursor.execute("DELETE FROM document_embeddings WHERE document_name = %s AND id = ANY(%s)", (filename, stale))
             stale_rows = cursor.rowcount
             conn.commit()
+            if stale_rows:
+                from api import memory_audit as _maudit
+                _maudit.record(action="reingest_prune", document_name=filename, chunks=stale_rows)
         cursor.close()
         conn.close()
     except Exception as e:
@@ -5101,6 +5104,8 @@ def delete_document_by_name(document_name: str, before: Optional[str] = None, ap
         if trashed == 0:
             raise HTTPException(status_code=404, detail=f"No active chunks found for document: {document_name}")
 
+        from api import memory_audit as _maudit
+        _maudit.record(action="trash", document_name=document_name, chunks=trashed, before=before)
         return {
             "document_name": document_name,
             "chunks_trashed": trashed,
@@ -5144,6 +5149,8 @@ def restore_document(document_name: str, api_key: str = Depends(get_api_key)):
         if restored == 0:
             raise HTTPException(status_code=404, detail=f"No trashed chunks found for document: {document_name}")
 
+        from api import memory_audit as _maudit
+        _maudit.record(action="restore", document_name=document_name, chunks=restored)
         return {"document_name": document_name, "chunks_restored": restored, "status": "restored"}
     except HTTPException:
         raise
@@ -5459,6 +5466,15 @@ def quarantine_audit_log(limit: int = 50, api_key: str = Depends(get_api_key)):
     return {"events": _qaudit.tail(n), "limit": n}
 
 
+@app.get("/documents/trash/log")
+def memory_audit_log(limit: int = 50, api_key: str = Depends(get_api_key)):
+    """Recent removals from memory (trash, restore, empty trash, forget, fact
+    delete): the record the revert drill asked for (D75)."""
+    from api import memory_audit as _maudit
+    n = max(1, min(int(limit or 50), 1000))
+    return {"events": _maudit.tail(n), "limit": n}
+
+
 @app.get("/documents/trash")
 def list_trash(api_key: str = Depends(get_api_key)):
     """List every soft-deleted document, grouped by document_name with the
@@ -5564,15 +5580,28 @@ def list_quarantine(api_key: str = Depends(get_api_key)):
 def empty_trash(api_key: str = Depends(get_api_key)):
     """Permanently delete every chunk currently in the trash. This is the
     only DELETE path now — the soft-delete UPDATE never destroys rows.
-    No undo from here."""
+    No undo from here. Audited: the names and chunk counts of what is
+    destroyed are written to api/memory_audit.py."""
+    from api import memory_audit as _maudit
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM document_embeddings WHERE metadata->>'deleted_at' IS NOT NULL")
-        deleted = cursor.rowcount
+        # RETURNING names exactly the rows this DELETE removed, so the record
+        # cannot drift from the deletion if a trash lands mid-call.
+        cursor.execute(
+            "DELETE FROM document_embeddings WHERE metadata->>'deleted_at' IS NOT NULL "
+            "RETURNING document_name"
+        )
+        counts: Dict[str, int] = {}
+        for (name,) in cursor.fetchall():
+            counts[name] = counts.get(name, 0) + 1
+        deleted = sum(counts.values())
+        doomed = [{"name": n, "chunks": c} for n, c in sorted(counts.items())]
         conn.commit()
         cursor.close()
         conn.close()
+        if deleted:
+            _maudit.record(action="empty_trash", document_name=None, chunks=deleted, documents=doomed)
         return {"chunks_deleted": deleted, "status": "trash_emptied"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Empty trash failed: {str(e)}")
@@ -8618,6 +8647,9 @@ def onboarding_fact_delete(fact_id: str, api_key: str = Depends(get_api_key)) ->
         )
         deleted = cursor.rowcount or 0
         conn.commit()
+        if deleted:
+            from api import memory_audit as _maudit
+            _maudit.record(action="fact_delete", document_name=f"onboarding-fact/{fact_id}", chunks=deleted)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail={"error": "delete_failed", "message": str(e)[:200]})

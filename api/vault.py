@@ -210,8 +210,13 @@ def _scan_locked(*, connect, chunker, embedder, layer, prune, force) -> Dict[str
                     cur.execute("DELETE FROM document_embeddings WHERE document_name = %s "
                                 "AND metadata->>'source' = %s",
                                 (doc_name(rel), _privacy.VAULT_SOURCE_PREFIX + rel))
+                    pruned_rows = getattr(cur, "rowcount", 0) or 0
                     conn.commit()
                     cur.close()
+                    if pruned_rows:
+                        from api import memory_audit as _maudit
+                        _maudit.record(action="vault_prune", document_name=doc_name(rel),
+                                       chunks=pruned_rows)
                 finally:
                     conn.close()
                 known.pop(rel, None)
