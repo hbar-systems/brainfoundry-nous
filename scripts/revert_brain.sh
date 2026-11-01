@@ -38,6 +38,10 @@ TS=$(date +%Y%m%d-%H%M%S)
 
 cd "$BRAIN_DIR"
 
+# One update or revert at a time on this checkout (scripts/update_lock.sh).
+. "$(dirname "$(readlink -f "$0")")/update_lock.sh"
+take_update_lock revert
+
 # git's dubious-ownership guard blocks all git commands when this runs as root
 # in-container against the uid-1000-owned bind-mounted repo. Mark it safe.
 git config --global --add safe.directory "$BRAIN_DIR" 2>/dev/null || true

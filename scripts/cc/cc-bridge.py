@@ -1763,7 +1763,9 @@ def _update_frames(path: Path, start: int, running, sleep=time.sleep, max_s: flo
                 yield frame({"type": "log", "line": text, "offset": pos})
                 mt = _UPDATE_RC.match(text.strip())
                 if mt:
-                    yield frame({"type": "done", "returncode": int(mt.group(1))})
+                    rc = int(mt.group(1))
+                    # 75: another update or revert held the checkout's lock (scripts/update_lock.sh).
+                    yield frame({"type": "done", "returncode": rc, **({"busy": True} if rc == 75 else {})})
                     yield "data: [DONE]\n\n"
                     return
             continue

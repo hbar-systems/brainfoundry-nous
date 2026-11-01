@@ -781,6 +781,15 @@ def _commits_behind() -> int:
         return 0
 
 
+def _auto_update_record(rc: int, prev_last_run: Optional[str]) -> dict:
+    """What the loop writes after a run. 75 means another update or revert held the
+    checkout's lock (scripts/update_lock.sh) and nothing ran: say skipped, and put
+    last_run back so the daily update is tried again on the next tick, not tomorrow."""
+    if rc == UPDATE_LOCK_BUSY:
+        return {"last_run": prev_last_run or "", "last_result": "skipped: another update was running"}
+    return {"last_result": f"rc={rc}"}
+
+
 def _auto_update_loop() -> None:
     """Every ten minutes: if the daily update is due, run scripts/update_brain.sh the way the
     Update tab does. The api container is replaced mid-run when its image changed; the
@@ -793,6 +802,7 @@ def _auto_update_loop() -> None:
             if cfg.get("enabled") and not _update_preflight():
                 now = datetime.utcnow()
                 if _auto_update_due(cfg, now, _commits_behind()):
+                    prev_last_run = cfg.get("last_run")
                     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                     settings_store.set_auto_update(last_run=stamp, last_result="started")
                     print(f"[auto-update] {stamp} running update_brain.sh", flush=True)
@@ -802,7 +812,7 @@ def _auto_update_loop() -> None:
                         lf.write(f"\n==> auto-update {stamp}\n"); lf.flush()
                         proc = subprocess.run(["bash", script, BRAIN_HOST_DIR], cwd=BRAIN_HOST_DIR, stdout=lf, stderr=subprocess.STDOUT,
                                               env={**os.environ, "BRAIN_DIR": BRAIN_HOST_DIR}, timeout=1800)
-                    settings_store.set_auto_update(last_result=f"rc={proc.returncode}")
+                    settings_store.set_auto_update(**_auto_update_record(proc.returncode, prev_last_run))
         except Exception as e:  # noqa: BLE001
             print(f"[auto-update] loop error: {type(e).__name__}: {e}", flush=True)
         time.sleep(600)
@@ -7446,6 +7456,8 @@ def admin_trace(api_key: str = Depends(get_api_key)):
 import subprocess
 
 BRAIN_HOST_DIR = os.getenv("BRAIN_HOST_DIR", "/home/hbar/brain")
+# Exit code of update_brain.sh / revert_brain.sh when another run holds the lock.
+UPDATE_LOCK_BUSY = 75
 
 
 def _update_preflight() -> Optional[str]:
@@ -7746,7 +7758,8 @@ def admin_update(api_key: str = Depends(get_api_key)):
                 # so the UI can render it immediately.
                 yield frame({"type": "log", "line": line.rstrip("\n")})
             proc.wait(timeout=600)
-            yield frame({"type": "done", "returncode": proc.returncode})
+            yield frame({"type": "done", "returncode": proc.returncode,
+                         **({"busy": True} if proc.returncode == UPDATE_LOCK_BUSY else {})})
         except Exception as e:
             yield frame({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:
@@ -7806,7 +7819,8 @@ def admin_revert(api_key: str = Depends(get_api_key)):
             for line in proc.stdout:
                 yield frame({"type": "log", "line": line.rstrip("\n")})
             proc.wait(timeout=600)
-            yield frame({"type": "done", "returncode": proc.returncode})
+            yield frame({"type": "done", "returncode": proc.returncode,
+                         **({"busy": True} if proc.returncode == UPDATE_LOCK_BUSY else {})})
         except Exception as e:
             yield frame({"type": "error", "message": f"{type(e).__name__}: {e}"})
         finally:

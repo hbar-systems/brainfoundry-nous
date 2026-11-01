@@ -43,6 +43,11 @@ TS=$(date +%Y%m%d-%H%M%S)
 
 cd "$BRAIN_DIR"
 
+# One update or revert at a time on this checkout (scripts/update_lock.sh).
+# Sourced from beside this script, so the guard matches the script that runs.
+. "$(dirname "$(readlink -f "$0")")/update_lock.sh"
+take_update_lock update
+
 # git's dubious-ownership guard blocks all git commands when this script runs
 # as root in-container against the uid-1000-owned bind-mounted repo. Mark it
 # safe. (The api Dockerfile also does this system-wide — belt and suspenders.)

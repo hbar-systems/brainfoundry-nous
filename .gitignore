@@ -119,6 +119,8 @@ api/brain_persona.md
 # update_brain.sh, read by revert_brain.sh / the console Revert button.
 # Per-brain runtime state, never committed.
 .update-prev-commit
+# The one-update-at-a-time lock (scripts/update_lock.sh); runtime state, never committed.
+.update.lock
 
 # Pre-update snapshots written by backup_brain.sh when invoked from the
 # in-container Update path. Lives inside the bind-mounted brain dir so it

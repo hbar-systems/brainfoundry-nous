@@ -219,7 +219,9 @@ export default function Update() {
           } else if (parsed.type === 'start') {
             appendLog({ kind: 'meta', text: `started in ${parsed.cwd}` })
           } else if (parsed.type === 'done') {
-            appendLog({ kind: 'meta', text: `script exited (rc=${parsed.returncode})` })
+            appendLog(parsed.busy
+              ? { kind: 'error', text: 'another update or revert is already running; nothing was done. Wait for it, then reload this page.' }
+              : { kind: 'meta', text: `script exited (rc=${parsed.returncode})` })
           } else if (parsed.type === 'error') {
             appendLog({ kind: 'error', text: parsed.message })
           }
@@ -319,7 +321,9 @@ export default function Update() {
             } else if (parsed.type === 'done') {
               rc = parsed.returncode
               finished = true
-              appendLog({ kind: 'meta', text: `script exited (rc=${rc ?? 'unknown'})` })
+              appendLog(parsed.busy
+                ? { kind: 'error', text: 'another update or revert is already running; nothing was done. Wait for it, then reload this page.' }
+                : { kind: 'meta', text: `script exited (rc=${rc ?? 'unknown'})` })
             } else if (parsed.type === 'error') {
               appendLog({ kind: 'error', text: parsed.message })
               finished = true
