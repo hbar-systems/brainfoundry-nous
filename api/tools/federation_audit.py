@@ -16,6 +16,8 @@ Record fields (per the federation-MVP spec):
     ts            UTC ISO-8601 (stamped here)
     direction     "in"  — a peer called THIS brain's /v1/federation/query
                   "out" — this brain called a peer via brain_call
+                  "local" — the owner vouched for or withdrew a vouch for a
+                  peer (surface "peers"; outcome "vouch:<n>d" | "unvouch")
     peer_brain_id the other brain (verified issuer / target; "anonymous" when
                   an inbound caller presented no verifiable assertion)
     query_summary first ~200 chars of the question
@@ -23,7 +25,8 @@ Record fields (per the federation-MVP spec):
     answer_len    length of the answer text (chars)
     verified      bool — inbound: assertion verified against a pinned pubkey;
                   outbound: this brain signed the call with its federation key
-    trust         "peer" | "anonymous"
+    trust         "peer" | "vouched" (passed on the owner's vouch, not on
+                  substrate depth) | "public" | "anonymous"
     outcome       short status — "ok" | "rate_limited" | "budget_exceeded" |
                   "no_answer" | "error:<reason>"
     surface       optional; "ask" for the A2A ask door (/v1/ask), absent for

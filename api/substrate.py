@@ -534,3 +534,51 @@ async def fetch_and_check_peer(
 
 def peer_cache_clear() -> None:
     _PEER_FLOOR_CACHE.clear()
+
+
+# ─── Owner vouch: the on-ramp through the floor (2026-11-01) ───────────────
+#
+# The floor is right against spam brains and wrong for a real newcomer on day
+# one (Elena's ask to the university, 0/50, 2026-10-25). The owner of THIS brain
+# may vouch for one introduced, pinned peer for a bounded time; while the vouch
+# holds, that peer passes the floor here and nowhere else. Trust is not
+# transitive: no other brain's vouch counts, and a vouch never admits a brain
+# whose key is not pinned. Stored as `vouched_until` (UTC ISO) on the peer's
+# entry in data/peers.json; set and withdrawn only through operator-authed
+# endpoints, each audited.
+
+VOUCH_MAX_DAYS = 90
+VOUCH_DEFAULT_DAYS = 30
+
+
+def vouch_active(entry: Optional[Dict[str, Any]], now_epoch: Optional[float] = None) -> bool:
+    """True when `entry` carries a pinned key and an unexpired `vouched_until`."""
+    if not entry or not entry.get("public_key"):
+        return False
+    until = entry.get("vouched_until")
+    if not isinstance(until, str) or not until:
+        return False
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    if dt.tzinfo is None:
+        return False
+    return dt.timestamp() > (time.time() if now_epoch is None else now_epoch)
+
+
+def vouched(brain_id: Optional[str], public_key: Optional[str]) -> bool:
+    """Is this peer vouched for by this brain's owner right now?
+
+    `public_key` is the key the caller was just verified against. The vouch
+    holds only for that exact key: a same-named entry pinned to another key (in
+    known_peers.toml, say) never inherits it."""
+    if not brain_id or not public_key:
+        return False
+    try:
+        from api.hbar_commands import find_peer_by_brain_id
+        entry = find_peer_by_brain_id(brain_id)
+        return bool(entry) and entry.get("public_key") == public_key and vouch_active(entry)
+    except Exception:
+        return False

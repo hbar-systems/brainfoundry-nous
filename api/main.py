@@ -619,11 +619,19 @@ async def receive_federation_assertion(req: FederationAssertionRequest):
             peer_endpoint=req.issuer_endpoint,
             pinned_pubkey_b64=peer["public_key"],
         )
-        if not floor.ok:
+        if not floor.ok and not substrate.vouched(peer["brain_id"], peer["public_key"]):
             return JSONResponse(
                 status_code=403,
                 content={"ok": False, "code": floor.code, "details": floor.details},
             )
+        if not floor.ok:
+            # Through on the owner's vouch, not on depth: say so, and record it.
+            from api.tools import federation_audit
+            federation_audit.record_event(direction="in", peer_brain_id=peer["brain_id"],
+                                          verified=True, trust="vouched",
+                                          outcome="handshake", surface="assertion")
+            return {"verified": True, "issuer": peer["brain_id"], "audience": this_brain_id,
+                    "claims": claims, "trust": "vouched"}
 
     return {"verified": True, "issuer": peer["brain_id"], "audience": this_brain_id, "claims": claims}
 
@@ -4158,9 +4166,12 @@ async def ask_door(http_request: Request):
         floor = await substrate.fetch_and_check_peer(
             peer_endpoint=caller.endpoint, pinned_pubkey_b64=caller.public_key)
         if not floor.ok:
-            if not public_asking:
+            if substrate.vouched(caller.brain_id, caller.public_key):
+                caller.trust = "vouched"  # the owner's on-ramp; same peer rate key
+            elif not public_asking:
                 return _refuse(_ask.AskError(403, _ask.FORBIDDEN, f"degraded_peer: {floor.code}"), caller)
-            caller.trust = "public"
+            else:
+                caller.trust = "public"
 
     rl = _ask_rate_limiter.check(caller.rate_key)
     if rl:
@@ -4305,6 +4316,7 @@ def federation_list_peers(api_key: str = Depends(get_api_key)):
             "endpoint": p.get("endpoint"),
             "introduced_at": p.get("introduced_at"),
             "pinned": bool(p.get("public_key")),
+            "vouched_until": p.get("vouched_until") or None,
             # The owner's name as the peer disclosed it at introduce ("" when it did not); People page.
             "name": p.get("name") or "",
         })
@@ -4345,6 +4357,55 @@ async def federation_ping_peer(req: dict, api_key: str = Depends(get_api_key)):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class VouchRequest(BaseModel):
+    days: int = 30
+
+
+@app.post("/v1/federation/peers/{brain_id}/vouch")
+def federation_vouch_peer(brain_id: str, req: VouchRequest, api_key: str = Depends(get_api_key)):
+    """Vouch for an introduced, pinned peer for 1-90 days: while it holds, the
+    peer passes this brain's substrate floor (the newcomer on-ramp). Only this
+    brain's own vouch counts; audited."""
+    from api import substrate
+    from api.hbar_commands import _load_peers, _save_peers
+    from api.tools import federation_audit
+    from datetime import timedelta, timezone
+    days = int(req.days)
+    if days < 1 or days > substrate.VOUCH_MAX_DAYS:
+        raise HTTPException(status_code=400, detail=f"days must be 1..{substrate.VOUCH_MAX_DAYS}")
+    peers = _load_peers()
+    entry = next((p for p in peers if p.get("brain_id") == brain_id), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown peer: introduce it first")
+    if not entry.get("public_key"):
+        raise HTTPException(status_code=409, detail="peer has no pinned key: a vouch needs one")
+    until = (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0)
+    entry["vouched_until"] = until.isoformat().replace("+00:00", "Z")
+    _save_peers(peers)
+    substrate.peer_cache_clear()
+    federation_audit.record_event(direction="local", peer_brain_id=brain_id, verified=True,
+                                  trust="vouched", outcome=f"vouch:{days}d", surface="peers")
+    return {"brain_id": brain_id, "vouched_until": entry["vouched_until"]}
+
+
+@app.delete("/v1/federation/peers/{brain_id}/vouch")
+def federation_unvouch_peer(brain_id: str, api_key: str = Depends(get_api_key)):
+    """Withdraw this brain's vouch for a peer; the floor applies again at once."""
+    from api import substrate
+    from api.hbar_commands import _load_peers, _save_peers
+    from api.tools import federation_audit
+    peers = _load_peers()
+    entry = next((p for p in peers if p.get("brain_id") == brain_id), None)
+    if entry is None or not entry.get("vouched_until"):
+        raise HTTPException(status_code=404, detail="no vouch for this peer")
+    entry.pop("vouched_until", None)
+    _save_peers(peers)
+    substrate.peer_cache_clear()
+    federation_audit.record_event(direction="local", peer_brain_id=brain_id, verified=True,
+                                  trust="peer", outcome="unvouch", surface="peers")
+    return {"brain_id": brain_id, "vouched_until": None}
 
 
 @app.delete("/v1/federation/peers/{brain_id}")

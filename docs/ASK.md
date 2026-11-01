@@ -44,8 +44,14 @@ X-Brain-Assertion: <token>
 ## Who may ask
 
 1. **Pinned peers.** A brain whose `brain_id` is in this brain's introduced peers (`data/peers.json`, via Settings or `peers.introduce`) or in `known_peers.toml` is verified against its **pinned** public key. A key that the caller supplies never overrides a pin.
-2. **Degraded peers.** These are pinned peers that fail the substrate floor (`FEDERATION_SUBSTRATE_GATE`, the same check as `/v1/federation/assertion`). They are refused.
-3. **Unknown brains** are refused (403 `unknown_peer`).
+2. **Degraded peers.** These are pinned peers that fail the substrate floor (`FEDERATION_SUBSTRATE_GATE`, the same check as `/v1/federation/assertion`). They are refused, unless this brain's owner has vouched for them.
+3. **Vouched newcomers** (2026-11-01). The owner may vouch for one introduced, pinned peer for 1 to 90 days. While the vouch holds, that peer passes the floor here, on this door and on `/v1/federation/assertion`. It asks with trust `vouched`: same scope and rate limit as a peer, marked in the federation audit. The vouch is bound to the pinned key and counts only on this brain; no other brain's vouch is honoured. Every vouch and withdrawal is audited.
+
+```
+POST   /v1/federation/peers/{brain_id}/vouch   {"days": 30}   (API key)
+DELETE /v1/federation/peers/{brain_id}/vouch                  (API key)
+```
+4. **Unknown brains** are refused (403 `unknown_peer`).
 
 The owner can turn on **public asking** (default off):
 

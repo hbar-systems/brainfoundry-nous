@@ -62,8 +62,11 @@ def _load_peers() -> list:
         return []
 
 def _save_peers(peers: list) -> None:
+    # Write-then-rename so a reader (or a crash) never sees a half-written file.
     _PEERS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _PEERS_PATH.write_text(json.dumps(peers, indent=2), encoding="utf-8")
+    tmp = _PEERS_PATH.with_name(_PEERS_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(peers, indent=2), encoding="utf-8")
+    os.replace(tmp, _PEERS_PATH)
 
 def find_peer_by_brain_id(brain_id: str) -> dict | None:
     """Look up an introduced peer by its brain_id. Used to verify an inbound
