@@ -1,0 +1,5 @@
+# Test extras (2026-11-03). Installed by CI and by scripts/test-gate.sh's venv recipe so the
+# tests that skip without them (cc_box, cc_gate, cc_bridge, test_deck) actually run.
+pytest
+permitd
+python-pptx

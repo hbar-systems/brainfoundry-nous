@@ -25,7 +25,7 @@ brainfoundry-nous is designed as a **personal, self-hosted node**. Its security 
 - `BRAIN_IDENTITY_SECRET` and `NODEOS_SIGNING_SECRET` are generated with `openssl rand -hex 32` and never reused
 - The API is placed behind a TLS-terminating reverse proxy before being exposed to the internet
 - `BRAIN_ENV=prod` is set in production to enforce startup secret validation
-- Only ports `3010` (UI) and `8010` (API, protected) are exposed externally; all other ports are bound to `127.0.0.1`
+- Every published port in `docker-compose.yml` is bound to `127.0.0.1` (loopback only): UI `3010`, API `8010`, NodeOS `8001`, public-chat `3020`, Postgres `54332`, Ollama `11435`. Nothing is reachable from outside the host by default. To let people in, put a TLS-terminating reverse proxy (see `docs/DEPLOYMENT.md`, Caddy template) or a private network such as Tailscale in front of the UI and API; do not change the bindings to `0.0.0.0`
 
 ## Known limitations
 

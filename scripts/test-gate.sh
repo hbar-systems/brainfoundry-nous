@@ -5,9 +5,9 @@
 # The python needs requirements.txt plus pytest; sentence_transformers is optional (tests/conftest.py).
 # Default: the durable venv /home/hands/.local/venvs/nous-tests when it exists (2026-10-27), else python3.
 # It is requirements.txt + api/requirements.txt without sentence-transformers (that pulls torch, ~3 GB),
-# plus pytest and permitd; to rebuild it:
+# plus requirements-test.txt (pytest, permitd, python-pptx); to rebuild it:
 #   cat requirements.txt api/requirements.txt | grep -vi '^sentence-transformers' > /tmp/req.txt
-#   python3 -m venv ~/.local/venvs/nous-tests && ~/.local/venvs/nous-tests/bin/pip install --no-cache-dir -r /tmp/req.txt pytest permitd
+#   python3 -m venv ~/.local/venvs/nous-tests && ~/.local/venvs/nous-tests/bin/pip install --no-cache-dir -r /tmp/req.txt -r requirements-test.txt
 #   TEST_PYTHON=/other/venv/bin/python bash scripts/test-gate.sh     another python
 set -u
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1

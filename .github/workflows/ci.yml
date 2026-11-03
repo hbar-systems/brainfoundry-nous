@@ -8,12 +8,14 @@
 #   unit        — the full pytest suite with NO external services. The live-DB
 #                 tests in test_substrate.py self-skip (they need
 #                 SUBSTRATE_PG_TEST=1 + DATABASE_URL, set only in `integration`).
+#   console     — npm ci && npm run build in ui/ (Node 18, as ui/Dockerfile) so a
+#                 broken console never reaches main.
 #   integration — the same live-DB tests, run for real against a pgvector
 #                 service container so "needs a DB" never means "silently
 #                 skipped". This job is what proves the persistence layer.
 #
-# Branch protection (operator action, one-time): make `lint`, `unit`, and
-# `integration` required status checks on `main` so a red check blocks merge.
+# Branch protection (operator action, one-time): make `lint`, `unit`,
+# `console` and `integration` required status checks on `main` so a red check blocks merge.
 # Until that setting is flipped these checks report but do not enforce.
 
 name: CI
@@ -68,6 +70,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             api/requirements.txt
+            requirements-test.txt
       - name: Install dependencies
         # The api/ test modules (test_vendor_disavowal imports api.main,
         # test_native_tools imports api.providers) pull the full runtime stack,
@@ -76,7 +79,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r api/requirements.txt
-          pip install pytest
+          pip install -r requirements-test.txt
       - name: Provision writable /app/runtime (mirrors the container volume)
         # api/main.py creates /app/runtime/proposal_texts at import time — in the
         # real deployment /app/runtime is the api_runtime volume. The runner has
@@ -122,13 +125,31 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             api/requirements.txt
+            requirements-test.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r api/requirements.txt
-          pip install pytest
+          pip install -r requirements-test.txt
       - name: Run live-DB integration tests
         # Targeted at the modules that exercise the DB. The skipif guard is now
         # satisfied (SUBSTRATE_PG_TEST=1 + DATABASE_URL), so these run for real.
         run: pytest tests/test_substrate.py -v
+
+  # ── Console build: the UI must compile. Node 18 matches ui/Dockerfile.
+  console:
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
