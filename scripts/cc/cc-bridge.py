@@ -451,6 +451,7 @@ import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
+import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -484,6 +485,15 @@ CODEX_SYSTEM = SYSTEM_CORE + (
     "When the person wants a change, say exactly what you would change (the file and the edit, or the "
     "command), so they can make it from the Claude seat, where every write passes their Allow, or by hand. "
     "You cannot change anything else from this surface either: not memory, not settings. Say so if asked to."
+)
+# The Codex seat with CC_CODEX_WRITE=1 and a passing gate check (cc_codex_gate.py): the Claude
+# seat's powers, every edit, command and tool call on a card first.
+CODEX_WRITE_SYSTEM = SYSTEM_CORE + (
+    " You may edit files, run commands and use the tools you are given on this box. Every one of them "
+    "first raises a card for the person (or follows the posture they chose); nothing runs until it is "
+    "allowed. A refused call comes back to you as blocked: do not retry it, and do not look for another "
+    "way to do the same thing; say what was refused and ask. Never write under ~/.codex: the bridge "
+    "owns those files and rewrites them before every turn."
 )
 LOCAL_SYSTEM = CODEX_SYSTEM.split(" When the person wants a change,")[0] + (
     " When the person asks for a change on this box, you may propose exactly one shell command: end your "
@@ -3142,6 +3152,11 @@ def _codex_status(fresh: bool = False) -> dict:
     env = cc_codex.env(_hands_env())
     st = cc_codex.status(CODEX_BIN, run=lambda argv, t: subprocess.run(
         _as_hands(argv, env), capture_output=True, text=True, timeout=t, env=env))
+    if CODEX_WRITE:
+        st["write"] = {"asked": True, "on": bool(CODEX_GATE["ok"]), "why": CODEX_GATE["why"],
+                       "sandbox": CODEX_WRITE_SANDBOX or None}
+        if CODEX_GATE["ok"]:
+            st["mode"], st["label"] = "gated", cc_codex_gate.LABEL
     _codex_cache[0], _codex_cache[1] = time.time(), st
     return dict(st)
 
@@ -3151,6 +3166,116 @@ def _local_status(live: bool = True) -> dict:
     a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down never stalls it.
     Never carries the key."""
     return cc_local.status(os.environ, live=live)
+
+
+# ---- the Codex seat's gated write mode (2026-11-03) ----
+# CC_CODEX_WRITE=1 asks for it; it is on only while the gate check passes (run at start and before
+# every Codex turn): the box lane and the gate are on, the bridge owns the hands' ~/.codex/hooks.json
+# and config.toml, Codex's own hook list shows the card hook trusted, and the hook answers a probe
+# with a deny. A failed check leaves the seat read-only for that turn and says why.
+CODEX_WRITE = os.environ.get("CC_CODEX_WRITE", "").strip() == "1"
+CODEX_WRITE_SANDBOX = cc_codex_gate.SANDBOXES.get(os.environ.get("CC_CODEX_WRITE_SANDBOX", "").strip() or "workspace-write", "")
+CODEX_HOME_HANDS = HANDS_HOME / ".codex"
+CODEX_HOOK_SCRIPT = Path(__file__).resolve().parent / "cc-codex-hook.py"
+CODEX_GATE = {"ok": False, "why": "off (CC_CODEX_WRITE is not 1)", "at": 0.0}
+CODEX_GATE_LOCK = threading.Lock()
+
+
+def _hands_read(path: Path) -> str | None:
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        r = subprocess.run(_as_hands(["/bin/cat", str(path)]), capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout
+        return None if "No such file" in (r.stderr or "") else ""
+
+
+def _hands_write(path: Path, text: str) -> None:
+    """Write a file as the hands (their home is closed to the bridge after the split)."""
+    if not HANDS_USER:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return
+    subprocess.run(_as_hands(["/bin/mkdir", "-p", str(path.parent)]), check=True, timeout=10)
+    subprocess.run(_as_hands(["/usr/bin/tee", str(path)]), input=text, stdout=subprocess.DEVNULL,
+                   text=True, check=True, timeout=10)
+
+
+def _codex_gate_env() -> dict:
+    return cc_codex_gate.env({**_hands_env(), "CODEX_HOME": str(CODEX_HOME_HANDS), "CC_PORT": str(PORT),
+                              "CC_BASE": BASE, "CC_ASK_TOKEN": ASK_TOKEN, "CC_PERMIT_TTL": str(PERMIT_TTL)})
+
+
+def _codex_gate_check() -> tuple[bool, str]:
+    """Prepare and prove the card hook for one Codex turn. (ok, a sentence for the page)."""
+    if not CODEX_WRITE:
+        return False, "off (CC_CODEX_WRITE is not 1)"
+    if not CODEX_WRITE_SANDBOX:
+        return False, "CC_CODEX_WRITE_SANDBOX is neither workspace-write nor off"
+    if not BOX_ENABLED or GATE is None:
+        return False, "the box lane or the gate is off on this brain, so there is no card to raise"
+    if not Path(CODEX_BIN).exists():
+        return False, "no codex binary"
+    with CODEX_GATE_LOCK:
+        try:
+            home = CODEX_HOME_HANDS
+            if not cc_codex_gate.config_ours(_hands_read(home / "config.toml")):
+                return False, f"{home}/config.toml is the owner's own, not the bridge's; move it away to use write mode"
+            try:
+                mcp = json.loads(Path(_mcp_config()).read_text())
+            except Exception:  # noqa: BLE001
+                mcp = {}
+            cmdline = cc_codex_gate.hook_command(HOOK_PYTHON, CODEX_HOOK_SCRIPT)
+            _hands_write(home / "hooks.json", cc_codex_gate.hooks_json(HOOK_PYTHON, CODEX_HOOK_SCRIPT, PERMIT_TTL))
+            _hands_write(home / "config.toml", cc_codex_gate.config_toml(home, None, mcp))
+            env = _codex_gate_env()
+            spawn = lambda argv: cc_codex_gate._spawn(_as_hands(argv, env), env)  # noqa: E731
+            h = cc_codex_gate.ours(cc_codex_gate.hooks_list(CODEX_BIN, RUN_CWD, spawn), home, cmdline)
+            if h is None or not h.get("currentHash"):
+                return False, "Codex does not list the card hook"
+            _hands_write(home / "config.toml", cc_codex_gate.config_toml(home, h["currentHash"], mcp))
+            ok, why = cc_codex_gate.verdict(cc_codex_gate.hooks_list(CODEX_BIN, RUN_CWD, spawn), home, cmdline, PERMIT_TTL)
+            if not ok:
+                return False, why
+            penv = {**env, "CC_ASK_TOKEN": "probe-not-the-token"}
+            pr = subprocess.run(_as_hands([HOOK_PYTHON, str(CODEX_HOOK_SCRIPT)], penv), input=cc_codex_gate.PROBE_INPUT,
+                                capture_output=True, text=True, timeout=30, env=penv)
+            if pr.returncode != 0 or not cc_codex_gate.probe_ok(pr.stdout):
+                return False, "the card hook did not answer a probe with a deny"
+            return True, why
+        except Exception as e:  # noqa: BLE001
+            return False, f"the gate check failed ({type(e).__name__})"
+
+
+def _codex_gate_refresh() -> dict:
+    ok, why = _codex_gate_check()
+    CODEX_GATE.update({"ok": ok, "why": why, "at": time.time()})
+    if CODEX_WRITE:
+        print(f"codex write mode: {'on' if ok else 'refused'}: {why}", flush=True)
+    return dict(CODEX_GATE)
+
+
+_SUDO_ANY = re.compile(r"(^|[\s;&|(`$])sudo(\s|$)")
+
+
+def _codex_auto_allows(tool: str, inp: dict) -> bool:
+    """The auto posture for the Codex seat. Claude Code's own classifier decides there and only sudo
+    still asks; Codex has no such classifier, so: everything the Claude seat would run without a card
+    in auto runs here too, except any command with sudo anywhere in it, and publishing (orfeo_post).
+    The cards and judged postures always go to the card."""
+    if not CODEX_GATE["ok"] or _posture_current() != "auto" or tool == "orfeo_post":
+        return False
+    if tool == "Bash":
+        return not _SUDO_ANY.search(str((inp or {}).get("command", "")))
+    return True
+
+
+def _seat_read_only(seat: str) -> bool:
+    """Whether this seat raises no cards this turn: Local always; Codex unless write mode passed."""
+    return seat == "local" or (seat == "codex" and not CODEX_GATE["ok"])
 
 
 def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
@@ -3175,16 +3300,29 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
     no = cc_local.probe(lst) if local else cc_codex.refusal(_codex_status(fresh=True))
     if no:
         return no, session_id, True
+    write = False
+    note = ""
+    if not local and CODEX_WRITE:
+        g = _codex_gate_refresh()
+        write = g["ok"]
+        if not write:
+            note = f"\n\n(Codex write mode refused: {g['why']}. This turn was read-only.)"
     try:
-        cmd = cc_local.build_cmd(CODEX_BIN, RUN_CWD, lst, session_id) if local else cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
+        if write:
+            cmd = cc_codex_gate.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL, sandbox=CODEX_WRITE_SANDBOX)
+        else:
+            cmd = cc_local.build_cmd(CODEX_BIN, RUN_CWD, lst, session_id) if local else cc_codex.build_cmd(CODEX_BIN, RUN_CWD, session_id, CODEX_MODEL)
     except cc_codex.Unsafe as e:
         return f"The {name} seat refused to start: {e}. Nothing ran.", session_id, True
     prompt, used = _compose(message, recent, first_use)
     print(f"memory chunks={used} recent={len(recent)} seat={seat}", flush=True)
-    prompt = f"<instructions>\n{LOCAL_SYSTEM if local else CODEX_SYSTEM}\n</instructions>\n\n{prompt}"
+    prompt = f"<instructions>\n{LOCAL_SYSTEM if local else CODEX_WRITE_SYSTEM if write else CODEX_SYSTEM}\n</instructions>\n\n{prompt}"
     run = run or Run(None, "")
     on_event = on_event or (lambda k, p: None)
-    env = cc_local.env(_run_env(run), lst["key"]) if local else cc_codex.env(_run_env(run))
+    if write:
+        env = cc_codex_gate.env({**_run_env(run), **_codex_gate_env()})
+    else:
+        env = cc_local.env(_run_env(run), lst["key"]) if local else cc_codex.env(_run_env(run))
     proc = subprocess.Popen(_as_hands(cmd, env), cwd=RUN_CWD, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     run.proc = proc
@@ -3217,9 +3355,12 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
             item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
             if kind == "thread.started":
                 sid = ev.get("thread_id") or sid
+                run.claude_sid = sid or run.claude_sid      # the card hook names this thread id
                 on_event("start", {"model": model or seat, "session_id": sid, "reasoner": seat})
             elif kind in ("item.started", "item.completed"):
                 b = cc_codex.brief(item)
+                if b and write and b[0] == "edit":
+                    b = ("edit", b[1].replace("edit (refused by the sandbox): ", "edit: "))
                 if b and item.get("id") not in shown:
                     shown.add(item.get("id"))
                     steps += 1
@@ -3256,7 +3397,7 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
         return f"The {name} seat could not answer this turn: {err}", sid, True
     META.update({"in": int(usage.get("input_tokens") or 0), "cached": int(usage.get("cached_input_tokens") or 0),
                  "out": int(usage.get("output_tokens") or 0), "steps": steps, "cost": 0 if local else None})
-    return (texts[-1] if texts else "(no answer)"), sid, False
+    return (texts[-1] if texts else "(no answer)") + note, sid, False
 
 
 # ----------------------------------------------------------------- http ----
@@ -3469,7 +3610,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                 reply = (reply + f"\n\n(No card was raised: {box_err}.)").strip()
         else:
             reply = _BOX_PROPOSAL.sub("", reply).strip()   # only the Local seat may raise a command card
-        if seat in READ_ONLY_SEATS and proposal:
+        if _seat_read_only(seat) and proposal:
             # the read-only seat raises no cards: a proposal is shown as text, never queued for a write
             proposal = None
             reply = (reply + f"\n\n(The {'Local' if seat == 'local' else 'Codex'} seat is read-only and raises no cards; ask the Claude seat to make this change.)").strip()
@@ -3528,7 +3669,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
                  "ms": ms, "error": is_error, "memory_sources": len(LAST_SOURCES), "retrieved": list(LAST_SOURCES),
                  "proposal": (card or {}).get("id"),
                  "auto": bool((card or {}).get("auto")), "pane": (pane or {}).get("route"),
-                 "tools": f"{seat}:{cc_codex.MODE}" if seat in READ_ONLY_SEATS else ALLOWED_TOOLS, "via": source, "reasoner": seat,
+                 "tools": (f"{seat}:{cc_codex.MODE}" if _seat_read_only(seat) else f"{seat}:gated") if seat in READ_ONLY_SEATS else ALLOWED_TOOLS, "via": source, "reasoner": seat,
                  "tok_in": META.get("in"), "tok_cached": META.get("cached"), "tok_out": META.get("out"), "cost": META.get("cost"),
                  "tok_fresh": META.get("in_fresh"), "tok_cache_write": META.get("cache_write"),
                  "model": META.get("model")})
@@ -4892,7 +5033,11 @@ class Handler(BaseHTTPRequestHandler):
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"behavior": "deny", "message": "not the hook"})
                 return
-            self._send(200, _box_ask(str(req.get("tool_name", "")), req.get("tool_input") or {}, session_id=str(req.get("session_id") or "") or None))
+            tool, inp = str(req.get("tool_name", "")), req.get("tool_input") or {}
+            if req.get("seat") == "codex" and _codex_auto_allows(tool, inp):
+                self._send(200, {"behavior": "allow"})
+                return
+            self._send(200, _box_ask(tool, inp, session_id=str(req.get("session_id") or "") or None))
             return
         if route in ("/permits/approve", "/permits/deny"):
             if GATE is None:
@@ -5032,6 +5177,8 @@ def main() -> None:
         threading.Thread(target=_tick_loop, daemon=True).start()
     if AGENTS_ON:
         threading.Thread(target=_agents_loop, daemon=True).start()
+    if CODEX_WRITE:
+        threading.Thread(target=_codex_gate_refresh, daemon=True).start()
     signal.signal(signal.SIGHUP, lambda *_: _restart_request("reload signal (Update)"))
     httpd = ThreadingHTTPServer((BIND, PORT), Handler)
     print(f"cc-bridge listening on {BIND}:{PORT}{BASE} cwd={RUN_CWD} tools={ALLOWED_TOOLS} memory={'on' if BRAIN_API_KEY else 'off'} mcp={MCP_CONFIG or 'none'}", flush=True)
