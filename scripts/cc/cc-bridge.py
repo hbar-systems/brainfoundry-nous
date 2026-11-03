@@ -1059,7 +1059,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
     run = RUNS.get(run_id) if run_id else None
     run = run if run is not None and not run.done else _run_watching(session_id)
-    same_turn = run is not None and (tool, summary) in run.allowed and remember_ok
+    same_turn = run is not None and (tool, summary) in run.allowed and tool != "orfeo_post"
     if (remember_ok and _auto_has(args)) or same_turn:
         # Already allowed: by the owner's standing choice, or the identical call earlier in this
         # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
