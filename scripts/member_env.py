@@ -44,6 +44,7 @@ def member_values(handle: str, n) -> dict:
         "TRUST_PROXY_HEADERS": "true",
         "OLLAMA_URL": "http://ollama:11434",
         "BRAIN_CC_ENABLED": "true",
+        "LAPTOP_AUDIO_HOST_DIR": f"/home/{handle}-hands/in",  # laptop import: audio lands in ~/in/<date>/import/
     }
 
 

@@ -11,7 +11,8 @@ to where you ran it. The brain never reaches into this computer.
 Never sent, whatever you answer: hidden files and folders (.ssh, .gnupg, .aws, .env,
 ...), key and password files (id_rsa, *.pem, *.key, *.p12, *.kdbx, keychains,
 1Password and other vault exports), system and app folders (Library, AppData,
-node_modules, ...), and anything Knowledge cannot read (audio, video, archives).
+node_modules, ...), and anything the brain cannot use (video, archives). Audio goes as files for the
+music tools, not into Knowledge: with y on a folder named Music, or when named (wav,mp3).
 
   python3 brain_import.py --brain https://you.brainfoundry.ai --token imp_...
   python3 brain_import.py --dry-run            (only list, send nothing)
@@ -61,6 +62,10 @@ READABLE = TEXT | DOCS | IMAGES
 DEFAULT_TYPES = TEXT | DOCS  # images go only when named: OCR is slow and photos are rarely notes
 AUDIO = {"wav", "aif", "aiff", "mp3", "flac", "m4a", "ogg", "als", "mid", "midi"}
 MAX_FILE_BYTES = 25 * 1024 ** 2
+# Audio is not read into Knowledge: it is kept as files on the brain (~/in/<date>/import/) for
+# the music tools. 'y' on a folder named Music brings it; elsewhere name the types (wav,mp3).
+MAX_AUDIO_FILE_BYTES = 200 * 1024 ** 2
+MUSIC_FOLDERS = {"music"}
 
 
 def skip_dir(name):
@@ -104,10 +109,10 @@ def walk(root):
             why = skip_file(f)
             if not why:
                 e = ext_of(f)
-                if e not in READABLE:
-                    why = "audio (music kit)" if e in AUDIO else "not readable by Knowledge"
-                elif size > MAX_FILE_BYTES:
-                    why = "over 25 MB"
+                if e not in READABLE and e not in AUDIO:
+                    why = "not readable by Knowledge"
+                elif size > (MAX_AUDIO_FILE_BYTES if e in AUDIO else MAX_FILE_BYTES):
+                    why = "over 200 MB" if e in AUDIO else "over 25 MB"
                 elif size == 0:
                     why = "empty"
             yield p, p.relative_to(root).as_posix(), size, why
@@ -157,17 +162,18 @@ def human(n):
         n /= 1024
 
 
-def parse_answer(ans):
-    """'y' -> DEFAULT_TYPES, 'n' or '' -> None, 'pdf,md' or 't:pdf,md' -> those types (readable only)."""
+def parse_answer(ans, music=False):
+    """'y' -> DEFAULT_TYPES (and audio for a Music folder), 'n' or '' -> None,
+    'pdf,md' or 't:pdf,md' -> those types (readable or audio only)."""
     a = (ans or "").strip().lower()
     if a in ("y", "yes"):
-        return set(DEFAULT_TYPES)
+        return set(DEFAULT_TYPES) | (AUDIO if music else set())
     if a in ("", "n", "no"):
         return None
     if a.startswith("t:"):
         a = a[2:]
     types = {t.strip().lstrip(".") for t in a.replace(" ", ",").split(",") if t.strip()}
-    unknown = types - READABLE
+    unknown = types - READABLE - AUDIO
     if unknown:
         raise ValueError("not readable by Knowledge: " + ", ".join(sorted(unknown)))
     return types or None
@@ -277,9 +283,11 @@ def run(argv=None, out=print):
         if not s["offer"]:
             continue
         while True:
-            ans = ask("  Bring it? [y]es (documents and text) / [n]o / types, e.g. pdf,md,jpg: ", answers, f.name)
+            music = f.name.lower() in MUSIC_FOLDERS
+            what = "music and documents" if music else "documents and text"
+            ans = ask(f"  Bring it? [y]es ({what}) / [n]o / types, e.g. pdf,md,jpg,wav: ", answers, f.name)
             try:
-                types = parse_answer(ans)
+                types = parse_answer(ans, music)
                 break
             except ValueError as e:
                 out("  " + str(e))
@@ -306,8 +314,9 @@ def run(argv=None, out=print):
                 st, j = 0, {"detail": str(e)}
             sent_bytes += size
             if st == 200:
-                receipt["sent"].append({"path": name, "proposal_id": j.get("proposal_id"), "size": size})
-                mark = "ok"
+                receipt["sent"].append({"path": name, "proposal_id": j.get("proposal_id"), "size": size,
+                                        "kept_at": j.get("where")})
+                mark = f"kept in {j['where']}" if j.get("where") else "ok"
             else:
                 receipt["refused"].append({"path": name, "status": st, "detail": j.get("detail")})
                 mark = f"refused ({st}: {j.get('detail')})"
@@ -323,8 +332,10 @@ def run(argv=None, out=print):
     rp = Path(a.receipt_dir) / f"brain-import-receipt-{time.strftime('%Y%m%d-%H%M%S')}.json"
     rp.write_text(json.dumps(receipt, indent=1), encoding="utf-8")
     out(f"\nSent {len(receipt['sent'])}, refused {len(receipt['refused'])}. Receipt: {rp}")
-    if receipt["sent"]:
-        out("They wait on your brain's Knowledge page (/upload) for your approval.")
+    if any(x.get("proposal_id") for x in receipt["sent"]):
+        out("Documents wait on your brain's Knowledge page (/upload) for your approval.")
+    if any(x.get("kept_at") for x in receipt["sent"]):
+        out("Music is kept as files on your brain under in/<date>/import/, listed in audio.tsv for the music tools.")
     return receipt
 
 

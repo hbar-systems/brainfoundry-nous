@@ -163,14 +163,42 @@ Helper: `scripts/import/brain_import.py` (one file, Python 3.8+ standard library
 - Hidden files and folders: `.ssh`, `.gnupg`, `.aws`, `.config`, `.env`, `.netrc`, `.git`, ...
 - Key, password and vault files: `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, keychains, 1Password/Bitwarden/KeePass folders and exports, `*.gpg`, `*.asc`, `*.ovpn`, and any name holding `password`, `secret`, `credential` or `token`.
 - System and app folders: `Library`, `AppData`, `Program Files`, `node_modules`, `venv`, `build`, `dist`, photo libraries, app bundles.
-- What Knowledge cannot read: audio, video, archives, databases. Audio is counted and named "audio (music kit)": it belongs to the music lane, not to Knowledge.
-- Files over 25 MB.
+- What the brain cannot use: video, archives, databases.
+- Files over 25 MB (audio: over 200 MB).
+
+Audio, MIDI and Ableton sets (`wav aif aiff mp3 flac m4a ogg mid midi als`, 2026-11-03) are not read into Knowledge: `y` on a folder named Music brings them with the documents there, elsewhere they go when named (`wav,mp3`).
 
 The brain checks again on its side: a path with `..`, a root or a hidden part is refused (400), a type it cannot read is refused (415), a spent, replaced or expired token is refused (401), the run's caps answer 413. The token can only propose into Knowledge; it is not the owner key and the owner key does not work in its place.
 
+### The Knowledge card (2026-11-03)
+
+The Knowledge page (/upload) carries "Bring files from your computer". Start mints the token (`POST /documents/import-laptop/token` through the console, behind the login) and shows the one line to paste, for Mac (Terminal) or Windows (PowerShell), with a Copy button. The line works once, for two hours; New line mints another and closes the old one. While it runs, the card asks `GET /documents/import-laptop/status` (owner key; the newest run's counts and what arrived, never a token) every 4 seconds: documents are listed and appear under Pending for approval, music is listed with where it was kept. `ui/lib/LaptopImportCard.js`.
+
+### Music: kept as files in ~/in, not remembered
+
+An audio file goes to the same `POST /documents/import-laptop/file` with the same token. The api streams it to a temp file (200 MB cap per file, counted against the run's caps), then keeps it at `LAPTOP_AUDIO_DIR/<date of the run>/import/<laptop path>` (a name already there gets ` (2)`; nothing is overwritten), mode 644, owned like the folder, and appends a line to `audio.tsv` in that `import/` folder (`file bytes sha256 arrived`) for the music tools. It is never proposed to memory. The answer is `KEPT` with `where: in/<date>/import/...`.
+
+`LAPTOP_AUDIO_DIR` is `/app/laptop_audio` in the container. `docker-compose.yml` mounts `LAPTOP_AUDIO_HOST_DIR` there; `scripts/member_env.py` sets it to `/home/<handle>-hands/in` for every new member, and `scripts/add-member.sh` makes that folder (owned by the hands) before the stack starts, so the music lands in the member's own `~/in/<date>/import/`, beside the console's attachments. Unset (a single brain), a docker volume `laptop_audio` keeps it and the card says "kept on your brain".
+
+### The way in from the laptop (Caddy)
+
+The console sits behind its login; the helper carries only the token. So the console site block opens exactly the four token-gated paths, straight to the api (the console's own `/api/bf` proxy would add the owner key), and keeps the login for everything else, `/token` and `/status` included. `scripts/add-member.sh` prints it in every new member's block. The snippet, for any console block (`<api port>` is the brain's api port):
+
+```
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    handle @import {
+        uri strip_prefix /api/bf
+        reverse_proxy localhost:<api port>
+    }
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    basicauth @login {
+```
+
+(the last line replaces the block's `basicauth {`; the hash line under it stays). Checked on caddy 2 with a stand-in api: the four paths pass without the password and arrive without an owner key; `/token`, `/status`, `file/../token`, `%2e%2e` and the rest of the console answer 401.
+
+Existing boxes (one line): back up `/etc/caddy/Caddyfile`, add the snippet to each console block, `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`, `sudo systemctl reload caddy`; for music into a member's `~/in`, add `LAPTOP_AUDIO_HOST_DIR=/home/<handle>-hands/in` to that member's .env, make the folder as the hands if missing, and rebuild the api. The central thread applies this on hbar's word.
+
 ### Not done yet
 
-- The way in from outside: the console sits behind its login (Caddy basic auth), so the laptop reaches `/api/bf/documents/import-laptop/*` only after one Caddy `handle` for that path outside the login is added per box. The routes carry their own token check for that reason. Not added on any box.
-- A console button that mints the token and shows the pasted command; for now the owner (or the reasoner, on request) calls the token route.
-- Audio and other non-text files (the Music folder): no place in the brain yet.
 - Resume after a broken run (the receipt lists what went; a second run needs a new token and resends).
+- Mac and Windows runs of the helper are untested here (Linux only).

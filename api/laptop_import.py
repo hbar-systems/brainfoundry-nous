@@ -12,6 +12,10 @@ This module holds the one-time import tokens. The owner mints one from the conso
 - is the only open one: minting a new token closes every earlier one.
 It lets its holder do exactly one thing: propose files into Knowledge. Every file
 becomes a PENDING proposal; nothing is remembered before the owner approves it.
+
+Audio (2026-11-03, M7-G) is not Knowledge: chosen audio files are kept as files in the
+member's ~/in/<date>/import/ (LAPTOP_AUDIO_DIR, a bind mount of the hands' ~/in), listed in
+audio.tsv beside them for the music tools. They are never proposed to memory.
 """
 import hashlib
 import json
@@ -38,6 +42,10 @@ TEXT_EXT = {
 DOC_EXT = {"pdf", "docx"}
 IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp"}
 ACCEPTED_EXT = TEXT_EXT | DOC_EXT | IMAGE_EXT
+# Kept as files for the music tools, not read: audio, MIDI and Ableton sets.
+AUDIO_EXT = {"wav", "aif", "aiff", "mp3", "flac", "m4a", "ogg", "als", "mid", "midi"}
+MAX_AUDIO_FILE_BYTES = 200 * 1024 ** 2
+ARRIVALS_KEPT = 500
 
 TOKEN_RE = re.compile(r"^imp_[A-Za-z0-9_-]{32,64}$")
 
@@ -104,10 +112,11 @@ class TokenStore:
         with self._lock:
             return dict(self._get(self._load(), raw))
 
-    def charge(self, raw: str, size: int) -> dict:
-        """Count one file against the run's caps, before it is proposed."""
-        if size > MAX_FILE_BYTES:
-            raise TokenError(413, f"file over {MAX_FILE_BYTES // 1024 ** 2} MB")
+    def charge(self, raw: str, size: int, ext: str = "") -> dict:
+        """Count one file against the run's caps, before it is proposed or kept."""
+        cap = max_file_bytes(ext)
+        if size > cap:
+            raise TokenError(413, f"file over {cap // 1024 ** 2} MB")
         with self._lock:
             data = self._load()
             rec = self._get(data, raw)
@@ -119,6 +128,30 @@ class TokenStore:
             rec["bytes"] += size
             self._save(data)
             return dict(rec)
+
+    def note(self, raw: str, entry: dict) -> None:
+        """One line of what arrived, for the console card's live list (newest last, capped)."""
+        with self._lock:
+            data = self._load()
+            rec = data.get(_hash(raw or ""))
+            if rec is None:
+                return
+            arrived = rec.setdefault("arrived", [])
+            arrived.append(dict(entry, at=int(time.time())))
+            del arrived[:-ARRIVALS_KEPT]
+            self._save(data)
+
+    def latest(self) -> dict | None:
+        """The newest run, for the console: open or not, counts, and what arrived. No token."""
+        with self._lock:
+            data = self._load()
+        if not data:
+            return None
+        rec = max(data.values(), key=lambda r: r.get("created", 0))
+        now = time.time()
+        return {"created": int(rec["created"]), "expires_at": int(rec["expires"]),
+                "open": not rec.get("closed") and now <= rec["expires"],
+                "files": rec["files"], "bytes": rec["bytes"], "arrived": rec.get("arrived", [])}
 
     def close(self, raw: str) -> dict:
         with self._lock:
@@ -159,3 +192,63 @@ def decode_text(content: bytes) -> str:
         return content.decode("utf-8")
     except UnicodeDecodeError:
         return content.decode("latin-1")
+
+
+def max_file_bytes(ext: str) -> int:
+    return MAX_AUDIO_FILE_BYTES if ext in AUDIO_EXT else MAX_FILE_BYTES
+
+
+def _chown_like(path: Path, root: Path) -> None:
+    """The api runs as root in its container; files it writes into a member's ~/in take
+    the owner of that folder, so the member's hands can read and move them."""
+    try:
+        st = root.stat()
+        if os.geteuid() == 0 and (st.st_uid, st.st_gid) != (0, 0):
+            os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
+def audio_dest(root: Path, rel: str, created: float) -> Path:
+    """Where one audio file lands: <root>/<date of the run>/import/<laptop path>; a name
+    already taken gets ' (2)', ' (3)', ... (nothing is overwritten)."""
+    day = time.strftime("%Y-%m-%d", time.gmtime(created))
+    dest = Path(root) / day / "import" / rel
+    if not dest.exists():
+        return dest
+    stem, suf = dest.stem, dest.suffix
+    for i in range(2, 1000):
+        cand = dest.with_name(f"{stem} ({i}){suf}")
+        if not cand.exists():
+            return cand
+    raise ValueError("too many files of that name")
+
+
+def keep_audio(root: Path, dest: Path, tmp: Path, size: int, sha: str) -> str:
+    """Move a fully received file into place, open it to the member, list it in audio.tsv.
+    Returns the path as the member sees it under ~/in."""
+    root = Path(root)
+    made = []
+    d = dest.parent
+    while d != root and not d.exists():
+        made.append(d)
+        d = d.parent
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    for d in reversed(made):
+        os.chmod(d, 0o755)
+        _chown_like(d, root)
+    os.replace(tmp, dest)
+    os.chmod(dest, 0o644)
+    _chown_like(dest, root)
+    import_dir = dest.relative_to(root).parts[:2]  # (<date>, "import")
+    index = root.joinpath(*import_dir) / "audio.tsv"
+    fresh = not index.exists()
+    with open(index, "a", encoding="utf-8") as f:
+        if fresh:
+            f.write("file\tbytes\tsha256\tarrived\n")
+        f.write(f"{dest.relative_to(index.parent).as_posix()}\t{size}\t{sha}\t"
+                f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+    if fresh:
+        os.chmod(index, 0o644)
+        _chown_like(index, root)
+    return "in/" + dest.relative_to(root).as_posix()

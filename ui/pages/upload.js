@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import CustomSelect from "../lib/CustomSelect";
+import LaptopImportCard from "../lib/LaptopImportCard";
 
 const API_BASE = "/api/bf";
 
@@ -742,6 +743,8 @@ export default function Upload() {
           <div style={{ fontSize: 13, color: REJECT, marginTop: 10, lineHeight: 1.6 }}>{chatImport.error}</div>
         )}
       </section>
+
+      <LaptopImportCard btn={BTN} onArrived={loadPending} />
 
       {/* First-use starter prompt (unreleased 0.10.0): shows until the brain
           holds ten documents, with progress. Replaces the empty-only guide. */}

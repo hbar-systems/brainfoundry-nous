@@ -85,6 +85,9 @@ for u in "$BRIDGE_USER" "$HANDS_USER"; do
     run sudo chmod 700 "/home/$u"
 done
 run sudo usermod -aG "$GROUP" "$ADMIN_USER"
+# ~/in exists before the stack starts: compose mounts it for laptop-import audio (docs/IMPORT.md),
+# and a folder docker made would belong to root.
+run sudo install -d -o "$HANDS_USER" -g "$HANDS_USER" -m 755 "/home/$HANDS_USER/in"
 
 say "== 2 checkout $DIR (owner $ADMIN_USER, group $GROUP, nothing for anyone else)"
 run sudo install -d -o root -g root -m 711 "$BRAINS_ROOT"
@@ -163,7 +166,16 @@ $HANDLE.brainfoundry.ai {
 }
 
 console.$HANDLE.brainfoundry.ai {
-    basicauth {
+    # Laptop import (docs/IMPORT.md): the helper on the person's computer carries a one-time
+    # token, never this password. Only the four token-gated paths, straight to the api (the
+    # console's own proxy would add the owner key); minting a token stays behind the login.
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    handle @import {
+        uri strip_prefix /api/bf
+        reverse_proxy localhost:$M_API_PORT
+    }
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    basicauth @login {
         $HANDLE <hash of the member's console password: caddy hash-password>
     }
     @claude path /claude /claude/*

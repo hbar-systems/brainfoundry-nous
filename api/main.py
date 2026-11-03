@@ -5007,6 +5007,9 @@ from fastapi import Header as _Header
 _LAPTOP_TOKENS = _laptop_import.TokenStore(RUNTIME_DIR / "laptop_import_tokens.json")
 _LAPTOP_HELPER = Path(__file__).resolve().parent.parent / "scripts" / "import" / "brain_import.py"
 _laptop_permit = {"id": None, "at": 0.0}
+# Audio is kept as files, not read: in the container at LAPTOP_AUDIO_DIR, which compose mounts from
+# the member's ~/in when LAPTOP_AUDIO_HOST_DIR is set (scripts/member_env.py sets it), else a volume.
+_LAPTOP_AUDIO_DIR = Path(os.getenv("LAPTOP_AUDIO_DIR") or "/app/laptop_audio")
 
 
 @app.post("/documents/import-laptop/token")
@@ -5015,6 +5018,13 @@ def import_laptop_token(api_key: str = Depends(get_api_key)):
     out = _LAPTOP_TOKENS.mint()
     print(f"[import-laptop] token minted, expires {out['expires_at']}", flush=True)
     return out
+
+
+@app.get("/documents/import-laptop/status")
+def import_laptop_status(api_key: str = Depends(get_api_key)):
+    """Owner only. The newest run for the Knowledge card: open or not, and what arrived."""
+    return {"run": _LAPTOP_TOKENS.latest(),
+            "audio_to": "in" if os.getenv("LAPTOP_AUDIO_HOST_DIR") else "brain"}
 
 
 @app.get("/documents/import-laptop/helper.py")
@@ -5052,6 +5062,8 @@ async def import_laptop_file(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ext = _laptop_import.extension(rel)
+    if ext in _laptop_import.AUDIO_EXT:
+        return await _import_laptop_audio(file, rel, raw)
     if ext not in _laptop_import.ACCEPTED_EXT:
         raise HTTPException(status_code=415, detail=f"Knowledge does not read .{ext or '(none)'} files")
     content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
@@ -5080,6 +5092,7 @@ async def import_laptop_file(
         try:
             res = _propose_document_text(text, filename=f"laptop/{rel}", content_type=ctype,
                                          size=len(content), permit_id=_laptop_permit["id"])
+            _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
             return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"],
                     "injection_risk": (res.get("injection_scan") or {}).get("risk")}
         except HTTPException as e:
@@ -5088,6 +5101,40 @@ async def import_laptop_file(
             _laptop_permit["id"] = None
             last = e
     raise last
+
+
+async def _import_laptop_audio(file, rel: str, raw: str):
+    """One audio file: streamed to a temp file beside its place (cap checked as it comes),
+    charged to the token, then kept under ~/in/<date>/import/ and listed in audio.tsv."""
+    import hashlib as _hashlib
+    cap = _laptop_import.MAX_AUDIO_FILE_BYTES
+    try:
+        rec = _LAPTOP_TOKENS.check(raw)
+        dest = _laptop_import.audio_dest(_LAPTOP_AUDIO_DIR, rel, rec["created"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=507, detail=f"no place for audio on the brain: {str(e)[:200]}")
+    tmp = dest.with_name(f".{dest.name}.part")
+    sha, size = _hashlib.sha256(), 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1 << 20):
+                size += len(chunk)
+                if size > cap:
+                    raise _laptop_import.TokenError(413, f"file over {cap // 1024 ** 2} MB")
+                sha.update(chunk)
+                out.write(chunk)
+        _LAPTOP_TOKENS.charge(raw, size, _laptop_import.extension(rel))
+        where = _laptop_import.keep_audio(_LAPTOP_AUDIO_DIR, dest, tmp, size, sha.hexdigest())
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    finally:
+        tmp.unlink(missing_ok=True)
+    _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "audio", "where": where})
+    print(f"[import-laptop] audio kept: {where} ({size} bytes)", flush=True)
+    return {"path": rel, "status": "KEPT", "where": where}
 
 
 @app.post("/documents/import-laptop/finish")
