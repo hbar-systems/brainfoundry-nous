@@ -4111,6 +4111,40 @@ def radio_subscribe_token(req: RadioSubscribeRequest, http_request: Request,
     return resp
 
 
+class OrfeoPostRequest(BaseModel):
+    station: str = "https://orfeo.music"
+    kind: str
+    title: str
+    audio_url: str
+    audio_sha256: str
+    note: str = ""
+    bpm: Optional[float] = None
+    key: Optional[str] = None
+    duration_s: Optional[float] = None
+
+
+@app.post("/v1/orfeo/post")
+def orfeo_post(req: OrfeoPostRequest, http_request: Request, api_key: str = Depends(get_api_key)):
+    """Owner-gated: sign a loop or track post and send it to the station (logic in api/orfeo_post.py).
+    On a console brain the bridge raises the permit card before calling this (2026-11-03)."""
+    from api import orfeo_post as _op
+    private_key, brain_id = os.getenv("BRAIN_PRIVATE_KEY"), os.getenv("BRAIN_ID")
+    if not private_key or not brain_id:
+        raise HTTPException(503, "BRAIN_PRIVATE_KEY and BRAIN_ID must be set to sign a post")
+    try:
+        station = _op.normalise_station(req.station, os.getenv("ORFEO_DEV_STATION", ""))
+        post = _op.clean_post(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    endpoint = _ask_base_url(http_request)
+    if not endpoint.startswith("https://") and endpoint != os.getenv("ORFEO_DEV_ISSUER", "").rstrip("/"):
+        raise HTTPException(503, "no public https base URL: set BRAIN_PUBLIC_URL")
+    token = _op.issue_post_token(post=post, private_key=private_key, brain_id=brain_id, endpoint=endpoint)
+    sent = _op.send(station, token)
+    print(f"orfeo.post station={station} ok={sent.get('ok')} id={sent.get('id')}", flush=True)
+    return {"station": station, "post": post, "sent": sent}
+
+
 @app.get("/.well-known/agent-card.json")
 def ask_agent_card(http_request: Request):
     """Public A2A Agent Card: who this brain is, where to ask, how to sign."""
