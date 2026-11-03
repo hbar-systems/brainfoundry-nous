@@ -16,6 +16,8 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
     cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
     cc-job radio [https://station]   a link to listen on a radio brain with this brain (orfeo.music by default)
+    cc-job orfeo-post <file> <https audio url> --kind loop|track --title T [--note N] [--bpm B] [--key K] [--station URL]
+                                    post a loop or track to orfeo, signed by this brain; a card asks first, it lands pending
     cc-job halt ["reason"] [--kill]   the kill switch (2026-10-25): writes ~/.cc-bridge/HALT; no new
                               job, tick or agent starts until resume; --kill also ends running jobs
     cc-job halt --status      halted or not, budget halts, running jobs
@@ -177,6 +179,27 @@ def main(argv: list[str]) -> int:
             if not d.get("results"):
                 print("refused:", d.get("error", "no answer"))
             return 0 if d.get("ok") else 1
+        if cmd == "orfeo-post":
+            # The orfeo door (2026-11-03): the file is hashed here, the bridge raises the card, the api signs and sends.
+            import argparse, hashlib
+            ap = argparse.ArgumentParser(prog="cc-job orfeo-post")
+            ap.add_argument("file"); ap.add_argument("audio_url")
+            ap.add_argument("--kind", choices=("loop", "track"), required=True)
+            ap.add_argument("--title", required=True); ap.add_argument("--note", default="")
+            ap.add_argument("--bpm", type=float); ap.add_argument("--key"); ap.add_argument("--duration", type=float)
+            ap.add_argument("--station", default="https://orfeo.music")
+            a = ap.parse_args(rest)
+            h = hashlib.sha256()
+            with open(a.file, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            d = _call("POST", "/orfeo/post", {"station": a.station, "kind": a.kind, "title": a.title, "audio_url": a.audio_url,
+                                              "audio_sha256": h.hexdigest(), "note": a.note, "bpm": a.bpm, "key": a.key,
+                                              "duration_s": a.duration, "run": os.environ.get("CC_RUN_ID", "").strip() or None},
+                      timeout=1000)
+            if not d.get("ok"):
+                print("refused:", d.get("error") or d.get("reason") or "no answer"); return 1
+            print(f"posted to {a.station}: id {d.get('id')}, {d.get('status')} until the station's owner approves"); return 0
         if cmd == "radio":
             # Listen on a radio brain (2026-10-25): the bridge asks the api for a signed taste-note link.
             station = rest[0] if rest else "https://orfeo.music"

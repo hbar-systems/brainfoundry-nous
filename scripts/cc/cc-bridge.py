@@ -889,6 +889,10 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
     """(action_id, summary, remember_ok) for one tool call. The action id is what
     "don't ask again" remembers: a command's first word, or an edited file's directory."""
     inp = inp if isinstance(inp, dict) else {}
+    if tool == "orfeo_post":
+        # Posting to orfeo publishes: a card every time, never remembered, never judged (2026-11-03).
+        return "orfeo_post", (f"post to {inp.get('station')}: the {inp.get('kind')} \"{str(inp.get('title'))[:120]}\" "
+                              f"({str(inp.get('audio_url'))[:200]}), signed by this brain; it lands pending there"), False
     if tool == "Bash":
         cmd = str(inp.get("command", "")).strip()
         words = cmd.split()
@@ -1036,8 +1040,9 @@ def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
     return r
 
 
-def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None) -> dict:
-    """Called by the hook. Blocks until the person decides, or the permit expires."""
+def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: str | None = None) -> dict:
+    """Called by the hook (and by the orfeo door, with the turn's run id). Blocks until the person
+    decides, or the permit expires."""
     if not BOX_ENABLED or GATE is None:
         return {"behavior": "deny", "message": "actions on the box are not enabled on this brain"}
     action_id, summary, remember_ok = _box_key(tool, inp)
@@ -1052,8 +1057,9 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None) -> dict:
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
-    run = _run_watching(session_id)
-    same_turn = run is not None and (tool, summary) in run.allowed
+    run = RUNS.get(run_id) if run_id else None
+    run = run if run is not None and not run.done else _run_watching(session_id)
+    same_turn = run is not None and (tool, summary) in run.allowed and remember_ok
     if (remember_ok and _auto_has(args)) or same_turn:
         # Already allowed: by the owner's standing choice, or the identical call earlier in this
         # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
@@ -1064,7 +1070,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None) -> dict:
         if run is not None:
             run.emit("ask", card)
         return {"behavior": "allow"}
-    if _posture_current() == "judged" and not action_id.startswith("sudo"):
+    if _posture_current() == "judged" and not action_id.startswith("sudo") and tool != "orfeo_post":
         verdict = _judge(tool, inp, summary)
         if verdict is not None:
             card["judge"] = verdict
@@ -2321,6 +2327,30 @@ def _radio_link(body: dict) -> tuple[int, dict]:
         reason = (r or {}).get("detail") if isinstance(r, dict) else None
         return 503, {"ok": False, "error": reason or "the brain's api issued no token (BRAIN_API_KEY on the bridge; BRAIN_PUBLIC_URL, BRAIN_PRIVATE_KEY and BRAIN_ID on the brain)"}
     return 200, {"ok": True, "url": r["url"], "taste": r.get("taste", ""), "event": r.get("event")}
+
+
+def _orfeo_post(body: dict, ask=None, api=None) -> tuple[int, dict]:
+    """Post a loop or track to orfeo (2026-11-03). The card comes first: nothing is signed or sent
+    until the person allows it on the page. Then the api signs with the brain's key and sends."""
+    ask, api = ask or _box_ask_inner, api or _brain_api
+    b = body or {}
+    post = {k: b.get(k) for k in ("station", "kind", "title", "audio_url", "audio_sha256", "note", "bpm", "key", "duration_s")}
+    post["station"] = str(post.get("station") or "https://orfeo.music").strip()
+    if post.get("kind") not in ("loop", "track") or not str(post.get("title") or "").strip():
+        return 400, {"ok": False, "error": "need kind (loop or track) and a title"}
+    if not str(post.get("audio_url") or "").startswith("https://") or not re.fullmatch(r"[0-9a-f]{64}", str(post.get("audio_sha256") or "")):
+        return 400, {"ok": False, "error": "need an https audio_url and the file's sha256"}
+    if not BRAIN_API_KEY:
+        return 409, {"ok": False, "error": "the bridge has no brain key, so it cannot sign"}
+    d = ask("orfeo_post", post, None, str(b.get("run") or "") or None)
+    if d.get("behavior") != "allow":
+        return 403, {"ok": False, "error": d.get("message") or "not allowed"}
+    r = api("POST", "/v1/orfeo/post", {k: v for k, v in post.items() if v is not None})
+    if not isinstance(r, dict) or "sent" not in r:
+        return 502, {"ok": False, "error": (r or {}).get("detail") if isinstance(r, dict) else "the brain's api did not sign"}
+    sent = r["sent"]
+    print(f"orfeo post {post['title'][:60]!r} -> {post['station']}: {sent}", flush=True)
+    return (200 if sent.get("ok") else 502), {"ok": bool(sent.get("ok")), **sent}
 
 
 def _task_done(body: dict) -> tuple:
@@ -4424,7 +4454,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/notify") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -4830,6 +4860,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False, "error": "not the reasoner"})
                 return
             self._send(*_task_done(req))
+            return
+        if route == "/orfeo/post":
+            if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                self._send(403, {"ok": False, "error": "not the reasoner"})
+                return
+            self._send(*_orfeo_post(req))
             return
         if route == "/radio/link":
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
