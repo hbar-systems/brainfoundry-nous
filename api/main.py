@@ -4963,6 +4963,110 @@ def import_chat_history(
     return res
 
 
+# ── The laptop on-ramp (2026-11-03, api/laptop_import.py, docs/IMPORT.md) ──
+# The owner mints a one-time token in the console; the helper on their own computer
+# sends the files they chose with that token only. Each file becomes one PENDING
+# proposal, named laptop/<path on the laptop>. Nothing is remembered before approval.
+from api import laptop_import as _laptop_import
+from fastapi import Header as _Header
+
+_LAPTOP_TOKENS = _laptop_import.TokenStore(RUNTIME_DIR / "laptop_import_tokens.json")
+_LAPTOP_HELPER = Path(__file__).resolve().parent.parent / "scripts" / "import" / "brain_import.py"
+_laptop_permit = {"id": None, "at": 0.0}
+
+
+@app.post("/documents/import-laptop/token")
+def import_laptop_token(api_key: str = Depends(get_api_key)):
+    """Owner only. A fresh one-time import token; every earlier one closes."""
+    out = _LAPTOP_TOKENS.mint()
+    print(f"[import-laptop] token minted, expires {out['expires_at']}", flush=True)
+    return out
+
+
+@app.get("/documents/import-laptop/helper.py")
+def import_laptop_helper():
+    """The helper itself, so the one pasted command can fetch it from the person's own brain."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(_LAPTOP_HELPER.read_text(encoding="utf-8"), media_type="text/x-python")
+
+
+@app.get("/documents/import-laptop/check")
+def import_laptop_check(authorization: str = _Header("")):
+    try:
+        rec = _LAPTOP_TOKENS.check(_laptop_import.bearer(authorization))
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"ok": True, "expires_at": int(rec["expires"]), "files": rec["files"], "max_files": rec["max_files"],
+            "bytes": rec["bytes"], "max_bytes": rec["max_bytes"], "max_file_bytes": _laptop_import.MAX_FILE_BYTES,
+            "accepted": sorted(_laptop_import.ACCEPTED_EXT)}
+
+
+@app.post("/documents/import-laptop/file")
+async def import_laptop_file(
+    file: UploadFile = File(...),
+    path: str = Form(...),
+    authorization: str = _Header(""),
+):
+    """One file from the helper: token checked and charged, text extracted, proposed (Path A)."""
+    import time as _time
+    raw = _laptop_import.bearer(authorization)
+    try:
+        _LAPTOP_TOKENS.check(raw)
+        rel = _laptop_import.clean_relpath(path)
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ext = _laptop_import.extension(rel)
+    if ext not in _laptop_import.ACCEPTED_EXT:
+        raise HTTPException(status_code=415, detail=f"Knowledge does not read .{ext or '(none)'} files")
+    content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
+    try:
+        _LAPTOP_TOKENS.charge(raw, len(content))
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    try:
+        if ext == "pdf":
+            text, ctype = extract_text_from_pdf(content), "application/pdf"
+        elif ext == "docx":
+            text, ctype = extract_text_from_docx(content), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif ext in _laptop_import.IMAGE_EXT:
+            text, ctype = extract_text_from_image(content), f"image/{ext}"
+        else:
+            text, ctype = _laptop_import.decode_text(content), "text/plain"
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"could not read the file: {str(e)[:200]}")
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="no text in the file")
+    last = None
+    for _ in range(2):
+        if not _laptop_permit["id"] or _time.monotonic() - _laptop_permit["at"] > 240:  # permits live 300 s
+            _laptop_permit["id"] = _issue_upload_permit("laptop-import", "laptop import")["permit_id"]
+            _laptop_permit["at"] = _time.monotonic()
+        try:
+            res = _propose_document_text(text, filename=f"laptop/{rel}", content_type=ctype,
+                                         size=len(content), permit_id=_laptop_permit["id"])
+            return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"],
+                    "injection_risk": (res.get("injection_scan") or {}).get("risk")}
+        except HTTPException as e:
+            if e.status_code != 502:
+                raise
+            _laptop_permit["id"] = None
+            last = e
+    raise last
+
+
+@app.post("/documents/import-laptop/finish")
+def import_laptop_finish(authorization: str = _Header("")):
+    """The helper is done: the token closes and the run's counts come back."""
+    try:
+        rec = _LAPTOP_TOKENS.close(_laptop_import.bearer(authorization))
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    print(f"[import-laptop] finished: {rec['files']} files, {rec['bytes']} bytes proposed", flush=True)
+    return {"files": rec["files"], "bytes": rec["bytes"]}
+
+
 @app.post("/documents/upload")
 async def upload_document(
     file: Optional[UploadFile] = File(None),

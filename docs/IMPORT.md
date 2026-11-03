@@ -138,3 +138,39 @@ BRAIN_API_KEY=... python3 scripts/sort_inbox.py persona-approve prepared_docs/in
 `--yes` must equal the hash of the draft as it is on disk now (an edit changes it; a wrong id prints the right one and writes nothing). The banner is stripped and the text goes through `PUT /persona`, the Persona page's own save; `persona_approval.json` records the id, time and any placeholders left.
 
 Not built yet: the console card review (one card per folder) and picking folders on the person's own spoke; both use these files as they are.
+
+## From your laptop: folder by folder (2026-11-03)
+
+The on-ramp for everything that is not a chat export. Pull by the person: the helper runs on their own computer, at their command, and sends only what they say yes to. The brain never holds a door into the laptop (no inbound shell, no agent left running there).
+
+Helper: `scripts/import/brain_import.py` (one file, Python 3.8+ standard library only, Mac, Windows, Linux). Brain side: `api/laptop_import.py` and four routes in `api/main.py`. Tests: `tests/test_laptop_import.py` (rules, secret skips, token store, and an end to end against the api on 127.0.0.1 over a temp folder tree).
+
+### The steps
+
+1. In the console, the owner mints a one-time token: `POST /documents/import-laptop/token` (owner key). It lives 2 hours, carries a cap of 2000 files and 2 GB, is stored only as its sha256, and closes every earlier token.
+2. The person pastes one command on their computer (Mac or Linux; on Windows use `curl.exe` and `python`):
+   ```
+   curl -fsSLo brain_import.py https://<brain>/api/bf/documents/import-laptop/helper.py && python3 brain_import.py --brain https://<brain>/api/bf --token imp_...
+   ```
+   The helper comes from the person's own brain (`GET /documents/import-laptop/helper.py`); it can be read before it runs. `--dry-run` only lists.
+3. It lists Documents, Desktop, Downloads, Music, Pictures, Movies/Videos, and project folders (a top-level folder named Projects, Code, dev, src, repos, work, ... or one holding a `.git`), each with file count, size, what is offerable by type, and what is never sent. Per folder: `y` (documents and text: txt, md, pdf, docx, csv, code, ...), `n`, or a list of types (`pdf,md,jpg`; images only when named, they go through OCR).
+4. One confirmation, then each chosen file goes to `POST /documents/import-laptop/file` with the token, with a progress line per file. The brain checks and charges the token, extracts the text (the same extractors as a Knowledge upload), and proposes it through an upload permit as `laptop/<Folder>/<path>`. It answers PENDING with a proposal id.
+5. `POST /documents/import-laptop/finish` closes the token. A receipt `brain-import-receipt-<time>.json` (sent with proposal ids, refused with reasons) is written where the helper ran.
+6. The files wait in Pending on the Knowledge page (/upload): one approval each, or Approve all. Nothing is remembered before that.
+
+### Never sent, by rule (in the helper, whatever the answer)
+
+- Hidden files and folders: `.ssh`, `.gnupg`, `.aws`, `.config`, `.env`, `.netrc`, `.git`, ...
+- Key, password and vault files: `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, keychains, 1Password/Bitwarden/KeePass folders and exports, `*.gpg`, `*.asc`, `*.ovpn`, and any name holding `password`, `secret`, `credential` or `token`.
+- System and app folders: `Library`, `AppData`, `Program Files`, `node_modules`, `venv`, `build`, `dist`, photo libraries, app bundles.
+- What Knowledge cannot read: audio, video, archives, databases. Audio is counted and named "audio (music kit)": it belongs to the music lane, not to Knowledge.
+- Files over 25 MB.
+
+The brain checks again on its side: a path with `..`, a root or a hidden part is refused (400), a type it cannot read is refused (415), a spent, replaced or expired token is refused (401), the run's caps answer 413. The token can only propose into Knowledge; it is not the owner key and the owner key does not work in its place.
+
+### Not done yet
+
+- The way in from outside: the console sits behind its login (Caddy basic auth), so the laptop reaches `/api/bf/documents/import-laptop/*` only after one Caddy `handle` for that path outside the login is added per box. The routes carry their own token check for that reason. Not added on any box.
+- A console button that mints the token and shows the pasted command; for now the owner (or the reasoner, on request) calls the token route.
+- Audio and other non-text files (the Music folder): no place in the brain yet.
+- Resume after a broken run (the receipt lists what went; a second run needs a new token and resends).
