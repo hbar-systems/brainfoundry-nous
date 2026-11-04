@@ -1566,6 +1566,14 @@ function CC() {
   const runIdRef = useRef({})     // thread key -> run id from the stream's 'begin', to re-follow a broken stream
   const showThread = (key) => {
     curRef.current = key; setCur(key); setBusy(!!runningRef.current[key])
+    // the address carries the thread shown, so a reload stays in it while a bare open starts a new one (2026-11-04)
+    if (!paneModeRef.current) {
+      try {
+        const u = new URL(window.location.href)
+        if (key && !String(key).startsWith('new:')) u.searchParams.set('thread', key); else u.searchParams.delete('thread')
+        if (u.href !== window.location.href) window.history.replaceState(window.history.state, '', u.href)
+      } catch {}
+    }
     // a pane on /panes tells its host which thread it shows, so the layout survives a reload
     if (paneModeRef.current && key && !String(key).startsWith('new:')) { try { window.parent.postMessage({ type: 'cc-pane-thread', pane: paneModeRef.current, thread: key }, window.location.origin) } catch {} }
   }
@@ -1895,7 +1903,8 @@ function CC() {
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(h => {
         setHealth(h)
-        if (pin === 'new') { freshRef.current = true }
+        // the bare console opens a NEW thread (hbar 2026-11-04); an old one opens from threads or ?thread=<id>
+        if (pin === 'new' || (!pin && !paneModeRef.current)) { freshRef.current = true }
         else if (pin) {
           showThread(pin); loadHistory(pin)
           if ((h.runs || []).some(r => r.thread === pin)) attach(pin)
@@ -2910,7 +2919,7 @@ function CC() {
           )}
           {pending.map(p => (
             <div key={p.id} style={{ display: 'flex', justifyContent: 'flex-start', margin: '8px 0' }}>
-              <div style={{ maxWidth: '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 1.6 }}>
+              <div style={{ maxWidth: width === 'none' && !pane ? '100%' : '78%', padding: '10px 14px', borderRadius: '12px', backgroundColor: C.brain, border: `1px solid ${C.line}`, color: C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 1.6 }}>
                 <span style={{ color: C.dim }}>Still waiting for your decision:</span>
                 <ProposalCard p={p} onDecide={decide} />
               </div>
