@@ -40,6 +40,10 @@ SIZES = ("small", "normal", "large")
 WEIGHTS = ("normal", "thin")
 DENSITIES = ("compact", "comfortable")   # spacing inside message bubbles (2026-10-09)
 VIEWS = ("talk", "gallery", "panes")
+# The start pane (hbar 2026-11-04): a screen that opens beside the conversation when the person sits down.
+# A brain app by id, or one of a few console screens; anything else is refused.
+START_SCREENS = ("/tasks", "/files", "/graph", "/guide")
+_START_APP = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
 VAR_KEYS = ("--accent", "--bg", "--surface", "--surface2", "--text", "--muted", "--border")
 PANE_MIN, PANE_MAX = 280, 1400
 NAME_MAX = 40
@@ -83,7 +87,7 @@ DEFAULT = {
     "pane": {"side": "right", "width": None},
     "column": "narrow", "theme": "default", "vars": {},
     "font": None, "size": "normal", "weight": "normal", "density": "compact",
-    "view": "talk", "voice": {"speak": False, "handsfree": False},
+    "view": "talk", "start": None, "voice": {"speak": False, "handsfree": False},
 }
 _TOP = set(DEFAULT)
 
@@ -149,6 +153,11 @@ def validate(obj) -> dict:
         out["density"] = _enum(obj["density"], DENSITIES, "density")
     if "view" in obj:
         out["view"] = _enum(obj["view"], VIEWS, "view")
+    if obj.get("start") is not None:
+        st = obj["start"]
+        if not isinstance(st, str) or not (st in START_SCREENS or _START_APP.match(st)):
+            raise LayoutError(f"start must be /apps/<app-id>, one of {', '.join(START_SCREENS)}, or null")
+        out["start"] = st
     if "voice" in obj:
         _only(obj["voice"], ("speak", "handsfree"), "voice")
         for k, v in obj["voice"].items():
@@ -192,6 +201,8 @@ def summary(layout: dict) -> str:
         parts.append(f"{lay['density']} spacing")
     if lay["view"] != "talk":
         parts.append(f"opens on {lay['view']}")
+    if lay["start"]:
+        parts.append(f"{lay['start'].rsplit('/', 1)[-1]} beside the chat at the start")
     if lay["voice"]["speak"] or lay["voice"]["handsfree"]:
         parts.append("voice " + ("hands-free" if lay["voice"]["handsfree"] else "on"))
     return "; ".join(parts) or "the stock console"
@@ -201,7 +212,8 @@ def summary(layout: dict) -> str:
 # Each question: id, the words, and the options as (value, label). "never" is a multiple choice.
 QUESTIONS = (
     {"id": "first", "ask": "What do you open first when you sit down?",
-     "options": (("talk", "the conversation"), ("gallery", "my conversations as a deck"), ("panes", "several conversations side by side"))},
+     "options": (("talk", "the conversation"), ("gallery", "my conversations as a deck"), ("panes", "several conversations side by side"),
+                 ("today", "Today (calendar, mail, tasks) beside the conversation"))},
     {"id": "never", "ask": "Which of these do you never use? Say none if all of them stay.", "multi": True,
      "options": (("board", "board"), ("gallery", "gallery"), ("files", "files link"), ("sidebyside", "side by side"),
                  ("handsfree", "hands-free row"), ("hint", "the starter hints"), ("hero", "the title block"))},
@@ -247,7 +259,9 @@ def from_answers(answers: dict, preset: str | None = None) -> dict:
         except cc_catalog.CatalogError as e:
             raise LayoutError(str(e)) from None
     lay = json.loads(json.dumps(DEFAULT))
-    if "first" in a:
+    if a.get("first") == "today":
+        lay["start"] = "/apps/today"
+    elif "first" in a:
         lay["view"] = a["first"]
     for k in a.get("never", []):
         lay["panels"][k] = False

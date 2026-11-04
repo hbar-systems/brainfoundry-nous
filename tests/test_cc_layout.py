@@ -234,3 +234,16 @@ const cap2=l.capture(k=>null,{v:1});
 console.log(JSON.stringify({a:a.set['cc.density'],b:b.set['cc.density']||null,brm:b.remove.includes('cc.density'),c:cap.density,c2:cap2.density}));
 """)
     assert out == {"a": "comfortable", "b": None, "brm": True, "c": "comfortable", "c2": "compact"}
+
+
+def test_start_pane():
+    # 2026-11-04: an app (or a few console screens) opens beside the chat at the start
+    assert L.DEFAULT["start"] is None
+    lay = L.from_answers({"first": "today"})
+    assert lay["start"] == "/apps/today" and lay["view"] == "talk"
+    assert "today beside the chat" in L.summary(lay)
+    assert L.validate({"start": "/tasks"})["start"] == "/tasks"
+    assert L.validate({"start": None})["start"] is None
+    for bad in ("/apps/../x", "https://example.com", "/settings", "/apps/today?x=<script>", 3):
+        with pytest.raises(L.LayoutError):
+            L.validate({"start": bad})

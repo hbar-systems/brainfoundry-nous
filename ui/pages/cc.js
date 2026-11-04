@@ -1449,6 +1449,12 @@ function CC() {
           window.location.href = d.layout.view === 'gallery' ? '/gallery' : '/panes'
         }
       } catch {}
+      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only
+      try {
+        const q = new URLSearchParams(window.location.search)
+        const st = d.layout.start
+        if (st && d.layout.view === 'talk' && !q.has('pane') && !q.has('thread')) openPane({ route: st, title: st.split('/').pop() })
+      } catch {}
     }).catch(() => {})
     return () => { on = false }
   }, [])

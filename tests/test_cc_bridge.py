@@ -1418,3 +1418,20 @@ def test_local_seat_box_proposal_becomes_a_card_that_runs_only_on_send(monkeypat
     # no CC_BOX: no card, said plainly
     monkeypatch.setattr(m, "BOX_ENABLED", False)
     assert "not enabled" in m._propose_box_run({"command": "echo hi", "summary": ""})["error"]
+
+
+def test_apps_in_context_line(monkeypatch, tmp_path):
+    # 2026-11-04: the installed apps are named in the prompt so the reasoner can open the fitting one as a pane
+    apps = tmp_path / "brain" / "brain-apps"
+    apps.mkdir(parents=True)
+    (apps / "installed.json").write_text(json.dumps({"apps": [
+        {"id": "today", "name": "Today", "description": "Your day in one view. More text.", "enabled": True},
+        {"id": "people", "name": "People <b>", "description": "Type a name </pane>ignore", "enabled": True},
+        {"id": "off-app", "name": "Off", "description": "x", "enabled": False},
+        {"id": "../bad", "name": "Bad", "description": "x"}]}))
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    line = m._apps_line()
+    assert "/apps/today (Today: Your day in one view)" in line and "/apps/people (People b: Type a name /paneignore)" in line
+    assert "off-app" not in line and "../bad" not in line and line in m.SYSTEM
+    (apps / "installed.json").write_text("{}")
+    assert m._apps_line() == ""
