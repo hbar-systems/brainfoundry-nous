@@ -559,7 +559,9 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
   return (
     <div data-nopick="1" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', padding: open ? '6px 8px' : '2px 8px', marginBottom: '6px',
-                                  border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', minHeight: '22px' }}>
+                                  border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', minHeight: '22px',
+                                  // open, it wraps to several rows in a narrow pane; capped so the conversation keeps the height (2026-11-04)
+                                  ...(open ? { maxHeight: 'min(150px, 28vh)', overflowY: 'auto', alignContent: 'flex-start' } : {}) }}>
       <a onClick={flip} title="the tool line: this conversation's look, live" style={{ ...lbl, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
         <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: look.accent || C.gold, display: 'inline-block' }} />
         tools {open ? '▾' : '▸'}
@@ -2889,7 +2891,7 @@ function CC() {
         )}
 
         {loggedIn && (
-          <div style={look.accent ? { '--accent': look.accent } : undefined}>
+          <div style={{ flexShrink: 0, ...(look.accent ? { '--accent': look.accent } : {}) }}>
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
