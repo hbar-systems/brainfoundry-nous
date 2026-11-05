@@ -246,9 +246,11 @@ def test_box_key_every_card_can_be_remembered(monkeypatch, tmp_path):
     """2026-09-29: a plain command by its first word, a compound command exactly, any other tool by
     its name; dangerous words never."""
     m = _load(monkeypatch, tmp_path)
-    # interpreters run anything, so they are never remembered by first word (E9, 2026-11-03)
+    # interpreters run anything, so they are never remembered by first word (E9, 2026-11-03); a here-doc
+    # is not plain (2026-11-05), so it can only be remembered as exactly these bytes
     a, s, ok = m._box_key("Bash", {"command": "python3 - <<'PY'\\nprint(1)\\nPY"})
-    assert a == "python3" and not ok
+    assert a.startswith("exact:")
+    assert m._box_key("Bash", {"command": "python3 run.py"})[2] is False
     a2, _, ok2 = m._box_key("Bash", {"command": "git add x && git commit -m y"})
     assert a2.startswith("exact:") and ok2
     a3, _, ok3 = m._box_key("Bash", {"command": "git add x && git commit -m y"})

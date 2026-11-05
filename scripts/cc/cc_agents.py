@@ -470,8 +470,8 @@ def main(argv: list[str]) -> int:
             out = {"ok": True, "agent": update(argv[2], json.loads(sys.stdin.read() or "{}"))}
         elif cmd == "delete":
             out = delete(argv[2])
-        elif cmd in ("run", "tick") and cc_halt.halted(Path.home()):
-            out = {"ok": False, "error": cc_halt.halted(Path.home()), "started": []}
+        elif cmd in ("run", "tick") and cc_halt.halted(Path.home(), cc_halt.OWNER_DIR):
+            out = {"ok": False, "error": cc_halt.halted(Path.home(), cc_halt.OWNER_DIR), "started": []}
         elif cmd == "run":
             out = {"ok": True, "agent": run(argv[2])}
         elif cmd == "tick":

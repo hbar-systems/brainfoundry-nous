@@ -311,7 +311,12 @@ def _curl_writes(base: str, args: list) -> bool:
             return True
         if any(a == f or a.startswith(f + "=") or (f.startswith("--") and a.startswith(f)) for f in _WRITE_FLAGS):
             return True                                  # --data-binary, --data-urlencode, --form-string ...
-        if base == "curl" and re.fullmatch(r"-[a-zA-Z]*[dFT][a-zA-Z]*", a or ""):
+        # a short-flag cluster holding d, F or T sends a body, value attached or not: -d@file, -d'{..}', -sd x
+        # (STUDY-4, 2026-11-05: the fullmatch let -d@file and -d<json> through)
+        if base == "curl" and re.match(r"-[a-zA-Z]*[dFT]", a or "") and not (a or "").startswith("--"):
+            return True
+        # options read from a file can hold any method or body the line does not show
+        if base == "curl" and (a in ("-K", "--config") or a.startswith("--config=") or re.match(r"-[a-zA-Z]*K", a or "")):
             return True
     return False
 

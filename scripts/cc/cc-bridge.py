@@ -973,7 +973,9 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         head = words[0] if words else ""
         if head == "sudo" and len(words) > 1:
             head = "sudo " + words[1]
-        plain = "|" not in cmd and ";" not in cmd and "&&" not in cmd and ">" not in cmd and "`" not in cmd and "$(" not in cmd
+        # "&" and a newline also start a second command: under a remembered "ls", "ls & x" or "ls\nx" ran x
+        # unasked (STUDY-4, 2026-11-05)
+        plain = not any(c in cmd for c in ("|", ";", "&", ">", "<", "`", "$(", "\n", "\r"))
         dangerous = any(w in BOX_NO_REMEMBER for w in head.split())
         if plain:
             runner = any(w in BOX_NO_FIRST_WORD for w in head.split())

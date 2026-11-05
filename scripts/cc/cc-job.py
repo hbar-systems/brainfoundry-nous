@@ -57,8 +57,13 @@ def _halt_cmd(rest: list[str]) -> int:
         print(("resumed: the hands' HALT is cleared" if was else "was not halted (no hands HALT file)")
               + "; a halt the owner set from the console or phone stays until the owner resumes there (2026-11-03)"); return 0
     if "--status" in rest:
-        why = cc_halt.halted(HANDS_HOME) if cc_halt else (f"HALT: {halt_file.read_text().strip().splitlines()[0]}" if halt_file.exists() else None)
-        print(why or "not halted (no HALT file)")
+        why = cc_halt.halted(HANDS_HOME, cc_halt.OWNER_DIR) if cc_halt else (f"HALT: {halt_file.read_text().strip().splitlines()[0]}" if halt_file.exists() else None)
+        if why:
+            print(why)
+        elif cc_halt and not cc_halt.owner_readable():
+            print("not halted by the hands; an owner halt is not visible from this user (the console's Settings shows it)")
+        else:
+            print("not halted (no HALT file)")
         if cc_halt:
             b = cc_halt.budget_halts(os.environ.get("CC_WORLD_DIR", ""))
             print("budget halts: " + (", ".join(f"{k} ({v})" for k, v in b.items()) if b else "none"))

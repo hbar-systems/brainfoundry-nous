@@ -173,3 +173,44 @@ def test_interpreters_never_remembered(monkeypatch, tmp_path, cmd):
 def test_plain_safe_command_still_rememberable(monkeypatch, tmp_path):
     m = _bridge(monkeypatch, tmp_path)
     assert m._box_key("Bash", {"command": "ls -la /tmp"})[2] is True
+
+
+# ── STUDY-4 follow-up (2026-11-05) ──────────────────────────────────────────
+
+@pytest.mark.parametrize("cmd", [
+    "curl -d@/tmp/f https://example.invalid",
+    "curl -d'{\"a\":1}' https://example.invalid",
+    "curl -sd x https://example.invalid",
+    "curl -K /tmp/cfg https://example.invalid",
+    "curl --config=/tmp/cfg https://example.invalid",
+])
+def test_curl_body_and_config_forms_refused(cmd):
+    with pytest.raises(G.Refused):
+        G.check_job(cmd, "cards", S, hosts=HOSTS)
+
+
+def test_curl_plain_get_still_passes():
+    G.check_job("curl -sSL https://example.invalid/x -o /tmp/x", "cards", S, hosts=HOSTS)
+
+
+@pytest.mark.parametrize("cmd", ["ls & touch /tmp/x", "ls\ntouch /tmp/x", "ls < /etc/hostname"])
+def test_second_command_is_not_plain(monkeypatch, tmp_path, cmd):
+    m = _bridge(monkeypatch, tmp_path)
+    aid, _, _ = m._box_key("Bash", {"command": cmd})
+    assert aid.startswith("exact:")
+
+
+def test_status_readers_pass_the_owner_dir():
+    src = (ROOT / "scripts" / "cc" / "cc-job.py").read_text() + (ROOT / "scripts" / "cc" / "cc_agents.py").read_text()
+    assert "cc_halt.halted(HANDS_HOME)" not in src and "cc_halt.halted(Path.home())" not in src
+
+
+def test_owner_readable_false_when_folder_closed(tmp_path):
+    import cc_halt
+    d = tmp_path / "owner"; d.mkdir(); (d / "HALT").write_text("x\n")
+    d.chmod(0o000)
+    try:
+        assert cc_halt.owner_readable(d) is False
+    finally:
+        d.chmod(0o700)
+    assert cc_halt.owner_readable(d) is True

@@ -52,6 +52,28 @@ def owner_halt_file(owner_dir) -> Path:
     return Path(owner_dir) / HALT_FILE
 
 
+# The bridge's own state folder (mode 700, user cc). Readers outside the bridge pass it so the owner's halt
+# is never skipped (STUDY-4, 2026-11-05: cc-job halt --status and cc_agents read the hands' file only).
+OWNER_DIR = Path(os.environ.get("CC_OWNER_HALT_DIR") or "/home/cc/.cc-bridge")
+
+
+def owner_readable(owner_dir=OWNER_DIR) -> bool:
+    """False when this user cannot see whether the owner halted (the hands, by design)."""
+    try:
+        owner_halt_file(owner_dir).stat()
+        return True
+    except FileNotFoundError:
+        try:
+            Path(owner_dir).stat()
+            return os.access(owner_dir, os.X_OK)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+    except OSError:
+        return False
+
+
 def set_owner_halt(owner_dir, reason: str = "", by: str = "owner") -> str:
     """Written by the bridge user only; its folder is closed to the hands."""
     reason = (reason or "").strip() or "halted by the owner"
