@@ -746,26 +746,59 @@ def _auto_save(items: list) -> None:
     AUTO_FILE.write_text(json.dumps(items, indent=1))
 
 
-def _auto_key(platform, action_id) -> str:
-    return f"{platform or ''}::{action_id or ''}"
+# Fields of a connected-app write that name WHO or WHERE it acts on (2026-11-03, security audit SEC-2, E9):
+# a standing allow is bound to them, so "don't ask again" for a send to one address does not cover a send
+# to another, and an email that asks the reasoner to write somewhere new still raises a card.
+_TARGET_KEYS = {"to", "cc", "bcc", "recipient", "recipients", "email", "emails", "address", "phone", "number",
+                "chat_id", "channel", "channel_id", "user", "user_id", "userid", "calendarid", "calendar_id",
+                "attendees", "repo", "repository", "owner", "path", "url", "webhook", "account", "accountid",
+                "id", "ids", "folder", "folderid", "parent", "parents", "list", "listid", "board", "space", "page"}
+
+
+def _auto_target(p: dict) -> str:
+    """A short fingerprint of where a connected-app write goes: its path vars, its query, and the
+    recipient-like fields of its body (nested one level). The box lane has none ("")."""
+    if (p or {}).get("platform") == "box":
+        return ""
+    import hashlib as _h
+    data = p.get("data") if isinstance(p.get("data"), dict) else {}
+    picked = {}
+    for k, v in data.items():
+        if str(k).lower() in _TARGET_KEYS:
+            picked[k] = v
+        elif isinstance(v, dict):
+            for k2, v2 in v.items():
+                if str(k2).lower() in _TARGET_KEYS:
+                    picked[f"{k}.{k2}"] = v2
+    blob = json.dumps({"path_vars": p.get("path_vars") or {}, "query": p.get("query") or {}, "target": picked},
+                      sort_keys=True, default=str)
+    return _h.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _auto_key(platform, action_id, target: str = "") -> str:
+    return f"{platform or ''}::{action_id or ''}::{target or ''}"
 
 
 def _auto_has(p: dict) -> bool:
-    k = _auto_key(p.get("platform"), p.get("action_id"))
-    return any(_auto_key(a.get("platform"), a.get("action_id")) == k for a in _auto_load())
+    """A standing allow matches this exact platform, action and target. Allows saved before 2026-11-03
+    carry no target and so match only target-less (box) calls: connected-app ones ask once more."""
+    k = _auto_key(p.get("platform"), p.get("action_id"), _auto_target(p))
+    return any(_auto_key(a.get("platform"), a.get("action_id"), a.get("target") or "") == k for a in _auto_load())
 
 
 def _auto_add(p: dict, title: str = "") -> None:
     items = _auto_load()
     if not _auto_has(p):
         items.append({"platform": p.get("platform"), "action_id": p.get("action_id"), "method": p.get("method"),
+                      "target": _auto_target(p),
                       "title": title or (p.get("summary") or "")[:80], "added": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         _auto_save(items)
 
 
 def _auto_remove(platform, action_id) -> None:
-    k = _auto_key(platform, action_id)
-    _auto_save([a for a in _auto_load() if _auto_key(a.get("platform"), a.get("action_id")) != k])
+    """Removes every standing allow for this platform and action, whatever its target."""
+    _auto_save([a for a in _auto_load()
+                if (a.get("platform"), a.get("action_id")) != (platform, action_id)])
 
 
 def _run_permit(pid: str, pm) -> dict:
@@ -918,6 +951,12 @@ def _activity() -> dict:
     return JOBS.activity([(r.thread, r.started) for r in _runs_active()])
 BOX_NO_REMEMBER = ("rm", "dd", "mkfs", "shutdown", "reboot", "chmod", "chown", "curl", "wget", "ssh", "scp",
                    "kill", "pkill", "userdel", "passwd", "sudo", "mv", "truncate", "shred")
+# 2026-11-03 (security audit SEC-2, E9): a first word that runs arbitrary code cannot be a standing allow
+# by first word: one ticked "python3" let any later "python3 -c ..." run unasked. The exact command can
+# still be remembered (its hash binds every byte), so a repeated "git add x && git commit" keeps its box.
+BOX_NO_FIRST_WORD = ("python", "python3", "node", "nodejs", "perl", "ruby", "php", "bash", "sh", "zsh", "dash",
+                   "ksh", "env", "xargs", "find", "awk", "gawk", "sed", "cc-job", "git", "npx", "uv", "pip", "pip3",
+                   "make", "docker", "rsync", "sftp", "nc", "socat", "one", "gh", "eval", "exec", "source", ".")
 
 
 def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
@@ -937,13 +976,16 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         plain = "|" not in cmd and ";" not in cmd and "&&" not in cmd and ">" not in cmd and "`" not in cmd and "$(" not in cmd
         dangerous = any(w in BOX_NO_REMEMBER for w in head.split())
         if plain:
-            return head or "command", "run on the box: " + cmd[:300], bool(head) and not dangerous
+            runner = any(w in BOX_NO_FIRST_WORD for w in head.split())
+            return head or "command", "run on the box: " + cmd[:300], bool(head) and not dangerous and not runner
         # A compound command (pipes, &&, redirects) is remembered as exactly this command, never by
         # its first word (2026-09-29: every card gets the checkbox; a "python3" rule must not cover
         # "python3 ... && rm -rf"). Dangerous words still get no checkbox.
         import hashlib as _h
         exact = "exact:" + _h.sha256(cmd.encode()).hexdigest()[:16]
-        return exact, "run on the box: " + cmd[:300], bool(head) and not dangerous
+        # E9: a dangerous word anywhere in it (find . -exec rm, x && sudo y) takes the box away, not only the first
+        anywhere = any(w.strip("'\"();&|") in BOX_NO_REMEMBER for w in words)
+        return exact, "run on the box: " + cmd[:300], bool(head) and not dangerous and not anywhere
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
         d = str(Path(fp).parent) if fp else ""
@@ -1004,7 +1046,7 @@ def _tick_once() -> int | None:
     Unset CC_TICK_CMD = off. Every job it opens still runs under the permission hook and its budget."""
     if not TICK["cmd"] or TICK["running"]:
         return None
-    why = cc_halt.halted(HANDS_HOME)
+    why = cc_halt.halted(HANDS_HOME, STATE_DIR)
     if why:                                      # the kill switch (2026-10-25): no standing order while halted
         print(f"tick skipped: {why}", flush=True)
         TICK["last"] = time.time()
@@ -1056,7 +1098,7 @@ def _agents_loop() -> None:
     while True:
         # Over the owner's spend cap, scheduled agents do not start; they wait, and Settings says so.
         # Run now on the Agents page is the owner's own press, so it still works (that press is the ask).
-        if SPEND.over_cap() or cc_halt.halted(HANDS_HOME):
+        if SPEND.over_cap() or cc_halt.halted(HANDS_HOME, STATE_DIR):
             time.sleep(60)
             continue
         code, d = _agents_call(["tick"])
@@ -1679,7 +1721,7 @@ def _host_system() -> dict:
     except OSError:
         d["judgments"] = 0
     d["jobs_running"] = sum(1 for j in JOBS.list() if j.get("ended") is None)
-    d["halt"] = cc_halt.halted(HANDS_HOME)       # the kill switch (2026-10-25): "HALT: <reason>" or None
+    d["halt"] = cc_halt.halted(HANDS_HOME, STATE_DIR)       # the kill switch (2026-10-25): "HALT: <reason>" or None
     members = _box_members()
     if MEMBER:
         own = (BRIDGE_UNIT, TAB_UNIT, cc_member.unit("cc-work-pull", MEMBER) + ".timer",
@@ -1861,9 +1903,16 @@ def _agent_settings_ok(path: str) -> bool:
     return cc_guard.agent_settings_ok(text)
 
 
+# Hosts a job may ssh/scp/rsync to without a turn (2026-11-03, security audit SEC-1, E9): set by the owner
+# in the bridge env (space or comma separated), default none. Everything else that reaches past the box
+# is refused in a job by cc_guard.check_reach and has to happen in a turn, where the owner is asked.
+JOB_HOSTS = [h for h in re.split(r"[\s,]+", os.environ.get("CC_JOB_HOSTS", "")) if h]
+
+
 def _job_guard(command: str) -> str:
     box = BOX_ENABLED and GATE is not None
-    return cc_guard.check_job(command, _posture_current(), _hook_settings() if box else None, _agent_settings_ok)
+    return cc_guard.check_job(command, _posture_current(), _hook_settings() if box else None, _agent_settings_ok,
+                              hosts=JOB_HOSTS)
 
 
 # An external reconciler (the operator's world-propose on hbar) may keep a summary of what it
@@ -3887,7 +3936,13 @@ def _tg_turn(chat_id, text: str) -> None:
 
 def _halt_from(word: str, where: str) -> str:
     """halt or resume, as the hands user through the installed cc-job (the one writer of the HALT file),
-    so the shell, the phone and the page share one code path and one log line each (2026-10-25)."""
+    so the shell, the phone and the page share one code path and one log line each (2026-10-25).
+    Since 2026-11-03 (E9) the owner's halt is also written into the bridge's own state folder, which no
+    agent can write, and only the owner's resume (here) clears it; `cc-job resume` from a shell cannot."""
+    if word == "halt":
+        cc_halt.set_owner_halt(STATE_DIR, f"from {where}", by="owner")
+    elif word == "resume":
+        cc_halt.clear_owner_halt(STATE_DIR)
     argv = [str(HANDS_HOME / ".local" / "bin" / "cc-job"), word] + ([f"from {where}"] if word == "halt" else [])
     try:
         r = subprocess.run(_as_hands(argv), capture_output=True, text=True, timeout=30)
@@ -5043,7 +5098,7 @@ class Handler(BaseHTTPRequestHandler):
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"error": "not the reasoner"})
                 return
-            why = cc_halt.refusal(HANDS_HOME, WORLD_DIR, str(req.get("title", "")))
+            why = cc_halt.refusal(HANDS_HOME, WORLD_DIR, str(req.get("title", "")), STATE_DIR)
             if why:                              # the kill switch (2026-10-25): HALT file, or a post's weekly budget spent
                 print(f"job refused: {why} ({str(req.get('title', ''))[:60]})", flush=True)
                 self._send(409, {"error": why})

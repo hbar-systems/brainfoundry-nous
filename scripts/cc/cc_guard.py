@@ -254,12 +254,156 @@ def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool]:
     return agent, mode
 
 
-def check_job(command: str, posture: str, settings: str | None, agent_ok=lambda path: False) -> str:
+# ------------------------------------------------------------ reach ----
+# 2026-11-03 (security audit SEC-1, E9): a job that is not a claude invocation used to run as the hands with
+# no card at all, so `cc-job run -- 'ssh ...'` reached a member box with nobody asked. Now every job command
+# is read for verbs that reach past the box; those are refused, so they can only happen in a turn, where the
+# permission hook asks the owner. Limits, on purpose and stated: a script file the job runs is not read
+# (python3 x.py may still do anything its code does); this reads the command line only.
+REACH_ALWAYS = {"sudo", "su", "doas", "pkexec", "systemctl", "crontab", "gh", "one",
+                "push.sh", "push-helper", "push-helper.py", "create.sh"}
+REMOTE = {"ssh", "scp", "sftp", "rsync"}
+_SSH_VALUE_OPTS = {"-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p",
+                   "-Q", "-R", "-S", "-W", "-w", "-P"}
+_WRITE_FLAGS = ("-d", "--data", "-F", "--form", "-T", "--upload-file", "--post-data", "--post-file", "--json",
+                "--body-data", "--body-file", "--method")
+
+
+def _host(arg: str) -> str:
+    h = arg.split("@", 1)[1] if "@" in arg else arg
+    return h.split(":", 1)[0].strip("[]").lower()
+
+
+def _remote_hosts(base: str, args: list) -> list:
+    """The hosts an ssh/scp/sftp/rsync line talks to."""
+    if base in ("ssh", "sftp"):
+        i = 0
+        while i < len(args):
+            a = args[i]
+            if a in _SSH_VALUE_OPTS:
+                i += 2; continue
+            if a.startswith("-"):
+                i += 1; continue
+            return [_host(a)]
+        return []
+    out = []
+    for a in args:
+        if a.startswith("-") or "::" in a:
+            if "::" in a and not a.startswith("-"):
+                out.append(_host(a.split("::", 1)[0]))
+            continue
+        if a.startswith("rsync://"):
+            out.append(_host(a[len("rsync://"):].split("/", 1)[0])); continue
+        if ":" in a and not a.startswith("/") and not a.startswith("."):
+            out.append(_host(a.split(":", 1)[0]))
+    return out
+
+
+def _curl_writes(base: str, args: list) -> bool:
+    for i, a in enumerate(args):
+        if a in ("-X", "--request"):
+            m = args[i + 1].upper() if i + 1 < len(args) else ""
+            if m not in ("GET", "HEAD"):
+                return True
+        if a.startswith("-X") and len(a) > 2 and a[2:].upper() not in ("GET", "HEAD"):
+            return True
+        if a.startswith("--request=") and a.split("=", 1)[1].upper() not in ("GET", "HEAD"):
+            return True
+        if any(a == f or a.startswith(f + "=") or (f.startswith("--") and a.startswith(f)) for f in _WRITE_FLAGS):
+            return True                                  # --data-binary, --data-urlencode, --form-string ...
+        if base == "curl" and re.fullmatch(r"-[a-zA-Z]*[dFT][a-zA-Z]*", a or ""):
+            return True
+    return False
+
+
+def _simple_commands(toks: list) -> list:
+    """(base, args) for every simple command: the word after assignments, redirects and wrappers."""
+    out, i, n = [], 0, len(toks)
+    while i < n:
+        j = i
+        while j < n and toks[j][0] == "word":
+            j += 1
+        k = i
+        while k < j:
+            w = toks[k][3]
+            if w in _RESERVED or _ASSIGN.match(w):
+                k += 1; continue
+            if _REDIRECT.match(w):
+                k += 1 if re.search(r"[<>&]\S", w) else 2; continue
+            base = os.path.basename(w)
+            if base in _WRAPPERS:
+                takes, k = _WRAPPERS[base], k + 1
+                while k < j and (toks[k][3].startswith("-") or _ASSIGN.match(toks[k][3])):
+                    k += 2 if toks[k][3] in takes else 1
+                if base == "timeout" and k < j:
+                    k += 1
+                continue
+            out.append((base, [t[3] for t in toks[k + 1:j]]))
+            break
+        i = j + 1
+    return out
+
+
+def _inner_scripts(value: str) -> list:
+    """The command text inside every $(...) or `...` of one word."""
+    out, i = [], 0
+    while i < len(value):
+        if value.startswith("$(", i):
+            end = _match_close(value, i + 2, "(", ")")
+            out.append(value[i + 2:end - 1]); i = end; continue
+        if value[i] == "`":
+            j = value.find("`", i + 1)
+            if j < 0:
+                break
+            out.append(value[i + 1:j]); i = j + 1; continue
+        i += 1
+    return out
+
+
+def check_reach(command: str, hosts=()) -> None:
+    """Refused when the command, anywhere in it, reaches past the box (see REACH_ALWAYS and REMOTE)."""
+    allowed = {h.strip().lower() for h in hosts if h and h.strip()}
+    toks = _tokens(command)
+    for t in toks:
+        if t[0] == "word" and ("$(" in t[3] or "`" in t[3]):
+            for inner in _inner_scripts(t[3]):
+                check_reach(inner, hosts)
+    for base, args in _simple_commands(toks):
+        if base in REACH_ALWAYS:
+            raise Refused(f"{base} in a job reaches past the box; run it in a turn, where the owner is asked")
+        for a in args:                                   # bash .../push.sh, python3 .../push-helper.py
+            if os.path.basename(a) in REACH_ALWAYS and os.path.basename(a) not in ("one", "gh"):
+                raise Refused(f"{os.path.basename(a)} in a job reaches past the box; run it in a turn")
+        if base == "git" and "push" in args:
+            raise Refused("git push in a job; pushes go through the push helper in a turn")
+        if base in ("curl", "wget") and _curl_writes(base, args):
+            raise Refused(f"{base} writing to the network in a job; run it in a turn")
+        if base in REMOTE:
+            found = _remote_hosts(base, args)
+            if not found and base in ("ssh", "sftp"):
+                found = ["(no host found)"]                  # scp/rsync with no host are local copies
+            for h in found:
+                if h not in allowed:
+                    raise Refused(f"{base} to {h} in a job; that host is not on the owner's list (CC_JOB_HOSTS)")
+        if base in _SHELLS:
+            for m, a in enumerate(args):
+                if a.startswith("-") and not a.startswith("--") and "c" in a[1:] and m + 1 < len(args):
+                    check_reach(args[m + 1], hosts)
+                    break
+        if base in ("eval", "xargs") and args:
+            check_reach(" ".join(args), hosts)
+
+
+def check_job(command: str, posture: str, settings: str | None, agent_ok=lambda path: False, hosts=None) -> str:
     """The command a job may run, or Refused with the reason. Every claude invocation (as the command
     word, after assignments and wrappers like env or nohup, or inside sh -c) gets `--settings <settings>`
     right after the word, unless it already names an agent's settings file that `agent_ok` accepts.
-    `settings` None injects nothing (the box lane is off) but still refuses."""
+    `settings` None injects nothing (the box lane is off) but still refuses.
+    `hosts` (2026-11-03): when given (the bridge passes CC_JOB_HOSTS), the command is first read for reach
+    past the box (check_reach); None skips that check (callers that only want the claude handling)."""
     posture = posture if posture in POSTURES else "cards"
+    if hosts is not None:
+        check_reach(command, hosts)
     toks = _tokens(command)
     edits = []                                               # (start, end, replacement), applied from the back
     for call in _calls(toks):

@@ -41,7 +41,9 @@ def _load(monkeypatch, tmp_path):
 
 def test_box_key_and_remember_rules(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
-    assert m._box_key("Bash", {"command": "git status"}) == ("git", "run on the box: git status", True)
+    # git can run git push or a configured alias, so it is never remembered by first word (E9, 2026-11-03)
+    assert m._box_key("Bash", {"command": "git status"}) == ("git", "run on the box: git status", False)
+    assert m._box_key("Bash", {"command": "ls /tmp"})[2] is True
     aid, _, ok = m._box_key("Bash", {"command": "sudo systemctl restart cc-bridge"})
     assert aid == "sudo systemctl" and ok is False          # sudo is never remembered
     assert m._box_key("Bash", {"command": "rm -rf /tmp/x"})[2] is False
@@ -71,12 +73,12 @@ def test_box_ask_denied_when_nobody_watches(monkeypatch, tmp_path):
 def test_box_ask_allowed_by_click_and_remembered(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     cards = []
-    m.RUNS.clear(); run = m.Run(None, "git please"); run.claude_sid = "s-1"; m.RUNS[run.id] = run
+    m.RUNS.clear(); run = m.Run(None, "ls please"); run.claude_sid = "s-1"; m.RUNS[run.id] = run
     run.attach(lambda kind, payload: cards.append((kind, payload)) if kind != "begin" else None)
     out = {}
 
     def ask():
-        out["d"] = m._box_ask("Bash", {"command": "git status"})
+        out["d"] = m._box_ask("Bash", {"command": "ls /tmp"})
     th = threading.Thread(target=ask)
     th.start()
     for _ in range(50):
@@ -90,12 +92,12 @@ def test_box_ask_allowed_by_click_and_remembered(monkeypatch, tmp_path):
     outcome = m._run_permit(card["id"], pm)
     assert outcome["ok"] is True
     m._box_settle(card["id"], "allow")
-    m._auto_add(pm.args, title="git")
+    m._auto_add(pm.args, title="ls")
     th.join(3)
     assert out["d"] == {"behavior": "allow"}
     # second time: no card to click, allowed from the owner's earlier choice, still a permit
     cards.clear()
-    d2 = m._box_ask("Bash", {"command": "git log -1"})
+    d2 = m._box_ask("Bash", {"command": "ls /var"})
     assert d2 == {"behavior": "allow"}
     assert cards and cards[0][1].get("auto") is True
 
@@ -244,8 +246,9 @@ def test_box_key_every_card_can_be_remembered(monkeypatch, tmp_path):
     """2026-09-29: a plain command by its first word, a compound command exactly, any other tool by
     its name; dangerous words never."""
     m = _load(monkeypatch, tmp_path)
+    # interpreters run anything, so they are never remembered by first word (E9, 2026-11-03)
     a, s, ok = m._box_key("Bash", {"command": "python3 - <<'PY'\\nprint(1)\\nPY"})
-    assert a == "python3" and ok
+    assert a == "python3" and not ok
     a2, _, ok2 = m._box_key("Bash", {"command": "git add x && git commit -m y"})
     assert a2.startswith("exact:") and ok2
     a3, _, ok3 = m._box_key("Bash", {"command": "git add x && git commit -m y"})

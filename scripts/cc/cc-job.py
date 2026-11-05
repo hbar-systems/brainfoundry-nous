@@ -54,7 +54,8 @@ def _halt_cmd(rest: list[str]) -> int:
             was = cc_halt.clear_halt(HANDS_HOME, by=by)
         else:
             was = halt_file.exists(); halt_file.unlink(missing_ok=True)
-        print("resumed: new jobs, the tick and agents may start again" if was else "was not halted"); return 0
+        print(("resumed: the hands' HALT is cleared" if was else "was not halted (no hands HALT file)")
+              + "; a halt the owner set from the console or phone stays until the owner resumes there (2026-11-03)"); return 0
     if "--status" in rest:
         why = cc_halt.halted(HANDS_HOME) if cc_halt else (f"HALT: {halt_file.read_text().strip().splitlines()[0]}" if halt_file.exists() else None)
         print(why or "not halted (no HALT file)")

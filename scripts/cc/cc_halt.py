@@ -6,6 +6,12 @@ it exists: the bridge refuses /jobs/start (so `cc-job run` and every standing ag
 skips its standing order, and cc_agents.py refuses tick and run. Running jobs are left alone unless
 `cc-job halt --kill` asked for them. Nothing here touches permits, the posture, or the brain's chat.
 
+Owner HALT (2026-11-03, security audit SEC-1, E9): a halt the owner sets from the console or Telegram is
+written by the bridge into its own state folder (<bridge home>/.cc-bridge/HALT, mode 700), which the hands
+and every agent cannot write. `cc-job resume` clears only the hands' file, so an agent cannot lift an owner
+halt; only the owner's resume (console or phone) does. Agents may still set the hands' HALT: stopping is the
+safe direction. Readers pass `owner_dir` to see both.
+
 Budget HALT: <world>/ops/finance/budgets.tsv (written by the finance thread) has a `state` column
 that reads HALT-<post> when a post's weekly cap is spent; a job whose title starts with "<post>:"
 is refused while that row says so. No file, no state column, no match: no budget halt.
@@ -29,8 +35,48 @@ def halt_file(hands_home) -> Path:
     return Path(hands_home) / ".cc-bridge" / HALT_FILE
 
 
-def halted(hands_home) -> str | None:
-    """The reason the box is halted, or None. A file that exists but cannot be read is still a halt."""
+def _read_halt(p: Path, label: str = "") -> str | None:
+    try:
+        if not p.exists():
+            return None
+    except OSError:
+        return None
+    try:
+        reason = p.read_text().strip().splitlines()
+    except OSError:
+        return f"HALT{label}: (reason unreadable at {p})"
+    return f"HALT{label}: " + (reason[0].strip() if reason and reason[0].strip() else "halted")
+
+
+def owner_halt_file(owner_dir) -> Path:
+    return Path(owner_dir) / HALT_FILE
+
+
+def set_owner_halt(owner_dir, reason: str = "", by: str = "owner") -> str:
+    """Written by the bridge user only; its folder is closed to the hands."""
+    reason = (reason or "").strip() or "halted by the owner"
+    d = Path(owner_dir)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    owner_halt_file(d).write_text(f"{reason}\n# set {stamp} by {by}\n")
+    return reason
+
+
+def clear_owner_halt(owner_dir) -> bool:
+    try:
+        owner_halt_file(owner_dir).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def halted(hands_home, owner_dir=None) -> str | None:
+    """The reason the box is halted, or None: the owner's halt first (only the owner lifts it), then the
+    hands' HALT file. A file that exists but cannot be read is still a halt."""
+    if owner_dir is not None:
+        why = _read_halt(owner_halt_file(owner_dir), " (owner)")
+        if why:
+            return why
     p = halt_file(hands_home)
     try:
         if not p.exists():
@@ -115,9 +161,9 @@ def budget_refusal(title: str, world_dir) -> str | None:
     return None
 
 
-def refusal(hands_home, world_dir, title: str = "") -> str | None:
-    """Why a new job may not start now: the HALT file first, then the budget. None = go."""
-    return halted(hands_home) or budget_refusal(title, world_dir)
+def refusal(hands_home, world_dir, title: str = "", owner_dir=None) -> str | None:
+    """Why a new job may not start now: the owner's halt, the HALT file, then the budget. None = go."""
+    return halted(hands_home, owner_dir) or budget_refusal(title, world_dir)
 
 
 def _proc_start(pid: int) -> float | None:
