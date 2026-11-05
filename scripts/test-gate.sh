@@ -14,11 +14,20 @@ cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 VENV_PY=/home/hands/.local/venvs/nous-tests/bin/python
 if [ -z "${TEST_PYTHON:-}" ] && [ -x "$VENV_PY" ]; then TEST_PYTHON=$VENV_PY; fi
 PY="${TEST_PYTHON:-python3}"
-out="$("$PY" -m pytest tests -q -p no:cacheprovider -W ignore 2>&1)"
+out="$("$PY" -m pytest tests -q -p no:cacheprovider -W ignore -rs 2>&1)"
 rc=$?
 last="$(printf '%s\n' "$out" | tail -1)"
+# The browser login gate (tests/browser, E11) skips without playwright, caddy or a console build,
+# which is the normal case in this venv. Say so, so GREEN never reads as "the login was checked"
+# (referee F3, 2026-11-05). Run it on its own: see tests/browser/test_console_login.py.
+bskip="$(printf '%s\n' "$out" | sed -n 's/^SKIPPED \[[0-9]*\] tests\/browser\/[^:]*:[0-9]*: //p' | head -1)"
+browser=""
+if [ -n "$bskip" ]; then
+  echo "browser gate: SKIPPED ($bskip)"
+  browser="; browser gate SKIPPED"
+fi
 if [ "$rc" -eq 0 ]; then
-  echo "test-gate: GREEN $last"
+  echo "test-gate: GREEN $last$browser"
   exit 0
 fi
 echo "test-gate: RED $last"
