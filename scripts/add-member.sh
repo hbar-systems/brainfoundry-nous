@@ -22,6 +22,12 @@
 # helper (scripts/member-update-door.sh, 2026-10-21).
 # --update-tab: also mount the docker socket into the member's api (the single brain's way). That socket
 # is root on the box: a member whose api is compromised then holds every member. Off by default.
+# Limits (2026-11-06, docs/MEMBER_LIMITS.md): the override carries cpus, memory ceiling and reservation and
+# a process limit per service; the member's bridge and terminal (so its reasoner and every cc-job) run in
+# brain-<m>.slice (CPUQuota, MemoryHigh/Max/Low, TasksMax); root's /etc/brainfoundry/limits-<m>.env caps
+# running jobs (CC_MAX_JOBS) and, if set, the spend ledger (CC_SPEND_CAP_EUR); <m>-cc and <m>-hands get no
+# cron or at (a crontab would run outside the slice). Numbers: scripts/member_limits.py, overridable by
+# BRAIN_LIMIT_* in this shell; `python3 scripts/member_limits.py check --plan --add 1` first says if they fit.
 #
 # Refuses: a bad or reserved handle, a block outside 1..99, a handle or block already in
 # /srv/brains/members.tsv, an existing checkout, user, unit or compose project, a port of the block in use.
@@ -103,18 +109,45 @@ run sudo chmod -R o+rX "$DIR/vector-db"
 say "== 3 .env (fresh secrets, into the file only)"
 run python3 "$REPO/scripts/member_env.py" "$HANDLE" "$N" "$REPO/.env.example" "$DIR/.env"
 
-say "== 4 compose override: the shared Ollama$([ "$UPDATE_TAB" = 1 ] && echo ', the Update tab')"
-OVERRIDE="services:
-  ollama:
-    profiles: [\"own-ollama\"]   # the box's one Ollama answers as \"ollama\" (docs/MULTI_INSTANCE.md)"
-[ "$UPDATE_TAB" = 1 ] && OVERRIDE="$OVERRIDE
-  api:
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - $DIR:$DIR:rw"
+LIMITS="$REPO/scripts/member_limits.py"
+say "== 4 compose override: the shared Ollama, the limits$([ "$UPDATE_TAB" = 1 ] && echo ', the Update tab')"
+OVERRIDE=$(python3 "$LIMITS" override $([ "$UPDATE_TAB" = 1 ] && echo --update-tab "$DIR")) || fail "limits: $LIMITS refused the profile"
 say "$OVERRIDE" | sed 's/^/    | /'
 if [ "$APPLY" = 1 ]; then printf '%s\n' "$OVERRIDE" > "$DIR/docker-compose.override.yml"; fi
 echo "+ write $DIR/docker-compose.override.yml"
+
+say "== 4b host limits: brain-$HANDLE.slice for the bridge, terminal, reasoner and jobs; the job cap; no cron"
+LIMITS_DIR=${LIMITS_DIR:-/etc/brainfoundry}
+SLICE_FILE="$SYSTEMD_DIR/brain-$HANDLE.slice"
+BRIDGE_DROPIN="$SYSTEMD_DIR/cc-bridge-$HANDLE.service.d/limits.conf"
+TERM_DROPIN="$SYSTEMD_DIR/claude-tab-$HANDLE.service.d/limits.conf"
+LIMITS_ENV="$LIMITS_DIR/limits-$HANDLE.env"
+for kind_path in "slice:$SLICE_FILE" "bridge:$BRIDGE_DROPIN" "term:$TERM_DROPIN" "env:$LIMITS_ENV"; do
+    kind=${kind_path%%:*}; path=${kind_path#*:}
+    BODY=$(LIMITS_DIR="$LIMITS_DIR" python3 "$LIMITS" unit "$HANDLE" "$kind") || fail "limits: no $kind file"
+    say "$BODY" | sed 's/^/    | /'
+    if [ "$APPLY" = 1 ]; then
+        sudo install -d -o root -g root -m 755 "$(dirname "$path")"
+        printf '%s\n' "$BODY" | sudo tee "$path" >/dev/null
+        sudo chmod 644 "$path"
+    fi
+    echo "+ write $path (root, 644)"
+done
+# cgroup v2 honours a reservation only up to what the parent carries: brain.slice and system.slice hold the
+# sum for every member so far plus this one plus the admin brain (scripts/member_limits.py parent).
+for kind_path in "brain:$SYSTEMD_DIR/brain.slice" "system:$SYSTEMD_DIR/system.slice.d/50-brain-limits.conf"; do
+    kind=${kind_path%%:*}; path=${kind_path#*:}
+    BODY=$(python3 "$LIMITS" parent "$kind" "$REGISTRY" --add 1) || fail "limits: no $kind parent"
+    say "$BODY" | sed 's/^/    | /'
+    if [ "$APPLY" = 1 ]; then
+        sudo install -d -o root -g root -m 755 "$(dirname "$path")"
+        printf '%s\n' "$BODY" | sudo tee "$path" >/dev/null
+        sudo chmod 644 "$path"
+    fi
+    echo "+ write $path (root, 644)"
+done
+if [ "$APPLY" = 1 ]; then printf '%s\n' "$BRIDGE_USER" "$HANDS_USER" | sudo tee -a /etc/cron.deny /etc/at.deny >/dev/null; fi
+echo "+ append $BRIDGE_USER and $HANDS_USER to /etc/cron.deny and /etc/at.deny"
 
 say "== 5 the stack: compose project $PROJECT"
 run docker compose --project-directory "$DIR" up -d --build

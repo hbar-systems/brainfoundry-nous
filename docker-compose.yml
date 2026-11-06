@@ -3,6 +3,18 @@
 # postgres 54332, public chat 3020, ollama 11435, and the project (so every container
 # and volume name) is the directory name. A member on a shared box sets
 # COMPOSE_PROJECT_NAME=brain-<m> and BRAIN_*_PORT from its port block.
+#
+# Limits (2026-11-06, docs/MEMBER_LIMITS.md): every service reads BRAIN_LIMIT_<SERVICE>_CPUS, _MEM,
+# _MEM_RES and _PIDS. Unset, nothing is limited (0 and -1 mean no limit), as before. A member on a
+# shared box gets its numbers in docker-compose.override.yml from scripts/add-member.sh
+# (scripts/member_limits.py). Container logs rotate at BRAIN_LOG_MAX_SIZE x BRAIN_LOG_MAX_FILE
+# (default 20m x 5 per container), so no log can fill the disk.
+x-brain-logging: &brain-logging
+  driver: json-file
+  options:
+    max-size: "${BRAIN_LOG_MAX_SIZE:-20m}"
+    max-file: "${BRAIN_LOG_MAX_FILE:-5}"
+
 services:
 
   # Ollama — local model inference
@@ -17,6 +29,11 @@ services:
     environment:
       - OLLAMA_KEEP_ALIVE=-1
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_OLLAMA_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_OLLAMA_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_OLLAMA_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_OLLAMA_PIDS:--1}
 
   # Brain API
   api:
@@ -163,6 +180,11 @@ services:
     networks:
       - llm-network
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_API_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_API_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_API_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_API_PIDS:--1}
 
   # BrainKernel — governance kernel
   nodeos:
@@ -184,6 +206,11 @@ services:
     ports:
       - "127.0.0.1:${BRAIN_NODEOS_PORT:-8001}:8001"
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_NODEOS_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_NODEOS_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_NODEOS_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_NODEOS_PIDS:--1}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health').read()\""]
       interval: 10s
@@ -211,6 +238,11 @@ services:
     networks:
       - llm-network
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_UI_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_UI_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_UI_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_UI_PIDS:--1}
 
   # Public chat surface — backs nous.brainfoundry.ai (bare domain).
   # No API key, no operator console nav. Calls the api service's
@@ -229,6 +261,11 @@ services:
     networks:
       - llm-network
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_PUBLIC_CHAT_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_PUBLIC_CHAT_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_PUBLIC_CHAT_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_PUBLIC_CHAT_PIDS:--1}
 
   # PostgreSQL with pgvector
   postgres:
@@ -245,6 +282,11 @@ services:
     networks:
       - llm-network
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_POSTGRES_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_POSTGRES_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_POSTGRES_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_POSTGRES_PIDS:--1}
 
   redis:
     image: redis:7-alpine
@@ -254,6 +296,11 @@ services:
     networks:
       - llm-network
     restart: unless-stopped
+    logging: *brain-logging
+    cpus: ${BRAIN_LIMIT_REDIS_CPUS:-0}
+    mem_limit: ${BRAIN_LIMIT_REDIS_MEM:-0}
+    mem_reservation: ${BRAIN_LIMIT_REDIS_MEM_RES:-0}
+    pids_limit: ${BRAIN_LIMIT_REDIS_PIDS:--1}
 
 networks:
   llm-network:

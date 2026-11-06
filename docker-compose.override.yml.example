@@ -35,6 +35,13 @@
 #    hand-write this; run `scripts/vault-setup.sh` as the owner, which creates
 #    the folder, adds these two lines, and checks hands/cc cannot read it.
 #    Never mount it read-write, and never mount it into any other service.
+#
+# 4) Limits (2026-11-06, docs/MEMBER_LIMITS.md)
+#    Per service: cpus, mem_limit (ceiling), mem_reservation (kept for this brain when the box is short)
+#    and pids_limit. A brain alone on its box needs none (the defaults limit nothing). A member on a
+#    shared box gets them from scripts/add-member.sh; for an existing override, print a merged copy
+#    with `python3 scripts/member_limits.py merge docker-compose.override.yml` and install it by hand.
+#    The same numbers can also be set in .env as BRAIN_LIMIT_<SERVICE>_CPUS / _MEM / _MEM_RES / _PIDS.
 
 services:
   api:
@@ -51,3 +58,8 @@ services:
       # - /home/<owner>/vault:/vault:ro
     # environment:
     #   BRAIN_VAULT_DIR: /home/<owner>/vault
+    # --- (4) limits (example numbers: one member of five on a CAX31) ---
+    # cpus: 1.5
+    # mem_limit: 2560m
+    # mem_reservation: 768m
+    # pids_limit: 512
