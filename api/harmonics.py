@@ -36,10 +36,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security
 from pydantic import BaseModel, Field
 
-from api.federation_dm import _operator_auth
+from api.federation_dm import _api_key_header, _operator_auth
 
 
 # ─── Constants ──────────────────────────────────────────────────────────────
@@ -289,8 +289,13 @@ class StandingResponse(BaseModel):
 
 
 @router.post("/harmonics/score", response_model=ScoreResponse)
-def score_exchange(req: ScoreRequest):
-    """Score a coherence event (c -> R); optionally record it — SPEC s3."""
+def score_exchange(req: ScoreRequest, x_api_key: str = Security(_api_key_header)):
+    """Score a coherence event (c -> R); optionally record it — SPEC s3.
+
+    Scoring is open; recording is operator-only (SEC-1, 2026-11-06): an open record=true let
+    anyone who reaches the api mint contributor rows, the standing the brain reads for itself."""
+    if req.record:
+        _operator_auth(x_api_key)
     try:
         cos, sin, score = coherence(req.contribution, req.receiver_context)
         ch = content_hash(req.contribution, req.receiver_context)

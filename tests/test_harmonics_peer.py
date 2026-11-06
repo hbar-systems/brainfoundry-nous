@@ -58,3 +58,34 @@ def test_migration_is_idempotent_ddl():
     finally:
         del os.environ["DATABASE_URL"]
     assert "peer_sig" in c.log[0][0]
+
+
+# SEC-1 (2026-11-06): /harmonics/score with record=true wrote a contributor row without a key.
+def _score_client(monkeypatch, recorded):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("BRAIN_ENV", "production")
+    monkeypatch.setenv("BRAIN_API_KEY", "k-" + "x" * 12)
+    monkeypatch.setattr(h, "coherence", lambda c, r: (0.6, 0.8, 0.48))
+    monkeypatch.setattr(h, "record_event", lambda **kw: recorded.append(kw) or 9)
+    app = FastAPI()
+    app.include_router(h.router)
+    return TestClient(app)
+
+
+def test_score_record_needs_operator_key(monkeypatch):
+    recorded = []
+    c = _score_client(monkeypatch, recorded)
+    body = {"contribution": "c", "receiver_context": "r", "record": True}
+    assert c.post("/harmonics/score", json=body).status_code == 401
+    assert c.post("/harmonics/score", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert recorded == []
+    r = c.post("/harmonics/score", json=body, headers={"X-API-Key": "k-" + "x" * 12})
+    assert r.status_code == 200 and r.json()["event_id"] == 9 and len(recorded) == 1
+
+
+def test_score_without_record_stays_open(monkeypatch):
+    recorded = []
+    c = _score_client(monkeypatch, recorded)
+    r = c.post("/harmonics/score", json={"contribution": "c", "receiver_context": "r"})
+    assert r.status_code == 200 and r.json()["event_id"] is None and recorded == []
