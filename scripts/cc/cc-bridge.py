@@ -854,6 +854,8 @@ class Run:
 
     def emit(self, kind: str, payload: dict) -> None:
         with self.lock:
+            if kind == "done" and self.done:
+                return                    # one end per turn: a Stop that already closed it wins (2026-11-06)
             if kind != "ping":
                 self.events.append((kind, payload))
             if kind == "done":
@@ -2983,7 +2985,17 @@ def _stop_run(run: Run) -> bool:
     run.stopped = True
     run.emit("tool", {"name": "stop", "brief": "stopped by you"})
     if run.proc is not None:
-        _stop_proc(run.proc)
+        if run.proc.poll() is None:
+            _stop_proc(run.proc)
+        else:
+            # The reasoner already exited but nothing closed the turn (its driver died, a ghost
+            # left "answering" forever; 2026-11-06): Stop ends it here so the thread is free again.
+            said = "".join(run.partial).strip()
+            run.emit("done", {"reply": (said + "\n\n" if said else "") + "(stopped by you)", "error": False,
+                              "session_id": run.claude_sid, "ms": int((time.time() - run.started) * 1000),
+                              "proposal": None, "pane": None, "meta": {}, "thread": run.thread, "title": run.title,
+                              "run": run.id, "sources": [], "stopped": True, "gone": True})
+            print(f"stop: reasoner of run={run.id} was already gone; marked done", flush=True)
     return True
 
 

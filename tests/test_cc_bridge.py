@@ -1435,3 +1435,34 @@ def test_apps_in_context_line(monkeypatch, tmp_path):
     assert "off-app" not in line and "../bad" not in line and line in m.SYSTEM
     (apps / "installed.json").write_text("{}")
     assert m._apps_line() == ""
+
+
+def test_stop_on_a_run_whose_process_is_gone_marks_it_done(monkeypatch, tmp_path):
+    """A ghost turn (its reasoner exited, nothing emitted done) used to stay 'answering' after Stop."""
+    import subprocess
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    run = m.Run("thread-1", "go")
+    m.RUNS[run.id] = run
+    run.emit("text", {"t": "half an answer"})
+    run.proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    run.proc.wait()
+    seen = []
+    run.attach(lambda k, pl: seen.append(k))
+    assert m._stop_run(run) is True
+    assert run.done and run.stopped and run.payload["stopped"] and run.payload["gone"]
+    assert run.payload["reply"].startswith("half an answer") and run.payload["reply"].endswith("(stopped by you)")
+    assert seen[-1] == "done" and m._run_for_thread("thread-1") is None
+    # the dead driver's late end, if it ever comes, does not reopen or double-close the turn
+    run.emit("done", {"reply": "late"})
+    assert run.payload["reply"] != "late" and [k for k, _ in run.events].count("done") == 1
+    assert m._stop_run(run) is False
+
+
+def test_stop_on_a_live_process_still_signals_it(monkeypatch, tmp_path):
+    import subprocess
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    run = m.Run("thread-2", "go")
+    run.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    assert m._stop_run(run) is True
+    assert run.proc.wait(timeout=10) is not None
+    assert not run.done          # the turn's own driver closes a live turn, with what was said
