@@ -2,17 +2,19 @@ import Head from 'next/head'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 // The map (2026-11-06, hbar: "a single MAP so we keep track visually of seeing AI agents, and the
-// different tasks etc. that are happening in real time"; autonomy eval E12).
+// different tasks etc. that are happening in real time"; autonomy eval E12). Live lanes, his
+// pick after the first ring version: "time left to right, now line, bars per run and job, waiting
+// blinks at the now line, queue past now".
 //
-// /board lists runs as tiles; this draws how they hang together. The brain sits at the centre,
-// every conversation of the last day is a light on the ring around it, and the background jobs a
-// conversation started hang off that conversation. Your open tasks, the next-box candidates and
-// finished jobs whose report asks you something sit on the outer orbit. Colour is state: answering
-// pulses in the accent, waiting on you burns amber and is the brightest thing on screen, failed is
-// red, done is quiet. Click a light for its line, its time, its last line, any card with its
-// buttons, and a link to the conversation. Same reads as the board (GET /cc/board, /cc/actions,
-// /api/bf/tasks), every three seconds, none while the tab is hidden. Nothing here writes except
-// the card buttons, which are the board's own (POST /cc/permits/<approve|deny>).
+// One lane per conversation of the window, newest work on top after anything waiting on you. Time
+// runs left to right up to the now line; a run is a bar from when it started to when it ended, or
+// to now while it answers; the jobs and agents a conversation started are thinner bars under it.
+// What waits on you reaches the now line and blinks there. Past the now line is what has not
+// happened yet: your open tasks, finished job reports that ask you something, and next-box
+// candidates. Click a bar for its line, its time, its last line, any card with its buttons, and
+// the conversation. Same reads as the board (GET /cc/board, /cc/actions, /api/bf/tasks), every
+// three seconds, none while the tab is hidden. Nothing here writes except the card buttons, which
+// are the board's own (POST /cc/permits/<approve|deny>).
 
 const C = {
   ink: 'var(--text)', dim: 'var(--muted)', gold: 'var(--accent)', card: 'var(--surface2)', surface: 'var(--surface)',
@@ -28,98 +30,92 @@ const STATE = {
   next: { color: C.dim, word: 'proposed next' },
   ask: { color: C.warn, word: 'report asks you' },
 }
-const RANK = { waiting: 0, failed: 1, answering: 2, done: 3 }
-const W = 1000, H = 720, CX = 500, CY = 360, R = 215, R_OUT = 330
-const OUTER_MAX = 14
+const RANK = { waiting: 0, answering: 1, failed: 2, done: 3 }
+const WINDOWS = [[3600, '1 h'], [6 * 3600, '6 h'], [24 * 3600, '24 h']]
+const NOW_AT = 0.76      // where the now line sits across the track; the queue lives to its right
+const LABEL_W = 210
 
 const clock = (s) => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` }
 const ago = (s) => { s = Math.max(0, Math.round(s)); return s < 90 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago` }
-const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s }
+const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 const CSS = `
-@keyframes map-breathe { 0%,100% { opacity: .55 } 50% { opacity: 1 } }
-@keyframes map-halo { 0% { transform: scale(1); opacity: .55 } 100% { transform: scale(2.6); opacity: 0 } }
-@keyframes map-flow { to { stroke-dashoffset: -24 } }
-@keyframes map-drift { 0%,100% { transform: translate(0,0) } 50% { transform: translate(0,-3px) } }
-.map-node { transition: transform .9s cubic-bezier(.2,.8,.2,1); cursor: pointer }
-.map-breathe { animation: map-breathe 2.2s ease-in-out infinite }
-.map-halo { transform-box: fill-box; transform-origin: center; animation: map-halo 1.8s ease-out infinite }
-.map-flow { stroke-dasharray: 4 8; animation: map-flow 1.2s linear infinite }
-.map-drift { animation: map-drift 6s ease-in-out infinite }
-@media (prefers-reduced-motion: reduce) { .map-breathe, .map-halo, .map-flow, .map-drift { animation: none } }
+@keyframes lane-blink { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(212,184,106,.7) } 50% { opacity: .35; box-shadow: 0 0 0 7px rgba(212,184,106,0) } }
+@keyframes lane-stripes { to { background-position: 28px 0 } }
+@keyframes lane-glow { 0%,100% { opacity: .55 } 50% { opacity: 1 } }
+.lane-blink { animation: lane-blink 1.1s ease-in-out infinite }
+.lane-run { background-image: repeating-linear-gradient(-45deg, rgba(255,255,255,.18) 0 7px, transparent 7px 14px); background-size: 28px 100%; animation: lane-stripes 1s linear infinite }
+.lane-now { animation: lane-glow 2.4s ease-in-out infinite }
+.lane-row:hover { background-color: var(--surface2) }
+@media (prefers-reduced-motion: reduce) { .lane-blink, .lane-run, .lane-now { animation: none } }
 `
 
-// Groups the board's tiles by conversation: the conversation's own tile is the hub, its jobs and
-// cards are satellites. Jobs and permits with no known conversation hang off the brain directly.
-export function buildMap(board, actions, tasks) {
+// When a tile began and ended, in ms. A live tile ends now. A finished conversation's tile carries
+// its last moment in ago_s and its length in elapsed_s; a live run or job carries started.
+export function span(t, now) {
+  const live = t.state === 'answering' || t.state === 'waiting'
+  const started = t.started ? Date.parse(t.started) : NaN
+  let end
+  if (live) end = now
+  else if (t.ago_s !== null && t.ago_s !== undefined) end = now - t.ago_s * 1000
+  else if (!Number.isNaN(started)) end = started + (t.elapsed_s || 0) * 1000
+  else end = now
+  let begin = live && !Number.isNaN(started) ? started : end - (t.elapsed_s || 0) * 1000
+  if (Number.isNaN(begin) || begin > end) begin = end
+  return { begin, end, live }
+}
+
+// Lanes: a conversation's own tile is the lane, its jobs and cards ride under it. Jobs and
+// permits with no known conversation get a lane of their own.
+export function buildLanes(board, now) {
   const tiles = (board && board.tiles) || []
-  const hubs = new Map()
-  const loose = []
+  const lanes = new Map()
   for (const t of tiles) {
-    if (t.kind === 'run' || t.kind === 'thread') {
-      const k = t.thread || t.key
-      const h = hubs.get(k)
-      // a live run outranks the same conversation's finished record
-      if (!h || (RANK[t.state] ?? 9) < (RANK[h.tile.state] ?? 9)) hubs.set(k, { key: k, tile: t, sats: h ? h.sats : [] })
+    if (t.kind !== 'run' && t.kind !== 'thread') continue
+    const k = t.thread || t.key
+    const l = lanes.get(k)
+    if (!l) lanes.set(k, { key: k, head: t, bars: [t], subs: [] })
+    else {
+      l.bars.push(t)
+      if ((RANK[t.state] ?? 9) < (RANK[l.head.state] ?? 9)) l.head = t
     }
   }
   for (const t of tiles) {
     if (t.kind === 'run' || t.kind === 'thread') continue
-    const h = t.thread ? hubs.get(t.thread) : null
-    if (h) h.sats.push(t)
-    else loose.push(t)
+    const l = t.thread ? lanes.get(t.thread) : null
+    if (l) l.subs.push(t)
+    else lanes.set(t.key, { key: t.key, head: t, bars: [t], subs: [] })
   }
-  // the loose jobs and permits ride the ring as their own lights
-  for (const t of loose) hubs.set(t.key, { key: t.key, tile: t, sats: [] })
-  const ring = [...hubs.values()].sort((a, b) => String(a.tile.started || '').localeCompare(String(b.tile.started || '')) || a.key.localeCompare(b.key))
-  const outer = []
-  for (const a of ((actions && actions.jobs) || [])) outer.push({ key: `ask:${a.id}`, kind: 'ask', state: 'ask', title: a.title || a.id, last: [a.status && `${a.status}:`, a.line].filter(Boolean).join(' '), href: a.thread ? `/talk?thread=${a.thread}` : '/board', raw: a })
-  for (const t of (tasks || []).filter(x => !x.done)) outer.push({ key: `task:${t.id}`, kind: 'task', state: 'task', title: t.text, last: t.due ? `due ${t.due}` : '', href: '/tasks', raw: t })
-  for (const n of ((actions && actions.next) || [])) outer.push({ key: `next:${n.id}`, kind: 'next', state: 'next', title: n.what, last: [n.why, n.cost && `cost ${n.cost}`].filter(Boolean).join(' · '), href: '/board', raw: n })
-  return { ring, outer: outer.slice(0, OUTER_MAX), outerMore: Math.max(0, outer.length - OUTER_MAX) }
+  const last = (l) => Math.max(...[...l.bars, ...l.subs].map(t => span(t, now).end))
+  return [...lanes.values()].sort((a, b) => ((RANK[a.head.state] ?? 9) - (RANK[b.head.state] ?? 9)) || (last(b) - last(a)))
 }
 
-// Fixed places: the ring spreads evenly from the top, satellites fan outward from their hub.
-export function layout(ring, outer) {
-  const pos = {}
-  const n = Math.max(ring.length, 1)
-  ring.forEach((h, i) => {
-    const a = -Math.PI / 2 + (i / n) * Math.PI * 2
-    pos[h.key] = { x: CX + Math.cos(a) * R, y: CY + Math.sin(a) * R * 0.86, a }
-    const m = h.sats.length
-    h.sats.forEach((s, j) => {
-      const off = m === 1 ? 0 : (j / (m - 1) - 0.5) * Math.min(0.5, 0.16 * m)
-      pos[s.key] = { x: CX + Math.cos(a + off) * (R + 62), y: CY + Math.sin(a + off) * (R + 62) * 0.86, a: a + off, hub: h.key }
-    })
-  })
-  const k = Math.max(outer.length, 1)
-  outer.forEach((o, i) => {
-    // the outer orbit fills the lower half, left to right, out of the ring's way
-    const a = Math.PI * (0.12 + 0.76 * (k === 1 ? 0.5 : i / (k - 1)))
-    pos[o.key] = { x: CX + Math.cos(Math.PI - a) * R_OUT * 1.18, y: CY + Math.sin(a) * R_OUT * 0.95, a: Math.PI - a }
-  })
-  return pos
+export function buildQueue(actions, tasks) {
+  const q = []
+  for (const a of ((actions && actions.jobs) || [])) q.push({ key: `ask:${a.id}`, kind: 'ask', state: 'ask', title: a.title || a.id, last: [a.status && `${a.status}:`, a.line].filter(Boolean).join(' '), href: a.thread ? `/talk?thread=${a.thread}` : '/board' })
+  for (const t of (tasks || []).filter(x => !x.done)) q.push({ key: `task:${t.id}`, kind: 'task', state: 'task', title: t.text, last: t.due ? `due ${t.due}` : '', href: '/tasks' })
+  for (const n of ((actions && actions.next) || [])) q.push({ key: `next:${n.id}`, kind: 'next', state: 'next', title: n.what, last: [n.why, n.cost && `cost ${n.cost}`].filter(Boolean).join(' · '), href: '/board' })
+  return q
 }
 
-function Node({ id, p, state, kind, r, label, sel, onPick, showLabel, below }) {
-  const st = STATE[state] || STATE.done
-  const live = state === 'answering'
-  const hot = state === 'waiting' || state === 'ask'
-  const right = Math.cos(p.a || 0) >= -0.05
+function Bar({ t, now, from, win, thin, sel, onPick }) {
+  const { begin, end, live } = span(t, now)
+  if (end < from) return null
+  const st = STATE[t.state] || STATE.done
+  const x0 = Math.max(0, (begin - from) / win) * NOW_AT * 100
+  const x1 = Math.min(1, (end - from) / win) * NOW_AT * 100
+  const w = Math.max(0.5, x1 - x0)
+  const h = thin ? 6 : 14
   return (
-    <g className="map-node" style={{ transform: `translate(${p.x}px, ${p.y}px)` }} onClick={(e) => { e.stopPropagation(); onPick(id) }}>
-      <circle r={r + 14} style={{ fill: 'transparent' }} />
-      {hot && <circle r={r} className="map-halo" style={{ fill: 'none', stroke: st.color, strokeWidth: 2 }} />}
-      {live && <circle r={r + 5} className="map-breathe" style={{ fill: 'none', stroke: st.color, strokeWidth: 1, opacity: 0.6 }} />}
-      {kind === 'next'
-        ? <rect x={-r * 0.8} y={-r * 0.8} width={r * 1.6} height={r * 1.6} transform="rotate(45)" style={{ fill: C.bg, stroke: st.color, strokeWidth: sel ? 2.4 : 1.2 }} />
-        : <circle r={r} className={live ? 'map-breathe' : undefined}
-                  style={{ fill: state === 'done' ? C.bg : st.color, fillOpacity: state === 'done' ? 1 : hot ? 0.95 : 0.85, stroke: sel ? C.ink : st.color, strokeWidth: sel ? 2.4 : 1.3 }} />}
-      {showLabel && (
-        <text x={below ? 0 : right ? r + 7 : -(r + 7)} y={below ? r + 15 : 4} textAnchor={below ? 'middle' : right ? 'start' : 'end'}
-              style={{ ...mono, fontSize: hot ? 12 : 11, fill: hot ? st.color : state === 'done' ? C.dim : C.ink, pointerEvents: 'none' }}>{label}</text>
+    <div onClick={(e) => { e.stopPropagation(); onPick(t.key) }} title={t.title}
+         className={t.state === 'answering' ? 'lane-run' : undefined}
+         style={{ position: 'absolute', left: `${x0}%`, width: `calc(${w}% + 4px)`, top: '50%', height: h, marginTop: -h / 2, borderRadius: h / 2, cursor: 'pointer',
+                  backgroundColor: st.color, opacity: t.state === 'done' ? 0.45 : 0.95,
+                  outline: sel ? `2px solid ${C.ink}` : 'none', outlineOffset: 2 }}>
+      {live && t.state === 'waiting' && (
+        <span className="lane-blink" style={{ position: 'absolute', right: -6, top: '50%', width: h + 8, height: h + 8, marginTop: -(h + 8) / 2, borderRadius: '50%', backgroundColor: C.warn }} />
       )}
-    </g>
+    </div>
   )
 }
 
@@ -129,6 +125,7 @@ export default function MapPage() {
   const [tasks, setTasks] = useState(null)
   const [sel, setSel] = useState(null)
   const [now, setNow] = useState(Date.now())
+  const [win, setWin] = useState(3600)
   const [busy, setBusy] = useState(null)
   const [note, setNote] = useState(null)
   const timer = useRef(null)
@@ -147,20 +144,26 @@ export default function MapPage() {
     document.addEventListener('visibilitychange', onVis)
     return () => { stop(); document.removeEventListener('visibilitychange', onVis) }
   }, [])
+  // the bars grow between two readings of the board
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [])
 
-  const { ring, outer, outerMore } = useMemo(() => buildMap(board, actions, tasks), [board, actions, tasks])
-  const pos = useMemo(() => layout(ring, outer), [ring, outer])
-  const items = useMemo(() => {
-    const m = {}
-    ring.forEach(h => { m[h.key] = h.tile; h.sats.forEach(s => { m[s.key] = s }) })
-    outer.forEach(o => { m[o.key] = o })
-    return m
-  }, [ring, outer])
+  const winMs = win * 1000
+  const from = now - winMs
+  const lanesAll = useMemo(() => buildLanes(board, now), [board, now])
+  const lanes = lanesAll.filter(l => [...l.bars, ...l.subs].some(t => span(t, now).end >= from))
+  const earlier = lanesAll.length - lanes.length
+  const queue = useMemo(() => buildQueue(actions, tasks), [actions, tasks])
+  const items = {}
+  lanesAll.forEach(l => [...l.bars, ...l.subs].forEach(t => { items[t.key] = t }))
+  queue.forEach(q => { items[q.key] = q })
   const picked = sel ? items[sel] : null
-  const waiting = Object.entries(items).filter(([, t]) => t.state === 'waiting')
-  const counts = { answering: 0, waiting: 0, failed: 0, done: 0 }
-  Object.values(items).forEach(t => { if (counts[t.state] !== undefined) counts[t.state] += 1 })
+  const waiting = lanesAll.filter(l => l.head.state === 'waiting' || l.subs.some(s => s.state === 'waiting'))
+  const counts = { waiting: 0, answering: 0, failed: 0, done: 0 }
+  lanes.forEach(l => { if (counts[l.head.state] !== undefined) counts[l.head.state] += 1 })
+
+  const ticks = []
+  const step = win <= 3600 ? 10 * 60e3 : win <= 6 * 3600 ? 3600e3 : 4 * 3600e3
+  for (let t = Math.ceil(from / step) * step; t <= now; t += step) ticks.push(t)
 
   const decide = async (id, action) => {
     setBusy(id); setNote(null)
@@ -171,83 +174,102 @@ export default function MapPage() {
     } catch { setNote('the bridge did not answer') }
     setBusy(null); load()
   }
-
   const timeLine = (t) => {
-    if (!t) return ''
-    const live = t.state === 'answering' || t.state === 'waiting'
-    if (live && t.started) return `running ${clock(Math.max(t.elapsed_s || 0, (now - Date.parse(t.started)) / 1000))}`
-    return [t.elapsed_s ? `took ${clock(t.elapsed_s)}` : '', t.ago_s !== null && t.ago_s !== undefined ? ago(t.ago_s) : ''].filter(Boolean).join(' · ')
+    if (!t || !t.kind || ['task', 'next', 'ask'].includes(t.kind)) return t && t.kind === 'task' ? 'not done yet' : ''
+    const { begin, end, live } = span(t, now)
+    return live ? `running ${clock((now - begin) / 1000)}, since ${hhmm(begin)}` : `took ${clock((end - begin) / 1000)} · ended ${ago((now - end) / 1000)}`
   }
   const kindWord = (t) => ({ run: 'conversation', thread: 'conversation', job: t.agent ? 'agent' : 'background job', permit: 'proposed action', task: 'task', next: 'next-box candidate', ask: 'job report' }[t.kind] || t.kind)
+  const nowPct = `${NOW_AT * 100}%`
 
   return (
     <>
       <Head><title>Map · BrainFoundry</title></Head>
       <style>{CSS}</style>
       <div onClick={() => setSel(null)}
-           style={{ position: 'relative', height: 'calc(100vh - var(--nav-h, 52px))', backgroundColor: C.bg, color: C.ink, overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', left: 14, top: 10, right: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', zIndex: 2 }}>
+           style={{ position: 'relative', height: 'calc(100vh - var(--nav-h, 52px))', backgroundColor: C.bg, color: C.ink, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px 6px' }}>
           <span style={{ ...mono, color: C.gold, fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase' }}>map</span>
           {['waiting', 'answering', 'failed', 'done'].map(k => (
             <span key={k} style={{ ...mono, fontSize: 11, color: counts[k] ? STATE[k].color : C.dim, opacity: counts[k] ? 1 : 0.6 }}>{counts[k]} {STATE[k].word}</span>
           ))}
+          {waiting.length > 0 && (
+            <button onClick={(e) => { e.stopPropagation(); const l = waiting[0]; setSel(l.head.state === 'waiting' ? l.head.key : l.subs.find(s => s.state === 'waiting').key) }}
+                    className="lane-blink"
+                    style={{ ...mono, fontSize: 12, padding: '4px 12px', borderRadius: 8, border: `1px solid ${C.warn}`, backgroundColor: 'transparent', color: C.warn, cursor: 'pointer' }}>
+              {waiting.length} waiting on you
+            </button>
+          )}
           <span style={{ flex: 1 }} />
+          {WINDOWS.map(([s, label]) => (
+            <button key={s} onClick={(e) => { e.stopPropagation(); setWin(s) }}
+                    style={{ ...mono, fontSize: 11, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', backgroundColor: 'transparent',
+                             border: `1px solid ${win === s ? C.gold : C.line}`, color: win === s ? C.gold : C.dim }}>{label}</button>
+          ))}
           <a href="/board" style={{ ...mono, fontSize: 11, color: C.dim }}>board</a>
-          <a href="/tasks" style={{ ...mono, fontSize: 11, color: C.dim }}>tasks</a>
           <a href="/talk?thread=new" style={{ ...mono, fontSize: 11, color: C.gold }}>+ new</a>
         </div>
-        {waiting.length > 0 && (
-          <button onClick={(e) => { e.stopPropagation(); setSel(waiting[0][0]) }}
-                  style={{ ...mono, position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: 40, zIndex: 2, fontSize: 12, padding: '6px 14px', borderRadius: 8,
-                           border: `1px solid ${C.warn}`, backgroundColor: 'transparent', color: C.warn, cursor: 'pointer' }}>
-            {waiting.length} waiting on you: {cut(waiting[0][1].title, 48)}
-          </button>
-        )}
-        {note && <p style={{ ...mono, position: 'absolute', left: 14, top: 34, fontSize: 12, color: C.bad, zIndex: 2 }}>{note}</p>}
-        {board === false && <p style={{ position: 'absolute', left: 14, top: 40, fontSize: 13, color: C.dim, zIndex: 2 }}>The bridge is not answering at /cc/board. The map fills by itself once it does.</p>}
-        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '100%', display: 'block' }}>
-          <g className="map-drift">
-            <ellipse cx={CX} cy={CY} rx={R} ry={R * 0.86} style={{ fill: 'none', stroke: C.line, strokeOpacity: 0.5 }} />
-            {ring.map(h => {
-              const p = pos[h.key], st = STATE[h.tile.state] || STATE.done
-              const live = h.tile.state === 'answering' || h.tile.state === 'waiting'
+        {note && <p style={{ ...mono, fontSize: 12, color: C.bad, margin: '0 14px 6px' }}>{note}</p>}
+
+        {/* the time axis */}
+        <div style={{ display: 'flex', borderBottom: `1px solid ${C.line}`, height: 22, flexShrink: 0 }}>
+          <div style={{ width: LABEL_W, flexShrink: 0 }} />
+          <div style={{ position: 'relative', flex: 1, marginRight: 14 }}>
+            {ticks.map(t => (
+              <span key={t} style={{ ...mono, position: 'absolute', left: `${((t - from) / winMs) * NOW_AT * 100}%`, transform: 'translateX(-50%)', top: 3, fontSize: 10, color: C.dim }}>{hhmm(t)}</span>
+            ))}
+            <span style={{ ...mono, position: 'absolute', left: nowPct, transform: 'translateX(-50%)', top: 3, fontSize: 10, color: C.gold, letterSpacing: '0.1em' }}>NOW</span>
+            <span style={{ ...mono, position: 'absolute', left: `calc(${nowPct} + 14px)`, top: 3, fontSize: 10, color: C.dim, letterSpacing: '0.1em' }}>NEXT</span>
+          </div>
+        </div>
+
+        <div style={{ position: 'relative', flex: 1, overflowY: 'auto' }}>
+          {/* the now line runs through every lane */}
+          <div className="lane-now" style={{ position: 'absolute', top: 0, bottom: 0, left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px - 14px) * ${NOW_AT})`, width: 2, backgroundColor: C.gold, pointerEvents: 'none', zIndex: 1 }} />
+          <div style={{ display: 'flex', minHeight: '100%' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {board === false && <p style={{ fontSize: 13, color: C.dim, margin: '24px 14px' }}>The bridge is not answering at /cc/board. The map fills by itself once it does.</p>}
+              {board && lanes.length === 0 && <p style={{ fontSize: 13, color: C.dim, margin: '24px 14px', maxWidth: 420 }}>Nothing ran in this window. Widen it above, or start a conversation.</p>}
+              {lanes.map(l => {
+                const st = STATE[l.head.state] || STATE.done
+                const rows = [{ key: l.key, label: l.head.title, bars: l.bars, thin: false }, ...l.subs.map(s => ({ key: s.key, label: s.title, bars: [s], thin: true }))]
+                return (
+                  <div key={l.key} style={{ borderBottom: `1px solid ${C.line}`, padding: '2px 0' }}>
+                    {rows.map(r => (
+                      <div key={r.key} className="lane-row" onClick={(e) => { e.stopPropagation(); setSel(r.bars[r.bars.length - 1].key) }}
+                           style={{ display: 'flex', alignItems: 'center', height: r.thin ? 20 : 30, cursor: 'pointer' }}>
+                        <div style={{ width: LABEL_W, flexShrink: 0, padding: r.thin ? '0 8px 0 26px' : '0 8px 0 14px', boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                      fontSize: r.thin ? 11 : 13, color: r.thin ? C.dim : l.head.state === 'done' ? C.dim : C.ink, ...(r.thin ? mono : {}) }} title={r.label}>
+                          {!r.thin && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: st.color, marginRight: 7, verticalAlign: 'middle' }} />}
+                          {r.label}
+                        </div>
+                        <div style={{ position: 'relative', flex: 1, height: '100%', marginRight: 14 }}>
+                          {r.bars.map(t => <Bar key={t.key} t={t} now={now} from={from} win={winMs} thin={r.thin} sel={sel === t.key} onPick={setSel} />)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+              {earlier > 0 && <p style={{ ...mono, fontSize: 11, color: C.dim, margin: '10px 14px' }}>{earlier} more ended before this window</p>}
+            </div>
+          </div>
+          {/* the queue: what has not happened yet, past the now line */}
+          <div style={{ position: 'absolute', top: 8, right: 14, width: `calc((100% - ${LABEL_W}px - 14px) * ${1 - NOW_AT} - 22px)`, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 2 }}>
+            {queue.slice(0, 30).map(q => {
+              const st = STATE[q.state]
               return (
-                <g key={'e' + h.key}>
-                  <line x1={CX} y1={CY} x2={p.x} y2={p.y} className={live ? 'map-flow' : undefined}
-                        style={{ stroke: live ? st.color : C.line, strokeOpacity: live ? 0.8 : 0.45, strokeWidth: live ? 1.4 : 1 }} />
-                  {h.sats.map(s => {
-                    const q = pos[s.key], ss = STATE[s.state] || STATE.done, sl = s.state === 'answering' || s.state === 'waiting'
-                    return <line key={'e' + s.key} x1={p.x} y1={p.y} x2={q.x} y2={q.y} className={sl ? 'map-flow' : undefined}
-                                 style={{ stroke: sl ? ss.color : C.line, strokeOpacity: sl ? 0.8 : 0.4 }} />
-                  })}
-                </g>
+                <div key={q.key} onClick={(e) => { e.stopPropagation(); setSel(q.key) }} title={q.title}
+                     style={{ padding: '5px 8px', borderRadius: 7, border: `1px ${q.kind === 'next' ? 'dashed' : 'solid'} ${sel === q.key ? C.ink : st.color}`, backgroundColor: C.bg, cursor: 'pointer',
+                              fontSize: 11.5, lineHeight: 1.3, color: q.kind === 'next' ? C.dim : C.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ ...mono, fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: st.color, marginRight: 6 }}>{q.kind}</span>{q.title}
+                </div>
               )
             })}
-            {outer.map(o => {
-              const q = pos[o.key]
-              return <line key={'e' + o.key} x1={CX} y1={CY} x2={q.x} y2={q.y} style={{ stroke: C.line, strokeOpacity: 0.18, strokeDasharray: '2 6' }} />
-            })}
-            <circle cx={CX} cy={CY} r={34} className="map-breathe" style={{ fill: C.gold, fillOpacity: 0.12 }} />
-            <circle cx={CX} cy={CY} r={13} style={{ fill: C.gold }} />
-            <text x={CX} y={CY + 34} textAnchor="middle" style={{ ...mono, fontSize: 11, letterSpacing: '0.14em', fill: C.dim }}>BRAIN</text>
-            {ring.map(h => (
-              <React.Fragment key={h.key}>
-                <Node id={h.key} p={pos[h.key]} state={h.tile.state} kind={h.tile.kind} r={h.tile.state === 'waiting' ? 11 : 9}
-                      label={cut(h.tile.title, ring.length > 14 ? 22 : 30)} sel={sel === h.key} onPick={setSel} showLabel below />
-                {h.sats.map(s => (
-                  <Node key={s.key} id={s.key} p={pos[s.key]} state={s.state} kind={s.kind} r={s.state === 'waiting' ? 8 : 5.5}
-                        label={cut(s.title, 22)} sel={sel === s.key} onPick={setSel} showLabel={sel === s.key || s.state === 'waiting' || s.state === 'answering'} />
-                ))}
-              </React.Fragment>
-            ))}
-            {outer.map(o => (
-              <Node key={o.key} id={o.key} p={pos[o.key]} state={o.state} kind={o.kind} r={o.kind === 'next' ? 5 : 6}
-                    label={cut(o.title, 26)} sel={sel === o.key} onPick={setSel} showLabel />
-            ))}
-            {outerMore > 0 && <text x={W - 20} y={H - 16} textAnchor="end" style={{ ...mono, fontSize: 11, fill: C.dim }}>+{outerMore} more on the board and tasks</text>}
-            {board && ring.length === 0 && <text x={CX} y={CY - 60} textAnchor="middle" style={{ fontSize: 14, fill: C.dim }}>Nothing ran in the last day.</text>}
-          </g>
-        </svg>
+            {queue.length > 30 && <span style={{ ...mono, fontSize: 10, color: C.dim }}>+{queue.length - 30} more on the board and tasks</span>}
+          </div>
+        </div>
+
         <div onClick={e => e.stopPropagation()}
              style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(380px, 92vw)', padding: '44px 20px 20px', boxSizing: 'border-box',
                       backgroundColor: C.surface, borderLeft: `1px solid ${C.line}`, overflowY: 'auto', zIndex: 3,
@@ -274,9 +296,9 @@ export default function MapPage() {
                 ))}
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 12 }}>
                   {picked.href && <a href={picked.href} style={{ ...mono, fontSize: 12, color: C.gold }}>{picked.kind === 'run' || picked.kind === 'thread' ? 'open the conversation' : 'open'}</a>}
-                  {(picked.links || []).slice(0, 4).map(l => (
-                    <a key={l.href} href={l.href} target={l.kind === 'url' ? '_blank' : undefined} rel={l.kind === 'url' ? 'noreferrer' : undefined}
-                       style={{ ...mono, fontSize: 12, color: C.dim }}>{l.label}</a>
+                  {(picked.links || []).slice(0, 4).map(lk => (
+                    <a key={lk.href} href={lk.href} target={lk.kind === 'url' ? '_blank' : undefined} rel={lk.kind === 'url' ? 'noreferrer' : undefined}
+                       style={{ ...mono, fontSize: 12, color: C.dim }}>{lk.label}</a>
                   ))}
                 </div>
               </>
