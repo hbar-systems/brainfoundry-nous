@@ -34,7 +34,7 @@ The owner preset's answers are empty: hbar's live layout is in `/home/cc/.cc-bri
 - No bridge route or `<layout>` key sets the arrangement; the operator sets it (`Store.set_arrangement`) when the brain is made.
 - Fonts, size, weight, width and colour vars stay layout values, not catalog items.
 
-## 5. The catalog (2026-10-29)
+## 5. The catalog (2026-10-29; panel:nav, tools, inputbuttons, footer added 2026-11-06)
 
 Generated from `cc_catalog.CATALOG`; the code is the source, this table is a copy.
 
@@ -79,6 +79,10 @@ Generated from `cc_catalog.CATALOG`; the code is the source, this table is a cop
 | panel:hero | panel | the title block | on | owner, member | candidate | unknown |
 | panel:hint | panel | the starter hints | on | owner, member | candidate | unknown |
 | panel:gallery | panel | the gallery link | on | owner, member | candidate | unknown |
+| panel:nav | panel | the row of buttons at the top of the console | on | owner, member | candidate | unknown |
+| panel:tools | panel | the tool line: colours, skins, posture, seat, learn | on | owner, member | candidate | unknown |
+| panel:inputbuttons | panel | attach, talk and send beside the input | on | owner, member | candidate | unknown |
+| panel:footer | panel | the status lines under the input | on | owner, member | candidate | unknown |
 | door:choices | door | choice buttons, each with a probability | on | owner, member | standard | nous c6dafd1; mind/claude/feedback_probability_recommendations.md |
 | door:highlight | door | a highlighted phrase opens its card | on | owner, member | standard | nous 0cd0d92; mind/claude/feedback_agent_tags_clickable.md |
 | door:permit-card | door | approve or refuse an action before it runs | on | owner, member | standard | mind/claude/feedback_human_approve_destructive_infra.md |

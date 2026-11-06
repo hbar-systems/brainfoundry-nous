@@ -32,7 +32,12 @@ VERSION = 1
 HISTORY_CAP = 10
 PROPOSAL_CAP = 20
 
-PANELS = ("hero", "hint", "handsfree", "files", "board", "gallery", "sidebyside")
+PANELS = ("hero", "hint", "handsfree", "files", "board", "gallery", "sidebyside",
+          # the quiet console (2026-11-06, hbar: "everything is done through speech"): the console's chrome,
+          # each hideable. nav: the top row of buttons; tools: the tool line; inputbuttons: attach, talk,
+          # send beside the input (Enter sends, a stop shows while an answer runs); footer: the status
+          # lines under the input, folded into one "..." link with only urgent lines kept.
+          "nav", "tools", "inputbuttons", "footer")
 FONTS = ("system", "inter", "lora", "crimson", "dm-mono", "jetbrains")   # the console's own font picker
 COLUMNS = ("narrow", "wide", "full")
 THEMES = ("default", "black", "light")
@@ -216,7 +221,9 @@ QUESTIONS = (
                  ("today", "Today (calendar, mail, tasks) beside the conversation"))},
     {"id": "never", "ask": "Which of these do you never use? Say none if all of them stay.", "multi": True,
      "options": (("board", "board"), ("gallery", "gallery"), ("files", "files link"), ("sidebyside", "side by side"),
-                 ("handsfree", "hands-free row"), ("hint", "the starter hints"), ("hero", "the title block"))},
+                 ("handsfree", "hands-free row"), ("hint", "the starter hints"), ("hero", "the title block"),
+                 ("nav", "the row of buttons at the top"), ("tools", "the tool line (colours, skins, posture, seat)"),
+                 ("inputbuttons", "the buttons beside the input (Enter sends)"), ("footer", "the status lines under the input"))},
     {"id": "panes", "ask": "When the brain opens a screen for you, one at a time beside the chat, or do you work with several?",
      "options": (("one", "one"), ("several", "several"))},
     {"id": "side", "ask": "Which side should the pane sit on?", "options": (("right", "right"), ("left", "left"))},

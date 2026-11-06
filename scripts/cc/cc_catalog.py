@@ -88,6 +88,10 @@ CATALOG = (
     _i("panel:hero", "the title block", "on", M, UNKNOWN),
     _i("panel:hint", "the starter hints", "on", M, UNKNOWN),
     _i("panel:gallery", "the gallery link", "on", M, UNKNOWN),
+    _i("panel:nav", "the row of buttons at the top of the console", "on", M, UNKNOWN),   # quiet console 2026-11-06
+    _i("panel:tools", "the tool line: colours, skins, posture, seat, learn", "on", M, UNKNOWN),
+    _i("panel:inputbuttons", "attach, talk and send beside the input", "on", M, UNKNOWN),
+    _i("panel:footer", "the status lines under the input", "on", M, UNKNOWN),
     # doors: things in an answer the person presses
     _i("door:choices", "choice buttons, each with a probability", "on", M, "nous c6dafd1; mind/claude/feedback_probability_recommendations.md"),
     _i("door:highlight", "a highlighted phrase opens its card", "on", M, "nous 0cd0d92; mind/claude/feedback_agent_tags_clickable.md"),

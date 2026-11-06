@@ -247,3 +247,60 @@ def test_start_pane():
     for bad in ("/apps/../x", "https://example.com", "/settings", "/apps/today?x=<script>", 3):
         with pytest.raises(L.LayoutError):
             L.validate({"start": bad})
+
+
+# ---- the quiet console (2026-11-06): the chrome as four hideable panels ----
+
+QUIET = ("nav", "tools", "inputbuttons", "footer")
+
+
+def test_quiet_panels_default_shown_and_hideable():
+    for k in QUIET:
+        assert k in L.PANELS and L.DEFAULT["panels"][k] is True
+        lay = L.validate({"panels": {k: False}})
+        assert lay["panels"][k] is False and all(lay["panels"][o] for o in L.PANELS if o != k)
+        assert f"hides {k}" in L.summary(lay)
+    with pytest.raises(L.LayoutError):
+        L.validate({"panels": {"footer": "folded"}})
+
+
+def test_quiet_panels_from_the_never_answer():
+    never = next(q for q in L.QUESTIONS if q["id"] == "never")
+    assert set(QUIET) <= {v for v, _w in never["options"]}
+    lay = L.from_answers({"never": list(QUIET)})
+    assert all(lay["panels"][k] is False for k in QUIET)
+    assert all(lay["panels"][k] is True for k in L.PANELS if k not in QUIET)
+    assert L.validate_answers({"never": ["footer", "nav", "footer"]}) == {"never": ["footer", "nav"]}
+
+
+def test_quiet_panels_in_both_interview_tables():
+    doc = (ROOT / "docs" / "personalize-interview.md").read_text()
+    asks = next(line for line in doc.splitlines() if line.startswith("| never | Which"))
+    for k in QUIET:
+        assert f"{k}:" in asks, k                      # the questions table, value: words
+        assert f"| never: {k} |" in doc, k             # the effects table
+
+
+def test_js_quiet_panels_round_trip():
+    lay = L.from_answers({"never": list(QUIET)})
+    out = _node_json("const l=require('./layout.js');const lay=%s;const plan=l.localPlan(lay);"
+                     "const get=k=>plan.set[k]===undefined?null:plan.set[k];"
+                     "console.log(JSON.stringify({keys:l.PANEL_KEYS,hidden:JSON.parse(plan.set['cc.hidden']),back:l.capture(get,lay)}))" % json.dumps(lay))
+    assert out["keys"] == list(L.PANELS)               # the page and the box hold the same list
+    assert out["hidden"] == {k: True for k in QUIET}
+    assert L.validate(out["back"]) == lay
+
+
+def test_js_urgent_lines_when_the_footer_folds():
+    out = _node_json(r"""
+const l=require('./layout.js');
+const all=l.urgentLines(['disk 96% used, 3.1 GB free','disk 91% used, 9 GB free','memory 0.4 GB available of 8','shared box: disk 95% used, 4 GB free'],
+  {ingest:{pending:2},cards_waiting:1});
+const none=l.urgentLines(['disk 94.9% used, 5 GB free','load 9 on 4 cores'],{ingest:{pending:0},cards_waiting:0});
+const empty=l.urgentLines(null,null);
+console.log(JSON.stringify({all,none,empty}));
+""")
+    assert [u["kind"] for u in out["all"]] == ["disk", "disk", "docs", "cards"]
+    assert out["all"][0]["text"].startswith("disk 96%") and out["all"][1]["text"].startswith("shared box: disk 95%")
+    assert out["all"][2]["text"] == "2 documents wait for your approval" and out["all"][3]["text"] == "a card waits for you"
+    assert out["none"] == [] and out["empty"] == []

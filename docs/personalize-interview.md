@@ -1,6 +1,6 @@
 # Personalize the console: the interview
 
-Created: 2026-10-09. Read by the brain's reasoner (CC) when the owner asks to set up or personalize the console, or on first use if they want to. The question list is fixed and lives in `scripts/cc/cc_layout.py` (`QUESTIONS`); a test keeps this file and that list in step. Amended 2026-10-29: starts from a preset.
+Created: 2026-10-09. Read by the brain's reasoner (CC) when the owner asks to set up or personalize the console, or on first use if they want to. The question list is fixed and lives in `scripts/cc/cc_layout.py` (`QUESTIONS`); a test keeps this file and that list in step. Amended 2026-10-29: starts from a preset. Amended 2026-11-06: "never" can hide the console's chrome (the quiet console).
 
 ## Start from a preset (2026-10-29)
 
@@ -22,7 +22,7 @@ The interview no longer starts from the stock console. It starts from a preset (
 | id | ask | options (value: words) |
 |---|---|---|
 | first | What do you open first when you sit down? | talk: the conversation; gallery: my conversations as a deck; panes: several conversations side by side; today: Today (calendar, mail, tasks) beside the conversation |
-| never | Which of these do you never use? Say none if all stay. (several allowed) | board; gallery; files; sidebyside: side by side; handsfree: the hands-free row; hint: the starter hints; hero: the title block |
+| never | Which of these do you never use? Say none if all stay. (several allowed) | board; gallery; files; sidebyside: side by side; handsfree: the hands-free row; hint: the starter hints; hero: the title block; nav: the row of buttons at the top; tools: the tool line (colours, skins, posture, seat); inputbuttons: the buttons beside the input (Enter sends); footer: the status lines under the input |
 | panes | When the brain opens a screen for you, one at a time beside the chat, or several? | one; several |
 | side | Which side should the pane sit on? | right; left |
 | tone | Black, light, or the stock warm dark? | black; light; default: stock |
@@ -52,6 +52,10 @@ When you have the answers, end one message with exactly one block, using the opt
 |---|---|
 | first | the page the console opens on: the conversation, /gallery or /panes (once per browser session); today opens the conversation with the Today app beside it (layout key `start`: `/apps/<id>` or /tasks, /files, /graph, /guide; amended 2026-11-04) |
 | never | the named block is hidden; "reset layout" and /layout bring it back |
+| never: nav | the top row (threads, new thread, side by side, gallery, board, agents, export) is hidden; the "everything" drawer stays, and /new, /help and the other slash commands still work (2026-11-06) |
+| never: tools | the tool line (colour wheel, tint, text, skins, wallpaper, posture, seat, learn) is hidden; /posture and /seat still work |
+| never: inputbuttons | attach, talk, send now and send leave the input: Enter sends, files attach by drop or paste, voice runs hands-free (/talk free), Esc stops; a stop button shows only while an answer runs |
+| never: footer | the status lines fold into one "···" link that unfolds them; a disk over 95% full, documents waiting for approval and cards waiting for a decision still show as one line |
 | panes: one | hides the "side by side" button |
 | side | the pane opens left or right of the conversation |
 | tone | colour preset: black, light, or the stock palette |

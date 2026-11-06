@@ -8,7 +8,7 @@
 
 const VAR_RE = /^--(accent|bg|surface|surface2|text|muted|border|user-bg|user-text|code-bg)$/
 const VAL_RE = /^#[0-9a-fA-F]{6}$/
-const PANEL_KEYS = ['hero', 'hint', 'handsfree', 'files', 'board', 'gallery', 'sidebyside']
+const PANEL_KEYS = ['hero', 'hint', 'handsfree', 'files', 'board', 'gallery', 'sidebyside', 'nav', 'tools', 'inputbuttons', 'footer']
 const COLUMN_PX = { narrow: '860px', wide: '1180px', full: 'none' }
 const PX_COLUMN = { '860px': 'narrow', '1180px': 'wide', none: 'full' }
 
@@ -77,4 +77,22 @@ function stamp(layout) {
   return JSON.stringify(sort(layout))
 }
 
-module.exports = { localPlan, capture, applyStyle, clearStyle, stamp, PANEL_KEYS, COLUMN_PX }
+// The quiet console (2026-11-06): with the footer folded, only what cannot wait stays as a line. A disk
+// at or over 95% full (from the system warnings, "disk 96% used, ..."), documents waiting for approval,
+// cards waiting for a decision. Returns [{kind, text}], the order the footer shows them in.
+const URGENT_DISK_PCT = 95
+function urgentLines(warnings, health) {
+  const out = []
+  for (const w of warnings || []) {
+    const m = /disk (\d+(?:\.\d+)?)% used/.exec(String(w))
+    if (m && Number(m[1]) >= URGENT_DISK_PCT) out.push({ kind: 'disk', text: String(w) })
+  }
+  const h = health || {}
+  const docs = (h.ingest && h.ingest.pending) || 0
+  if (docs > 0) out.push({ kind: 'docs', text: `${docs} document${docs === 1 ? '' : 's'} wait for your approval` })
+  const cards = h.cards_waiting || 0
+  if (cards > 0) out.push({ kind: 'cards', text: cards === 1 ? 'a card waits for you' : `${cards} cards wait for you` })
+  return out
+}
+
+module.exports = { localPlan, capture, applyStyle, clearStyle, stamp, urgentLines, PANEL_KEYS, COLUMN_PX }
