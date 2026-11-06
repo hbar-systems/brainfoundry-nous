@@ -668,6 +668,8 @@ export default function Upload() {
       if (!r.ok) { pushLog(`FAIL approve all: ${r.status} ${s.detail || ""}`); return; }
       setBatchRun(s);
       pushLog(`APPROVE ALL: ${s.total} documents, running on the server; you can leave this page.`);
+      // SEC-1 (2026-11-06): the server holds back documents the injection scan rated high.
+      if (s.held && s.held.length) pushLog(`HELD: ${s.held.length} high-risk document(s) stay pending; approve them one by one after reading: ${s.held.map(h => h.name).join(", ")}`);
       const t = setInterval(async () => { const running = await pollBatch(); if (!running) clearInterval(t); }, 3000);
     } catch (e) { pushLog(`FAIL approve all: ${e}`); }
   };

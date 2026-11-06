@@ -146,3 +146,44 @@ def test_scratch_folder_is_removed(env):
     _post(env, _zip(**{"conversations.json": chatgpt_export()}))
     left = list((env.tmp / "runtime" / "chat_imports").iterdir())
     assert left == []
+
+
+# ── SEC-1 (2026-11-06): a bulk approve holds back what the scan rated high ──
+
+def _bulk_env(monkeypatch, env, risks):
+    """Pending proposals with saved scan bands; the worker is replaced so nothing ingests."""
+    pending = []
+    for pid, risk in risks.items():
+        m._save_proposal_text(pid, f"text of {pid}", filename=f"{pid}.md", content_type="text/markdown",
+                              size=10, scan={"risk": risk, "score": 0, "signals": [], "summary": ""})
+        pending.append({"proposal_id": pid, "memory_type": "document_embedding",
+                        "source_refs": {"filename": f"{pid}.md"}})
+    started = []
+    monkeypatch.setattr(m, "_pending_document_proposals", lambda: list(pending))
+    monkeypatch.setattr(m, "_approve_all_worker", lambda items: started.extend(p["proposal_id"] for p in items))
+    m._APPROVE_ALL.update(running=False)
+    return started
+
+
+def test_approve_all_holds_high_risk_proposals(env, monkeypatch):
+    started = _bulk_env(monkeypatch, env, {"p-clean": "none", "p-med": "medium", "p-poison": "high"})
+    r = env.client.post("/documents/approve-all")
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["total"] == 2
+    assert [h["proposal_id"] for h in j["held"]] == ["p-poison"]
+    import time as _t
+    for _ in range(50):
+        if len(started) == 2:
+            break
+        _t.sleep(0.02)
+    assert sorted(started) == ["p-clean", "p-med"]
+
+
+def test_approve_all_by_id_still_holds_high_unless_asked(env, monkeypatch):
+    started = _bulk_env(monkeypatch, env, {"p-poison": "high"})
+    j = env.client.post("/documents/approve-all", json={"proposal_ids": ["p-poison"]}).json()
+    assert j["total"] == 0 and j["held"][0]["proposal_id"] == "p-poison" and started == []
+    j = env.client.post("/documents/approve-all",
+                        json={"proposal_ids": ["p-poison"], "include_high_risk": True}).json()
+    assert j["total"] == 1 and j["held"] == []

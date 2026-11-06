@@ -7823,6 +7823,18 @@ def items_left(items: List[Dict[str, Any]], current: Dict[str, Any]) -> bool:
 
 class ApproveAllRequest(BaseModel):
     proposal_ids: Optional[List[str]] = None   # a subset; None means every pending document
+    # SEC-1 (2026-11-06): a bulk approve holds back the proposals the injection scan rated
+    # high; they stay PENDING for a one-by-one look unless the caller says so on purpose.
+    include_high_risk: bool = False
+
+
+def _proposal_scan_risk(proposal_id: str) -> Optional[str]:
+    """The injection-scan band saved with a pending proposal's text (meta only, not the text)."""
+    try:
+        meta = json.loads((PROPOSAL_TEXT_DIR / f"{proposal_id}.meta.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    return ((meta.get("injection_scan") or {}).get("risk") or None)
 
 
 @app.post("/documents/approve-all")
@@ -7837,18 +7849,27 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
         if req and req.proposal_ids:
             want = set(req.proposal_ids)
             items = [p for p in items if p["proposal_id"] in want]
+        held: List[Dict[str, Any]] = []
+        if not (req and req.include_high_risk):
+            held = [p for p in items if _proposal_scan_risk(p["proposal_id"]) == "high"]
+            if held:
+                gone = {p["proposal_id"] for p in held}
+                items = [p for p in items if p["proposal_id"] not in gone]
+                print(f"[approve-all] held {len(held)} high-risk proposal(s) for a one-by-one look", flush=True)
+        held_out = [{"proposal_id": p["proposal_id"],
+                     "name": (p.get("source_refs") or {}).get("filename") or p["proposal_id"]} for p in held]
         if _APPROVE_ALL["running"]:
             # A batch is already running: queue these for it (the reconciler's second batch
             # of 392 was dropped here on 2026-09-27); the worker drains the queue when done.
             seen = {p["proposal_id"] for p in _APPROVE_QUEUE}
             _APPROVE_QUEUE.extend(p for p in items if p["proposal_id"] not in seen)
             _APPROVE_ALL["total"] += len(items)
-            return {**_APPROVE_ALL, "queued": len(items)}
+            return {**_APPROVE_ALL, "queued": len(items), "held": held_out}
         _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
                             started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), finished=None if items else "nothing pending")
         if items:
             threading.Thread(target=_approve_all_worker, args=(items,), name="approve-all", daemon=True).start()
-    return dict(_APPROVE_ALL)
+    return {**_APPROVE_ALL, "held": held_out}
 
 
 @app.get("/documents/approve-all/status")
