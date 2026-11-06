@@ -379,6 +379,17 @@ content, never credentials.
    operator-driven; native agentic mode widens what an injection could attempt.
    The gate (§4) is sized for that growth; the approval flow for RED is not built.
 
+9. **Telegram owner pin is trust on first use (SEC-1, 2026-11-06).** The first chat that
+   messages a newly connected bot becomes the owner and gets answers from memory. Connect,
+   then message the bot yourself at once. Fix: a pairing code. Pinned as an xfail in
+   tests/test_known_gaps_xfail.py.
+10. **Federation DM sender is self-asserted (SEC-1).** `/v1/federation/dm/receive` checks the
+   signature against the key the sender sent, so `from_brain` can be forged. DMs are shown
+   in the console only; they never reach the reasoner or memory. Pinned as an xfail.
+11. **Kernel `remember` is not scanned or stamped (SEC-1).** Operator key and permit only, no
+   embedding, but it is the one write lane without `injection_scan` and `mem_type`. Pinned
+   as an xfail.
+
 ## 7. Out of scope
 
 Transport TLS, host hardening, OS patching, and physical access — owned by the

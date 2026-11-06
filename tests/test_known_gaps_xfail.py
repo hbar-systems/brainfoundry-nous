@@ -54,3 +54,44 @@ def test_fetch_url_pins_validated_ip():
     src = _read("api/tools/fetch_url.py")
     assert re.search(r"transport|local_address|resolve_override|pinned", src, re.I), \
         "fetch_url has no connection pinning to the validated address"
+
+
+# ── SEC-1 Warden 1, poisoned input (2026-11-06) ─────────────────────────────
+
+@pytest.mark.xfail(strict=True, reason=(
+    "SEC-1 gap: /integrations/telegram/webhook pins the FIRST chat that messages the bot "
+    "as the owner (trust on first use). Between connect and the owner's first message, "
+    "anyone who finds the bot's @username becomes the owner and gets answers from memory. "
+    "Fix: a one-time pairing code shown in the console, required in the first message."))
+def test_telegram_owner_pin_needs_a_pairing_code():
+    src = _read("api/main.py")
+    m = re.search(r"if owner is None:\n(.*?)\n\s*if chat_id != owner:", src, re.S)
+    assert m, "telegram owner-pin block not found (code moved; update this test)"
+    assert re.search(r"pair|code|nonce", m.group(1), re.I), \
+        "the first chat becomes owner with no pairing check"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "SEC-1 gap: federation DM /receive verifies the signature against the sender's OWN "
+    "from_pubkey, so any sender can claim any from_brain (T1, named in the module docstring). "
+    "Display only today (no reasoner, no memory), but the inbox shows a forged peer name. "
+    "Fix: look the sender up in known_peers and verify against the pinned key."))
+def test_dm_receive_verifies_against_pinned_peer():
+    src = _read("api/federation_dm.py")
+    m = re.search(r"async def receive_dm\(.*?\n(?=@router)", src, re.S)
+    assert m, "receive_dm not found (code moved; update this test)"
+    assert re.search(r"find_peer|known_peers|pinned", m.group(0).split('"""', 2)[-1]), \
+        "receive_dm trusts the sender-supplied public key"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "SEC-1 gap: the kernel 'remember' command (api/hbar_commands.py) inserts into "
+    "document_embeddings with no injection scan and no mem_type/provenance stamp, unlike "
+    "every other write lane (THREAT_MODEL section 6.3). Operator key + permit only, and the "
+    "row has no embedding, but reembed_null_embeddings.py would make it retrievable untyped. "
+    "Fix: run main._scan_and_classify_write (or classify_write) before the INSERT."))
+def test_kernel_remember_is_scanned_and_stamped():
+    src = _read("api/hbar_commands.py")
+    m = re.search(r'if cmd == "remember":(.*?)\n    if cmd == "recall":', src, re.S)
+    assert m, "remember branch not found (code moved; update this test)"
+    assert re.search(r"scan_text|classify_write|_scan_and_classify_write|mem_type", m.group(1))
