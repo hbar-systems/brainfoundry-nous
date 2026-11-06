@@ -28,6 +28,8 @@
 #                stale block would route the old name, and the old password, to the next member of the block.
 #   Step 11 prints what this script cannot take: backups and snapshots, peers that pin the member's
 #   key, the tripwire baseline, the registry in hbar.world, DNS, Telegram bots, provider keys.
+#   Step 4 also takes the member limits add-member.sh 4b wrote: brain-<m>.slice, the bridge and terminal
+#   drop-ins, $LIMITS_DIR/limits-<m>.env (default /etc/brainfoundry) and the cron/at deny lines.
 #
 # Refuses: root, a bad or reserved handle, a handle that is neither in /srv/brains/members.tsv nor a
 # checkout under /srv/brains.
@@ -66,6 +68,7 @@ ADMIN_USER=${ADMIN_USER:-$(id -un)}
 BACKUP_DIR=${BACKUP_DIR:-/home/$ADMIN_USER/brain-backups}   # backup_brain.sh's default, listed at step 11
 SHARED_OLLAMA=${SHARED_OLLAMA:-brain-ollama-1}
 REGISTRY="$BRAINS_ROOT/members.tsv"
+LIMITS_DIR=${LIMITS_DIR:-/etc/brainfoundry}
 STAMP=$(date -u +%Y-%m-%dT%H%MZ)
 
 say()  { echo "$*"; }
@@ -170,6 +173,17 @@ for f in "${FOUND_UNITS[@]}"; do
     run sudo systemctl disable --now "$f"
     run sudo rm -f "$SYSTEMD_DIR/$f"
 done
+# add-member.sh step 4b (SEC-1 member limits): the slice, the two drop-ins, the limits file, the cron/at deny.
+for f in "$SYSTEMD_DIR/brain-$HANDLE.slice" "$LIMITS_DIR/limits-$HANDLE.env"; do
+    exists "$f" && run sudo rm -f "$f"
+done
+for d in "$SYSTEMD_DIR/cc-bridge-$HANDLE.service.d" "$SYSTEMD_DIR/claude-tab-$HANDLE.service.d"; do
+    exists "$d" && run sudo rm -rf "$d"
+done
+for f in /etc/cron.deny /etc/at.deny; do
+    readf "$f" | grep -qxE "($BRIDGE_USER|$HANDS_USER)" && run sudo sed -i -E "/^($BRIDGE_USER|$HANDS_USER)\$/d" "$f"
+done
+say "   note: brain.slice and system.slice.d/50-brain-limits.conf still reserve this member's share; rewrite them with scripts/member_limits.py parent after the members.tsv line goes (docs/MEMBER_LIMITS.md)"
 run sudo systemctl daemon-reload
 run sudo systemctl reset-failed
 

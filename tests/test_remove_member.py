@@ -267,3 +267,26 @@ def test_caddy_sites_ports_cli(tmp_path):
     assert "8110" not in r.stdout and "paul" not in r.stdout
     r = subprocess.run(cmd + ["81x0"], capture_output=True, text=True)
     assert r.returncode == 2 and "numbers" in r.stderr
+
+
+def test_dry_run_takes_the_member_limits(tmp_path):
+    # SEC-1 (2026-11-06): add-member.sh 4b writes a slice, two drop-ins and a limits file; remove takes them.
+    box, env = _box(tmp_path)
+    systemd, limits = Path(env["SYSTEMD_DIR"]), box / "limits"
+    limits.mkdir()
+    (systemd / "brain-ada.slice").write_text("[Slice]\n")
+    (systemd / "cc-bridge-ada.service.d").mkdir()
+    (systemd / "cc-bridge-ada.service.d" / "limits.conf").write_text("[Service]\n")
+    (limits / "limits-ada.env").write_text("CC_MAX_JOBS=2\n")
+    (limits / "limits-paul.env").write_text("CC_MAX_JOBS=2\n")
+    env["LIMITS_DIR"] = str(limits)
+    before = _tree(box)
+    r = _rm(env, "ada", "--dry-run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _tree(box) == before
+    out = r.stdout
+    assert f"+ sudo rm -f {systemd}/brain-ada.slice" in out
+    assert f"+ sudo rm -f {limits}/limits-ada.env" in out
+    assert f"+ sudo rm -rf {systemd}/cc-bridge-ada.service.d" in out
+    assert "claude-tab-ada.service.d" not in out and "limits-paul" not in out   # only what exists, only ada
+    assert "member_limits.py parent" in out
