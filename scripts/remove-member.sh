@@ -3,8 +3,8 @@
 # Created: 2026-10-26 from docs/MULTI_INSTANCE.md "Removing a member (by hand, 2026-10-25)", the list
 # run on friends-1 when two fresh members were renamed.
 #
-#   bash scripts/remove-member.sh <handle> --dry-run                 # prints every action, touches nothing
-#   bash scripts/remove-member.sh <handle> --apply [--carry DIR]
+#   bash scripts/remove-member.sh <handle> --dry-run [--export] [--site NAME]...   # prints every action, touches nothing
+#   bash scripts/remove-member.sh <handle> --apply --export|--no-export [--carry DIR] [--site NAME]...
 #
 # Run as the box's admin (hbar: sudo, docker), from any brain checkout on the box. Never reads .env.
 # Carries first (into DIR, default ~/member-carry/<m>-<UTC stamp>, mode 700): the persona from the
@@ -17,16 +17,43 @@
 # before Caddy restarts). It does not take the memory: back it up first (backup_brain.sh or export.sh)
 # if anyone may want it. DNS is by hand, as for add-member.
 #
+# 2026-11-06 (SEC-1 Wardens, docs/MEMBER_LIFECYCLE.md):
+#   --export     carry the memory too, before anything is taken: scripts/export.sh of this checkout
+#                (INCLUDE_VAULT=1: the vault is theirs) and the hands' ~/in uploads, into DIR.
+#   --no-export  say out loud that the memory dies with down -v. --apply refuses without one of the two.
+#   --site NAME  one more site block to drop (repeatable). Besides <m>.brainfoundry.ai and
+#                console.<m>.brainfoundry.ai, every block whose local upstreams are all in the member's
+#                port block is found and dropped (showcase-1 names them brain.hbar.university and so
+#                on); a block that mixes the member's ports with others is refused at step 0, because a
+#                stale block would route the old name, and the old password, to the next member of the block.
+#   Step 11 prints what this script cannot take: backups and snapshots, peers that pin the member's
+#   key, the tripwire baseline, the registry in hbar.world, DNS, Telegram bots, provider keys.
+#
 # Refuses: root, a bad or reserved handle, a handle that is neither in /srv/brains/members.tsv nor a
 # checkout under /srv/brains.
 set -euo pipefail
 
-usage() { echo "usage: $0 <handle> --dry-run|--apply [--carry DIR]" >&2; exit 2; }
+usage() { echo "usage: $0 <handle> --dry-run|--apply [--export|--no-export] [--carry DIR] [--site NAME]..." >&2; exit 2; }
 [ $# -ge 2 ] || usage
 HANDLE=$1; MODE=$2; shift 2
 case "$MODE" in --dry-run) APPLY=0 ;; --apply) APPLY=1 ;; *) usage ;; esac
-CARRY=""
-if [ $# -gt 0 ]; then [ "$1" = --carry ] && [ $# -eq 2 ] || usage; CARRY=$2; fi
+CARRY=""; EXPORT=""; EXTRA_SITES=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --carry) [ $# -ge 2 ] || usage; CARRY=$2; shift 2 ;;
+        --site) [ $# -ge 2 ] || usage; EXTRA_SITES+=("$2"); shift 2 ;;
+        --export) [ -z "$EXPORT" ] || usage; EXPORT=1; shift ;;
+        --no-export) [ -z "$EXPORT" ] || usage; EXPORT=0; shift ;;
+        *) usage ;;
+    esac
+done
+if [ "$APPLY" = 1 ] && [ -z "$EXPORT" ]; then
+    echo "usage: --apply needs --export (carry the memory first) or --no-export (it dies with down -v); docs/MEMBER_LIFECYCLE.md" >&2
+    exit 2
+fi
+for s in ${EXTRA_SITES[@]+"${EXTRA_SITES[@]}"}; do
+    [[ "$s" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || { echo "usage: --site takes a host name, got '$s'" >&2; exit 2; }
+done
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 BRAINS_ROOT=${BRAINS_ROOT:-/srv/brains}
@@ -36,6 +63,7 @@ CADDY_DIR=${CADDY_DIR:-/etc/caddy}
 CADDYFILE=${CADDYFILE:-$CADDY_DIR/Caddyfile}
 UPDATE_STATE=${UPDATE_STATE:-/var/lib/brain-update}
 ADMIN_USER=${ADMIN_USER:-$(id -un)}
+BACKUP_DIR=${BACKUP_DIR:-/home/$ADMIN_USER/brain-backups}   # backup_brain.sh's default, listed at step 11
 SHARED_OLLAMA=${SHARED_OLLAMA:-brain-ollama-1}
 REGISTRY="$BRAINS_ROOT/members.tsv"
 STAMP=$(date -u +%Y-%m-%dT%H%MZ)
@@ -69,9 +97,42 @@ PROJECT="brain-$HANDLE"; BRIDGE_USER="$HANDLE-cc"; HANDS_USER="$HANDLE-hands"; N
 DOCKER=0
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then DOCKER=1; else say "   note: docker not reachable from here; the stack steps are printed, not inspected"; fi
 CARRY=${CARRY:-/home/$ADMIN_USER/member-carry/$HANDLE-$STAMP}
+case "$CARRY" in /*) ;; *) CARRY="$PWD/$CARRY" ;; esac   # export.sh cds into the checkout
+if [ "${EXPORT:-}" = 1 ] && [ "$DOCKER" = 1 ] && [ -z "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=api")" ]; then
+    fail "--export needs $PROJECT's api running (start it, or choose --no-export)"
+fi
 
-say "== 1 carry into $CARRY (persona from the api_runtime volume, the console's hash line)"
+# The member's site blocks: the two default names, --site, and every block that proxies only to the
+# member's port block. A mixed block is refused here, before anything is taken.
+SITES=("$HANDLE.brainfoundry.ai" "console.$HANDLE.brainfoundry.ai" ${EXTRA_SITES[@]+"${EXTRA_SITES[@]}"})
+TMP=$(mktemp); trap 'rm -f "$TMP" "$TMP.new"' EXIT
+CADDY_READ=0
+if readf "$CADDYFILE" > "$TMP"; then CADDY_READ=1
+elif [ "$APPLY" = 1 ]; then fail "$CADDYFILE not readable: the site blocks could not be dropped; nothing is taken"; fi
+if [ "$CADDY_READ" = 1 ] && [ -n "$N" ]; then
+    BY_PORT=$(python3 "$REPO/scripts/caddy_sites.py" ports "$TMP" "$M_API_PORT" "$M_UI_PORT" "$M_NODEOS_PORT" "$M_PG_PORT" "$M_PUBLIC_CHAT_PORT" "$M_TERM_PORT" "$M_CC_PORT") \
+        || fail "$CADDYFILE does not parse (caddy_sites.py ports); nothing is taken"
+    MIXED=$(awk -F'\t' '$1=="mixed" {print "   " $3 " (" $4 ")"}' <<<"$BY_PORT")
+    [ -z "$MIXED" ] || fail "a site block mixes $HANDLE's ports with other upstreams; split it by hand first:
+$MIXED"
+    while IFS=$'\t' read -r kind first _ _; do
+        [ "$kind" = pure ] || continue
+        case " ${SITES[*]} " in *" $first "*) ;; *) SITES+=("$first") ;; esac
+    done <<<"$BY_PORT"
+fi
+say "   site blocks to drop: ${SITES[*]}"
+
+say "== 1 carry into $CARRY (persona from the api_runtime volume, the console's hash line$([ "$EXPORT" = 1 ] && echo ', the memory'))"
 run install -d -m 700 "$CARRY"
+if [ "$EXPORT" = 1 ]; then
+    # the admin's checkout runs the export (the member's own copy is theirs to change); vault included
+    echo "+ BRAIN_DIR=$DIR INCLUDE_VAULT=1 bash $REPO/scripts/export.sh $CARRY"
+    [ "$APPLY" = 1 ] && BRAIN_DIR="$DIR" INCLUDE_VAULT=1 bash "$REPO/scripts/export.sh" "$CARRY" </dev/null
+    if exists "/home/$HANDS_USER/in"; then
+        run sudo tar -C "/home/$HANDS_USER" -czf "$CARRY/in-$HANDLE.tar.gz" in
+        run sudo chown "$ADMIN_USER" "$CARRY/in-$HANDLE.tar.gz"
+    fi
+fi
 if [ "$DOCKER" = 0 ] || [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=api")" ]; then
     into "$CARRY/persona-$HANDLE.md" docker compose --project-directory "$DIR" exec -T api cat /app/runtime/brain_persona.local.md
 else
@@ -79,7 +140,11 @@ else
 fi
 into "$CARRY/hash-$HANDLE.txt" sudo grep -E "^[[:space:]]+$HANDLE [\$]2" "$CADDYFILE" || true   # none for a half-made member
 run chmod -R go-rwx "$CARRY"
-say "   memory is not carried: bash $DIR/scripts/backup_brain.sh first if anyone may want it"
+if [ "$EXPORT" = 1 ]; then
+    say "   not in the export: NodeOS memory_proposals (scripts/export_brain.py over ssh has them), the bridge's threads and tokens"
+else
+    say "   memory is not carried: rerun with --export, or bash $DIR/scripts/backup_brain.sh first, if anyone may want it"
+fi
 
 say "== 2 backups"
 run sudo cp -p "$CADDYFILE" "$CADDYFILE.bak-remove-$HANDLE-$STAMP"
@@ -142,10 +207,8 @@ if [ -f "$REGISTRY" ]; then
     echo "+ write $BRAINS_ROOT/count (the number of members, no names; mode 644)"
 fi
 
-say "== 9 Caddyfile: drop $HANDLE.brainfoundry.ai and console.$HANDLE.brainfoundry.ai (braces matched), validate, restart"
-SITES=("$HANDLE.brainfoundry.ai" "console.$HANDLE.brainfoundry.ai")
-TMP=$(mktemp); trap 'rm -f "$TMP" "$TMP.new"' EXIT
-if readf "$CADDYFILE" > "$TMP"; then
+say "== 9 Caddyfile: drop ${SITES[*]} (braces matched), validate, restart"
+if [ "$CADDY_READ" = 1 ]; then
     python3 "$REPO/scripts/caddy_sites.py" list "$TMP" "${SITES[@]}" | sed 's/^/   /' || true
 else
     [ "$APPLY" = 1 ] && fail "$CADDYFILE not readable; the site blocks stay (everything above is done)"
@@ -186,6 +249,21 @@ port $p still listening"
 else
     say "   after --apply: users, groups, units, caddy, sudoers, /srv/brains, /home, containers, volumes, networks, images grepped for $HANDLE; the block's ports"
 fi
+say "== 11 what this script cannot take (docs/MEMBER_LIFECYCLE.md, procedures a and b)"
+BK=$( { ls -d "$BACKUP_DIR"/*/ 2>/dev/null || sudo -n ls -d "$BACKUP_DIR"/*/ 2>/dev/null; } \
+      | sed 's:/$::; s:.*/::' | grep -E "(^|[^a-z0-9])$HANDLE([^a-z0-9]|$)" | sed "s:^:$BACKUP_DIR/:" || true)
+# and every artifact whose manifest names this checkout (backup_brain.sh writes "brain_dir: <dir>")
+BK_M=$( { grep -lsx "brain_dir: *$DIR" "$BACKUP_DIR"/*/*/manifest.txt "$BACKUP_DIR"/*/*/*/manifest.txt 2>/dev/null \
+          || sudo -n sh -c 'grep -lsx "brain_dir: *$1" "$2"/*/*/manifest.txt "$2"/*/*/*/manifest.txt' _ "$DIR" "$BACKUP_DIR" 2>/dev/null; } \
+        | sed 's:/manifest.txt$::' || true)
+BK=$(printf '%s\n%s\n' "$BK" "$BK_M" | sed '/^$/d' | sort -u)
+if [ -n "$BK" ]; then say "   backups under $BACKUP_DIR that name $HANDLE (delete them if the member asked to be forgotten):"; echo "$BK" | sed 's/^/     /'
+else say "   no backup under $BACKUP_DIR names $HANDLE or $DIR (backup_brain.sh names artifacts by category and time; make a member's with BACKUP_DIR=$BACKUP_DIR/$HANDLE)"; fi
+say "   the carry dir $CARRY: hand it over, then delete it"
+say "   Hetzner box backups (7 days) and snapshots still hold the checkout, .env included; the Storage Box may hold brain backups"
+say "   peers: every known_peers.toml and data/peers.json that pins this brain's key, on this box and the other"
+say "   hbar.world: ops/security/brain-identity-baseline.tsv, registry/nodes.json, ops/security/incidents.tsv (kind removal)"
+say "   Telegram: the member's bots stay valid at Telegram until revoked with @BotFather; provider API keys until revoked at the provider"
 say ""
-say "DNS (by hand, not here): delete $HANDLE.brainfoundry.ai and console.$HANDLE.brainfoundry.ai."
+say "DNS (by hand, not here): delete ${SITES[*]}."
 [ "$APPLY" = 1 ] || say "Dry run: nothing was changed. Rerun with --apply."
