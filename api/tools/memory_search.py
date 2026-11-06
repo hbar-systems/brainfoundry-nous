@@ -7,10 +7,14 @@ green-tier tool and the counterpart to the yellow web_search: when the model is
 running agentically it can decide to pull more specific context from memory
 mid-reasoning instead of relying only on the one-shot RAG injection.
 
-Output is the brain's own (trusted) documents, so it is NOT safety-wrapped the
-way external/untrusted tool output is. Each result carries its memory-type
-provenance label (api/memory_type) so the model can still weight a curated fact
-above an inferred summary or an untrusted scrape.
+Output is wrapped as untrusted reference data, the same block the RAG prompt
+uses for retrieved documents (SEC-1, 2026-11-06). The corpus holds more than the
+owner's own words: brain-app writes, approved uploads the scan flagged, peer and
+tool answers, submissions. THREAT_MODEL.md section 2 lists retrieved documents
+and saved memories as untrusted, so this tool must not present them as trusted
+instructions. Each result still carries its memory-type provenance label
+(api/memory_type) so the model can weight a curated fact above an inferred
+summary or an untrusted scrape.
 """
 from __future__ import annotations
 
@@ -55,7 +59,7 @@ def run(query: str, limit: int = _DEFAULT_LIMIT) -> ToolResult:
         return ToolResult(ok=True, content="(no matching documents in memory)",
                           provenance=[], meta={"query": query, "count": 0, "results": []})
 
-    lines: List[str] = ["The brain's own memory returned these documents (trusted):"]
+    lines: List[str] = ["The brain's own memory returned these documents:"]
     provenance: List[Dict[str, Any]] = []
     for i, d in enumerate(docs, 1):
         md = d.get("metadata") or {}
@@ -69,9 +73,11 @@ def run(query: str, limit: int = _DEFAULT_LIMIT) -> ToolResult:
             "title": name,
         })
 
+    from api.security import untrusted as _untrusted
     return ToolResult(
         ok=True,
-        content="\n\n".join(lines),
+        content=_untrusted.untrusted_context_block(
+            "knowledge-store (search_memory results)", "\n\n".join(lines)),
         provenance=provenance,
         meta={"query": query, "count": len(docs), "results": docs},
     )
