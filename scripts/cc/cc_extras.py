@@ -418,8 +418,14 @@ class Jobs:
     UNKNOWN = "unknown"
     UNSEEN_TTL = 24 * 3600      # a finished job nobody took stops being "unseen" after a day
 
-    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None, on_end=None, guard=None):
+    def __init__(self, out_dir: Path, env_fn, wrap=None, resolve=None, on_end=None, guard=None, max_running=None):
         self.on_end = on_end      # called with the finished record (the spend meter, 2026-10-17)
+        # jobs running at once (2026-11-06, docs/MEMBER_LIMITS.md): CC_MAX_JOBS, set for a member on a shared
+        # box by root's limits-<m>.env; 0 or unset = no cap (a brain alone on its box, as before)
+        try:
+            self.max_running = int(os.environ.get("CC_MAX_JOBS") or 0) if max_running is None else int(max_running)
+        except ValueError:
+            self.max_running = 1      # a cap that does not parse is the strictest one, not none
         # command -> the command to run, or raises with the reason (2026-10-19: a claude started by a
         # job gets the turn's permission hook and may not loosen the owner's posture; cc_guard.check_job)
         self.guard = guard
@@ -479,8 +485,14 @@ class Jobs:
                 thread = str(self.resolve(run) or "") or None
             except Exception:  # noqa: BLE001
                 thread = None
+        if self.max_running > 0:
+            self._reap()          # a job whose process is gone no longer counts
         with self.lock:
             items = self._load()
+            running = sum(1 for r in items if r.get("ended") is None)
+            if self.max_running > 0 and running >= self.max_running:
+                return {"error": f"{running} jobs are running, the most this brain may run at once "
+                                 f"(CC_MAX_JOBS={self.max_running}); wait for one to end"}
             jid = f"J{int(time.time())}{len(items) + 1:03d}"
             log = self.dir / f"{jid}.log"
             lf = open(log, "ab")

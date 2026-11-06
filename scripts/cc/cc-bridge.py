@@ -5101,6 +5101,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"error": "not the reasoner"})
                 return
             why = cc_halt.refusal(HANDS_HOME, WORLD_DIR, str(req.get("title", "")), STATE_DIR)
+            if not why and SPEND.over_admin_cap():   # the box admin's spend ceiling (docs/MEMBER_LIMITS.md)
+                why = f"this brain's spend for 30 days reached the box's ceiling ({SPEND.admin_cap():g} EUR, CC_SPEND_CAP_EUR)"
             if why:                              # the kill switch (2026-10-25): HALT file, or a post's weekly budget spent
                 print(f"job refused: {why} ({str(req.get('title', ''))[:60]})", flush=True)
                 self._send(409, {"error": why})

@@ -12,6 +12,10 @@ minutes, not its price). Totals add what is known. Beside it, spend-cap.json hol
 EUR for the last 30 days. Over the cap, scheduled agents do not start (the bridge skips its minute check);
 Run now on the Agents page still works. The cap does not stop conversations or jobs.
 
+On a shared box the admin may set a ceiling above the owner's (2026-11-06, docs/MEMBER_LIMITS.md):
+CC_SPEND_CAP_EUR in root's limits-<m>.env. The cap in force is the lower of the two; over the admin's
+ceiling new jobs are refused too (the bridge's /jobs/start), and the owner cannot raise it from Settings.
+
 This is the person's view of their own spend. What anyone charges them for running the brain is
 not here and does not belong in this file.
 """
@@ -139,10 +143,30 @@ class Ledger:
             tmp.replace(self.cap_path)
         return eur
 
+    @staticmethod
+    def admin_cap() -> float | None:
+        """The box admin's ceiling, EUR per 30 days (CC_SPEND_CAP_EUR); None when unset, zero or unreadable."""
+        try:
+            v = float(os.environ.get("CC_SPEND_CAP_EUR") or 0)
+        except ValueError:
+            return None
+        return v if v > 0 and v == v else None
+
+    def limit(self) -> float | None:
+        """The cap in force: the lower of the owner's and the admin's."""
+        caps = [c for c in (self.cap(), self.admin_cap()) if c is not None]
+        return min(caps) if caps else None
+
     def over_cap(self, now: float | None = None) -> bool:
-        cap = self.cap()
+        cap = self.limit()
+        return cap is not None and self.totals(now)["month"]["eur"] >= cap
+
+    def over_admin_cap(self, now: float | None = None) -> bool:
+        cap = self.admin_cap()
         return cap is not None and self.totals(now)["month"]["eur"] >= cap
 
     def view(self, now: float | None = None) -> dict:
-        tot, cap = self.totals(now), self.cap()
-        return {**tot, "cap": cap, "over": cap is not None and tot["month"]["eur"] >= cap, "eur_per_usd": EUR_PER_USD}
+        tot, cap, admin = self.totals(now), self.cap(), self.admin_cap()
+        lim = self.limit()
+        return {**tot, "cap": cap, "admin_cap": admin, "over": lim is not None and tot["month"]["eur"] >= lim,
+                "eur_per_usd": EUR_PER_USD}
