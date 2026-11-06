@@ -982,14 +982,15 @@ function ProposalCard({ p, onDecide }) {
 }
 
 // The pages a pane can switch to from its own header (hbar 2026-10-26: "change the tab WITHIN one of
-// these windows"): the same surfaces the reasoner may open with <pane>.
+// these windows"): the same surfaces the reasoner may open with <pane>. Alphabetical by label
+// (hbar 2026-11-06), so a page is found by its name, not remembered by its place.
 const PANE_ROUTES = [
-  ['/upload', 'Knowledge'], ['/files', 'Files'], ['/terminal', 'Terminal'], ['/tasks', 'Tasks'],
-  ['/board', 'Board'], ['/agents', 'Agents'], ['/graph', 'Memory graph'], ['/apps', 'Apps'],
-  ['/research', 'Research'], ['/integrations', 'Integrations'], ['/trace', 'Trace'], ['/permits', 'Permits'],
-  ['/boxes', 'Boxes'], ['/economy', 'Economy'], ['/federation', 'Federation'], ['/persona', 'Persona'],
-  ['/profile', 'Profile'], ['/layout', 'Layout'], ['/settings', 'Settings'], ['/update', 'Update'],
-  ['/guide', 'Guide'], ['/dashboard', 'Dashboard'], ['/future', 'Future'],
+  ['/agents', 'Agents'], ['/apps', 'Apps'], ['/board', 'Board'], ['/boxes', 'Boxes'],
+  ['/dashboard', 'Dashboard'], ['/economy', 'Economy'], ['/federation', 'Federation'], ['/files', 'Files'],
+  ['/future', 'Future'], ['/guide', 'Guide'], ['/integrations', 'Integrations'], ['/upload', 'Knowledge'],
+  ['/layout', 'Layout'], ['/graph', 'Memory graph'], ['/permits', 'Permits'], ['/persona', 'Persona'],
+  ['/profile', 'Profile'], ['/research', 'Research'], ['/settings', 'Settings'], ['/tasks', 'Tasks'],
+  ['/terminal', 'Terminal'], ['/trace', 'Trace'], ['/update', 'Update'],
 ]
 
 function Pane({ pane, onClose, side, onSide, onRoute }) {
