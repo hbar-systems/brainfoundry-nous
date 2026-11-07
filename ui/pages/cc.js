@@ -1151,7 +1151,7 @@ function SignIn({ onDone, health, onOpenPane }) {
             <Btn onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} title="the Codex seat, read-only; OpenAI's own device-code sign-in in the terminal panel">Sign in with ChatGPT</Btn>
           </div>
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '8px 0 0 0' }}>
-            {codexWords(health && health.codex)}. ChatGPT signs in the Codex seat, which reads and answers but never writes; Claude stays the default seat.
+            {codexWords(health && health.codex)}. Either one is enough: sign in with Claude or with ChatGPT, and the chat opens. With only ChatGPT, every thread starts on Codex; press recheck after signing in.
           </p>
           {!(health && health.signin_proxy) && (
             <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '10px 0 0 0' }}>
@@ -1833,7 +1833,12 @@ function CC() {
   // last answered on (the bridge keeps it), else Claude.
   const [seatPick, setSeatPick] = useState(null)   // { key, seat }
   const seatKey = cur || 'new'
-  const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || 'claude')
+  // A brain signed in only with ChatGPT starts its threads on Codex, not on a Claude that cannot answer (2026-11-07).
+  const claudeIn = !!(health && health.auth && health.auth.loggedIn)
+  const codexIn = !!(health && health.codex && health.codex.installed && health.codex.signedIn)
+  const localIn = !!(health && health.local && health.local.configured)
+  const defaultSeat = claudeIn ? 'claude' : codexIn ? 'codex' : localIn ? 'local' : 'claude'
+  const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || defaultSeat)
   const seatRef = useRef('claude'); seatRef.current = seat
   const pickSeat = (s) => setSeatPick({ key: seatKey, seat: SEATS.includes(s) ? s : 'claude' })
   const recheckCodex = () => fetch('/cc/codex/status?fresh=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
@@ -2254,7 +2259,8 @@ function CC() {
     requestAnimationFrame(end)
   }, [turns])
 
-  const loggedIn = !!(health && health.auth && health.auth.loggedIn)
+  // Any signed-in reasoner opens the chat: Claude, Codex (ChatGPT) or a configured local model (2026-11-07).
+  const loggedIn = claudeIn || codexIn || localIn
   // A pane tells the page that holds it what it is doing, for the one-line title bar (2026-10-06).
   useEffect(() => {
     if (!paneMode) return
