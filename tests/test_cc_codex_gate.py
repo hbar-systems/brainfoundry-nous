@@ -341,3 +341,12 @@ def test_bridge_codex_call_without_auto_still_waits_for_a_card(monkeypatch, tmp_
     monkeypatch.setattr(m, "_run_permit", lambda pid, pm: (_ for _ in ()).throw(AssertionError("must not run")))
     r = m._box_ask("Bash", {"command": "printf ok > /tmp/x"})
     assert r["behavior"] == "deny" and ("deny", "pa1") in gate.calls   # nobody watching: refused, never run
+
+
+def test_bridge_temporary_page_key_gets_a_clear_reply(monkeypatch, tmp_path):
+    # hbar 2026-11-07: an orphan "new:<ms>" key from the page came back "not on this box any more"
+    m = _tc()._load(monkeypatch, tmp_path)
+    st, d = m._turn_inner("hello", thread="new:1762512000000", new=False)
+    assert st == 404 and "never saved" in d["reply"]
+    st, d = m._turn_inner("hello", thread="0000-not-a-thread", new=False)
+    assert st == 404 and "not on this box" in d["reply"]

@@ -2635,13 +2635,20 @@ function CC() {
       if (await queueOnServer(realKey)) { if (typeof forced !== 'string') setDraft(''); return }
     }
     release()
-    if (busy && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
+    // busy from the ref, not the render: a second press before the page re-renders must see the first
+    const busyNow = busy || !!(curRef.current && runningRef.current[curRef.current])
+    if (busyNow && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
     if (typeof forced !== 'string') setDraft('')
     setTurns(t => [...t, { who: 'me', text }])
     // The thread this turn belongs to: the one shown, or a fresh one under a temporary key until
     // the bridge names it in "done".
     const isNew = freshRef.current || !curRef.current
     const key = isNew ? `new:${Date.now()}` : curRef.current
+    // the page is no longer blank from this moment, not from the bridge's first byte: Codex takes
+    // seconds to answer, and a second press in between opened an orphan thread whose next message
+    // came back "That conversation is not on this box any more" (hbar 2026-11-07)
+    if (isNew) freshRef.current = false
+    let named = !isNew
     // the seat picked on the blank page follows the thread to its temporary key and then its real id;
     // without this it fell back to Claude the moment the thread got a key (hbar 2026-11-07)
     if (isNew) { setSeatPick({ key, seat: seatRef.current }); showThread(key) }
@@ -2671,6 +2678,7 @@ function CC() {
       }
       if (isNew && data && data.thread) {
         // the new thread has its name now; the page shown under the temporary key follows it
+        named = true
         delete runningRef.current[key]
         setSeatPick(p => (p && p.key === key ? { ...p, key: data.thread } : p))
         if (curRef.current === key) showThread(data.thread)
@@ -2688,6 +2696,9 @@ function CC() {
       if (curRef.current === key) setTurns(t => [...t, { who: 'brain', text: msg, error: true }])
     } finally {
       markRunning(key, false)
+      // a new thread that never got its id (the record failed, or the turn was dropped): the next
+      // message starts a thread again instead of going to a temporary key the bridge never knew
+      if (!named && curRef.current === key) freshRef.current = true
       if (curRef.current === key && queueRef.current.length) flushLocal()
       setTimeout(() => pollRef.current && pollRef.current(), 400)
       if (boxRef.current) boxRef.current.focus()

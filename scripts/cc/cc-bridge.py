@@ -3625,6 +3625,9 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         print(f"new thread ({source})", flush=True)
     elif thread:
         explicit = next((x for x in _threads_load() if x.get("brain") == thread), None)
+        if explicit is None and str(thread).startswith("new:"):
+            # a page's temporary key for a thread that never got its id (2026-11-07): nothing to continue
+            return 404, {"error": "no such thread", "reply": "That message went to a thread that was never saved (its first turn did not finish). Nothing was lost on the box; send it again and it starts a new thread."}
         if explicit is None:
             return 404, {"error": "no such thread", "reply": "That conversation is not on this box any more; start a new one."}
         state = {"session_id": explicit.get("claude"), "brain_session_id": explicit["brain"], "title": explicit.get("title"),
