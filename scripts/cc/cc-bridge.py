@@ -2588,18 +2588,34 @@ MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
 MCP_CONFIG = os.environ.get("CC_MCP_CONFIG", "").strip()
 
 
+def _mcp_text() -> str | None:
+    """The owner's MCP servers file as text, or None. It lives in the hands' home, which is closed
+    to the bridge after the split, so it is read as the hands (2026-11-07: read as the bridge it
+    failed without a word on member boxes and both seats started with no tools)."""
+    if not MCP_CONFIG:
+        return None
+    try:
+        return _hands_read(Path(MCP_CONFIG)) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _mcp_config() -> str:
     """The MCP servers the reasoner may see: the owner's file when set and present, else none."""
-    if MCP_CONFIG and Path(MCP_CONFIG).exists():
+    if _mcp_text() is not None:
         return MCP_CONFIG
     return str(MCP_EMPTY)
 
 
-def _mcp_servers() -> list[str]:
+def _mcp_dict() -> dict:
     try:
-        return sorted((json.loads(Path(_mcp_config()).read_text()).get("mcpServers") or {}).keys())
-    except Exception:
-        return []
+        return json.loads(_mcp_text() or "{}")
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _mcp_servers() -> list[str]:
+    return sorted((_mcp_dict().get("mcpServers") or {}).keys())
 
 # Sign-in doors (hardening item 1, ops/legal/claude-code-terms-2026-09-19.md in hbar.world).
 # Anthropic permits an owner to configure their own API key on their own machine, and to
@@ -3322,10 +3338,7 @@ def _codex_gate_check() -> tuple[bool, str]:
             home = CODEX_HOME_HANDS
             if not cc_codex_gate.config_ours(_hands_read(home / "config.toml")):
                 return False, f"{home}/config.toml is the owner's own, not the bridge's; move it away to use write mode"
-            try:
-                mcp = json.loads(Path(_mcp_config()).read_text())
-            except Exception:  # noqa: BLE001
-                mcp = {}
+            mcp = _mcp_dict()
             cmdline = cc_codex_gate.hook_command(HOOK_PYTHON, CODEX_HOOK_SCRIPT)
             _hands_write(home / "hooks.json", cc_codex_gate.hooks_json(HOOK_PYTHON, CODEX_HOOK_SCRIPT, PERMIT_TTL))
             _hands_write(home / "config.toml", cc_codex_gate.config_toml(home, None, mcp))
