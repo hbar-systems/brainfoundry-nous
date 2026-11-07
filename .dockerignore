@@ -23,6 +23,8 @@ vector-db
 scripts
 # except the chat import tool the api runs (api/chat_import.py, 2026-10-25)
 !scripts/import_chats.py
+# and the laptop import helper the api serves (api/Dockerfile COPY, 2026-11-03)
+!scripts/import/brain_import.py
 tests
 notes
 docs
