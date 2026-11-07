@@ -298,3 +298,46 @@ def test_bridge_gated_seat_queues_proposals(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_recent", lambda msg, fresh: "")
     status, payload = m._turn_inner("do it", thread=None, new=True, reasoner="codex")
     assert "raises no cards" not in payload["reply"] and payload["proposal"] is not None
+
+
+class _AutoGate:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, tool, args, permit_id=None):
+        self.calls.append((tool, dict(args)))
+        return type("R", (), {"permit": {"id": "pa1", "ttl_seconds": 900}, "error": None, "reason": None})()
+
+    def get(self, pid):
+        return None
+
+    def deny(self, pid):
+        self.calls.append(("deny", pid))
+
+
+def test_bridge_auto_allowed_codex_call_leaves_a_permit_and_a_decision(monkeypatch, tmp_path):
+    # hbar 2026-11-07: in the auto posture a Codex call ran with no trace in the permit history
+    m = _tc()._load(monkeypatch, tmp_path)
+    gate = _AutoGate()
+    monkeypatch.setattr(m, "BOX_ENABLED", True)
+    monkeypatch.setattr(m, "GATE", gate)
+    monkeypatch.setattr(m, "_auto_has", lambda a: False)
+    ran, logged = [], []
+    monkeypatch.setattr(m, "_run_permit", lambda pid, pm: ran.append(pid) or {"ok": True, "status": "executed"})
+    monkeypatch.setattr(m, "_decision_log", lambda *a, **k: logged.append(a))
+    r = m._box_ask("Bash", {"command": "printf ok > /tmp/x"}, session_id="s1", auto_why="the auto posture, Codex seat")
+    assert r == {"behavior": "allow"}
+    assert gate.calls and gate.calls[0][0] == "box_act" and gate.calls[0][1]["platform"] == "box"
+    assert ran == ["pa1"]
+    assert logged and logged[0][:3] == ("pa1", "allow", "auto posture")
+
+
+def test_bridge_codex_call_without_auto_still_waits_for_a_card(monkeypatch, tmp_path):
+    m = _tc()._load(monkeypatch, tmp_path)
+    gate = _AutoGate()
+    monkeypatch.setattr(m, "BOX_ENABLED", True)
+    monkeypatch.setattr(m, "GATE", gate)
+    monkeypatch.setattr(m, "_auto_has", lambda a: False)
+    monkeypatch.setattr(m, "_run_permit", lambda pid, pm: (_ for _ in ()).throw(AssertionError("must not run")))
+    r = m._box_ask("Bash", {"command": "printf ok > /tmp/x"})
+    assert r["behavior"] == "deny" and ("deny", "pa1") in gate.calls   # nobody watching: refused, never run

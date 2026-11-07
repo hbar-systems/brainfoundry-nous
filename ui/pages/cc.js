@@ -526,7 +526,7 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
       <span style={lbl}>seat</span>
       <Chip on={seat !== 'codex' && seat !== 'local'} onClick={() => onPick('claude')} title="Claude answers; on this box its edits and commands pass your Allow">Claude</Chip>
       <Chip on={seat === 'codex'} onClick={() => onPick('codex')}
-        title={ready ? 'Codex answers this thread, read-only: it reads files and runs read-only commands, never writes' : codexWords(codex) + '; a turn on this seat is refused until it is'}>
+        title={ready ? (codex.mode === 'gated' ? 'Codex answers this thread; its edits and commands pass your Allow, like Claude' : 'Codex answers this thread, read-only: it reads files and runs read-only commands, never writes') : codexWords(codex) + '; a turn on this seat is refused until it is'}>
         {(codex && codex.label) || 'Codex (read-only)'}
       </Chip>
       {seat === 'codex' || (codex && codex.installed) ? (
@@ -2642,7 +2642,9 @@ function CC() {
     // the bridge names it in "done".
     const isNew = freshRef.current || !curRef.current
     const key = isNew ? `new:${Date.now()}` : curRef.current
-    if (isNew) showThread(key)
+    // the seat picked on the blank page follows the thread to its temporary key and then its real id;
+    // without this it fell back to Claude the moment the thread got a key (hbar 2026-11-07)
+    if (isNew) { setSeatPick({ key, seat: seatRef.current }); showThread(key) }
     markRunning(key, true)
     try {
       const r = await fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2670,6 +2672,7 @@ function CC() {
       if (isNew && data && data.thread) {
         // the new thread has its name now; the page shown under the temporary key follows it
         delete runningRef.current[key]
+        setSeatPick(p => (p && p.key === key ? { ...p, key: data.thread } : p))
         if (curRef.current === key) showThread(data.thread)
       }
       loadLatest()

@@ -1112,8 +1112,8 @@ def _agents_loop() -> None:
         time.sleep(60)
 
 
-def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
-    r = _box_ask_inner(tool, inp, session_id)
+def _box_ask(tool: str, inp: dict, session_id: str | None = None, auto_why: str = "") -> dict:
+    r = _box_ask_inner(tool, inp, session_id, auto_why=auto_why)
     if r.get("behavior") == "allow" and tool == "Bash" and _RESTART_CMD.match(str((inp or {}).get("command", ""))):
         st = _restart_request("an approved card")
         return {"behavior": "deny", "message": f"restart queued, not run: the bridge restarts by itself once no thread "
@@ -1121,9 +1121,12 @@ def _box_ask(tool: str, inp: dict, session_id: str | None = None) -> dict:
     return r
 
 
-def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: str | None = None) -> dict:
+def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: str | None = None,
+                   auto_why: str = "") -> dict:
     """Called by the hook (and by the orfeo door, with the turn's run id). Blocks until the person
-    decides, or the permit expires."""
+    decides, or the permit expires. auto_why: the caller already ruled this call runs unasked (the
+    Codex seat in the auto posture); it still gets a permit, an outcome and a decision line, so the
+    permit history shows every call, not only the asked ones (hbar 2026-11-07)."""
     if not BOX_ENABLED or GATE is None:
         return {"behavior": "deny", "message": "actions on the box are not enabled on this brain"}
     action_id, summary, remember_ok = _box_key(tool, inp)
@@ -1148,6 +1151,13 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
         card.update({"auto": True, "decided": "approve", "outcome": outcome,
                      "why": "same call, allowed a moment ago" if same_turn else "you allowed this action earlier"})
         _decision_log(pid, "allow", "same turn" if same_turn else "standing allow", card["why"], session_id)
+        if run is not None:
+            run.emit("ask", card)
+        return {"behavior": "allow"}
+    if auto_why:
+        outcome = _run_permit(pid, GATE.get(pid))
+        card.update({"auto": True, "decided": "approve", "outcome": outcome, "why": auto_why})
+        _decision_log(pid, "allow", "auto posture", auto_why, session_id)
         if run is not None:
             run.emit("ask", card)
         return {"behavior": "allow"}
@@ -5130,10 +5140,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"behavior": "deny", "message": "not the hook"})
                 return
             tool, inp = str(req.get("tool_name", "")), req.get("tool_input") or {}
-            if req.get("seat") == "codex" and _codex_auto_allows(tool, inp):
-                self._send(200, {"behavior": "allow"})
-                return
-            self._send(200, _box_ask(tool, inp, session_id=str(req.get("session_id") or "") or None))
+            auto = "the auto posture, Codex seat" if req.get("seat") == "codex" and _codex_auto_allows(tool, inp) else ""
+            self._send(200, _box_ask(tool, inp, session_id=str(req.get("session_id") or "") or None, auto_why=auto))
             return
         if route in ("/permits/approve", "/permits/deny"):
             if GATE is None:
