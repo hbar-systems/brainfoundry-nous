@@ -6121,14 +6121,20 @@ def get_document_stats_by_layer(api_key: str = Depends(get_api_key)):
 
 # Session Management Endpoints
 @app.get("/sessions")
-def list_chat_sessions(api_key: str = Depends(get_api_key)):
+def list_chat_sessions(api_key: str = Depends(get_api_key), q: str = ""):
     """List all chat sessions with message counts and preview"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        # Owner-only search uses the same session door and key as listing (2026-11-08).
+        # Bound history and results; literal substring matching does not treat % or _ as wildcards.
+        query = str(q or "").strip()[:120]
         cursor.execute(
             """
-            SELECT 
+            WITH recent_sessions AS (
+                SELECT * FROM chat_sessions ORDER BY created_at DESC LIMIT 500
+            )
+            SELECT
                 s.session_id, 
                 s.model_name, 
                 s.title,
@@ -6136,12 +6142,15 @@ def list_chat_sessions(api_key: str = Depends(get_api_key)):
                 COUNT(m.id) as message_count,
                 (SELECT content FROM chat_messages WHERE session_id = s.session_id ORDER BY created_at DESC LIMIT 1) as last_message,
                 s.local_only_at
-            FROM chat_sessions s
+            FROM recent_sessions s
             LEFT JOIN chat_messages m ON s.session_id = m.session_id
+            WHERE %s = '' OR strpos(lower(coalesce(s.title, '')), lower(%s)) > 0
+                OR EXISTS (SELECT 1 FROM chat_messages hit WHERE hit.session_id = s.session_id
+                           AND strpos(lower(hit.content), lower(%s)) > 0)
             GROUP BY s.session_id, s.model_name, s.title, s.created_at, s.local_only_at
-            ORDER BY s.created_at DESC 
-            LIMIT 50
-            """
+            ORDER BY s.created_at DESC
+            LIMIT %s
+            """, (query, query, query, 200 if query else 50)
         )
         sessions = cursor.fetchall()
         cursor.close()

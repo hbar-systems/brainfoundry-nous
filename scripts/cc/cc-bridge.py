@@ -2029,7 +2029,7 @@ def _threads_save(items: list) -> None:
     THREADS_FILE.write_text(json.dumps(items[-200:], indent=1))
 
 
-def _threads_view(archived: bool = False) -> dict:
+def _threads_view(archived: bool = False, q: str = "") -> dict:
     """The list the threads dropdown shows (2026-09-30). Pinned first, then by last activity,
     newest on top; archived ones only when asked for, with a count of them either way. The
     running and waiting marks come from the runs in flight."""
@@ -2037,11 +2037,25 @@ def _threads_view(archived: bool = False) -> dict:
     n_arch = sum(1 for x in items if x.get("archived"))
     if not archived:
         items = [x for x in items if not x.get("archived")]
-    items = _threads_order(items)[:60]
+    query = str(q or "").strip()[:120]
+    search_error = False
+    if query:
+        from urllib.parse import urlencode
+        matches = _brain_api("GET", "/sessions?" + urlencode({"q": query}))
+        search_error = not isinstance(matches, dict) or not isinstance(matches.get("sessions"), list)
+        ids = {x.get("session_id") for x in matches["sessions"] if isinstance(x, dict)} if not search_error else set()
+        # Renames recorded locally are searchable even if the API rename failed.
+        items = [x for x in items if x.get("brain") in ids or query.casefold() in
+                 (str(x.get("title") or "") + " " + str(x.get("brain") or "")).casefold()]
+    items = _threads_order(items)[:200]
     tg_thread = _tg_thread()
     st = _load_state()
     running = {r.thread: r.public() for r in _runs_active() if r.thread}
     jobs_by = JOBS.running_by_thread()
+    children = {}
+    for job in JOBS.list(200):
+        if job.get("thread"):
+            children.setdefault(job["thread"], []).append({k: job.get(k) for k in ("id", "title", "ended")})
     verdicts = cc_recent.load_verdicts(VERDICTS_WORLD)
     for th in items:
         r = running.get(th.get("brain"))
@@ -2056,7 +2070,13 @@ def _threads_view(archived: bool = False) -> dict:
         th["verdict"] = v.get("verdict")
         th["verdict_date"] = v.get("verdict_date") or ""
         th["verdict_note"] = v.get("verdict_note") or ""
-    return {"threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
+        th["child_jobs"] = children.get(th.get("brain"), [])
+        th["seat"] = th.get("reasoner") or "unknown"
+        th["task_owner"] = th.get("task_owner") or "unknown"
+        th["status"] = ("waiting on you" if th["waiting"] else "answering") if r else (
+            "jobs running" if th["jobs_running"] else th.get("verdict") or "idle")
+    return {"search_error": search_error, "search_scope": "Title/content: latest 500 sessions; up to 200 matches. Thread register: latest 200.",
+            "threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
             "finished_count": sum(1 for x in items if x.get("verdict") in cc_recent.FINISHED),
             "runs": [r.public() for r in _runs_active()], "max_runs": MAX_RUNS}
 
@@ -4572,7 +4592,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
         elif route == "/threads":
-            self._send(200, _threads_view(archived=self._query().get("archived") == "1"))
+            self._send(200, _threads_view(archived=self._query().get("archived") == "1", q=self._query().get("q", "")))
         elif route == "/live":
             # Watch a turn in flight (2026-09-28): the page that asked, another tab, the phone, or
             # a switch back to a thread that is still answering. Replays everything so far, then

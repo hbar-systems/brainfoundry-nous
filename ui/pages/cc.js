@@ -1528,6 +1528,17 @@ function CC() {
   const [firstRun, setFirstRun] = useState(null) // first-use steps from the api, until complete
   const [threads, setThreads] = useState([])       // CC threads the brain remembers
   const [showThreads, setShowThreads] = useState(false)
+  const [threadQuery, setThreadQuery] = useState('')
+  const threadQueryRef = useRef('')
+  const threadRequest = useRef(0)
+  const [threadSearchError, setThreadSearchError] = useState('')
+  const [threadSearching, setThreadSearching] = useState(false)
+  useEffect(() => {
+    threadQueryRef.current = threadQuery
+    if (!showThreads) return
+    const timer = setTimeout(() => loadThreads(), 300)
+    return () => clearTimeout(timer)
+  }, [threadQuery, showThreads])
   // The shape of threads (2026-09-30): pinned on top, then day groups; rename, pin, archive on
   // each row; archived ones hidden until "show". `renaming` is the brain id whose title is an
   // input right now ('header' for the line under the page title).
@@ -1823,9 +1834,23 @@ function CC() {
       })
       .catch(() => {})
   }
-  const loadThreads = () =>
-    fetch('/cc/threads' + (showArchivedRef.current ? '?archived=1' : ''), { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d) { setThreads(d.threads || []); setArchivedCount(d.archived_count || 0) } }).catch(() => {})
+  const loadThreads = async () => {
+    const request = ++threadRequest.current
+    setThreadSearching(true)
+    const params = new URLSearchParams({ q: threadQueryRef.current, archived: showArchivedRef.current ? '1' : '0' })
+    try {
+      const response = await fetch('/cc/threads?' + params, { cache: 'no-store' })
+      if (!response.ok) throw new Error('Thread list unavailable')
+      const data = await response.json()
+      if (request !== threadRequest.current) return
+      setThreads(data.threads || []); setArchivedCount(data.archived_count || 0)
+      setThreadSearchError(data.search_error ? 'Content search unavailable; showing title/ID matches only.' : '')
+    } catch {
+      if (request === threadRequest.current) { setThreads([]); setThreadSearchError('Thread search unavailable. Try again.') }
+    } finally {
+      if (request === threadRequest.current) setThreadSearching(false)
+    }
+  }
   const toggleArchived = () => { showArchivedRef.current = !showArchivedRef.current; setShowArchived(showArchivedRef.current); loadThreads() }
   // rename, pin, unpin, archive, unarchive: one call, then the list is read again (2026-09-30)
   async function updateThread(brain, patch) {
@@ -1904,7 +1929,7 @@ function CC() {
   const threadGroups = (() => {
     const groups = []; const at = {}
     for (const th of threads) {
-      if (hideFinished && FINISHED[th.verdict]) continue
+      if (!threadQuery.trim() && hideFinished && FINISHED[th.verdict]) continue
       const label = th.pinned ? 'pinned' : dayLabel(th.last || th.started)
       if (!(label in at)) { at[label] = groups.length; groups.push({ label, items: [] }) }
       groups[at[label]].items.push(th)
@@ -2854,6 +2879,15 @@ function CC() {
             {showThreads && (
               <div className="cc-threads-pop" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
+                <input aria-label="Search threads" type="search" value={threadQuery} maxLength={120}
+                  onChange={e => { threadQueryRef.current = e.target.value; ++threadRequest.current; setThreadQuery(e.target.value) }}
+                  placeholder="Find a title, words in a chat, or thread ID"
+                  style={{ width: '100%', boxSizing: 'border-box', background: C.surface, color: C.ink, border: `1px solid ${C.line}`, borderRadius: '6px', padding: '10px', fontFamily: 'inherit' }} />
+                <p role="status" style={{ ...mono, color: C.faint, fontSize: '10px', margin: '6px 10px' }}>
+                  {threadSearching ? 'Searching… ' : `${threads.length} threads. `}Title/content: latest 500 sessions, up to 200 matches; register: latest 200. Search includes finished; use show archived below for archives. Jobs: latest 200 records.
+                </p>
+                {threadSearchError && <p role="alert" style={{ color: C.gold, fontSize: '12px', margin: '6px 10px' }}>{threadSearchError}</p>}
+                {!threadSearching && !threadGroups.length && <p style={{ color: C.dim, padding: '10px' }}>No matching threads in this scope.</p>}
                 {finishedCount > 0 && (
                   <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
                     <span>{finishedCount} finished</span>
@@ -2872,12 +2906,19 @@ function CC() {
                                      onKeyDown={e => { if (e.key === 'Enter') finishRename(th.brain); else if (e.key === 'Escape') setRenaming(null) }}
                                      onBlur={() => setRenaming(null)} onClick={e => e.stopPropagation()}
                                      style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
-                            : <a onClick={() => switchThread(th)}
+                            : <div role="button" tabIndex={0} onClick={() => switchThread(th)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); switchThread(th) } }}
                                  style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
                                 <Light a={lightOf(th.brain) || (th.running ? { state: 'working', via: 'turn' } : null)} style={{ marginRight: '8px' }} />{th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
+                                <span style={{ display: 'block', ...mono, fontSize: '10px', color: C.faint }}>
+                                  {String(th.brain).slice(0, 8)} · seat: {th.seat || 'unknown'} · owner: {th.task_owner || 'unknown'} · {th.status || 'unknown'}
+                                </span>
+                                {(th.child_jobs || []).map(job => <a key={job.id} href={'/cc/jobs/' + encodeURIComponent(job.id)} target="_blank" rel="noreferrer"
+                                  onClick={e => e.stopPropagation()} title="Open job record and log" style={{ display: 'block', ...mono, fontSize: '10px', color: C.dim }}>
+                                  {job.title || job.id} · {job.ended ? 'ended' : 'not marked finished'} · job record ↗
+                                </a>)}
                                 {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
                                 <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
-                              </a>}
+                              </div>}
                           {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
                           {renaming !== th.brain && (
                             <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
