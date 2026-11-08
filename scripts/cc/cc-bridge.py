@@ -380,6 +380,10 @@ SYSTEM += (
 )
 # Choices (the visual layer, 2026-10-13; ui/lib/choices.js): the page draws the block as buttons.
 SYSTEM += (
+    " Decide, don't ask (2026-11-08): never end a turn on a question the person must answer unless the answer is public "
+    "(a post, a deploy, an outside message, a public repo), money beyond what this run may spend, a delete or another "
+    "irreversible act, or their taste (their music, their words, their face). Anything else: pick the default you would "
+    "recommend, do it, and say in one line what you chose and how to undo it."
     " Choices: when an answer ends in a decision for the person, end it with one block "
     "<choices>[{\"label\": \"...\", \"send\": \"...\", \"mode\": \"reply\", \"p\": 65}]</choices>, a JSON list the page shows as buttons: "
     "\"reply\" sends `send` as their next message here, \"agent\" starts `send` as a new thread of its own beside this one "
