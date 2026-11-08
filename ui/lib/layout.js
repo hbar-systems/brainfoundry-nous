@@ -13,7 +13,7 @@ const COLUMN_PX = { narrow: '860px', wide: '1180px', full: 'none' }
 const PX_COLUMN = { '860px': 'narrow', '1180px': 'wide', none: 'full' }
 
 // The browser's localStorage keys the layout maps to (the ones the console already keeps).
-//   cc.hidden {key:true}, cc.paneSide, cc.paneW, cc.width, cc.font, cc.density, cc.speak, cc.handsfree
+//   cc.hidden {key:true}, cc.paneSide, cc.paneW, cc.width, cc.font, cc.density, cc.text, cc.speak, cc.handsfree
 function localPlan(layout) {
   const set = {}
   const remove = []
@@ -25,6 +25,7 @@ function localPlan(layout) {
   if (layout.column && layout.column !== 'narrow') set['cc.width'] = COLUMN_PX[layout.column]; else remove.push('cc.width')
   if (layout.font) set['cc.font'] = layout.font; else remove.push('cc.font')
   if (layout.density === 'comfortable') set['cc.density'] = 'comfortable'; else remove.push('cc.density')
+  if (layout.text === '14px' || layout.text === '18px') set['cc.text'] = layout.text; else remove.push('cc.text')
   set['cc.speak'] = layout.voice && layout.voice.speak ? '1' : '0'
   set['cc.handsfree'] = layout.voice && layout.voice.handsfree ? '1' : '0'
   return { set, remove }
@@ -45,6 +46,8 @@ function capture(get, base) {
   const f = get('cc.font')
   lay.font = f || null
   lay.density = get('cc.density') === 'comfortable' ? 'comfortable' : 'compact'
+  const t = get('cc.text')
+  lay.text = t === '14px' || t === '18px' ? t : '16px'
   lay.voice = { speak: get('cc.speak') === '1', handsfree: get('cc.handsfree') === '1' }
   return lay
 }

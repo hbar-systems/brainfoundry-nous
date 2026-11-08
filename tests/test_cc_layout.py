@@ -304,3 +304,15 @@ console.log(JSON.stringify({all,none,empty}));
     assert out["all"][0]["text"].startswith("disk 96%") and out["all"][1]["text"].startswith("shared box: disk 95%")
     assert out["all"][2]["text"] == "2 documents wait for your approval" and out["all"][3]["text"] == "a card waits for you"
     assert out["none"] == [] and out["empty"] == []
+
+
+def test_text_size_default_valid_and_summary():
+    # the conversation's text size from the footer "text 16" link, kept by "save layout" (2026-11-08)
+    assert L.DEFAULT["text"] == "16px" and L.validate({})["text"] == "16px"
+    assert L.validate({"text": "18px"})["text"] == "18px"
+    for bad in ("20px", 18, None, "large"):
+        try:
+            L.validate({"text": bad})
+        except L.LayoutError:
+            continue
+        raise AssertionError(f"text {bad!r} should be refused")

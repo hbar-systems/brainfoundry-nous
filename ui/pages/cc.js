@@ -1481,6 +1481,7 @@ function CC() {
       setPaneSide(plan.set['cc.paneSide'] === 'left' ? 'left' : 'right')
       setWidth(plan.set['cc.width'] || '860px')
       setDensity(plan.set['cc.density'] === 'comfortable' ? 'comfortable' : 'compact')
+      setTextSize(plan.set['cc.text'] || '16px')
       setFont(plan.set['cc.font'] || '')
       setSpeak(plan.set['cc.speak'] === '1'); setHandsfree(plan.set['cc.handsfree'] === '1')
       // the default view: once per browser session, only from the bare console page
@@ -3194,7 +3195,7 @@ function CC() {
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             onPaste={e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); setFiles(f => [...f, ...fs]) } }}
             style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
-                     border: `1px solid ${listening || thoughts ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: '14px', lineHeight: 1.5, outline: 'none' }} />
+                     border: `1px solid ${listening || thoughts ? C.gold : C.line}`, fontFamily: 'inherit', fontSize: look.text || (paneMode ? '15px' : textSize), lineHeight: 1.5, outline: 'none' }} />
           <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files || [])]); e.target.value = '' }} />
           {/* the quiet console (2026-11-06): with the input buttons hidden, Enter sends, drop or paste attaches,
               voice runs hands-free and Esc stops; a stop shows only while an answer runs */}
@@ -3277,7 +3278,7 @@ function CC() {
           {!paneMode && (layoutChanged || pane || width !== '860px') ? <span><a onClick={resetLayout} title="Show every block again, put the side pane back on the right at its usual width" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>reset layout</a></span> : null}
           {!paneMode && health && health.layout_proposals > 0 ? <span><a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="A layout from the interview or an installed pack waits for your yes" style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.layout_proposals} layout proposal{health.layout_proposals === 1 ? '' : 's'} wait{health.layout_proposals === 1 ? 's' : ''} for you</a></span> : null}
           {!paneMode && health && health.profile_proposals > 0 ? <span><a onClick={() => openPane({ route: '/profile', title: 'Profile' })} title="How your brain should talk to you, from the interview, waits for your yes" style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>your profile waits for you</a></span> : null}
-          {showDetails && !paneMode ? <span><a onClick={saveLayout} title="Keep how the console looks now (blocks, pane side and width, column, font, voice) in your layout file on the box" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>save layout</a>{' · '}<a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="Your answers, colours, undo and the shareable pack" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>layout page</a>{' · '}<a onClick={() => openPane({ route: '/profile', title: 'Profile' })} title="How your brain talks to you: the answers it keeps in your persona" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>profile</a></span> : null}
+          {showDetails && !paneMode ? <span><a onClick={saveLayout} title="Keep how the console looks now (blocks, pane side and width, column, font, text size, voice) in your layout file on the box" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>save layout</a>{' · '}<a onClick={() => openPane({ route: '/layout', title: 'Layout' })} title="Your answers, colours, undo and the shareable pack" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>layout page</a>{' · '}<a onClick={() => openPane({ route: '/profile', title: 'Profile' })} title="How your brain talks to you: the answers it keeps in your persona" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>profile</a></span> : null}
           {layoutNote ? <span style={{ color: C.gold }}>{layoutNote}</span> : null}
           {!paneMode && hidden.hero ? <span><a onClick={() => { setHeroPref(true); hide('hero', false) }} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>show title</a></span> : null}
           {!paneMode ? <span><a onClick={cycleText} title="the size of the conversation's text: 16, 18 or 14 px" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>text {parseInt(textSize, 10)}</a></span> : null}

@@ -44,6 +44,7 @@ THEMES = ("default", "black", "light")
 SIZES = ("small", "normal", "large")
 WEIGHTS = ("normal", "thin")
 DENSITIES = ("compact", "comfortable")   # spacing inside message bubbles (2026-10-09)
+TEXTS = ("14px", "16px", "18px")         # the conversation's text size, the footer "text 16" link (2026-11-08)
 # "doors" (2026-11-08): the thread, opening on a few large doors by activity (cc_doors.py) instead of a blank page
 VIEWS = ("talk", "gallery", "panes", "doors")
 # The start pane (hbar 2026-11-04): a screen that opens beside the conversation when the person sits down.
@@ -92,7 +93,7 @@ DEFAULT = {
     "panels": {k: True for k in PANELS},
     "pane": {"side": "right", "width": None},
     "column": "narrow", "theme": "default", "vars": {},
-    "font": None, "size": "normal", "weight": "normal", "density": "compact",
+    "font": None, "size": "normal", "weight": "normal", "density": "compact", "text": "16px",
     "view": "talk", "start": None, "voice": {"speak": False, "handsfree": False},
 }
 _TOP = set(DEFAULT)
@@ -157,6 +158,8 @@ def validate(obj) -> dict:
         out["weight"] = _enum(obj["weight"], WEIGHTS, "weight")
     if "density" in obj:
         out["density"] = _enum(obj["density"], DENSITIES, "density")
+    if "text" in obj:
+        out["text"] = _enum(obj["text"], TEXTS, "text")
     if "view" in obj:
         out["view"] = _enum(obj["view"], VIEWS, "view")
     if obj.get("start") is not None:
@@ -205,6 +208,8 @@ def summary(layout: dict) -> str:
         parts.append(f"{lay['weight']} type")
     if lay["density"] != "compact":
         parts.append(f"{lay['density']} spacing")
+    if lay["text"] != "16px":
+        parts.append(f"{lay['text']} conversation text")
     if lay["view"] != "talk":
         parts.append(f"opens on {lay['view']}")
     if lay["start"]:
