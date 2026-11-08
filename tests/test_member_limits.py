@@ -278,3 +278,39 @@ def test_bridge_refuses_jobs_over_the_admin_ceiling():
     src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
     block = src.split('if route == "/jobs/start":', 1)[1].split("JOBS.start(", 1)[0]
     assert "SPEND.over_admin_cap()" in block and "self._send(409" in block
+
+
+# ------------------------------------------- set-env.sh and the override mode (SEAT-1, 2026-11-08) ----
+def _set_env(tmp_path, bridge_user, value):
+    """scripts/cc/set-env.sh with sudo, systemctl, chown and curl faked; the env file sits where
+    `~<bridge_user>` expands to for an unknown user (the literal path, relative to the cwd)."""
+    bins = tmp_path / "fakebin"
+    bins.mkdir(parents=True, exist_ok=True)
+    for name, body in (("sudo", 'exec "$@"'), ("chown", "exit 0"),
+                       ("systemctl", f'echo "$@" >> {tmp_path}/systemctl.log'), ("curl", "exit 7")):
+        (bins / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bins / name).chmod(0o755)
+    envf = tmp_path / f"~{bridge_user}" / ".cc-bridge" / "env"
+    envf.parent.mkdir(parents=True, exist_ok=True)
+    envf.write_text("OTHER=1\n")
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "cc" / "set-env.sh"), "CC_CODEX_WRITE"], input=value, cwd=tmp_path,
+                       capture_output=True, text=True, timeout=30,
+                       env={"PATH": f"{bins}:/usr/bin:/bin", "BRIDGE_USER": bridge_user, "HOME": str(tmp_path)})
+    log = (tmp_path / "systemctl.log").read_text() if (tmp_path / "systemctl.log").exists() else ""
+    return r, envf.read_text(), log
+
+
+def test_set_env_takes_a_value_with_no_final_newline_and_restarts_the_members_bridge(tmp_path):
+    r, text, log = _set_env(tmp_path, "nosuchmember-cc", "1")          # printf '1' | set-env.sh, as on 11-07
+    assert r.returncode == 0, r.stderr
+    assert "CC_CODEX_WRITE=1\n" in text and "OTHER=1\n" in text
+    assert log.split() == ["restart", "cc-bridge-nosuchmember"]          # the member's unit, never the owner's
+    assert "cc-bridge-nosuchmember restarted" in r.stdout
+    r, text, _ = _set_env(tmp_path / "b", "nosuchmember-cc", "")
+    assert r.returncode != 0 and "nothing given" in r.stdout and "CC_CODEX_WRITE" not in text
+
+
+def test_add_member_writes_the_override_644():
+    src = (ROOT / "scripts" / "add-member.sh").read_text()
+    line = next(x for x in src.splitlines() if 'printf \'%s\\n\' "$OVERRIDE" > "$DIR/docker-compose.override.yml"' in x)
+    assert "umask 022" in line and 'chmod 644 "$DIR/docker-compose.override.yml"' in line

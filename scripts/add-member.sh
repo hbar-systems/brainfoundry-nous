@@ -113,8 +113,10 @@ LIMITS="$REPO/scripts/member_limits.py"
 say "== 4 compose override: the shared Ollama, the limits$([ "$UPDATE_TAB" = 1 ] && echo ', the Update tab')"
 OVERRIDE=$(python3 "$LIMITS" override $([ "$UPDATE_TAB" = 1 ] && echo --update-tab "$DIR")) || fail "limits: $LIMITS refused the profile"
 say "$OVERRIDE" | sed 's/^/    | /'
-if [ "$APPLY" = 1 ]; then printf '%s\n' "$OVERRIDE" > "$DIR/docker-compose.override.yml"; fi
-echo "+ write $DIR/docker-compose.override.yml"
+# 644, never the admin's umask: brain-member-update refuses a group-writable override, so a 664 one
+# broke every member's first Update (Alexander, 2026-11-07: "is group- or world-writable (664)")
+if [ "$APPLY" = 1 ]; then (umask 022; printf '%s\n' "$OVERRIDE" > "$DIR/docker-compose.override.yml"); chmod 644 "$DIR/docker-compose.override.yml"; fi
+echo "+ write $DIR/docker-compose.override.yml (644)"
 
 say "== 4b host limits: brain-$HANDLE.slice for the bridge, terminal, reasoner and jobs; the job cap; no cron"
 LIMITS_DIR=${LIMITS_DIR:-/etc/brainfoundry}

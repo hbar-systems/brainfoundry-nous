@@ -11,7 +11,10 @@ KEY=${1:-}; [ -n "$KEY" ] || { echo "usage: $0 KEY_NAME"; exit 1; }
 BRIDGE_USER=${BRIDGE_USER:-cc}
 ENV_FILE=$(eval echo "~$BRIDGE_USER")/.cc-bridge/env
 sudo test -f "$ENV_FILE" || { echo "no bridge env at $ENV_FILE"; exit 1; }
-read -rsp "$KEY: " VALUE; echo
+# `|| true`: a value piped in without a final newline (printf '1' | ...) makes read return 1; under
+# set -e that ended the script before it wrote anything (CC_CODEX_WRITE, 2026-11-07, twice). An empty
+# value still stops at the check below.
+read -rsp "$KEY: " VALUE || true; echo
 [ -n "$VALUE" ] || { echo "nothing given"; exit 1; }
 if [ "$KEY" = "CC_TELEGRAM_TOKEN" ]; then
     # a bot token is <8-10 digits>:<35 letters, digits, _ or ->; anything else Telegram answers with Not Found
@@ -26,6 +29,9 @@ printf '%s' "$VALUE" | sudo env KEY="$KEY" ENV_FILE="$ENV_FILE" BRIDGE_USER="$BR
   printf "%s=%s\n" "$KEY" "$v" >> "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
   chown "$BRIDGE_USER:$BRIDGE_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"'
 unset VALUE
-sudo systemctl restart cc-bridge; sleep 3
-echo "set $KEY; bridge restarted"
+# a member's bridge (BRIDGE_USER=<m>-cc) is cc-bridge-<m>; this restarted the owner's own cc-bridge (2026-11-08)
+UNIT=cc-bridge; [ "$BRIDGE_USER" != cc ] && [ "${BRIDGE_USER%-cc}" != "$BRIDGE_USER" ] && UNIT="cc-bridge-${BRIDGE_USER%-cc}"
+sudo systemctl restart "$UNIT"; sleep 3
+echo "set $KEY; $UNIT restarted"
+[ "$UNIT" = cc-bridge ] || exit 0   # the lane line below reads the owner's port only
 curl -s http://127.0.0.1:7682/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("telegram lane:", {None:"off (no token)",False:"on, waiting for the first message (it pins the owner)",True:"on, owner pinned"}[d.get("telegram")], "| voice:", "on" if d.get("voice") else "off")'
