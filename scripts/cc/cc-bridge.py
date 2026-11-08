@@ -21,7 +21,7 @@ account billed per use (--console). Nothing about the account is stored by
 the bridge; the CLI keeps its own credentials in the brain user's home.
 
 Endpoints (JSON):
-  GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method}
+  GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method} (?fresh=1 re-reads both sign-ins)
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
   GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line"}  (live GET <base>/models, 5 s)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
@@ -3389,12 +3389,27 @@ def _seat_read_only(seat: str) -> bool:
     return seat == "local" or (seat == "codex" and not CODEX_GATE["ok"])
 
 
-def _reasoner_pick(requested, thread_entry: dict | None, state: dict) -> str:
-    """Which seat answers: the one this turn asks for, else the thread's own, else Claude."""
+def _default_seat() -> str:
+    """The seat a turn gets when nothing names one: Claude if it is signed in, else Codex if it is,
+    else Local if it is configured, else Claude (whose refusal then says to sign in). A brain signed
+    in only with ChatGPT answers on Codex from every door, not only from the page (2026-11-08)."""
+    if _auth_status().get("loggedIn"):
+        return "claude"
+    cx = _codex_status()
+    if cx.get("installed") and cx.get("signedIn"):
+        return "codex"
+    if _local_status(live=False).get("configured"):
+        return "local"
+    return "claude"
+
+
+def _reasoner_pick(requested, thread_entry: dict | None, state: dict, default=None) -> str:
+    """Which seat answers: the one this turn asks for, else the thread's own, else default()
+    (the signed-in seat, _default_seat), else Claude."""
     for r in (requested, (thread_entry or {}).get("reasoner"), state.get("reasoner")):
         if r in REASONERS:
             return r
-    return "claude"
+    return default() if default else "claude"
 
 
 def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
@@ -3694,7 +3709,7 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
     if on_run:
         on_run(run)
     t0 = time.time()
-    seat = _reasoner_pick(reasoner, explicit, {} if new else state)
+    seat = _reasoner_pick(reasoner, explicit, {} if new else state, default=_default_seat)
     skey = {"codex": "codex_id", "local": "local_id"}.get(seat, "session_id")   # each seat keeps its own session in the thread
     try:
         fresh = new or not state.get(skey)   # a new thread, or one this seat has not seen yet
@@ -4500,11 +4515,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/health":
             _st = _load_state()
+            # ?fresh=1 (2026-11-08): the page asks for it when a sign-in panel closes or recheck is
+            # pressed, so a sign-in that just landed shows at once instead of after the 20 s caches
+            _fresh = self._query().get("fresh") == "1"
             self._send(200, {"ok": True, "session": bool(_st.get("session_id")),
                              "brain_session_id": _st.get("brain_session_id"), "title": _st.get("title"),
                              "reasoner": _reasoner_version(), "cwd": CWD, "tools": ALLOWED_TOOLS,
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
-                             "persona": PERSONA_FILE.exists(), "auth": _auth_status(),
+                             "persona": PERSONA_FILE.exists(), "auth": _auth_status(fresh=_fresh),
                              "hands": "one" if ONE_ENABLED else None,
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
@@ -4523,7 +4541,7 @@ class Handler(BaseHTTPRequestHandler):
                              "writes": GATE is not None, "gate": "permitd" if GATE is not None else None,
                              "workshop": WORLD_DIR or None, "work": (WORK_DIR or None) if BOX_ENABLED else None, "last_sources": LAST_SOURCES,
                              "signin_proxy": SUBSCRIPTION_PROXY, "auto_count": len(_auto_load()) if GATE else 0,
-                             "reasoners": list(REASONERS), "codex": _codex_status(), "local": _local_status(live=False), "activity": _activity()})
+                             "reasoners": list(REASONERS), "codex": _codex_status(fresh=_fresh), "local": _local_status(live=False), "activity": _activity()})
         elif route == "/activity":
             self._send(200, _activity())
         elif route == "/login/state":

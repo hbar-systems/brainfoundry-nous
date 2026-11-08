@@ -284,3 +284,128 @@ def test_door_runs_the_device_code_login_as_the_hands():
     inst = (ROOT / "scripts" / "cc" / "install-codex.sh").read_text()
     assert "CODEX_VERSION=${CODEX_VERSION:-" + cc_codex.PINNED_VERSION + "}" in inst   # one pin, in step with the bridge
     assert '"@openai/codex@$CODEX_VERSION"' in inst and "--prefix" in inst and "codex login --device-auth" in inst
+
+
+# ------------------------------------------------- SEAT-1: the signed-in seat (2026-11-08) ----
+def _signed(m, monkeypatch, claude=False, codex=False, installed=True, local=False):
+    monkeypatch.setattr(m, "_auth_status", lambda fresh=False: {"loggedIn": claude, "email": None, "method": None})
+    monkeypatch.setattr(m, "_codex_status", lambda fresh=False: {"installed": installed, "signedIn": codex})
+    monkeypatch.setattr(m, "_local_status", lambda live=True: {"configured": local})
+
+
+def test_default_seat_is_the_signed_in_reasoner(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path)
+    _signed(m, monkeypatch, claude=True, codex=True)
+    assert m._default_seat() == "claude"
+    _signed(m, monkeypatch, codex=True)
+    assert m._default_seat() == "codex"
+    _signed(m, monkeypatch, codex=True, installed=False)   # a sign-in without the binary answers nothing
+    assert m._default_seat() == "claude"
+    _signed(m, monkeypatch, local=True)
+    assert m._default_seat() == "local"
+    _signed(m, monkeypatch)
+    assert m._default_seat() == "claude"
+    # the default only fills a gap: the turn's own seat and the thread's seat still win
+    _signed(m, monkeypatch, codex=True)
+    assert m._reasoner_pick(None, None, {}, default=m._default_seat) == "codex"
+    assert m._reasoner_pick("claude", None, {}, default=m._default_seat) == "claude"
+    assert m._reasoner_pick(None, {"reasoner": "claude"}, {}, default=m._default_seat) == "claude"
+
+
+def test_a_turn_naming_no_seat_goes_to_codex_on_a_chatgpt_only_brain(monkeypatch, tmp_path):
+    """Telegram, the queue and any door that sends no seat: a brain signed in only with ChatGPT
+    answered on Claude and refused (hbar 2026-11-07 for Alexander's brain)."""
+    m = _load(monkeypatch, tmp_path)
+    _signed(m, monkeypatch, codex=True)
+    calls = []
+    monkeypatch.setattr(m, "_run_turn", lambda msg, sid, **kw: (calls.append("claude") or ("from claude", "c-1", False)))
+    monkeypatch.setattr(m, "_run_codex_turn", lambda msg, sid, **kw: (calls.append("codex") or ("from codex", "x-1", False)))
+    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: {"session_id": "b9"} if path == "/sessions" else {})
+    monkeypatch.setattr(m, "_recent", lambda msg, fresh: "")
+    status, payload = m._turn_inner("hello", thread=None, new=True, reasoner=None)
+    assert status == 200 and calls == ["codex"] and payload["reasoner"] == "codex"
+
+
+def test_health_fresh_rereads_both_sign_ins():
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    health = src.split('if route == "/health":', 1)[1].split("elif route ==", 1)[0]
+    assert '_fresh = self._query().get("fresh") == "1"' in health
+    assert '"auth": _auth_status(fresh=_fresh)' in health and '"codex": _codex_status(fresh=_fresh)' in health
+
+
+def test_sign_in_card_rechecks_and_never_offers_a_second_chatgpt_login():
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    assert "fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health'" in src
+    assert "onClose={() => { setPane(null); loadHealth(true) }}" in src          # a closed sign-in panel looks again
+    card = src.split("function SignIn(", 1)[1].split("\nfunction ", 1)[0]
+    assert "onRecheck" in card and ">recheck</Btn>" in card
+    assert "{codexCanSignIn(health && health.codex) && (" in card
+    assert "press reconnect" not in card and "press recheck after signing in" not in card   # no button by that name
+    assert "const codexCanSignIn = (cx) => !!(cx && cx.installed && !cx.signedIn)" in src
+
+
+# ---- the door's codex-login and login cases, run for real against fake CLIs ----
+FAKE_CODEX_LOGIN = '''#!/usr/bin/env bash
+here="$(dirname "$0")"
+if [ "$1 $2" = "login status" ]; then [ -f "$here/signed" ]; exit $?; fi
+if [ "$1 $2" = "login --device-auth" ]; then echo login >> "$here/calls"; [ "$(cat "$here/next" 2>/dev/null)" = ok ] && touch "$here/signed"; exit 0; fi
+exit 2
+'''
+FAKE_CLAUDE_LOGIN = '''#!/usr/bin/env bash
+here="$(dirname "$0")"
+if [ "$1 $2" = "auth login" ]; then [ "$(cat "$here/next" 2>/dev/null)" = ok ] && touch "$here/csigned"; exit 0; fi
+if [ "$1 $2" = "auth status" ]; then if [ -f "$here/csigned" ]; then echo '{"loggedIn": true}'; else echo '{"loggedIn": false}'; fi; exit 0; fi
+exit 2
+'''
+
+
+def _door(tmp_path):
+    import getpass
+    import subprocess
+    src = (ROOT / "scripts" / "cc" / "install.sh").read_text()
+    body = src.split("<<'DOOR'\n", 1)[1].split("\nDOOR\n", 1)[0]
+    home = tmp_path / "hands"
+    body = body.replace("/home/__LOGIN_USER__", str(home)).replace("__LOGIN_USER__", getpass.getuser())
+    door = tmp_path / "door.sh"
+    door.write_text(body)
+    bin_ = home / ".local" / "bin"
+    bin_.mkdir(parents=True)
+    for name, text in (("clear", "#!/bin/sh\n"), ("sleep", "#!/bin/sh\n")):   # no 3600 s wait in a test
+        (bin_ / name).write_text(text)
+        (bin_ / name).chmod(0o755)
+
+    def run(arg):
+        r = subprocess.run(["bash", str(door), arg], capture_output=True, text=True, timeout=30,
+                           env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+        return r.stdout
+    return bin_, run
+
+
+def _fake_cli(bin_, name, text):
+    (bin_ / name).write_text(text)
+    (bin_ / name).chmod(0o755)
+
+
+def test_door_codex_login_says_what_happened(tmp_path):
+    bin_, run = _door(tmp_path)
+    assert "not installed on this box" in run("codex-login")
+    _fake_cli(bin_, "codex", FAKE_CODEX_LOGIN)
+    (bin_ / "next").write_text("fail")
+    out = run("codex-login")
+    assert "Not signed in yet" in out and "Signed in." not in out
+    (bin_ / "next").write_text("ok")
+    out = run("codex-login")
+    assert "Signed in. Close this panel" in out and (bin_ / "calls").read_text().count("login") == 2
+    # signed in: the door starts no new device login (it would drop this one)
+    out = run("codex-login")
+    assert "already signed in" in out and (bin_ / "calls").read_text().count("login") == 2
+
+
+def test_door_claude_login_says_done_only_when_signed_in(tmp_path):
+    bin_, run = _door(tmp_path)
+    _fake_cli(bin_, "claude", FAKE_CLAUDE_LOGIN)
+    (bin_ / "next").write_text("fail")
+    out = run("login")
+    assert "Not signed in yet" in out and "Signed in." not in out and "Done." not in out
+    (bin_ / "next").write_text("ok")
+    assert "Signed in. Close this panel" in run("login")

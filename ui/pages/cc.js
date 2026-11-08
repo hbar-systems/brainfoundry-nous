@@ -506,6 +506,9 @@ function Chip({ on, onClick, title, children }) {
 // Codex, which runs read-only. The Codex door beside it: its status in words (never the CLI's own
 // output) and "Sign in with ChatGPT", which opens the terminal panel into OpenAI's own device-code flow.
 const CODEX_LOGIN = { route: '/claude/?arg=codex-login', title: 'Sign in with ChatGPT' }
+// Whether the page offers "Sign in with ChatGPT": installed and not signed in. Signed in, a new
+// device login would drop the working one; not installed, the panel could only say so (2026-11-08).
+const codexCanSignIn = (cx) => !!(cx && cx.installed && !cx.signedIn)
 function codexWords(cx) {
   if (!cx) return 'codex: status unknown'
   if (!cx.installed) return 'codex: not installed on this box'
@@ -1078,7 +1081,7 @@ function FirstRun({ steps, onOpen }) {
   )
 }
 
-function SignIn({ onDone, health, onOpenPane }) {
+function SignIn({ onDone, onRecheck, health, onOpenPane }) {
   const [state, setState] = useState({ phase: 'idle' })
   const [code, setCode] = useState('')
   const [method, setMethod] = useState(null)
@@ -1148,14 +1151,18 @@ function SignIn({ onDone, health, onOpenPane }) {
             ) : (
               <Btn onClick={() => onOpenPane && onOpenPane({ route: '/claude/?arg=login', title: 'Sign in' })}>Sign in with a Claude subscription</Btn>
             )}
-            <Btn onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} title="the Codex seat, read-only; OpenAI's own device-code sign-in in the terminal panel">Sign in with ChatGPT</Btn>
+            {/* only while Codex is installed and not signed in: a second device login drops the first (2026-11-07, Alexander) */}
+            {codexCanSignIn(health && health.codex) && (
+              <Btn onClick={() => onOpenPane && onOpenPane(CODEX_LOGIN)} title="the Codex seat; OpenAI's own device-code sign-in in the panel beside this one">Sign in with ChatGPT</Btn>
+            )}
+            <Btn onClick={onRecheck} title="look again whether Claude or Codex is signed in">recheck</Btn>
           </div>
           <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '8px 0 0 0' }}>
-            {codexWords(health && health.codex)}. Either one is enough: sign in with Claude or with ChatGPT, and the chat opens. With only ChatGPT, every thread starts on Codex; press recheck after signing in.
+            {codexWords(health && health.codex)}{health && health.codex && !health.codex.installed ? ' (the box\'s admin installs it)' : ''}. Either one is enough: sign in with Claude or with ChatGPT, and the chat opens. With only ChatGPT, every thread starts on Codex.
           </p>
           {!(health && health.signin_proxy) && (
             <p style={{ color: C.faint, fontSize: '12px', lineHeight: 1.6, margin: '10px 0 0 0' }}>
-              A subscription signs in through the provider's own flow, in a panel beside this one: open the link it shows, sign in, paste the code where it asks. Nothing about your account passes through this page; when it says done, close the panel and press reconnect.
+              A subscription signs in through the provider's own flow, in a panel beside this one: open the link it shows, sign in, paste the code where it asks. Nothing about your account passes through this page; when it says signed in, close the panel; this page looks again when it closes, or press recheck.
             </p>
           )}
           {apiErr && <p style={{ color: '#d08a7a', fontSize: '13px', margin: '10px 0 0 0' }}>{apiErr}</p>}
@@ -1791,8 +1798,9 @@ function CC() {
     cardsSeenRef.current = n
   }, [health && health.cards_waiting])
   const loadUsage = () => fetch('/cc/usage', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setUsage(d) }).catch(() => {})
-  const loadHealth = () =>
-    fetch('/cc/health', { cache: 'no-store' })
+  // fresh: the bridge reads both sign-ins again instead of its 20 s caches (a sign-in panel closed, recheck pressed; 2026-11-08)
+  const loadHealth = (fresh) =>
+    fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setHealth)
       .catch(() => setHealth(false))
@@ -2911,7 +2919,7 @@ function CC() {
           </div>
         )}
 
-        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onOpenPane={openPane} />}
+        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
 
         {!paneMode && tgNews && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
@@ -3209,7 +3217,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={openPane} onClose={() => { setPane(null); loadHealth() }} />}
+      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={openPane} onClose={() => { setPane(null); loadHealth(true) }} />}
       </div>
     </LearnCtx.Provider>
   )

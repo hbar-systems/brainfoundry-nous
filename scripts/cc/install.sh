@@ -103,13 +103,16 @@ case "${1:-}" in
     # The sign-in must land with the user the bridge runs as. After harden-user.sh that is
     # not the door's user; signing in here as the door's user left the bridge disconnected
     # (observed 2026-09-21). __BRIDGE_USER__ is filled in by the installer.
-    if [ "__LOGIN_USER__" != "$(id -un)" ]; then
-        sudo -n -u "__LOGIN_USER__" -H env PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM" claude auth login --claudeai \
-            || printf '\n  Could not switch to the reasoner user from here. In a terminal on the box run:\n  sudo -u __LOGIN_USER__ -H claude auth login --claudeai\n'
+    CA=(env); [ "__LOGIN_USER__" != "$(id -un)" ] && CA=(sudo -n -u "__LOGIN_USER__" -H env)
+    CA+=(PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM")
+    "${CA[@]}" claude auth login --claudeai \
+        || printf '\n  The sign-in did not finish (or this panel could not act as __LOGIN_USER__).\n'
+    # "signed in" only when it is: the panel said "Done" after a failed login too (2026-11-07)
+    if "${CA[@]}" claude auth status --json 2>/dev/null | grep -Eq '"loggedIn": *true'; then
+        printf '\n  Signed in. Close this panel; the page looks again when it closes.\n'
     else
-        claude auth login --claudeai
+        printf '\n  Not signed in yet. Close this panel and press "Sign in with a Claude subscription" again.\n'
     fi
-    printf '\n  Done. Close this panel and press reconnect.\n'
     sleep 3600 ;;
   codex-login)
     # The Codex seat (2026-10-15, opt-in: scripts/cc/install-codex.sh). OpenAI's own device-code
@@ -123,12 +126,19 @@ case "${1:-}" in
     AS=(env); [ "__LOGIN_USER__" != "$(id -un)" ] && AS=(sudo -n -u "__LOGIN_USER__" -H env)
     AS+=(PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM")
     if ! "${AS[@]}" test -x "/home/__LOGIN_USER__/.local/bin/codex"; then
-        printf '  The Codex CLI is not installed for __LOGIN_USER__ (or this door cannot act as them).\n  On the box, from the brain repo: bash scripts/cc/install-codex.sh\n'
+        printf '  The Codex seat is not installed on this box. The box'"'"'s admin installs it\n  (scripts/cc/install-codex.sh, as the admin, not from this panel). Close this panel.\n'
+    elif "${AS[@]}" codex login status >/dev/null 2>&1; then
+        # a new device login drops the working one (2026-11-07, Alexander: a third login locked the chat)
+        printf '  Codex is already signed in. Nothing was changed: a new sign-in would drop this one.\n  Close this panel; the page looks again when it closes.\n'
     else
         "${AS[@]}" codex login --device-auth \
-            || printf '\n  The sign-in did not finish. In a terminal on the box run:\n  sudo -u __LOGIN_USER__ -H codex login --device-auth\n'
+            || printf '\n  The sign-in did not finish.\n'
+        if "${AS[@]}" codex login status >/dev/null 2>&1; then
+            printf '\n  Signed in. Close this panel; the page looks again when it closes.\n'
+        else
+            printf '\n  Not signed in yet. Close this panel and press "Sign in with ChatGPT" again.\n'
+        fi
     fi
-    printf '\n  Close this panel and press recheck beside the Codex seat.\n'
     sleep 3600 ;;
   *)
     exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;
