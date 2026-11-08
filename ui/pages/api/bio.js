@@ -30,8 +30,9 @@ export default async function handler(req, res) {
     public_key: key ? `${String(key).slice(0, 16)}...` : null,
     state: health ? {
       api: health.status || 'up',
-      db: health.database?.status || health.db?.status || null,
-      model: health.ollama?.status || null,
+      db: health.services?.database?.status || null,
+      model: health.services?.ollama?.status || null,
+      memory: health.services?.embeddings?.status || null,
     } : null,
   })
 }
