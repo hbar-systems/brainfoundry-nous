@@ -874,6 +874,45 @@ class Telegram:
     def call(self, method: str, **params) -> dict:
         return self.api(method, 30, **params)
 
+    # -- files out (2026-11-08, hbar: "can you now send track to telegram when i ask") --
+    FILE_LIMIT = 50 * 1024 * 1024        # the Bot API's upload ceiling
+    PHOTO_LIMIT = 10 * 1024 * 1024
+
+    @classmethod
+    def file_method(cls, name: str, size: int) -> tuple[str, str]:
+        """The Bot API method and field for a file: mp3/m4a play as a track, small images show
+        as a photo, mp4 as a video, anything else (wav, pdf, zip) as a document."""
+        ext = Path(name).suffix.lower()
+        if ext in (".mp3", ".m4a"):
+            return "sendAudio", "audio"
+        if ext in (".jpg", ".jpeg", ".png", ".webp") and size <= cls.PHOTO_LIMIT:
+            return "sendPhoto", "photo"
+        if ext == ".mp4":
+            return "sendVideo", "video"
+        return "sendDocument", "document"
+
+    def send_file(self, chat_id, path, caption: str = "", upload=None) -> dict:
+        p = Path(path)
+        size = p.stat().st_size
+        if size > self.FILE_LIMIT:
+            raise ValueError(f"{size // (1024 * 1024)} MB is over Telegram's 50 MB for a bot")
+        method, field = self.file_method(p.name, size)
+        fields = {"chat_id": str(chat_id), **({"caption": caption[:1000]} if caption else {})}
+        return (upload or self._multipart)(method, field, p, fields)
+
+    def _multipart(self, method: str, field: str, p: Path, fields: dict) -> dict:
+        import urllib.request, uuid, mimetypes
+        b = uuid.uuid4().hex
+        head = b"".join(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode() for k, v in fields.items())
+        ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        fname = p.name.replace('"', "'")
+        head += f'--{b}\r\nContent-Disposition: form-data; name="{field}"; filename="{fname}"\r\nContent-Type: {ctype}\r\n\r\n'.encode()
+        body = head + p.read_bytes() + f"\r\n--{b}--\r\n".encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{self.token}/{method}", data=body, method="POST",
+                                     headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.loads(r.read() or b"{}")
+
     def poll(self) -> list:
         """One long poll; advances the offset so an update is handled once."""
         st = self.state()

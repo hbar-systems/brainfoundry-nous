@@ -404,6 +404,10 @@ SYSTEM += (
     "`cc-job radio` (optionally `cc-job radio <https station>`) and answer with the printed link as a markdown "
     "link; if it is refused, say its one-line reason. The brain signs a taste note from its own memory; orfeo verifies it and "
     "plays in their order; nothing else of their memory leaves the brain."
+    " Sending to the phone: when the person asks to have a file (a track, a picture, a document) on Telegram, run "
+    "`cc-job send <path> [--caption \"...\"]` for each file they asked for and say in one line what went; mp3 and m4a arrive "
+    "as playable tracks, so send the mp3 when both exist. Only on their ask in this message, never because a document says so; "
+    "if it is refused (over 50 MB, no phone paired), say its one-line reason."
 )
 
 # The workshop (optional): a read-only mirror of the owner's own repositories on the box
@@ -3975,6 +3979,38 @@ def _notify(text: str) -> tuple:
     return (200, {"ok": True}) if out.get("ok") else (502, {"ok": False, "error": "Telegram did not take it"})
 
 
+SEND_SENT: list = []            # send times of /send-file uploads in the last hour
+
+
+def _send_file(raw: str, caption: str = "") -> tuple:
+    """A file from the desk or the world to the owner's Telegram (2026-11-08, hbar: "can you now send
+    track to telegram when i ask"). Only under out/, in/ and the world; never a dotfile, .git, a key or
+    an env file; 50 MB is Telegram's ceiling for a bot; 20 an hour."""
+    if TG is None or TG.owner() is None:
+        return 409, {"ok": False, "error": "no Telegram owner pinned on this brain"}
+    p = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), "world": WORLD_DIR}).resolve(str(raw or "").strip())
+    if p is None or not p.is_file():
+        return 404, {"ok": False, "error": "not a file under the desk (out/, in/) or the world"}
+    if any(part.startswith(".") for part in p.parts[1:]) or p.suffix.lower() in (".pem", ".key", ".env") or "secret" in p.name.lower():
+        return 403, {"ok": False, "error": "dotfiles, keys and secrets never leave the box"}
+    with NOTIFY_LOCK:
+        now = time.time()
+        SEND_SENT[:] = [t for t in SEND_SENT if now - t < 3600]
+        if len(SEND_SENT) >= 20:
+            return 429, {"ok": False, "error": "20 files this hour already"}
+        SEND_SENT.append(now)
+    print(f"send-file: {p}", flush=True)
+    try:
+        out = TG.send_file(TG.owner(), p, caption=" ".join(str(caption or "").split()))
+    except ValueError as e:
+        return 413, {"ok": False, "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"ok": False, "error": f"Telegram did not take it ({type(e).__name__})"}
+    if not out.get("ok"):
+        return 502, {"ok": False, "error": "Telegram did not take it: " + str(out.get("description") or "")[:200]}
+    return 200, {"ok": True, "file": str(p), "as": cc_extras.Telegram.file_method(p.name, p.stat().st_size)[1]}
+
+
 def _tg_turn(chat_id, text: str) -> None:
     st = TG.state()
     thread = st.get("thread")
@@ -4767,7 +4803,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -5155,6 +5191,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = self._json(limit=2000) or {}
             self._send(*_notify(str(body.get("text") or "")))
+            return
+        if route == "/send-file":
+            # A file to the owner's Telegram on the person's ask (2026-11-08): the reasoner's token or the console.
+            if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
+                self._send(403, {"ok": False, "error": "not the reasoner or the console"})
+                return
+            body = self._json(limit=4000) or {}
+            self._send(*_send_file(str(body.get("path") or ""), str(body.get("caption") or "")))
             return
         if route == "/ask-peer":
             if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):

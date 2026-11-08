@@ -486,3 +486,22 @@ def test_job_report_asks_status_and_choices():
     assert a["options"] == ["Keep it private", "Publish"]
     b = X.job_report_asks("**STATUS: blocked** no key\n<choices>not json</choices>")
     assert b["status"] == "blocked" and b["options"] == []
+
+
+def test_telegram_send_file_picks_the_method(tmp_path):
+    """2026-11-08: a track goes as sendAudio, a picture as sendPhoto, a wav as a document; over 50 MB refuses."""
+    tg = X.Telegram("tok", tmp_path / "tg.json", api=lambda *a, **k: {"ok": True})
+    seen = []
+    up = lambda method, field, p, fields: seen.append((method, field, p.name, fields)) or {"ok": True}
+    for name in ("beat.mp3", "cover.png", "beat.wav", "clip.mp4"):
+        (tmp_path / name).write_bytes(b"x" * 10)
+        assert tg.send_file(42, tmp_path / name, caption="hi", upload=up)["ok"]
+    assert [s[0] for s in seen] == ["sendAudio", "sendPhoto", "sendDocument", "sendVideo"]
+    assert seen[0][1] == "audio" and seen[0][3] == {"chat_id": "42", "caption": "hi"}
+    assert X.Telegram.file_method("big.png", 11 * 1024 * 1024) == ("sendDocument", "document")
+    big = tmp_path / "big.wav"
+    with open(big, "wb") as f:
+        f.truncate(51 * 1024 * 1024)
+    import pytest
+    with pytest.raises(ValueError):
+        tg.send_file(42, big, upload=up)

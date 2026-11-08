@@ -1344,6 +1344,31 @@ def test_notify_rate_limit_and_flood_line(monkeypatch, tmp_path):
     assert len(sent) == 11 and sent[0] == "line 0" and sent[10].startswith("More alerts this hour")
 
 
+def test_send_file_guards_the_path(monkeypatch, tmp_path):
+    # /send-file (2026-11-08): only desk and world files, never dotfiles or secrets, 20 an hour.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    assert m._send_file(str(m.OUT_DIR / "x.mp3"))[0] == 409       # no phone paired
+    sent = []
+
+    class FakeTG:
+        def owner(self):
+            return 42
+        def send_file(self, chat, p, caption=""):
+            sent.append((chat, p.name, caption))
+            return {"ok": True}
+    monkeypatch.setattr(m, "TG", FakeTG())
+    track = m.OUT_DIR / "2026-11-08" / "beat.mp3"; track.parent.mkdir(parents=True, exist_ok=True); track.write_bytes(b"x")
+    hidden = m.OUT_DIR / ".cfg" / "a.mp3"; hidden.parent.mkdir(parents=True, exist_ok=True); hidden.write_bytes(b"x")
+    outside = tmp_path / "elsewhere.mp3"; outside.write_bytes(b"x")
+    code, body = m._send_file(str(track), "Seven Over Four")
+    assert code == 200 and body["as"] == "audio" and sent == [(42, "beat.mp3", "Seven Over Four")]
+    assert m._send_file(str(outside))[0] == 404
+    assert m._send_file(str(hidden))[0] == 403
+    assert m._send_file(str(m.OUT_DIR / "nope.mp3"))[0] == 404
+    codes = [m._send_file(str(track))[0] for _ in range(20)]
+    assert codes[:19] == [200] * 19 and codes[19] == 429
+
+
 def test_actions_refuse_bad_input(monkeypatch, tmp_path):
     # standing-page actions (2026-10-26): ids and verbs are checked before anything runs
     m = _load(monkeypatch, tmp_path, with_key=False)

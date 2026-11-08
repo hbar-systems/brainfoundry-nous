@@ -16,6 +16,7 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
     cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
     cc-job radio [https://station]   a link to listen on a radio brain with this brain (orfeo.music by default)
+    cc-job send <path> [--caption "..."]   a file from out/, in/ or the world to the owner's Telegram (on their ask)
     cc-job orfeo-post <file> <https audio url> --kind loop|track --title T [--note N] [--bpm B] [--key K] [--station URL]
                                     post a loop or track to orfeo, signed by this brain; a card asks first, it lands pending
     cc-job halt ["reason"] [--kill]   the kill switch (2026-10-25): writes ~/.cc-bridge/HALT; no new
@@ -219,6 +220,19 @@ def main(argv: list[str]) -> int:
             if not d.get("ok"):
                 print("refused:", d.get("error") or d.get("reason") or "no answer"); return 1
             print(f"posted to {a.station}: id {d.get('id')}, {d.get('status')} until the station's owner approves"); return 0
+        if cmd == "send" and rest:
+            # A file to the owner's phone (2026-11-08): the bridge checks the path and uploads it.
+            cap = ""
+            if "--caption" in rest:
+                i = rest.index("--caption"); cap = " ".join(rest[i + 1:i + 2]); rest = rest[:i] + rest[i + 2:]
+            code = 0
+            for path in rest:
+                d = _call("POST", "/send-file", {"path": os.path.abspath(path), "caption": cap}, timeout=360)
+                if d.get("ok"):
+                    print(f"sent to Telegram as {d.get('as')}: {d.get('file')}")
+                else:
+                    print(f"refused: {path}: {d.get('error', 'no answer')}"); code = 1
+            return code
         if cmd == "radio":
             # Listen on a radio brain (2026-10-25): the bridge asks the api for a signed taste-note link.
             station = rest[0] if rest else "https://orfeo.music"
