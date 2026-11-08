@@ -44,7 +44,8 @@ THEMES = ("default", "black", "light")
 SIZES = ("small", "normal", "large")
 WEIGHTS = ("normal", "thin")
 DENSITIES = ("compact", "comfortable")   # spacing inside message bubbles (2026-10-09)
-VIEWS = ("talk", "gallery", "panes")
+# "doors" (2026-11-08): the thread, opening on a few large doors by activity (cc_doors.py) instead of a blank page
+VIEWS = ("talk", "gallery", "panes", "doors")
 # The start pane (hbar 2026-11-04): a screen that opens beside the conversation when the person sits down.
 # A brain app by id, or one of a few console screens; anything else is refused.
 START_SCREENS = ("/tasks", "/files", "/graph", "/guide")
@@ -218,6 +219,7 @@ def summary(layout: dict) -> str:
 QUESTIONS = (
     {"id": "first", "ask": "What do you open first when you sit down?",
      "options": (("talk", "the conversation"), ("gallery", "my conversations as a deck"), ("panes", "several conversations side by side"),
+                 ("doors", "a few doors, one for each thing I do here"),
                  ("today", "Today (calendar, mail, tasks) beside the conversation"))},
     {"id": "never", "ask": "Which of these do you never use? Say none if all of them stay.", "multi": True,
      "options": (("board", "board"), ("gallery", "gallery"), ("files", "files link"), ("sidebyside", "side by side"),

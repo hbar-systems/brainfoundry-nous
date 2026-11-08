@@ -476,6 +476,7 @@ import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
+import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_guard  # noqa: E402
@@ -3286,6 +3287,8 @@ def _codex_status(fresh: bool = False) -> dict:
     env = cc_codex.env(_hands_env())
     st = cc_codex.status(CODEX_BIN, run=lambda argv, t: subprocess.run(
         _as_hands(argv, env), capture_output=True, text=True, timeout=t, env=env))
+    if not st.get("installed"):
+        st["install"] = cc_codex.install_command(MEMBER)
     if CODEX_WRITE:
         st["write"] = {"asked": True, "on": bool(CODEX_GATE["ok"]), "why": CODEX_GATE["why"],
                        "sandbox": CODEX_WRITE_SANDBOX or None}
@@ -4160,6 +4163,15 @@ def _layout_view() -> dict:
             "questions": [{**q, "options": [list(o) for o in q["options"]]} for q in cc_layout.QUESTIONS]}
 
 
+def _doors() -> list:
+    """The doors for this brain, from its persona and its installed apps (read on every call: small files)."""
+    try:
+        apps = json.loads((Path(CWD) / "brain-apps" / "installed.json").read_text()).get("apps") or []
+    except Exception:
+        apps = []
+    return cc_doors.doors(_persona(), apps)
+
+
 def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tuple[int, dict]:
     """Every /layout route, as (status, object). Errors from the schema are 400 with the reason."""
     body = body or {}
@@ -4169,6 +4181,8 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
         if route == "/layout/mode":   # newcomer or operator (2026-10-17); the Nav and Settings read it
             mode = LAYOUT.set_mode(body.get("mode")) if method == "POST" else LAYOUT.mode()
             return 200, {"mode": mode, "modes": list(cc_layout.MODES), "tiers": cc_layout.TIERS}
+        if method == "GET" and route == "/layout/doors":   # the doors view (cc_doors.py, 2026-11-08)
+            return 200, {"doors": _doors()}
         if method == "GET" and route == "/layout/export":
             cur = LAYOUT.get()
             if cur is None:

@@ -15,6 +15,8 @@
 #                            host ports 8100+10n (api) +1 ui +2 nodeos +3 postgres +4 public chat
 #   cc-bridge-<m>            the bridge on +8, claude-tab-<m> the terminal door on +7 (scripts/cc/install.sh,
 #                            then scripts/cc/split-hands.sh, both with CC_MEMBER)
+#   the Codex seat         the CLI for <m>-hands (scripts/cc/install-codex.sh <m>), CC_CODEX_WRITE=1 and
+#                            CC_CODEX_WRITE_SANDBOX=off: Sign in with ChatGPT works on day one (2026-11-08)
 # and the box's one Ollama (the first brain's, 127.0.0.1 only) joins the member's network as "ollama".
 # It prints the Caddy site block for <m>.brainfoundry.ai and console.<m>.brainfoundry.ai; it never
 # edits the Caddyfile, DNS or the cloud.
@@ -180,6 +182,20 @@ run "${CC_ENV[@]}" bash "$DIR/scripts/cc/install.sh"
 run "${CC_ENV[@]}" bash "$DIR/scripts/cc/split-hands.sh"
 # the console's Update button: through the bridge and a narrow root helper, no docker socket (2026-10-21)
 run bash "$DIR/scripts/member-update-door.sh" "$HANDLE" --apply
+
+say "== 7b the Codex seat for $HANDS_USER, gated write mode, so Sign in with ChatGPT works on day one (2026-11-08)"
+# As on Alexander's brain (2026-11-07): edits and commands through the same cards as Claude, Codex's own
+# sandbox off (it cannot start on Ubuntu 24.04; the cards are the gate). Without npm or node the brain is
+# still made; the sign-in panel then names the owner's one command (bash scripts/cc/install-codex.sh <m>).
+run bash "$DIR/scripts/cc/install-codex.sh" "$HANDLE" \
+    || say "   note: the Codex CLI did not install; later, from any checkout: bash scripts/cc/install-codex.sh $HANDLE"
+for kv in CC_CODEX_WRITE=1 CC_CODEX_WRITE_SANDBOX=off; do
+    echo "+ printf '${kv#*=}' | BRIDGE_USER=$BRIDGE_USER bash $DIR/scripts/cc/set-env.sh ${kv%%=*}"
+    if [ "$APPLY" = 1 ]; then
+        printf '%s' "${kv#*=}" | BRIDGE_USER="$BRIDGE_USER" bash "$DIR/scripts/cc/set-env.sh" "${kv%%=*}" \
+            || say "   note: ${kv%%=*} was not set; set it with scripts/cc/set-env.sh"
+    fi
+done
 
 say "== 8 registry"
 LINE=$(printf '%s\t%s\t%s\t%s' "$HANDLE" "$N" "$M_API_PORT" "$(date -u +%Y-%m-%d)")

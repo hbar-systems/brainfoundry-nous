@@ -100,6 +100,11 @@ export default function LayoutPage() {
       <div style={label}>accent</div>
       {ACCENTS.map(([n, hex]) => <Chip key={n} on={(accent || null) === hex} onClick={() => setAccent(hex)}>{n}</Chip>)}
 
+      <div style={label}>view</div>
+      {[['talk', 'thread'], ['doors', 'doors']].map(([v, w]) => <Chip key={v} on={((lay && lay.view) || 'talk') === v}
+        title={v === 'talk' ? 'The console opens on your thread, as it always has' : 'The console opens on a blank thread with a few large doors, one for each thing you do here'}
+        onClick={() => { const base = JSON.parse(JSON.stringify(lay || d.default)); base.view = v; post('/layout/save', { layout: base, answers: Object.keys(d.answers || {}).length ? d.answers : undefined }) }}>{w}</Chip>)}
+
       <div style={label}>spacing</div>
       {[['compact', 'compact'], ['comfortable', 'comfortable']].map(([v, w]) => <Chip key={v} on={((lay && lay.density) || 'compact') === v} title="Spacing inside message bubbles"
         onClick={() => { const base = JSON.parse(JSON.stringify(lay || d.default)); base.density = v; post('/layout/save', { layout: base, answers: Object.keys(d.answers || {}).length ? d.answers : undefined }) }}>{w}</Chip>)}

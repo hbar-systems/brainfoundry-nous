@@ -366,6 +366,7 @@ def _door(tmp_path):
     body = src.split("<<'DOOR'\n", 1)[1].split("\nDOOR\n", 1)[0]
     home = tmp_path / "hands"
     body = body.replace("/home/__LOGIN_USER__", str(home)).replace("__LOGIN_USER__", getpass.getuser())
+    body = body.replace("__CODEX_INSTALL__", "bash scripts/cc/install-codex.sh elena")
     door = tmp_path / "door.sh"
     door.write_text(body)
     bin_ = home / ".local" / "bin"
@@ -388,7 +389,9 @@ def _fake_cli(bin_, name, text):
 
 def test_door_codex_login_says_what_happened(tmp_path):
     bin_, run = _door(tmp_path)
-    assert "not installed on this box" in run("codex-login")
+    out = run("codex-login")   # not installed: who installs it and the owner's one command, nothing for the member (2026-11-08)
+    assert "not installed for this brain" in out and "The owner of this box" in out
+    assert "bash scripts/cc/install-codex.sh elena" in out and "nothing for you to type" in out.lower()
     _fake_cli(bin_, "codex", FAKE_CODEX_LOGIN)
     (bin_ / "next").write_text("fail")
     out = run("codex-login")

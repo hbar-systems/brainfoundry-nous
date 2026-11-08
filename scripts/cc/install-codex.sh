@@ -4,6 +4,9 @@
 #
 # Run ON the brain's server as the brain user (needs sudo to act as the hands), from the brain repo:
 #     bash scripts/cc/install-codex.sh
+# For a member's brain on a shared box (docs/MULTI_INSTANCE.md), the box's owner names the member,
+# from any brain checkout on the box (add-member.sh runs this for every new member, 2026-11-08):
+#     bash scripts/cc/install-codex.sh <handle>      # installs for <handle>-hands
 # What it does: installs OpenAI's Codex CLI, pinned to CODEX_VERSION, from npm into the hands
 # user's own ~/.local (no system-wide install, no root-owned files), and prints its version and
 # sign-in state. It does not sign in; that is the console's "Sign in with ChatGPT" (or, on the box:
@@ -14,6 +17,12 @@
 set -euo pipefail
 
 CODEX_VERSION=${CODEX_VERSION:-0.162.1}   # keep in step with PINNED_VERSION in scripts/cc/cc_codex.py
+if [ -n "${1:-}" ]; then
+    . "$(dirname "$0")/member.sh"
+    member_handle_ok "$1" || { echo "bad member handle: $1"; exit 2; }
+    HANDS_USER="$1-hands"
+    id "$HANDS_USER" >/dev/null 2>&1 || { echo "no user $HANDS_USER on this box: is $1 a member here?"; exit 1; }
+fi
 BRIDGE_USER=$(grep -oP '^User=\K.*' /etc/systemd/system/cc-bridge.service 2>/dev/null || id -un)
 BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
 HANDS_USER=${HANDS_USER:-$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$BRIDGE_HOME/.cc-bridge/env" 2>/dev/null || true)}

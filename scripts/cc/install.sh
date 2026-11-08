@@ -126,7 +126,7 @@ case "${1:-}" in
     AS=(env); [ "__LOGIN_USER__" != "$(id -un)" ] && AS=(sudo -n -u "__LOGIN_USER__" -H env)
     AS+=(PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM")
     if ! "${AS[@]}" test -x "/home/__LOGIN_USER__/.local/bin/codex"; then
-        printf '  The Codex seat is not installed on this box. The box'"'"'s admin installs it\n  (scripts/cc/install-codex.sh, as the admin, not from this panel). Close this panel.\n'
+        printf '  Codex is not installed for this brain yet, so there is nothing to sign in to.\n  There is nothing for you to type here. The owner of this box installs it with one command on the box:\n    %s\n  Then close this panel and press recheck.\n' "__CODEX_INSTALL__"
     elif "${AS[@]}" codex login status >/dev/null 2>&1; then
         # a new device login drops the working one (2026-11-07, Alexander: a third login locked the chat)
         printf '  Codex is already signed in. Nothing was changed: a new sign-in would drop this one.\n  Close this panel; the page looks again when it closes.\n'
@@ -145,7 +145,8 @@ case "${1:-}" in
 esac
 DOOR
 LOGIN_USER=$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$ENV_FILE" 2>/dev/null || true); LOGIN_USER=${LOGIN_USER:-$BRIDGE_USER}
-sed -i "s|__LOGIN_USER__|$LOGIN_USER|g; s|__BRIDGE_USER__|$BRIDGE_USER|g" "$DOOR_TMP"
+CODEX_INSTALL="bash scripts/cc/install-codex.sh${MEMBER:+ $MEMBER}"   # cc_codex.install_command, the owner's one command
+sed -i "s|__LOGIN_USER__|$LOGIN_USER|g; s|__BRIDGE_USER__|$BRIDGE_USER|g; s|__CODEX_INSTALL__|$CODEX_INSTALL|g" "$DOOR_TMP"
 if [ "$TERM_USER" = "$(id -un)" ] || [ "$TERM_USER" = "$BRAIN_USER" ]; then
     mkdir -p "$DOOR_DIR"   # a fresh box has no state dir yet (found on e2e 2026-09-22)
     cat "$DOOR_TMP" > "$DOOR_DIR/door.sh"; chmod 755 "$DOOR_DIR/door.sh"; FIX_OWNER

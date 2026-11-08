@@ -135,12 +135,19 @@ def _run(argv: list[str], timeout: int):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
+def install_command(member: str = "") -> str:
+    """The one command the box's owner runs to install the seat for this brain (never the member's to
+    run: it needs sudo). A member's brain names the member (2026-11-08, Elena: "Sign in with ChatGPT"
+    failed because nothing was installed, and the page gave her a bash line she could not run)."""
+    return "bash scripts/cc/install-codex.sh" + (f" {member}" if member else "")
+
+
 def refusal(st: dict) -> str | None:
     """The sentence a refused turn shows, or None when the seat can answer."""
     if not st.get("installed"):
-        return ("The Codex seat is not installed on this box (no codex binary for the hands user). "
-                "This turn was not answered, and nothing fell back to the Claude seat. "
-                "Install it with scripts/cc/install-codex.sh, then sign in with ChatGPT.")
+        return ("The Codex seat is not installed for this brain yet. This turn was not answered, and nothing "
+                "fell back to the Claude seat. The owner of this box installs it with one command on the box: "
+                f"{st.get('install') or install_command()}. Then Sign in with ChatGPT shows here.")
     if not st.get("signedIn"):
         return ("The Codex seat is not signed in. This turn was not answered, and nothing fell back to the "
                 "Claude seat. Use Sign in with ChatGPT, then send again.")

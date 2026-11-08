@@ -21,7 +21,7 @@ The interview no longer starts from the stock console. It starts from a preset (
 
 | id | ask | options (value: words) |
 |---|---|---|
-| first | What do you open first when you sit down? | talk: the conversation; gallery: my conversations as a deck; panes: several conversations side by side; today: Today (calendar, mail, tasks) beside the conversation |
+| first | What do you open first when you sit down? | talk: the conversation; gallery: my conversations as a deck; panes: several conversations side by side; doors: a few doors, one for each thing I do here; today: Today (calendar, mail, tasks) beside the conversation |
 | never | Which of these do you never use? Say none if all stay. (several allowed) | board; gallery; files; sidebyside: side by side; handsfree: the hands-free row; hint: the starter hints; hero: the title block; nav: the row of buttons at the top; tools: the tool line (colours, skins, posture, seat); inputbuttons: the buttons beside the input (Enter sends); footer: the status lines under the input |
 | panes | When the brain opens a screen for you, one at a time beside the chat, or several? | one; several |
 | side | Which side should the pane sit on? | right; left |
@@ -50,7 +50,7 @@ When you have the answers, end one message with exactly one block, using the opt
 
 | answer | effect in the console |
 |---|---|
-| first | the page the console opens on: the conversation, /gallery or /panes (once per browser session); today opens the conversation with the Today app beside it (layout key `start`: `/apps/<id>` or /tasks, /files, /graph, /guide; amended 2026-11-04) |
+| first | the page the console opens on: the conversation, /gallery or /panes (once per browser session); doors opens a blank thread with a few large doors by activity, generated from the persona and the installed apps (scripts/cc/cc_doors.py; amended 2026-11-08); today opens the conversation with the Today app beside it (layout key `start`: `/apps/<id>` or /tasks, /files, /graph, /guide; amended 2026-11-04) |
 | never | the named block is hidden; "reset layout" and /layout bring it back |
 | never: nav | the top row (threads, new thread, side by side, gallery, board, agents, export) is hidden; the "everything" drawer stays, and /new, /help and the other slash commands still work (2026-11-06) |
 | never: tools | the tool line (colour wheel, tint, text, skins, wallpaper, posture, seat, learn) is hidden; /posture and /seat still work |
