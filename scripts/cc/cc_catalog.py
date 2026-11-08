@@ -80,6 +80,7 @@ CATALOG = (
     _i("view:talk", "the conversation", "on", M, "mind/claude/project_claude_code_in_brain.md"),
     _i("view:panes", "several conversations side by side", "off", M, "ops/2026-10-06_console-reading-space/README.md"),
     _i("view:gallery", "conversations as a deck", "off", M, UNKNOWN),   # idea register 10-12: live, mostly unseen
+    _i("view:doors", "a few large doors, one per activity, opening a thread", "off", M, "ops/jobs/briefs/2026-11-08_nous-member-door.md"),
     # panels: blocks of the console page (layout "panels")
     _i("panel:handsfree", "the hands-free row", "on", M, "ops/2026-09-28_where-we-are.md (hands-free)"),
     _i("panel:files", "the files link", "on", M, "mind/claude/feedback_desk_files_group_readable.md"),
