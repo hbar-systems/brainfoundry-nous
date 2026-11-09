@@ -3,7 +3,7 @@
 # Created: 2026-10-19 (docs/MULTI_INSTANCE.md; design: hbar.world ops/2026-10-12_next-brains-design.md §1).
 #
 #   bash scripts/add-member.sh <handle> <n> --dry-run      # prints every action, touches nothing
-#   bash scripts/add-member.sh <handle> <n> --apply [--update-tab]
+#   bash scripts/add-member.sh <handle> <n> --apply [--update-tab] [--music[=<plugin checkout>]|--no-music]
 #
 # Run as the box's admin (hbar: sudo, docker), from any brain checkout on the box.
 # Member <m> with port block n gets, walled from every other member:
@@ -15,6 +15,8 @@
 #                            host ports 8100+10n (api) +1 ui +2 nodeos +3 postgres +4 public chat
 #   cc-bridge-<m>            the bridge on +8, claude-tab-<m> the terminal door on +7 (scripts/cc/install.sh,
 #                            then scripts/cc/split-hands.sh, both with CC_MEMBER)
+#   box packages           nodejs and npm (when node >= 16 with npm is not already there), cmake, python3-dev,
+#                            build-essential, libcairo2: only the missing ones, apt, once per box (2026-11-09)
 #   the Codex seat         the CLI for <m>-hands (scripts/cc/install-codex.sh <m>), CC_CODEX_WRITE=1 and
 #                            CC_CODEX_WRITE_SANDBOX=off: Sign in with ChatGPT works on day one (2026-11-08)
 # and the box's one Ollama (the first brain's, 127.0.0.1 only) joins the member's network as "ollama".
@@ -24,6 +26,9 @@
 # helper (scripts/member-update-door.sh, 2026-10-21).
 # --update-tab: also mount the docker socket into the member's api (the single brain's way). That socket
 # is root on the box: a member whose api is compromised then holds every member. Off by default.
+# The music pack (scripts/member-music-kit.sh, the ableton.systems plugin for <m>-hands): --music installs it
+# from MUSIC_PLUGIN (or --music=<checkout>); --no-music skips it; neither: asked on a terminal with --apply,
+# else skipped with the one line to run later. One run, no pastes after it (SEAT-1 inventory #7 #10 #13).
 # Limits (2026-11-06, docs/MEMBER_LIMITS.md): the override carries cpus, memory ceiling and reservation and
 # a process limit per service; the member's bridge and terminal (so its reasoner and every cc-job) run in
 # brain-<m>.slice (CPUQuota, MemoryHigh/Max/Low, TasksMax); root's /etc/brainfoundry/limits-<m>.env caps
@@ -35,11 +40,20 @@
 # /srv/brains/members.tsv, an existing checkout, user, unit or compose project, a port of the block in use.
 set -euo pipefail
 
-usage() { echo "usage: $0 <handle> <n> --dry-run|--apply [--update-tab]" >&2; exit 2; }
+usage() { echo "usage: $0 <handle> <n> --dry-run|--apply [--update-tab] [--music[=<plugin checkout>]|--no-music]" >&2; exit 2; }
 [ $# -ge 3 ] || usage
-HANDLE=$1; N=$2; MODE=$3; UPDATE_TAB=0
-[ "${4:-}" = "--update-tab" ] && UPDATE_TAB=1
+HANDLE=$1; N=$2; MODE=$3; UPDATE_TAB=0; MUSIC=ask; MUSIC_PLUGIN=${MUSIC_PLUGIN:-}
 case "$MODE" in --dry-run) APPLY=0 ;; --apply) APPLY=1 ;; *) usage ;; esac
+shift 3
+for a in "$@"; do
+    case "$a" in
+        --update-tab) UPDATE_TAB=1 ;;
+        --music) MUSIC=yes ;;
+        --music=*) MUSIC=yes; MUSIC_PLUGIN=${a#--music=} ;;
+        --no-music) MUSIC=no ;;
+        *) usage ;;
+    esac
+done
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 BRAINS_ROOT=${BRAINS_ROOT:-/srv/brains}
@@ -57,7 +71,8 @@ BRIDGE_USER=$M_BRIDGE_USER; HANDS_USER=$M_HANDS_USER; PROJECT=$M_PROJECT
 say()  { echo "$*"; }
 # One action: printed always, run only with --apply. Never given a secret: the .env is written by
 # scripts/member_env.py into the file, and the bridge copies its key from that file.
-run()  { echo "+ $*"; [ "$APPLY" = 1 ] && "$@"; return 0; }
+# Returns the action's own status, so `run X || say ...` notes a failure (before 2026-11-09 it always said 0).
+run()  { echo "+ $*"; [ "$APPLY" = 1 ] || return 0; "$@"; }
 fail() { echo "refused: $*" >&2; exit 1; }
 
 say "== member $HANDLE, port block $N ($([ "$APPLY" = 1 ] && echo apply || echo 'dry run: nothing is changed'))"
@@ -85,6 +100,24 @@ for p in "$M_API_PORT" "$M_UI_PORT" "$M_NODEOS_PORT" "$M_PG_PORT" "$M_PUBLIC_CHA
     grep -qx "$p" <<<"$LISTEN" && fail "port $p of block $N is in use"
 done
 say "   ok: handle, block, users, units, project and ports are free"
+
+say "== 0b box packages: node for the Codex CLI, build tools and cairo for the music pack (only the missing ones)"
+# As on friends-1 (2026-11-07): no node (Codex could not install), no cmake or python3-dev (tinysoundfont
+# did not build), no libcairo2 (no PDF score). Box-wide plain packages; never reinstalled, never upgraded.
+PKGS=()
+NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)
+[[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || NODE_MAJOR=0
+# a node from elsewhere (nodesource) carries its own npm; apt's npm would fight it, so both or neither
+if ! command -v npm >/dev/null 2>&1 || [ "$NODE_MAJOR" -lt 16 ]; then PKGS+=(nodejs npm); fi
+for p in cmake python3-dev build-essential libcairo2; do
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || PKGS+=("$p")
+done
+if [ ${#PKGS[@]} -eq 0 ]; then
+    say "   ok: node $NODE_MAJOR with npm, cmake, python3-dev, build-essential, libcairo2 are all here"
+else
+    run sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    run sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${PKGS[@]}"
+fi
 
 say "== 1 users (no sudo, not in docker, homes 700)"
 run sudo groupadd "$GROUP"
@@ -189,6 +222,30 @@ say "== 7b the Codex seat for $HANDS_USER, gated write mode, so Sign in with Cha
 # still made; the sign-in panel then names the owner's one command (bash scripts/cc/install-codex.sh <m>).
 run bash "$DIR/scripts/cc/install-codex.sh" "$HANDLE" \
     || say "   note: the Codex CLI did not install; later, from any checkout: bash scripts/cc/install-codex.sh $HANDLE"
+
+say "== 7c the music pack for $HANDS_USER (scripts/member-music-kit.sh)"
+# Before the two set-env lines below: each restarts cc-bridge-$HANDLE, so the bridge reads the new MCP entry.
+MUSIC_LATER="bash $DIR/scripts/member-music-kit.sh $HANDLE <ableton-systems plugin checkout>"
+if [ "$MUSIC" = ask ]; then
+    if [ "$APPLY" = 1 ] && [ -t 0 ] && [ -t 1 ]; then
+        read -rp "   install the music pack for $HANDLE now? [y/N] " ans || ans=""
+        case "$ans" in y|Y|yes) MUSIC=yes ;; *) MUSIC=no ;; esac
+        if [ "$MUSIC" = yes ] && [ -z "$MUSIC_PLUGIN" ]; then
+            read -rp "   ableton-systems plugin checkout: " MUSIC_PLUGIN || MUSIC_PLUGIN=""
+        fi
+    else
+        MUSIC=no
+    fi
+fi
+if [ "$MUSIC" = yes ] && [ -n "$MUSIC_PLUGIN" ] && [ -d "$MUSIC_PLUGIN" ]; then
+    run bash "$DIR/scripts/member-music-kit.sh" "$HANDLE" "$MUSIC_PLUGIN" \
+        || say "   note: the music pack did not install; later: bash $DIR/scripts/member-music-kit.sh $HANDLE $MUSIC_PLUGIN"
+elif [ "$MUSIC" = yes ]; then
+    say "   note: no plugin checkout (set MUSIC_PLUGIN or --music=<checkout>; got '${MUSIC_PLUGIN}'); later: $MUSIC_LATER"
+else
+    say "   skipped; later: $MUSIC_LATER"
+fi
+
 for kv in CC_CODEX_WRITE=1 CC_CODEX_WRITE_SANDBOX=off; do
     echo "+ printf '${kv#*=}' | BRIDGE_USER=$BRIDGE_USER bash $DIR/scripts/cc/set-env.sh ${kv%%=*}"
     if [ "$APPLY" = 1 ]; then

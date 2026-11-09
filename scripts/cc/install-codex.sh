@@ -11,24 +11,32 @@
 # user's own ~/.local (no system-wide install, no root-owned files), and prints its version and
 # sign-in state. It does not sign in; that is the console's "Sign in with ChatGPT" (or, on the box:
 # sudo -u <hands> -H codex login --device-auth). It touches no .env and no credentials.
-# Needs node >= 16 and npm on the box (apt install nodejs npm, if missing).
+# Needs node >= 16 and npm on the box (apt install nodejs npm, if missing; add-member.sh installs them).
 #
 # Rollback: sudo -u <hands> -H npm uninstall -g --prefix ~<hands>/.local @openai/codex
 set -euo pipefail
 
 CODEX_VERSION=${CODEX_VERSION:-0.162.1}   # keep in step with PINNED_VERSION in scripts/cc/cc_codex.py
-if [ -n "${1:-}" ]; then
+SYSTEMD_DIR=${SYSTEMD_DIR:-/etc/systemd/system}
+MEMBER=${1:-${CC_MEMBER:-}}
+if [ -n "$MEMBER" ]; then
     . "$(dirname "$0")/member.sh"
-    member_handle_ok "$1" || { echo "bad member handle: $1"; exit 2; }
-    HANDS_USER="$1-hands"
-    id "$HANDS_USER" >/dev/null 2>&1 || { echo "no user $HANDS_USER on this box: is $1 a member here?"; exit 1; }
+    member_handle_ok "$MEMBER" || { echo "bad member handle: $MEMBER"; exit 2; }
+    HANDS_USER="$MEMBER-hands"
+    id "$HANDS_USER" >/dev/null 2>&1 || { echo "no user $HANDS_USER on this box: is $MEMBER a member here?"; exit 1; }
 fi
-BRIDGE_USER=$(grep -oP '^User=\K.*' /etc/systemd/system/cc-bridge.service 2>/dev/null || id -un)
+# The member's own unit and env on a shared box: cc-bridge-<m>, user <m>-cc. Reading cc-bridge.service
+# here found the owner's bridge (or none) on friends-1 (SEAT-1 inventory #7, 2026-11-09).
+UNIT_FILE="$SYSTEMD_DIR/cc-bridge${MEMBER:+-$MEMBER}.service"
+BRIDGE_USER=$(grep -oP '^User=\K.*' "$UNIT_FILE" 2>/dev/null || true)
+BRIDGE_USER=${BRIDGE_USER:-${MEMBER:+$MEMBER-cc}}
+BRIDGE_USER=${BRIDGE_USER:-$(id -un)}
 BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
 HANDS_USER=${HANDS_USER:-$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$BRIDGE_HOME/.cc-bridge/env" 2>/dev/null || true)}
 HANDS_USER=${HANDS_USER:-$BRIDGE_USER}
 HANDS_HOME=$(eval echo "~$HANDS_USER")
 AS_HANDS=""; [ "$HANDS_USER" != "$(id -un)" ] && AS_HANDS="sudo -u $HANDS_USER -H"
+echo "== hands user $HANDS_USER, bridge user $BRIDGE_USER ($([ -f "$UNIT_FILE" ] && echo "$UNIT_FILE" || echo "no $UNIT_FILE"))"
 
 command -v npm >/dev/null || { echo "npm is missing: sudo apt-get install -y nodejs npm, then run this again"; exit 1; }
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)

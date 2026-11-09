@@ -196,3 +196,87 @@ def test_sign_in_panel_says_who_installs_it():
     assert "the box\\'s admin installs it" not in CC_JS
     inst = (ROOT / "scripts" / "cc" / "install.sh").read_text()
     assert 'CODEX_INSTALL="bash scripts/cc/install-codex.sh${MEMBER:+ $MEMBER}"' in inst and "s|__CODEX_INSTALL__|$CODEX_INSTALL|g" in inst
+
+
+# ------------------------------------------------- add-member as a one-shot (2026-11-09) ----
+def _add_box(tmp_path, *flags, node_major="18", installed=()):
+    """add-member's dry run against a stubbed box: node prints its major, dpkg-query knows `installed`."""
+    bins = tmp_path / "bin"
+    bins.mkdir(parents=True, exist_ok=True)
+    stubs = {"ss": "printf ''",
+             "node": f"echo {node_major}",
+             "npm": "exit 0",
+             "dpkg-query": 'for a; do p=$a; done; case " ' + " ".join(installed) + ' " in *" $p "*) printf "install ok installed";; esac'}
+    for name, body in stubs.items():
+        (bins / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bins / name).chmod(0o755)
+    env = {"PATH": f"{bins}:/usr/bin:/bin", "HOME": str(tmp_path), "BRAINS_ROOT": str(tmp_path / "srv"),
+           "SYSTEMD_DIR": str(tmp_path / "systemd"), "ADMIN_USER": "hbar", "BRAIN_REPO_URL": "https://example.invalid/brain.git"}
+    return subprocess.run(["bash", str(ROOT / "scripts" / "add-member.sh"), "elena", "3", "--dry-run", *flags],
+                          env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+
+def test_add_member_installs_only_the_missing_box_packages(tmp_path):
+    r = _add_box(tmp_path / "a", node_major="12", installed=("cmake",))
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    line = "+ sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q nodejs npm python3-dev build-essential libcairo2"
+    assert line in out and "apt-get update -qq" in out
+    assert out.index("== 0b box packages") < out.index(line) < out.index("== 1 users")
+    r = _add_box(tmp_path / "b", node_major="18", installed=("cmake", "python3-dev", "build-essential", "libcairo2"))
+    assert r.returncode == 0, r.stderr
+    assert "apt-get" not in r.stdout and "ok: node 18 with npm, cmake, python3-dev, build-essential, libcairo2" in r.stdout
+
+
+def test_add_member_music_pack_flag(tmp_path):
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    root = tmp_path / "m" / "srv"
+    r = _add_box(tmp_path / "m", f"--music={plugin}")
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    kit = f"+ bash {root}/elena/scripts/member-music-kit.sh elena {plugin}"
+    assert kit in out
+    # after Codex, before the set-env lines that restart the member's bridge (so it reads the new MCP entry)
+    assert out.index("install-codex.sh elena") < out.index(kit) < out.index("set-env.sh CC_CODEX_WRITE")
+    r = _add_box(tmp_path / "n", "--music")   # no MUSIC_PLUGIN, no path: a note and the later line, not a failure
+    assert r.returncode == 0, r.stderr
+    assert "note: no plugin checkout" in r.stdout and "member-music-kit.sh elena <ableton-systems plugin checkout>" in r.stdout
+
+
+def test_add_member_skips_music_without_a_terminal_and_names_the_line(tmp_path):
+    for i, flags in enumerate(((), ("--no-music",), ("--update-tab", "--no-music"))):
+        r = _add_box(tmp_path / str(i), *flags)
+        assert r.returncode == 0, r.stderr
+        assert "skipped; later: bash " in r.stdout and "member-music-kit.sh elena <ableton-systems plugin checkout>" in r.stdout
+        assert "+ bash" not in r.stdout.split("== 7c", 1)[1].split("set-env.sh", 1)[0]
+    r = _add_box(tmp_path / "bad", "--musik")
+    assert r.returncode == 2 and "usage" in r.stderr
+
+
+def test_add_member_run_reports_a_failed_action():
+    src = (ROOT / "scripts" / "add-member.sh").read_text()
+    assert 'run()  { echo "+ $*"; [ "$APPLY" = 1 ] || return 0; "$@"; }' in src
+
+
+def test_install_codex_reads_the_members_own_bridge_unit(tmp_path):
+    """A shared box: the member's cc-bridge-<m>.service, never the owner's cc-bridge.service (inventory #7)."""
+    bins = tmp_path / "bin"
+    bins.mkdir()
+    for tool in ("grep", "dirname"):
+        (bins / tool).symlink_to(subprocess.run(["sh", "-c", f"command -v {tool}"], capture_output=True, text=True).stdout.strip())
+    (bins / "id").write_text('#!/bin/sh\n[ "$1" = -un ] && echo hbar\nexit 0\n')   # every user "exists"; no npm here
+    (bins / "id").chmod(0o755)
+    sd = tmp_path / "systemd"
+    sd.mkdir()
+    (sd / "cc-bridge.service").write_text("[Service]\nUser=cc\n")
+    (sd / "cc-bridge-elena.service").write_text("[Service]\nUser=elena-cc\n")
+    inst = ROOT / "scripts" / "cc" / "install-codex.sh"
+    r = subprocess.run(["/bin/bash", str(inst), "elena"], capture_output=True, text=True, timeout=30,
+                       env={"PATH": str(bins), "HOME": str(tmp_path), "SYSTEMD_DIR": str(sd)})
+    assert "== hands user elena-hands, bridge user elena-cc (" + str(sd / "cc-bridge-elena.service") + ")" in r.stdout
+    assert r.returncode == 1 and "npm is missing" in r.stdout
+    (sd / "cc-bridge-elena.service").unlink()   # no unit yet: still the member's names, not the owner's
+    r = subprocess.run(["/bin/bash", str(inst), "elena"], capture_output=True, text=True, timeout=30,
+                       env={"PATH": str(bins), "HOME": str(tmp_path), "SYSTEMD_DIR": str(sd)})
+    assert "== hands user elena-hands, bridge user elena-cc (no " in r.stdout

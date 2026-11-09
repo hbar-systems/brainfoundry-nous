@@ -53,6 +53,12 @@ their own console, as on any brain.
 Update tab. Leave it off on a shared box: that socket is root on the host, so a member whose brain
 is compromised would hold every member. The Update button works without it (next section).
 
+One run, no pastes after it (2026-11-09): add-member.sh also installs the missing box packages
+(nodejs and npm when node >= 16 with npm is not there, cmake, python3-dev, build-essential, libcairo2),
+the Codex CLI for `<handle>-hands`, and, with `--music=<ableton-systems plugin checkout>` (or `--music`
+and `MUSIC_PLUGIN`), the music pack (scripts/member-music-kit.sh). `--no-music` skips it; with neither
+flag it asks on a terminal and otherwise prints the one line to run later.
+
 ## Update from the console (2026-10-21)
 
 A member's api has no docker socket and no view of its checkout, so its Update page goes to the
