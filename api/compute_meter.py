@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -36,9 +37,10 @@ _RATES_PATH = Path(__file__).parent / "compute_rates.json"
 # Baked-in fallback so the meter works even if the JSON is missing. The JSON
 # (operator-editable) wins when present. €/Mtoken, separate input/output.
 _FALLBACK_RATES = {
-    "claude-opus-4-8": {"in": 14.0, "out": 70.0},
+    "claude-opus-5-5": {"in": 3.72, "out": 18.6},
+    "claude-opus-4-8": {"in": 4.65, "out": 23.25},
     "claude-sonnet-4-6": {"in": 2.8, "out": 14.0},
-    "claude-haiku-4-5": {"in": 0.75, "out": 3.7},
+    "claude-haiku-4-5": {"in": 0.93, "out": 4.65},
     "gpt-4o": {"in": 2.3, "out": 9.3},
     "llama3.2:3b": {"in": 0.04, "out": 0.04},
 }
@@ -55,27 +57,81 @@ def _load_rates() -> dict:
     return _FALLBACK_RATES
 
 
+_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+_FAMILY_ALIAS = {"mythos": "fable"}  # Mythos is priced as Fable
+
+
+def _family_and_version(model: str) -> tuple[Optional[str], Optional[float]]:
+    """('opus', 4.8) for 'claude-opus-4-8'; (None, None) for non-Claude ids."""
+    m = (model or "").lower()
+    if not m.startswith("claude"):
+        return None, None
+    for word in (*_FAMILIES, *_FAMILY_ALIAS):
+        if word in m:
+            fam = _FAMILY_ALIAS.get(word, word)
+            nums = re.findall(r"\d+", m.split(word, 1)[1] if m.index(word) < len(m) else "")
+            nums = [n for n in nums if len(n) <= 2]  # drop date suffixes like 20251001
+            if not nums:  # 'claude-3-5-sonnet': version precedes the family word
+                nums = [n for n in re.findall(r"\d+", m.split(word, 1)[0]) if len(n) <= 2]
+            ver = float(nums[0] + ("." + nums[1] if len(nums) > 1 else "")) if nums else 0.0
+            return fam, ver
+    return None, None
+
+
+def _nearest_family_rate(model: str, rates: dict) -> Optional[dict]:
+    """Rate of the listed Claude model of the same family with the nearest
+    version (ties go to the newer, the dearer in practice for a fallback)."""
+    fam, ver = _family_and_version(model)
+    if fam is None:
+        return None
+    best = None
+    for key, rate in rates.items():
+        kfam, kver = _family_and_version(key)
+        if kfam != fam or not isinstance(rate, dict):
+            continue
+        rank = (abs(kver - ver), -kver)
+        if best is None or rank < best[0]:
+            best = (rank, rate)
+    return best[1] if best else None
+
+
+def rate_lookup(model: str) -> tuple[Optional[dict], str]:
+    """(rate, status), status in 'listed' | 'assumed' | 'none'. 'assumed' means
+    the model is not in the table and the nearest same-family rate was used."""
+    rates = _load_rates()
+    r = rates.get(model)
+    if r:
+        return r, "listed"
+    r = _nearest_family_rate(model, rates)
+    if r:
+        return r, "assumed"
+    return None, "none"
+
+
 def _rate_for(model: str) -> Optional[dict]:
     """Return {'in', 'out'} €/Mtoken for a model, or None if uncosted.
 
     Re-reads the JSON each call so the operator can edit the peg without a
-    restart (low-frequency path; cost is negligible). A model absent from the
-    table is uncosted -> est_cost_eur 0 + estimated stays visible.
+    restart (low-frequency path; cost is negligible). An unlisted Claude model
+    gets the nearest family rate (see rate_lookup); only a model with no
+    family match is uncosted -> est_cost_eur 0 + estimated stays visible.
     """
-    return _load_rates().get(model)
+    return rate_lookup(model)[0]
 
 
 def est_cost_eur(model: str, prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
-    """(cost_eur, uncosted) for a usage row. uncosted=True when the model has no
-    rate yet (cost 0 but flagged so it shows up as unpriced, not free)."""
-    r = _rate_for(model)
+    """(cost_eur, estimated_rate) for a usage row. estimated_rate=True when the
+    rate was assumed from the model family (cost real but approximate) or when
+    there is no rate at all (cost 0, flagged so it shows up as unpriced, not
+    free). rate_lookup tells the two apart."""
+    r, status = rate_lookup(model)
     if not r:
         return 0.0, True
     # TODO: (b)-light hook — H-weighted pricing multiplies the peg by a
     # harmonics-derived factor here. Blocked on harmonics rho>=0.7 calibration;
     # left as a clean seam, NOT wired (no harmonics coupling in v0).
     cost = (prompt_tokens * r["in"] + completion_tokens * r["out"]) / 1_000_000.0
-    return round(cost, 8), False
+    return round(cost, 8), status == "assumed"
 
 
 # ─── Token estimation (when a provider omits usage) ─────────────────────────
@@ -143,6 +199,8 @@ def record_usage(
     pt = int(prompt_tokens or 0)
     ct = int(completion_tokens or 0)
     cost, uncosted = est_cost_eur(model, pt, ct)
+    if rate_lookup(model)[1] == "assumed":
+        source = f"{source} rate: assumed" if source else "rate: assumed"
     # A row is "estimated" if its tokens were estimated OR its model is uncosted.
     estimated = bool(estimated or uncosted)
     try:

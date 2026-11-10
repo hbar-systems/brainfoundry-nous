@@ -1,17 +1,75 @@
 {
-  "_comment": "Compute cost peg — €/Mtoken, separate input/output, keyed by model id. This is CONFIG, not code: the operator edits it as providers/hardware change. It is the cost-discovered, honest peg the compute-register claim depends on. Local (ollama) rates are the amortized self-hosted cost from the 2026-05-21 sovereign-compute benchmark (consumer tier ~€27-31/mo); refine as real throughput is measured against the meter. Cloud rates track the BYOK provider's published price the operator actually pays. A model absent here meters at rate 0 and is flagged estimated=true so uncosted usage stays visible. Never put provider API keys in this file.",
+  "_comment": "Compute cost peg \u2014 \u20ac/Mtoken, separate input/output, keyed by model id. This is CONFIG, not code: the operator edits it as providers/hardware change. It is the cost-discovered, honest peg the compute-register claim depends on. Local (ollama) rates are the amortized self-hosted cost from the 2026-05-21 sovereign-compute benchmark (consumer tier ~\u20ac27-31/mo); refine as real throughput is measured against the meter. Cloud rates track the BYOK provider's published price the operator actually pays. A model absent here falls back to the nearest listed rate of the same Claude family (opus, sonnet, haiku, fable; mythos uses fable) and is flagged estimated=true with 'rate: assumed' in the ledger source; only a model with no family match meters at rate 0, flagged estimated=true. Never put provider API keys in this file.",
   "_unit": "eur_per_million_tokens",
   "rates": {
-    "claude-opus-4-8":    { "in": 14.0, "out": 70.0 },
-    "claude-opus-4-7":    { "in": 14.0, "out": 70.0 },
-    "claude-sonnet-4-6":  { "in": 2.8,  "out": 14.0 },
-    "claude-haiku-4-5":   { "in": 0.75, "out": 3.7 },
-    "gpt-4o":             { "in": 2.3,  "out": 9.3 },
-    "gpt-4o-mini":        { "in": 0.14, "out": 0.55 },
-    "gemini-2.0-flash":   { "in": 0.09, "out": 0.37 },
-    "llama3.2:1b":        { "in": 0.02, "out": 0.02 },
-    "llama3.2:3b":        { "in": 0.04, "out": 0.04 },
-    "llama3.3:70b":       { "in": 0.45, "out": 0.45 },
-    "qwen2.5:72b":        { "in": 0.45, "out": 0.45 }
-  }
+    "claude-fable-5-1": {
+      "in": 9.3,
+      "out": 46.5
+    },
+    "claude-fable-5": {
+      "in": 9.3,
+      "out": 46.5
+    },
+    "claude-opus-5-5": {
+      "in": 3.72,
+      "out": 18.6
+    },
+    "claude-opus-5": {
+      "in": 4.65,
+      "out": 23.25
+    },
+    "claude-opus-4-8": {
+      "in": 4.65,
+      "out": 23.25
+    },
+    "claude-opus-4-7": {
+      "in": 4.65,
+      "out": 23.25
+    },
+    "claude-sonnet-5-5": {
+      "in": 1.86,
+      "out": 9.3
+    },
+    "claude-sonnet-5": {
+      "in": 1.86,
+      "out": 9.3
+    },
+    "claude-sonnet-4-6": {
+      "in": 2.8,
+      "out": 14.0
+    },
+    "claude-haiku-4-5": {
+      "in": 0.93,
+      "out": 4.65
+    },
+    "gpt-4o": {
+      "in": 2.3,
+      "out": 9.3
+    },
+    "gpt-4o-mini": {
+      "in": 0.14,
+      "out": 0.55
+    },
+    "gemini-2.0-flash": {
+      "in": 0.09,
+      "out": 0.37
+    },
+    "llama3.2:1b": {
+      "in": 0.02,
+      "out": 0.02
+    },
+    "llama3.2:3b": {
+      "in": 0.04,
+      "out": 0.04
+    },
+    "llama3.3:70b": {
+      "in": 0.45,
+      "out": 0.45
+    },
+    "qwen2.5:72b": {
+      "in": 0.45,
+      "out": 0.45
+    }
+  },
+  "_note": "Claude rates 2026-11-10: list prices from the claude-api skill reference 'Current Models (cached: 2026-09-25)' in USD per Mtoken (fable-5/5-1 10/50, opus-5-5 4/20, opus-5 and opus-4-8/4-7 5/25, sonnet-5-5 and sonnet-5 2/10, sonnet-4-6 3/15, haiku-4-5 1/5), converted at the file's existing peg of 0.93 EUR per USD (matches the sonnet-4-6 row 2.8/14 up to rounding). Corrected 2026-11-10: opus-4-8 and opus-4-7 were 14/70 (old Opus 4 era price), haiku-4-5 was 0.75/3.7; the reference gives opus 4.8/4.7 at 5/25 and haiku 4.5 at 1/5. Not in the reference, so not listed: opus-4-6 has a row there but was not asked for; mythos-5-1 (Project Glasswing only, same price as fable, served via the fable family fallback). Cache-read and cache-write prices are not metered (ledger has input/output only). Prices are first-party API rates; Bedrock/Vertex differ."
 }
