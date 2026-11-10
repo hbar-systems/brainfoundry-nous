@@ -2014,6 +2014,17 @@ function CC() {
   const tgDismiss = () => { if (tgNews) tgMarkSeen(tgNews.last); setTgNews(null) }
   const tgOpen = () => { const th = tgNews && threads.find(t => t.brain === tgNews.brain); tgDismiss(); if (th) switchThread(th) }
   const openPane = (p) => { if (!p) return; if (typeof p === 'string') p = { route: p, title: p.replace(/^\//, '').split('?')[0] || 'pane' }; if (p.route) setPane(p) }
+  // The terminal beside the chat (hbar 2026-11-06: "open the terminal here on the side, we should have a button"):
+  // one press opens /terminal as the pane, the next press puts it away. Ctrl+` does the same while the
+  // focus is on this page (inside the terminal the shell keeps every key). Hidden with the tools strip.
+  const termOpen = !!(pane && pane.route === '/terminal')
+  const toggleTerminal = () => setPane(p => (p && p.route === '/terminal' ? null : { route: '/terminal', title: 'Terminal' }))
+  useEffect(() => {
+    if (paneMode || hidden.tools) return undefined
+    const k = (e) => { if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Backquote') { e.preventDefault(); toggleTerminal() } }
+    document.addEventListener('keydown', k)
+    return () => document.removeEventListener('keydown', k)
+  }, [paneMode, hidden.tools])
 
   // Jobs that outlive a turn: poll while any runs; a finished one lands as a small card, in the
   // conversation whose hands started it only (2026-10-11: the page names the thread it shows, the
@@ -2916,6 +2927,7 @@ function CC() {
             )}
           </div>
           <div className="cc-chips cc-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+            {!paneMode && !hidden.tools && <Btn small accent={termOpen} onClick={toggleTerminal} title={termOpen ? 'Put the terminal away (Ctrl+`)' : 'A shell on your box, beside the conversation (Ctrl+`)'}>terminal</Btn>}
             {!hidden.nav && <>
             {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>

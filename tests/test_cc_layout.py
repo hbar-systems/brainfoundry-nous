@@ -316,3 +316,15 @@ def test_text_size_default_valid_and_summary():
         except L.LayoutError:
             continue
         raise AssertionError(f"text {bad!r} should be refused")
+
+
+def test_terminal_button_goes_with_the_tools_strip():
+    # the terminal beside the chat (2026-11-10, hbar 2026-11-06): one button and Ctrl+`, toggling the
+    # /terminal pane, hidden only when the owner hid the tools strip; the shortcut is in docs/CC.md
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    assert "['/terminal', 'Terminal']" in src                          # still a pane route
+    assert "{!paneMode && !hidden.tools && <Btn small accent={termOpen} onClick={toggleTerminal}" in src
+    assert "p && p.route === '/terminal' ? null : { route: '/terminal', title: 'Terminal' }" in src
+    assert "if (paneMode || hidden.tools) return undefined" in src     # no shortcut when hidden
+    assert "e.code === 'Backquote'" in src
+    assert "Ctrl+`" in (ROOT / "docs" / "CC.md").read_text()
