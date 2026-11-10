@@ -68,6 +68,13 @@
 //   audio.transcribe  -> { base64, mime?, name? }  permission 'audio.transcribe'; the CC bridge's
 //                        speech door. result -> { text }; error 'no_speech_door' when it is not set up.
 //
+// Added 2026-11-10 for the Week app (brain-apps/shipped/week):
+//   files.read        -> { name }  permission 'files.read'; a text file on the owner's Files desk, by a
+//                        name relative to the desk (out/), e.g. 'week/index.html'. No '..', no absolute
+//                        path, nothing outside the desk; at most FILES_READ_MAX characters.
+//                        result -> { path, text }; errors 'not_found' (404), 'forbidden' (403),
+//                        'no_files_door' on a brain without CC, 'bad_name', 'too_large'.
+//
 // Reserved-but-unimplemented intents (will land when first app needs them):
 //   federation.query  -> { peer, path, body? }
 //   federation.send   -> { peer, message }
@@ -123,8 +130,13 @@ function acceptMessage(event, frameWindow) {
   return true
 }
 
-// Console screens an app may open (ui.open). Anything else is refused.
-const OPEN_ROUTE_RE = /^\/(files|tasks|chat|cc|graph|upload|apps\/[a-z0-9][a-z0-9-]{1,62}[a-z0-9])(\?[^#\s]{0,1000})?$/
+// Console screens an app may open (ui.open). Anything else is refused. /talk added 2026-11-10 (the
+// conversation's second address, so a page an app shows can open a thread).
+const OPEN_ROUTE_RE = /^\/(files|tasks|chat|cc|talk|graph|upload|apps\/[a-z0-9][a-z0-9-]{1,62}[a-z0-9])(\?[^#\s]{0,1000})?$/
+
+// files.read (2026-11-10): a desk-relative name, plain segments only.
+const DESK_NAME_RE = /^(?!.*(^|\/)\.{1,2}(\/|$))[A-Za-z0-9._ -]+(\/[A-Za-z0-9._ -]+){0,8}$/
+const FILES_READ_MAX = 2000000
 
 function b64ToBlob(b64, mime) {
   const bin = atob(String(b64))
@@ -376,6 +388,30 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
         })
         .catch(e => ({ ok: false, error: { code: 'no_files_door', detail: String(e) } }))
     }
+    if (type === 'files.read') {
+      if (!perms.includes('files.read')) return denied('files.read')
+      const name = String(payload.name || '').trim()
+      if (!DESK_NAME_RE.test(name)) return Promise.resolve({ ok: false, error: { code: 'bad_name', detail: 'a name on the desk, like week/index.html' } })
+      const noDoor = (d) => ({ ok: false, error: { code: 'no_files_door', detail: d || 'this brain has no Files desk (CC is not installed)' } })
+      // The desk root comes from the CC bridge's own roots list, so the app never names a box path.
+      return fetch('/cc/files', { method: 'GET' })
+        .then(r => (r.ok ? r.json().catch(() => ({})) : Promise.reject(r.status)))
+        .then(b => {
+          const out = ((b && b.roots) || []).find(x => x && x.label === 'out')
+          if (!out || typeof out.path !== 'string' || !out.path.startsWith('/')) return noDoor()
+          const path = out.path.replace(/\/+$/, '') + '/' + name
+          return fetch('/cc/files/raw' + path.split('/').map(encodeURIComponent).join('/'), { method: 'GET' })
+            .then(r => {
+              if (r.status === 404) return { ok: false, error: { code: 'not_found', status: 404, detail: path } }
+              if (r.status === 403) return { ok: false, error: { code: 'forbidden', status: 403, detail: path } }
+              if (!r.ok) return { ok: false, error: { code: 'files_read_failed', status: r.status, detail: `HTTP ${r.status}` } }
+              return r.text().then(text => (text.length > FILES_READ_MAX
+                ? { ok: false, error: { code: 'too_large', detail: `at most ${FILES_READ_MAX} characters` } }
+                : { ok: true, result: { path, text } }))
+            })
+        }, () => noDoor())
+        .catch(e => noDoor(String(e)))
+    }
     if (type === 'audio.transcribe') {
       if (!perms.includes('audio.transcribe')) return denied('audio.transcribe')
       if (typeof payload.base64 !== 'string' || !payload.base64) return Promise.resolve({ ok: false, error: { code: 'missing_audio' } })
@@ -400,4 +436,4 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
   return { handleIntent, store }
 }
 
-module.exports = { makeBridge, OPEN_ROUTE_RE, acceptMessage, seedName, loadStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_MAX_CHARS }
+module.exports = { makeBridge, OPEN_ROUTE_RE, DESK_NAME_RE, FILES_READ_MAX, acceptMessage, seedName, loadStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_MAX_CHARS }

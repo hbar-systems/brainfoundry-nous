@@ -28,13 +28,15 @@ Code: `scripts/cc/cc_catalog.py` (the catalog, the validator, presets), `scripts
 
 The owner preset's answers are empty: hbar's live layout is in `/home/cc/.cc-bridge/layout.json`, which this seat cannot read. Measure it there with `python3 scripts/cc/cc_catalog.py measure` (prints the answers that reproduce the current layout, the mode and the stored interview answers) and copy the answers into `presets/owner.json`.
 
+The interview's `first` answer `week` (added 2026-11-10) opens the conversation with the Week app beside it (layout `start` = `/apps/week`), the same way `today` opens Today. Week ships in the template (`brain-apps/shipped/week`, base pack); on a running brain it installs from /apps, "Shipped with this brain". It is the catalog item `app:week`, a candidate until hbar's use is recorded.
+
 ## 4. What is not built
 
 - The console does not read the arrangement yet: Nav, the pane picker and the doors still show everything (or the newcomer tiers). Next: `/cc/layout` returns the arrangement, Nav and `PANE_ROUTES` filter and order by it.
 - No bridge route or `<layout>` key sets the arrangement; the operator sets it (`Store.set_arrangement`) when the brain is made.
 - Fonts, size, weight, width and colour vars stay layout values, not catalog items.
 
-## 5. The catalog (2026-10-29; panel:nav, tools, inputbuttons, footer added 2026-11-06)
+## 5. The catalog (2026-10-29; panel:nav, tools, inputbuttons, footer added 2026-11-06; app:week added 2026-11-10)
 
 Generated from `cc_catalog.CATALOG`; the code is the source, this table is a copy.
 
@@ -93,6 +95,7 @@ Generated from `cc_catalog.CATALOG`; the code is the source, this table is a cop
 | app:mirror | app | self-knowledge notes | off | owner, member | candidate | unknown |
 | app:daybook | app | day log | off | owner, member | candidate | unknown |
 | app:today | app | today | off | owner, member | candidate | unknown |
+| app:week | app | the week page (shipped, 2026-11-10) | off | owner, member | candidate | unknown |
 | app:people | app | people | off | owner, member | candidate | unknown |
 | app:weekly-review | app | weekly review | off | owner, member | candidate | unknown |
 | app:toolbox | app | small utilities | off | owner, member | candidate | unknown |

@@ -18,3 +18,8 @@ installed.json
 # Track the pack definitions — template config, read-only at runtime.
 !packs/
 !packs/*.json
+
+# Track the shipped apps (2026-11-10): apps whose files live in this repo, installed by copy
+# into brain-apps/<id>/ (api/apps.py SHIPPED_DIR). Template, read-only at runtime.
+!shipped/
+!shipped/**

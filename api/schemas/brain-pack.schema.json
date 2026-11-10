@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hbar.systems/schemas/brain/pack.schema.json",
   "title": "Brain Pack Schema",
-  "description": "A pack is a domain bundle installed on a brain: a list of brain-apps (installed through the normal GitHub-URL path), tool ids to enable, governance .md files to install, and an optional compute spoke declaration. Files live at brain-apps/packs/<name>.json in the brainfoundry-nous template. The base pack is what every instance ships with; other packs (music, video) require it. Added 2026-09-13 (unreleased 0.10.0).",
+  "description": "A pack is a domain bundle installed on a brain: a list of brain-apps (installed through the normal GitHub-URL path, or copied from brain-apps/shipped/ since 2026-11-10), tool ids to enable, governance .md files to install, and an optional compute spoke declaration. Files live at brain-apps/packs/<name>.json in the brainfoundry-nous template. The base pack is what every instance ships with; other packs (music, video) require it. Added 2026-09-13 (unreleased 0.10.0).",
   "type": "object",
   "required": ["dialect", "name", "version", "description", "apps"],
   "properties": {
@@ -37,10 +37,15 @@
       "description": "Brain-apps in this pack. Same shape as the old defaults.json entries: id is the manifest id (used for the install-if-absent precheck); the authoritative id, route and version come from the repo's brain-app.yaml at install time.",
       "items": {
         "type": "object",
-        "required": ["id", "repo_url"],
+        "required": ["id"],
+        "oneOf": [
+          { "required": ["repo_url"], "not": { "required": ["shipped"] } },
+          { "required": ["shipped"], "not": { "required": ["repo_url"] } }
+        ],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" },
           "repo_url": { "type": "string", "format": "uri", "pattern": "^https://(github\\.com|gitlab\\.com|codeberg\\.org)/" },
+          "shipped": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$", "description": "Added 2026-11-10: an app shipped in this template at brain-apps/shipped/<name>/, installed by copy instead of a clone. Exactly one of repo_url and shipped." },
           "ref": { "type": "string", "default": "HEAD", "description": "Branch, tag, or commit SHA. Pin a tag for anything a buyer receives." }
         },
         "additionalProperties": false

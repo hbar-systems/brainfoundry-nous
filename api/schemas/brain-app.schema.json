@@ -158,6 +158,7 @@
           "tasks.write",
           "calendar.read",
           "email.read",
+          "files.read",
           "files.write",
           "audio.transcribe"
         ]

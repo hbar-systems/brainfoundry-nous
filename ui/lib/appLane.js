@@ -23,7 +23,7 @@
 // Manifest id pattern (api/schemas/brain-app.schema.json).
 const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/
 // First segments under apps/ that are the brain's own apps router (api/apps.py), never an app.
-const APPS_ROUTER_WORDS = new Set(['list', 'install', 'packs'])
+const APPS_ROUTER_WORDS = new Set(['list', 'install', 'packs', 'shipped'])
 
 // The sandbox for app documents. Same list as the iframe's sandbox attribute in ui/pages/apps/[id].js.
 // No allow-same-origin (the point), no allow-forms (apps use onClick), no popups, no top navigation.

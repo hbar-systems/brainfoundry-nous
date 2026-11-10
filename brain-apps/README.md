@@ -21,7 +21,7 @@ Worked example: `registry/schema/brain/app.example.yaml`.
 
 ## Bridge intents
 
-_(intent catalog — last updated 2026-10-16, adds `storage.*`; 2026-05-18 added `llm.complete`)_
+_(intent catalog — last updated 2026-11-10, adds `files.read` and `/talk` in `ui.open`; 2026-10-16 added `storage.*`; 2026-05-18 added `llm.complete`)_
 
 An installed app talks to the brain by `postMessage`-ing an intent to its host
 shell (`ui/pages/apps/[id].js`) and awaiting a `reply`. The wire shape:
@@ -45,13 +45,14 @@ enforcement at the brain API is the durable gate.
 | `llm.complete` | `llm.invoke` + `requires_layers` | `{ messages: [{role, content}, ...] }` | `{ text, model, sources: [...] }` |
 | `storage.set` / `storage.remove` / `storage.clear` | — (the app's own store only) | `{ key, value }` / `{ key }` / `{}` | `{ saved: true }`; sent for you by the `localStorage` shim |
 | `meta.theme` | — | — | `{ tokens, theme, font }`: the console skin; the host also posts `bf.theme` on change (2026-10-22) |
-| `ui.open` | — | `{ route }` | opens `/files`, `/tasks`, `/chat`, `/cc`, `/graph`, `/upload` or `/apps/<id>` (optional `?query`); nothing else |
+| `ui.open` | — | `{ route }` | opens `/files`, `/tasks`, `/chat`, `/cc`, `/talk`, `/graph`, `/upload` or `/apps/<id>` (optional `?query`); nothing else |
 | `memory.search` | `memory.read` + read layers | `{ query, limit? }` (limit at most 20) | `{ results: [{ content, document_name, similarity, metadata }] }`, declared read layers, open view only |
 | `tasks.list` / `tasks.add` / `tasks.complete` | `tasks.read` / `tasks.write` | `{ include_done? }` / `{ text, due? }` / `{ id, done? }` | `{ tasks }` / `{ task }` (source `app:<id>`) / `{ ok }` |
 | `calendar.upcoming` | `calendar.read` | `{ max_results? }` | `{ source, events, trust: 'untrusted' }` (`GET /integrations/calendar/events`) |
 | `email.recent` | `email.read` | `{ query?, max_results?, unread_only? }` | `{ source, messages, trust: 'untrusted' }` (`GET /integrations/email/messages`) |
 | `web.fetch` | `network.outbound` | `{ url }` | `{ url, title, text, trust: 'untrusted' }` through the guarded fetch_url (`POST /tools/fetch-url`) |
 | `files.save` | `files.write` | `{ name, text }` or `{ name, base64, mime? }` | `{ path, route }` in the Files desk (`out/<date>/`, CC bridge `POST /files/save`); `no_files_door` without CC |
+| `files.read` | `files.read` | `{ name }`, a name on the desk such as `week/index.html` (no `..`, not absolute) | `{ path, text }` from the Files desk (`out/`), at most 2,000,000 characters; `not_found` (404), `forbidden` (403), `no_files_door` without CC (2026-11-10) |
 | `audio.transcribe` | `audio.transcribe` | `{ base64, mime?, name? }` | `{ text }` through the CC bridge's speech door; `no_speech_door` when not set up |
 
 The base shelf (2026-10-22) builds on these through one design kit, `brain-app-kit` (a sibling repo; each app vendors `kit/`).
@@ -153,6 +154,20 @@ against `api/schemas/brain-pack.schema.json`, each with its own `version`.
   block on update counts as a scope change. Hub, not mesh: the brain calls the
   spoke under a permit; the iframe never does; spokes never call each other.
 - `tools` and `md` are declared in this version and not yet acted on.
+
+## Shipped apps (added 2026-11-10)
+
+An app may ship inside this template instead of its own repo: `shipped/<id>/` (tracked; `brain-app.yaml`,
+`index.html`, `README.md`, `LICENSE` like any app). A pack names it `{"id": "<id>", "shipped": "<id>"}`
+in place of `repo_url` (exactly one of the two). It installs by copy into `brain-apps/<id>/` through the
+same gates as a clone (manifest schema, reserved ids `packs`/`shipped`/`installed`, id and route
+collisions); its `commit_sha` is a sha1 over its files, so the app's Update button copies it again
+after the brain's own Update brings a newer template. `GET /apps/shipped` lists them,
+`POST /apps/shipped/<id>/install` installs one; the Apps page shows the missing ones under
+"Shipped with this brain" with one Install button each.
+
+- `week` (base pack): the owner's week page (`week/index.html` on the Files desk) on one screen,
+  through `files.read`; the interview's `first` answer `week` opens it beside the conversation.
 
 ## Installing an app (v0)
 

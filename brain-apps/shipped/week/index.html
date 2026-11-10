@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<!--
+  Week: a brain-app shipped with BrainFoundry (brain-apps/shipped/week).
+  Created: 2026-11-10 (WEEK-APP-1)
+
+  Shows the owner's week page (week/index.html on the Files desk) full size, so the layout can
+  open it beside the conversation at the start (start = /apps/week). The app runs sandboxed in an
+  opaque origin, so it cannot fetch the desk itself: the host page reads the file with the
+  owner's session (bridge intent files.read) and the app shows the text in a frame of its own.
+  One file, no build. Opened without a host it says so.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Week</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext x='8' y='48' font-size='44' fill='%23EBEBE6' font-family='serif'%3E%E2%84%8F%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=Inter+Tight:wght@200;300&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #000; --ink: #EBEBE6; --dim: #8a8a85; --line: #222; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--ink); }
+  body { font-family: "Inter Tight", system-ui, sans-serif; font-weight: 300; -webkit-font-smoothing: antialiased; }
+  #page { display: none; width: 100%; height: 100%; border: 0; background: var(--bg); }
+  body.shown #page { display: block; }
+  body.shown #note { display: none; }
+  #note { min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 32px 28px; max-width: 640px; }
+  .cap { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); }
+  #line { font-size: 19px; font-weight: 200; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="note">
+  <div class="cap">Week</div>
+  <div id="line">Reading the week page.</div>
+</div>
+<iframe id="page" title="Week page"></iframe>
+<script>
+(function () {
+  'use strict'
+  var NAME = 'week/index.html'
+  var NONE = "No week page on this brain yet. hbar.world's scripts/week-page.py writes it."
+  var pending = {}
+  var seq = 0
+  var lastText = null
+  var frame = document.getElementById('page')
+  var line = document.getElementById('line')
+  var hosted = window.parent && window.parent !== window
+
+  window.addEventListener('message', function (ev) {
+    var m = ev.data
+    if (!m || m.type !== 'reply' || !pending[m.request_id]) return
+    var done = pending[m.request_id]
+    delete pending[m.request_id]
+    done(m)
+  })
+
+  function ask(type, payload) {
+    return new Promise(function (resolve) {
+      var id = 'week-' + (++seq)
+      pending[id] = resolve
+      window.parent.postMessage({ type: type, payload: payload || {}, request_id: id }, '*')
+      setTimeout(function () {
+        if (pending[id]) { delete pending[id]; resolve({ ok: false, error: { code: 'no_reply' } }) }
+      }, 15000)
+    })
+  }
+
+  function note(text) {
+    document.body.classList.remove('shown')
+    line.textContent = text
+  }
+
+  // A link in the week page that points at this console opens there, through the bridge:
+  // a thread (/talk?thread=..) in the conversation, a desk file (/cc/files/raw/..) in Files.
+  // The shown page has an opaque origin of its own (the sandbox carries down), so the app cannot
+  // reach into it: a small relay, put at the end of the page, posts each link press up here.
+  var RELAY = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest?' +
+    'e.target.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href")||"";if(h.charAt(0)==="#")return;' +
+    'e.preventDefault();parent.postMessage({type:"week.link",href:a.href},"*")},true)<' + '/script>'
+  function routeFor(href) {
+    var u
+    try { u = new URL(href, location.href) } catch (_) { return null }
+    if (u.host !== location.host) return null
+    if (u.pathname.indexOf('/cc/files/raw/') === 0) {
+      return '/files?path=' + encodeURIComponent(decodeURIComponent(u.pathname.slice('/cc/files/raw'.length)))
+    }
+    if (/^\/(talk|cc|files|tasks|chat|graph|upload)$/.test(u.pathname) || /^\/apps\/[a-z0-9-]+$/.test(u.pathname)) {
+      return u.pathname + u.search
+    }
+    return null
+  }
+
+  window.addEventListener('message', function (ev) {
+    var m = ev.data
+    if (ev.source !== frame.contentWindow || !m || m.type !== 'week.link' || typeof m.href !== 'string') return
+    var route = routeFor(m.href)
+    if (route) ask('ui.open', { route: route })
+  })
+
+  function load() {
+    if (!hosted) { note('Open Week from the console: it reads the week page through the brain.'); return }
+    ask('files.read', { name: NAME }).then(function (r) {
+      if (r.ok && r.result && typeof r.result.text === 'string') {
+        if (r.result.text !== lastText) {
+          lastText = r.result.text
+          frame.srcdoc = r.result.text + RELAY
+        }
+        document.body.classList.add('shown')
+        return
+      }
+      var e = r.error || {}
+      if (e.code === 'not_found' || e.code === 'forbidden' || e.status === 404 || e.status === 403) { note(NONE); return }
+      if (e.code === 'no_files_door') { note('This brain has no Files desk, so there is no week page to show.'); return }
+      if (e.code === 'permission_denied') { note('Week needs the files.read permission. Update the app at /apps.'); return }
+      note('The week page did not load (' + (e.code || 'error') + ').')
+    })
+  }
+
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load() })
+  load()
+})()
+</script>
+</body>
+</html>

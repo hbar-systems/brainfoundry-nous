@@ -7,6 +7,8 @@ import { useEffect, useState } from 'react'
 //
 // Created: 2026-05-09
 // 2026-05-19: install + management moved here from Settings -> Apps.
+// 2026-11-10: "Shipped with this brain": apps whose files come with the template
+// (brain-apps/shipped/, e.g. Week) install with one press, no GitHub URL.
 
 const API = '/api/bf'
 
@@ -85,11 +87,27 @@ export default function AppsIndex() {
   const [updatePreview, setUpdatePreview] = useState(null) // re-approval card for a scope-changing update
   const [notice, setNotice] = useState(null)               // { kind, text } — transient success line
 
-  const load = () =>
+  const [shipped, setShipped] = useState([])              // shipped apps not yet installed
+  const load = () => Promise.all([
     api('/apps/list')
       .then(d => setApps(Array.isArray(d?.apps) ? d.apps : []))
-      .catch(e => setErr(String(e.message || e)))
+      .catch(e => setErr(String(e.message || e))),
+    // An older brain api has no /apps/shipped: the row simply stays away.
+    api('/apps/shipped')
+      .then(d => setShipped((d?.shipped || []).filter(x => x.manifest && !x.installed)))
+      .catch(() => setShipped([])),
+  ])
   useEffect(() => { load() }, [])
+
+  const doInstallShipped = async (name) => {
+    setBusy(`shipped:${name}`); setErr(null); setNotice(null)
+    try {
+      const r = await api(`/apps/shipped/${name}/install`, { method: 'POST' })
+      setNotice({ kind: 'ok', text: `${r.manifest?.name || r.id} installed. It opens at /apps/${r.id}.` })
+      await load()
+    } catch (e) { setErr(`Install failed: ${e.message}`) }
+    setBusy(null)
+  }
 
   // People (Standard tier) joins the menu once a friend's brain is known; until then this page says so.
   const [peerCount, setPeerCount] = useState(null)
@@ -216,6 +234,39 @@ export default function AppsIndex() {
           {busy === 'preview' ? 'Reading…' : 'Preview'}
         </button>
       </div>
+
+      {/* Shipped with this brain: template apps not installed yet, one press each */}
+      {shipped.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            Shipped with this brain
+          </div>
+          {shipped.map(x => (
+            <div key={x.name} style={{
+              display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
+              padding: '12px 14px', marginBottom: 8,
+              border: '1px solid var(--border)', borderRadius: 8, backgroundColor: 'var(--surface)',
+            }}>
+              <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                <div style={{ fontSize: 14, color: 'var(--text)' }}>
+                  <b>{x.manifest.name}</b>{' '}
+                  <span style={{ color: 'var(--muted)', fontFamily: 'var(--font-mono, DM Mono, monospace)', fontSize: 12 }}>
+                    v{x.manifest.version}{(x.manifest.permissions || []).length ? ` · ${x.manifest.permissions.join(', ')}` : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>{x.manifest.description}</div>
+              </div>
+              <button
+                style={{ ...BTN, opacity: busy === `shipped:${x.name}` ? 0.5 : 1 }}
+                disabled={busy === `shipped:${x.name}`}
+                onClick={() => doInstallShipped(x.name)}
+              >
+                {busy === `shipped:${x.name}` ? 'Installing…' : 'Install'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Preview / approval card */}
       {preview && (

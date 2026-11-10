@@ -105,6 +105,7 @@ CATALOG = (
     _i("app:mirror", "self-knowledge notes", "off", M, UNKNOWN),
     _i("app:daybook", "day log", "off", M, UNKNOWN),
     _i("app:today", "today", "off", M, UNKNOWN),
+    _i("app:week", "the week page (shipped, 2026-11-10)", "off", M, UNKNOWN),
     _i("app:people", "people", "off", M, UNKNOWN),
     _i("app:weekly-review", "weekly review", "off", M, UNKNOWN),
     _i("app:toolbox", "small utilities", "off", M, UNKNOWN),

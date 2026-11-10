@@ -68,8 +68,10 @@ def test_shipped_base_pack_is_valid_and_is_the_base_shelf():
     base = json.load(open(os.path.join(ROOT, "brain-apps", "packs", "base.json")))
     apps._validate_pack(base, "base")  # raises on schema failure
     base_ids = [a["id"] for a in base["apps"]]
+    # 2026-11-10: week, shipped in this repo (brain-apps/shipped/week), installed by copy.
     assert base_ids == ["thread-consolidator", "daybook", "mirror",
-                        "toolbox", "clip", "today", "people", "weekly-review"]
+                        "toolbox", "clip", "today", "people", "weekly-review", "week"]
+    assert base["apps"][-1] == {"id": "week", "shipped": "week"}
     defaults = json.load(open(os.path.join(ROOT, "brain-apps", "defaults.json")))
     assert [a["id"] for a in defaults["apps"]] == base_ids
 

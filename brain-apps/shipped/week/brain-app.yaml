@@ -1,0 +1,34 @@
+# Week: brain-app manifest
+# The owner's week page (directions, loops, rulings, what is owed) as an app, so the layout can
+# open it beside the conversation when the owner sits down (layout start = /apps/week).
+# Shipped in the template (brain-apps/shipped/week), installed by copy; no repo of its own.
+# Created: 2026-11-10 (WEEK-APP-1)
+
+dialect: brain-app/v1
+id: week
+name: Week
+version: 0.1.0
+description: "Your week page on one screen: the directions, open loops, rulings and what is owed, as the box last wrote it."
+license: AGPL-3.0
+
+author:
+  name: hbar
+  url: https://hbar.systems
+  contact: hello@hbar.systems
+
+repo: https://github.com/hbar-systems/brainfoundry-nous
+
+tab:
+  label: Week
+  route: /week
+  order: 25
+
+entries:
+  ui_bundle: ./
+
+# files.read: the one file week/index.html on the owner's Files desk, through the host page.
+permissions:
+  - files.read
+
+engines:
+  brainfoundry-nous: ">=0.13.0"

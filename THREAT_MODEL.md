@@ -300,6 +300,12 @@ request reaching the API. Tests: `tests/test_app_lane.py`.
   `allow-same-origin` (`ui/pages/files.js` `VIEW_SANDBOX`, served by the CC
   bridge at `/cc/files/raw`). That is the same class of exposure for HTML
   files on the box (written by the reasoner or ingested), open as of this entry.
+- *`files.read` (added 2026-11-10, the Week app).* An app that declares
+  `files.read` and is approved gets the text of any file on the owner's Files
+  desk (`out/`) by a desk-relative name; the host refuses `..`, absolute names
+  and anything past 2,000,000 characters, but a symlink the owner put on the
+  desk is followed by the CC bridge. The text comes back to the app's opaque
+  frame only; the shipped Week app reads `week/index.html` and nothing else.
 
 ## 5. Key handling (BYOK)
 

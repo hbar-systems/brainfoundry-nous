@@ -52,6 +52,14 @@ BASE_PACK = "base"
 # Comma-separated pack names the provisioner writes into .env (BRAIN_PACKS=base,music).
 # Absent or empty means ["base"]. base is always included whatever is listed.
 PACKS_ENV = "BRAIN_PACKS"
+# Shipped apps (added 2026-11-10, WEEK-APP-1): apps whose files live in this template repo at
+# brain-apps/shipped/<id>/ (tracked) instead of their own GitHub repo. An install copies the
+# directory into brain-apps/<id>/ like a clone would land; an Update (the template's own Update,
+# then the app's Update button) copies it again. commit_sha is a content hash of the files.
+# A pack entry names one with {"id": <id>, "shipped": <id>} in place of repo_url.
+SHIPPED_DIR = BRAIN_APPS_DIR / "shipped"
+# Directory names under brain-apps/ that are template config, never an app id.
+RESERVED_APP_IDS: set[str] = {"packs", "shipped", "installed"}
 
 # Built-in nav entries the brain ships with. The UI Nav renders ONLY these —
 # installed apps live behind the single `_apps` hub at /apps, which lists
@@ -226,6 +234,49 @@ def _git_clone(repo_url: str, ref: str, dest: Path) -> str:
         check=True, capture_output=True, text=True,
     )
     return sha_proc.stdout.strip()
+
+
+def _shipped_source(name: str) -> Path:
+    """brain-apps/shipped/<name>, or 404. The name is a manifest id, never a path."""
+    import re as _re
+    if not isinstance(name, str) or not _re.match(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$", name):
+        raise HTTPException(status_code=400, detail={"error": "bad_shipped_name", "name": str(name)[:80]})
+    src = SHIPPED_DIR / name
+    if not (src / "brain-app.yaml").is_file():
+        raise HTTPException(status_code=404, detail={"error": "shipped_app_not_found", "name": name})
+    return src
+
+
+def _tree_hash(root: Path) -> str:
+    """sha1 over the relative paths and bytes of every file under root (sorted): the shipped app's
+    'commit', so Update can tell whether the template carries a newer copy."""
+    h = hashlib.sha1()
+    for p in sorted(x for x in root.rglob("*") if x.is_file() and not x.is_symlink()):
+        h.update(p.relative_to(root).as_posix().encode() + b"\0")
+        h.update(p.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def _copy_shipped(name: str, dest: Path) -> str:
+    """Copy brain-apps/shipped/<name> to dest (which must not exist). Returns the tree hash."""
+    src = _shipped_source(name)
+    if dest.exists():
+        raise HTTPException(status_code=409, detail={"error": "destination_exists", "path": str(dest)})
+    shutil.copytree(src, dest, symlinks=False)
+    return _tree_hash(dest)
+
+
+def _fetch_source(dest: Path, repo_url: str | None = None, ref: str = "HEAD",
+                  shipped: str | None = None) -> str:
+    """Land an app's files at dest: a copy of a shipped app, or a git clone. Returns the pin."""
+    if shipped:
+        return _copy_shipped(shipped, dest)
+    return _git_clone(repo_url, ref, dest)
+
+
+def _check_reserved_id(app_id: str) -> None:
+    if app_id in RESERVED_APP_IDS:
+        raise HTTPException(status_code=409, detail={"error": "id_reserved", "id": app_id})
 
 
 def _read_manifest(app_dir: Path) -> dict:
@@ -482,8 +533,8 @@ def resolve_packs(names: list[str]) -> tuple[list[dict], list[dict]]:
     return ordered, failures
 
 
-def _install_default(repo_url: str, ref: str, installed_ids: set[str],
-                     installed_routes: set) -> dict | None:
+def _install_default(repo_url: str | None, ref: str, installed_ids: set[str],
+                     installed_routes: set, shipped: str | None = None) -> dict | None:
     """Clone + validate + register one pack app. Mirrors install_app's core
     (minus the HTTP response + hot-mount; the startup mount loop mounts it).
     Returns the installed.json entry, or None if the app is already present /
@@ -492,12 +543,16 @@ def _install_default(repo_url: str, ref: str, installed_ids: set[str],
     BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
     staging = BRAIN_APPS_DIR / f".seed-{secrets.token_hex(8)}"
     try:
-        commit_sha = _git_clone(repo_url, ref, staging)
+        commit_sha = _fetch_source(staging, repo_url, ref, shipped)
         _chown_to_host_owner(staging)
         manifest = _read_manifest(staging)
         _validate_manifest(manifest)
         app_id = manifest["id"]
         route = manifest["tab"]["route"]
+        if app_id in RESERVED_APP_IDS:
+            shutil.rmtree(staging, ignore_errors=True)
+            print(f"[brain-apps] default {app_id}: reserved id; skipped", flush=True)
+            return None
         if app_id in installed_ids:
             shutil.rmtree(staging, ignore_errors=True)
             return None
@@ -517,8 +572,13 @@ def _install_default(repo_url: str, ref: str, installed_ids: set[str],
     # token_hash kept for parity with install_app; the raw token is discarded —
     # bridge auth is host-side (the host mints a loop permit with BRAIN_API_KEY),
     # so a pre-installed app needs no returned-once token to function.
-    return {
-        "id": app_id,
+    return _entry(manifest, commit_sha, shipped) | {"preinstalled": True}
+
+
+def _entry(manifest: dict, commit_sha: str, shipped: str | None = None) -> dict:
+    """The installed.json entry for a freshly landed app (install, seed, shipped install)."""
+    entry = {
+        "id": manifest["id"],
         "name": manifest["name"],
         "version": manifest["version"],
         "description": manifest["description"],
@@ -534,8 +594,10 @@ def _install_default(repo_url: str, ref: str, installed_ids: set[str],
         "requires_endpoints": manifest.get("requires_endpoints", []),
         "compute": manifest.get("compute"),
         "token_hash": _hash_token(secrets.token_urlsafe(32)),
-        "preinstalled": True,
     }
+    if shipped:
+        entry["shipped"] = shipped
+    return entry
 
 
 def _install_pack_apps(pack: dict, state: dict) -> dict:
@@ -554,14 +616,17 @@ def _install_pack_apps(pack: dict, state: dict) -> dict:
             record["skipped"].append(want)
             continue
         try:
-            entry = _install_default(d["repo_url"], d.get("ref", "HEAD"),
-                                     installed_ids, installed_routes)
+            kw = {"shipped": d["shipped"]} if d.get("shipped") else {}
+            entry = _install_default(d.get("repo_url"), d.get("ref", "HEAD"),
+                                     installed_ids, installed_routes, **kw)
         except Exception as e:
-            print(f"[brain-apps] pack {pack.get('name')}: install failed for {d.get('repo_url')}: {e}", flush=True)
-            record["failed"].append({"id": want, "repo_url": d.get("repo_url"), "error": str(e)[:300]})
+            src = d.get("repo_url") or f"shipped:{d.get('shipped')}"
+            print(f"[brain-apps] pack {pack.get('name')}: install failed for {src}: {e}", flush=True)
+            record["failed"].append({"id": want, "repo_url": d.get("repo_url"), "shipped": d.get("shipped"),
+                                     "error": str(e)[:300]})
             continue
         if entry is None:
-            record["skipped"].append(want or d.get("repo_url"))
+            record["skipped"].append(want or d.get("repo_url") or d.get("shipped"))
             continue
         existing.append(entry)
         installed_ids.add(entry["id"])
@@ -687,6 +752,73 @@ def install_pack(name: str, request: Request) -> dict:
     return {"name": name, "packs": results, "failures": failures}
 
 
+def list_shipped_names() -> list[str]:
+    """Ids of the apps shipped in brain-apps/shipped/ (each a dir with a brain-app.yaml)."""
+    if not SHIPPED_DIR.is_dir():
+        return []
+    return sorted(p.name for p in SHIPPED_DIR.iterdir()
+                  if p.is_dir() and not p.name.startswith(".") and (p / "brain-app.yaml").is_file())
+
+
+@router.get("/shipped")
+def list_shipped() -> dict:
+    """The apps this template ships in its own tree (brain-apps/shipped/), with their manifest
+    and whether this brain has them installed. The Apps page offers the missing ones."""
+    state = _load_installed()
+    installed_ids = {a["id"] for a in state.get("apps", [])}
+    out = []
+    for name in list_shipped_names():
+        try:
+            manifest = _read_manifest(SHIPPED_DIR / name)
+            _validate_manifest(manifest)
+        except HTTPException as e:
+            out.append({"name": name, "error": e.detail})
+            continue
+        out.append({"name": name, "manifest": manifest, "installed": manifest["id"] in installed_ids})
+    return {"shipped": out}
+
+
+@router.post("/shipped/{name}/install", response_model=InstallResponse)
+def install_shipped(name: str, request: Request) -> InstallResponse:
+    """Install a shipped app: copy brain-apps/shipped/<name> into brain-apps/<id>, validate,
+    register, mount live. Same gates as a GitHub install (manifest schema, id, route)."""
+    state = _load_installed()
+    existing = state.get("apps", [])
+    BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
+    staging = BRAIN_APPS_DIR / f".staging-{secrets.token_hex(8)}"
+    try:
+        commit_sha = _copy_shipped(name, staging)
+        _chown_to_host_owner(staging)
+        manifest = _read_manifest(staging)
+        _validate_manifest(manifest)
+        app_id = manifest["id"]
+        if app_id != name:
+            raise HTTPException(status_code=409, detail={"error": "shipped_id_mismatch", "dir": name, "id": app_id})
+        _check_reserved_id(app_id)
+        _check_id_collision(app_id, existing)
+        _check_route_collision(manifest["tab"]["route"], existing)
+        final_dir = BRAIN_APPS_DIR / app_id
+        if final_dir.exists():
+            raise HTTPException(status_code=409, detail={"error": "app_dir_exists", "path": str(final_dir)})
+        staging.rename(final_dir)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    raw_token = secrets.token_urlsafe(32)
+    entry = _entry(manifest, commit_sha, shipped=name)
+    entry["token_hash"] = _hash_token(raw_token)
+    existing.append(entry)
+    state["apps"] = existing
+    _save_installed(state)
+    try:
+        from api.apps_mount import mount_app as _mount_app
+        _mount_app(request.app, entry)
+    except Exception as e:
+        print(f"[brain-apps] hot-mount failed for {app_id}: {e}", flush=True)
+    return InstallResponse(id=app_id, manifest=manifest, commit_sha=commit_sha, app_token=raw_token)
+
+
 @router.post("/install/preview", response_model=PreviewResponse)
 def install_preview(req: InstallRequest) -> PreviewResponse:
     """Clone to a temp dir, parse and validate the manifest, return it. No state written."""
@@ -718,6 +850,7 @@ def install_app(req: InstallRequest, request: Request) -> InstallResponse:
         _validate_manifest(manifest)
 
         app_id = manifest["id"]
+        _check_reserved_id(app_id)
         _check_id_collision(app_id, existing)
         _check_route_collision(manifest["tab"]["route"], existing)
 
@@ -850,13 +983,14 @@ def update_preview(app_id: str) -> UpdatePreviewResponse:
     if entry is None:
         raise HTTPException(status_code=404, detail={"error": "app_not_found", "id": app_id})
     repo_url = entry.get("repo")
-    if not repo_url:
+    shipped = entry.get("shipped")
+    if not repo_url and not shipped:
         raise HTTPException(status_code=400, detail={"error": "app_has_no_repo", "id": app_id})
 
     BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
     tmp_dir = BRAIN_APPS_DIR / f".update-preview-{secrets.token_hex(8)}"
     try:
-        sha = _git_clone(repo_url, "HEAD", tmp_dir)
+        sha = _fetch_source(tmp_dir, repo_url, "HEAD", shipped)
         _chown_to_host_owner(tmp_dir)
         manifest = _read_manifest(tmp_dir)
         _validate_manifest(manifest)
@@ -895,14 +1029,15 @@ def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateRespo
         raise HTTPException(status_code=404, detail={"error": "app_not_found", "id": app_id})
     entry = apps[idx]
     repo_url = entry.get("repo")
-    if not repo_url:
+    shipped = entry.get("shipped")
+    if not repo_url and not shipped:
         raise HTTPException(status_code=400, detail={"error": "app_has_no_repo", "id": app_id})
     previous_sha = entry.get("commit_sha", "")
 
     BRAIN_APPS_DIR.mkdir(parents=True, exist_ok=True)
     staging = BRAIN_APPS_DIR / f".update-staging-{secrets.token_hex(8)}"
     try:
-        commit_sha = _git_clone(repo_url, "HEAD", staging)
+        commit_sha = _fetch_source(staging, repo_url, "HEAD", shipped)
         _chown_to_host_owner(staging)
         manifest = _read_manifest(staging)
         _validate_manifest(manifest)

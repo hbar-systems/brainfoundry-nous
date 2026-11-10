@@ -225,7 +225,8 @@ QUESTIONS = (
     {"id": "first", "ask": "What do you open first when you sit down?",
      "options": (("talk", "the conversation"), ("gallery", "my conversations as a deck"), ("panes", "several conversations side by side"),
                  ("doors", "a few doors, one for each thing I do here"),
-                 ("today", "Today (calendar, mail, tasks) beside the conversation"))},
+                 ("today", "Today (calendar, mail, tasks) beside the conversation"),
+                 ("week", "Week (the week page) beside the conversation"))},
     {"id": "never", "ask": "Which of these do you never use? Say none if all of them stay.", "multi": True,
      "options": (("board", "board"), ("gallery", "gallery"), ("files", "files link"), ("sidebyside", "side by side"),
                  ("handsfree", "hands-free row"), ("hint", "the starter hints"), ("hero", "the title block"),
@@ -244,6 +245,9 @@ QUESTIONS = (
      "options": (("off", "off"), ("speak", "read aloud"), ("handsfree", "hands-free"))},
 )
 _FACE = {"serif": "lora", "mono": "jetbrains", "sans": "system"}
+# "first" answers that open the conversation with an app beside it (layout key start). week added
+# 2026-11-10 (WEEK-APP-1): the week page opens by itself when the owner sits down.
+_FIRST_START = {"today": "/apps/today", "week": "/apps/week"}
 
 
 def validate_answers(answers) -> dict:
@@ -273,8 +277,8 @@ def from_answers(answers: dict, preset: str | None = None) -> dict:
         except cc_catalog.CatalogError as e:
             raise LayoutError(str(e)) from None
     lay = json.loads(json.dumps(DEFAULT))
-    if a.get("first") == "today":
-        lay["start"] = "/apps/today"
+    if a.get("first") in _FIRST_START:
+        lay["start"] = _FIRST_START[a["first"]]
     elif "first" in a:
         lay["view"] = a["first"]
     for k in a.get("never", []):

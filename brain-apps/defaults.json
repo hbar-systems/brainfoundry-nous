@@ -41,6 +41,10 @@
       "id": "weekly-review",
       "repo_url": "https://github.com/hbar-systems/brain-app-weekly-review",
       "ref": "HEAD"
+    },
+    {
+      "id": "week",
+      "shipped": "week"
     }
   ]
 }
