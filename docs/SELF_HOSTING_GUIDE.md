@@ -212,6 +212,16 @@ How much retrieved text reaches the model. Cloud models get whole documents up t
 | `RAG_CONTEXT_CHAR_BUDGET` | `7000` | Local model | Total characters of retrieved text |
 | `RAG_MIN_SIMILARITY` | `0.0` | Both | Drop matches below this similarity; `0.0` keeps all |
 
+### Chunking (2026-11-10)
+
+How uploaded text is cut before embedding. The embedding model (bge-large) reads 512 tokens of each chunk; a 500-word chunk of markdown is about 800 to 1,300 of its tokens, so the word chunker leaves roughly half of every document out of the vectors. The token chunker fixes that. Changing it does not touch stored chunks: it applies to documents ingested or re-ingested afterwards (a re-ingest re-embeds that document whole). Measure first with `scripts/eval_retrieval.py` (tests/golden/README.md).
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `CHUNKER` | `words` | `words`: 500-word windows every 450 words (the old behaviour). `tokens`: split on headings, paragraphs, sentences; every chunk starts with its heading path |
+| `CHUNK_MAX_TOKENS` | `480` | `tokens` only: most embedding-model tokens per chunk (leaves room for the two special tokens under 512) |
+| `CHUNK_OVERLAP_TOKENS` | `48` | `tokens` only: how much of a chunk's end the next chunk in the same section repeats |
+
 ### Network
 
 | Variable | Default | Description |

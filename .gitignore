@@ -130,3 +130,6 @@ api/brain_persona.md
 
 # One CLI scoping file (CC hands), per box, never committed
 .onerc
+
+# private golden sets (tests/golden/README.md)
+tests/golden/retrieval.jsonl

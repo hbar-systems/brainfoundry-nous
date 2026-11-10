@@ -2133,16 +2133,11 @@ def extract_text_from_image(file_content: bytes) -> str:
         raise HTTPException(status_code=400, detail=f"OCR extraction failed: {str(e)}")
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-    """Split text into overlapping chunks for better embeddings"""
-    words = text.split()
-    chunks = []
-    
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = " ".join(words[i:i + chunk_size])
-        if chunk.strip():
-            chunks.append(chunk.strip())
-    
-    return chunks
+    """Split text into chunks for embedding. CHUNKER=words (default): 500-word windows every
+    450 words, as before. CHUNKER=tokens: heading-aware chunks under CHUNK_MAX_TOKENS (480)
+    bge tokens (api/chunker.py, 2026-11-10)."""
+    from api.chunker import chunk_text as _chunk_text
+    return _chunk_text(text, chunk_size, overlap)
 
 def generate_embeddings(texts: List[str]) -> List[List[float]]:
     """Generate embeddings for text chunks"""

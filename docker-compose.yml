@@ -116,6 +116,10 @@ services:
       - RAG_TIER2A=${RAG_TIER2A:-thinking}
       - RAG_TIER2B=${RAG_TIER2B:-projects}
       - RAG_TIER2C=${RAG_TIER2C:-writing}
+      # Ingest chunker (api/chunker.py): words = 500-word windows (default, as before); tokens = heading-aware chunks under CHUNK_MAX_TOKENS bge tokens
+      - CHUNKER=${CHUNKER:-words}
+      - CHUNK_MAX_TOKENS=${CHUNK_MAX_TOKENS:-480}
+      - CHUNK_OVERLAP_TOKENS=${CHUNK_OVERLAP_TOKENS:-48}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
