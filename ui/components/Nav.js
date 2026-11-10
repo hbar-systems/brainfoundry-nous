@@ -82,6 +82,10 @@ export default function Nav() {
   const [hasPeers, setHasPeers] = useState(false)
   // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
   const ccHome = tabs.some(t => t.id === '_cc' && t.href === '/')
+  // The brand link (2026-11-10, Paul landed on the dashboard): when the brain has CC, the symbol
+  // goes to the thread page (the CC tab's own route), never to the dashboard.
+  const ccTab = tabs.find(t => t.id === '_cc')
+  const homeHref = ccTab ? ccTab.href : '/'
   const split = splitByMode(tabs, mode)
   const shown = withPeople(split.shown, hasPeers)
   const more = split.more
@@ -194,7 +198,7 @@ export default function Nav() {
       right: 0,
       zIndex: 100,
     }}>
-      <Link href="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+      <Link href={homeHref} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <span style={{ fontSize: '18px', color: 'var(--accent)', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
         <span className="bf-brand-name" style={{
           fontFamily: 'var(--font-display)',
