@@ -1,0 +1,16 @@
+Join my brain
+
+This puts your laptop on your brain's own private network, so your brain can help you
+sort what is on it. In order:
+
+1. Tailscale, a private network app, is installed if you do not have it (macOS asks for
+   your password once). It connects only to your brain, never to anyone else's.
+2. You turn on Remote Login for your own user (System Settings opens at the right page).
+3. One line is added that lets your brain run one small program here, door.sh, and
+   nothing else. Every time it does, a line is written to ~/.brain-spoke/door.log.
+4. "Leave my brain" appears on your Desktop. Double-click it any time to undo all of this.
+
+First your brain only LOOKS: how many photos, documents, songs, how big, how old.
+No file names leave the laptop for that. It never opens your passwords (keychain),
+your messages, your mail or your browsers. It moves nothing until you say yes, in the
+conversation, to a plan you have read. Nothing is ever deleted.
