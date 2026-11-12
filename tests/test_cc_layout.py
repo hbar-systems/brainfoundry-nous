@@ -328,3 +328,43 @@ def test_terminal_button_goes_with_the_tools_strip():
     assert "if (paneMode || hidden.tools) return undefined" in src     # no shortcut when hidden
     assert "e.code === 'Backquote'" in src
     assert "Ctrl+`" in (ROOT / "docs" / "CC.md").read_text()
+
+
+# ---- the console's language (2026-11-12, HANDOFF-2) ----
+
+def test_lang_defaults_to_english_and_round_trips(tmp_path):
+    st = L.Store(tmp_path)
+    assert st.lang() == "en"
+    assert not (tmp_path / "layout.json").exists()   # a read never writes the file
+    assert st.set_lang("ru") == "ru"
+    st.save(L.from_answers({"never": ["nav", "tools", "inputbuttons", "footer"], "first": "week"}))
+    assert st.lang() == "ru"   # saving a layout keeps it
+    assert "lang" not in L.validate(st.get())   # never part of a layout, so a pack cannot carry it
+    with pytest.raises(L.LayoutError):
+        st.set_lang("<b>")
+
+
+def test_bridge_lang_route(monkeypatch, tmp_path):
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    st, d = m._layout_api("GET", "/layout/lang", None, {})
+    assert st == 200 and d == {"lang": "en", "langs": list(L.LANGS)}
+    st, d = m._layout_api("POST", "/layout/lang", {"lang": "ru"}, {})
+    assert st == 200 and d["lang"] == "ru"
+    st, d = m._layout_api("GET", "/layout", None, {})
+    assert st == 200 and d["lang"] == "ru"
+    st, d = m._layout_api("POST", "/layout/lang", {"lang": "xx"}, {})
+    assert st == 400
+
+
+def test_js_console_words_cover_every_language():
+    out = _node_json(
+        "const t=require('./consoleText.js');const keys=Object.keys(t.TEXT.en);"
+        "const miss={};for(const l of t.LANGS){miss[l]=keys.filter(k=>!(k in t.TEXT[l]))}"
+        "const step={key:'files',label:'Drop ten files (3 of 10)',sub:'x',progress:{done:3,target:10}};"
+        "console.log(JSON.stringify({langs:t.LANGS,miss,unknown:t.words('xx').send,"
+        "ru:t.stepLabel('ru',step),en:t.stepLabel('en',step),app:t.stepLabel('ru',{key:'app',label:'Open Daybook'})}))")
+    assert out["langs"] == list(L.LANGS)
+    assert all(not v for v in out["miss"].values()), out["miss"]
+    assert out["unknown"] == "send"
+    assert out["ru"] == "Положите десять файлов (3 из 10)" and out["en"] == "Drop ten files (3 of 10)"
+    assert out["app"] == "Откройте Daybook"

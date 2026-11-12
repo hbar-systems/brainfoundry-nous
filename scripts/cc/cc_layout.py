@@ -74,6 +74,11 @@ SIZE_ZOOM = {"small": 0.92, "normal": 1.0, "large": 1.12}
 # the layout itself, so a shared layout pack never switches anyone's mode. Tabs by the api's tab id; a tab
 # in no list is hidden from a newcomer until it is ruled into a tier.
 MODES = ("newcomer", "operator")
+# The console's own words (2026-11-12, HANDOFF-2: a Russian member opened her console on the English page).
+# Which language the console's chrome speaks: the title, the starter lines, the input and its buttons
+# (ui/lib/consoleText.js holds the strings). Beside mode, not in the layout, so a shared layout pack never
+# switches anyone's language. Unset is English. Not the language the brain answers in: that is Settings.
+LANGS = ("en", "ru")
 TIERS = {
     "standard": ["_chat", "_knowledge", "_files", "_guide", "_settings", "_apps"],
     "catalogue": ["_tasks", "_research", "_graph", "_integrations", "_trace"],
@@ -382,6 +387,19 @@ class Store:
             d["mode"] = m
             self._write(d)
         return m
+
+    def lang(self) -> str:
+        """The console's language (LANGS); English when unset or unreadable. Never written by a read."""
+        v = self._read().get("lang")
+        return v if v in LANGS else "en"
+
+    def set_lang(self, lang) -> str:
+        v = _enum(lang, LANGS, "lang")
+        with self.lock:
+            d = self._read()
+            d["lang"] = v
+            self._write(d)
+        return v
 
     def arrangement(self) -> dict | None:
         """The brain's arrangement of catalog items (docs/PERSONALIZATION.md), or None when unset.

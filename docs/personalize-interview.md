@@ -1,6 +1,6 @@
 # Personalize the console: the interview
 
-Created: 2026-10-09. Read by the brain's reasoner (CC) when the owner asks to set up or personalize the console, or on first use if they want to. The question list is fixed and lives in `scripts/cc/cc_layout.py` (`QUESTIONS`); a test keeps this file and that list in step. Amended 2026-10-29: starts from a preset. Amended 2026-11-06: "never" can hide the console's chrome (the quiet console). Amended 2026-11-10: "first" can be week (the Week app beside the conversation).
+Created: 2026-10-09. Read by the brain's reasoner (CC) when the owner asks to set up or personalize the console, or on first use if they want to. The question list is fixed and lives in `scripts/cc/cc_layout.py` (`QUESTIONS`); a test keeps this file and that list in step. Amended 2026-10-29: starts from a preset. Amended 2026-11-06: "never" can hide the console's chrome (the quiet console). Amended 2026-11-10: "first" can be week (the Week app beside the conversation). Amended 2026-11-12: the quiet console also folds the four asks and the idle line; the console's own words follow the bridge's `lang` key (en, ru), set beside the layout, not asked here.
 
 ## Start from a preset (2026-10-29)
 
@@ -54,8 +54,8 @@ When you have the answers, end one message with exactly one block, using the opt
 | never | the named block is hidden; "reset layout" and /layout bring it back |
 | never: nav | the top row (threads, new thread, side by side, gallery, board, agents, export) is hidden; the "everything" drawer stays, and /new, /help and the other slash commands still work (2026-11-06) |
 | never: tools | the tool line (colour wheel, tint, text, skins, wallpaper, posture, seat, learn) is hidden; /posture and /seat still work |
-| never: inputbuttons | attach, talk, send now and send leave the input: Enter sends, files attach by drop or paste, voice runs hands-free (/talk free), Esc stops; a stop button shows only while an answer runs |
-| never: footer | the status lines fold into one "···" link that unfolds them; a disk over 95% full, documents waiting for approval and cards waiting for a decision still show as one line |
+| never: inputbuttons | attach, talk, send now and send leave the input: Enter sends, files attach by drop or paste, voice runs hands-free (/talk free), Esc stops; a stop button shows only while an answer runs; the four asks above the input (read the threads, where were we?, help decide, just thoughts) go too, and stay as typed words (amended 2026-11-12) |
+| never: footer | the status lines fold into one "···" link that unfolds them; a disk over 95% full, documents waiting for approval and cards waiting for a decision still show as one line; the idle line above the input shows only while an answer runs (amended 2026-11-12) |
 | panes: one | hides the "side by side" button |
 | side | the pane opens left or right of the conversation |
 | tone | colour preset: black, light, or the stock palette |

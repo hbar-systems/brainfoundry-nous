@@ -4199,7 +4199,7 @@ LAYOUT = cc_layout.Store(STATE_DIR, Path(CWD) / "brain-apps")
 def _layout_view() -> dict:
     cur = LAYOUT.get()
     return {"layout": cur, "resolved": cc_layout.resolve(cur) if cur else None,
-            "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(),
+            "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(), "lang": LAYOUT.lang(),
             "questions": [{**q, "options": [list(o) for o in q["options"]]} for q in cc_layout.QUESTIONS]}
 
 
@@ -4221,6 +4221,9 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
         if route == "/layout/mode":   # newcomer or operator (2026-10-17); the Nav and Settings read it
             mode = LAYOUT.set_mode(body.get("mode")) if method == "POST" else LAYOUT.mode()
             return 200, {"mode": mode, "modes": list(cc_layout.MODES), "tiers": cc_layout.TIERS}
+        if route == "/layout/lang":   # the console's own words, en or ru (2026-11-12); the page reads it from GET /layout
+            lang = LAYOUT.set_lang(body.get("lang")) if method == "POST" else LAYOUT.lang()
+            return 200, {"lang": lang, "langs": list(cc_layout.LANGS)}
         if method == "GET" and route == "/layout/doors":   # the doors view (cc_doors.py, 2026-11-08)
             return 200, {"doors": _doors()}
         if method == "GET" and route == "/layout/export":

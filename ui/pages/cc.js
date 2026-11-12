@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines } from '../lib/layout'
+import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
@@ -1086,7 +1087,7 @@ function Pane({ pane, onClose, side, onSide, onRoute }) {
   )
 }
 
-function FirstRun({ steps, onOpen }) {
+function FirstRun({ steps, onOpen, lang }) {
   // The first-use steps as sentences from the brain, on the home screen (D54). The
   // reasoner sign-in card covers the key step, so it is not repeated here.
   const rows = (steps || []).filter(s => s.key !== 'key')
@@ -1095,7 +1096,7 @@ function FirstRun({ steps, onOpen }) {
     <div style={{ margin: '0 0 16px 0' }}>
       {rows.map(s => (
         <p key={s.key} style={{ margin: '0 0 6px 0', color: s.done ? C.faint : C.dim, fontSize: '14px', lineHeight: 1.6 }}>
-          {s.done ? '\u2713 ' : ''}{s.label}{!s.done && s.sub ? `. ${s.sub}` : ''}
+          {s.done ? '\u2713 ' : ''}{stepLabel(lang, s)}{!s.done && stepSub(lang, s) ? `. ${stepSub(lang, s)}` : ''}
           {!s.done && s.href ? <> <a onClick={() => onOpen({ route: s.href, title: s.cta || s.label })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{s.cta || 'open'}</a></> : null}
         </p>
       ))}
@@ -1462,9 +1463,13 @@ function CC() {
   const [doors, setDoors] = useState(null)
   const doorsView = !!(layoutBase && layoutBase.view === 'doors')
   const [layoutNote, setLayoutNote] = useState('')
+  // the console's own words (2026-11-12): the bridge's lang key beside the layout, English when unset
+  const [lang, setLang] = useState('en')
+  const W = words(lang)
   useEffect(() => {
     let on = true
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (on && d && d.lang) setLang(d.lang)
       if (!on || !d || !d.layout) return
       setLayoutBase(d.layout)
       let seen = null
@@ -2911,7 +2916,7 @@ function CC() {
               {slimHero && <a onClick={() => setHeroPref(true)} title="Show the full title again; this stays until you hide it" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>show title</a>}
               <a onClick={() => { setHeroPref(false); hide('hero', true) }} title="Hide this title; it comes back with reset layout" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline', marginLeft: '12px', textTransform: 'none', letterSpacing: 0 }}>hide</a>
             </p>
-            {!slimHero && <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>Talk to your brain</h1>}
+            {!slimHero && <h1 style={{ fontSize: '22px', color: C.ink, margin: 0, fontWeight: 600 }}>{W.title}</h1>}
             </>}
             {paneMode && !curThread && <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>new conversation</p>}
             {curThread && (
@@ -3004,11 +3009,11 @@ function CC() {
           </div>
         </div>
 
-        {!paneMode && !hidden.hint && firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} />}
+        {!paneMode && !hidden.hint && firstRun && !firstRun.complete && loggedIn && <FirstRun steps={firstRun.steps} onOpen={openPane} lang={lang} />}
         {!paneMode && doorsView && loggedIn && turns.length === 0 && doors && doors.length > 0 && <Doors doors={doors} onPick={pickDoor} />}
         {!paneMode && !hidden.hint && loggedIn && turns.length === 0 && (
           <p style={{ margin: '0 0 16px 0', color: C.faint, fontSize: '13px' }}>
-            New here? <a onClick={() => openPane({ route: '/guide', title: 'Guide' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>The guide</a> explains what this brain can do, with a seven-step tutorial that checks itself. Or type /help.
+            {W.guide[0]}<a onClick={() => openPane({ route: '/guide', title: 'Guide' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{W.guide[1]}</a>{W.guide[2]}
             <a onClick={() => hide('hint', true)} style={{ ...mono, fontSize: '11px', marginLeft: '12px', cursor: 'pointer', textDecoration: 'underline' }}>hide</a>
           </p>
         )}
@@ -3072,8 +3077,7 @@ function CC() {
           ))}
           {turns.length === 0 && loggedIn && pending.length === 0 && (
             <p style={{ color: C.faint, fontSize: '14px', lineHeight: 1.7, margin: '24px 0' }}>
-              This surface reasons over what the brain remembers and over its own files on its own server.
-              Ask what the brain knows about you, what changed recently, or what a document says. It reads; it does not change anything from here.
+              {W.empty}
               {health.session ? ' The previous thread continues.' : ''}
             </p>
           )}
@@ -3151,7 +3155,8 @@ function CC() {
             <div style={{ padding: '4px 12px 0', color: C.faint, fontSize: '11px' }}>Tab completes. Other slash commands go to the reasoner.</div>
           </div>
         )}
-        {!paneMode && (() => {
+        {/* the quiet console (2026-11-12): with the footer hidden, the status line shows only while an answer runs */}
+        {!paneMode && (active || !footQuiet) && (() => {
           const live = [...turns].reverse().find(x => x.live)
           const last = [...turns].reverse().find(x => x.who === 'brain' && !x.live && x.ms)
           return (
@@ -3185,8 +3190,9 @@ function CC() {
             ))}
           </p>
         )}
-        {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode. */}
-        {loggedIn && (
+        {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode.
+            Hidden with the input's buttons (2026-11-12, HANDOFF-2): a quiet console has no buttons around the input. */}
+        {loggedIn && !(hidden.inputbuttons && !paneMode) && (
           <div className="cc-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: paneMode ? '6px' : '10px' }}>
             <Btn small onClick={() => send(PANEL.threads)} disabled={active} title="What the other threads did: done, running, open, owed by you">{(() => {
               // one light for the other threads: pulsing while any of them works (a turn, else a job), a fade when one just finished
@@ -3202,7 +3208,7 @@ function CC() {
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
           <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
-            placeholder={thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : 'Ask your brain. Enter sends, Shift+Enter for a new line. / for commands.'}
+            placeholder={thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : W.ask}
             disabled={!loggedIn}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             onPaste={e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); setFiles(f => [...f, ...fs]) } }}
@@ -3213,18 +3219,18 @@ function CC() {
               voice runs hands-free and Esc stops; a stop shows only while an answer runs */}
           {hidden.inputbuttons && active && (paneMode
             ? <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>
-            : <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>)}
+            : <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">{W.stop}</Btn>)}
           {!paneMode && !hidden.inputbuttons && (
           <div style={{ display: 'flex', gap: '8px', flex: '0 0 auto', marginLeft: 'auto' }}>
-            <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">attach</Btn>
+            <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={!loggedIn} title="Attach files; they land on your box and the brain reads them there">{W.attach}</Btn>
             <Btn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} accent={listening}
               title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}>
-              {listening ? 'stop' : transcribing ? 'hearing' : 'talk'}
+              {listening ? W.stop : transcribing ? 'hearing' : W.talk}
             </Btn>
-            {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">stop</Btn>}
+            {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">{W.stop}</Btn>}
             {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
             {/* the "fix the brain" button left the send row 2026-10-23 (hbar: never used); /fix does the same */}
-            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : 'send'}</Btn>
+            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : W.send}</Btn>
           </div>
           )}
           {paneMode && !hidden.inputbuttons && (
