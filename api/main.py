@@ -856,6 +856,7 @@ class SetAgenticToolsRequest(BaseModel):
 class SetAutonomyRequest(BaseModel):
     enabled: Optional[bool] = None
     goal: Optional[str] = None
+    tools: Optional[List[str]] = None   # extra tools the tick may use (owner's allow-list)
 
 
 @app.get("/settings/agentic-tools")
@@ -868,7 +869,8 @@ def settings_get_agentic_tools(api_key: str = Depends(get_api_key)):
 def settings_get_autonomy(api_key: str = Depends(get_api_key)):
     """Standing autonomous loop status + the goal each tick pursues."""
     return {"enabled": settings_store.get_autonomy_enabled(),
-            "goal": settings_store.get_autonomy_goal()}
+            "goal": settings_store.get_autonomy_goal(),
+            "tools": settings_store.get_autonomy_tools()}
 
 
 @app.post("/settings/autonomy")
@@ -877,9 +879,12 @@ def settings_set_autonomy(req: SetAutonomyRequest, api_key: str = Depends(get_ap
         settings_store.set_autonomy_enabled(req.enabled)
     if req.goal is not None:
         settings_store.set_autonomy_goal(req.goal)
+    if req.tools is not None:
+        settings_store.set_autonomy_tools(req.tools)
     return {"ok": True,
             "enabled": settings_store.get_autonomy_enabled(),
-            "goal": settings_store.get_autonomy_goal()}
+            "goal": settings_store.get_autonomy_goal(),
+            "tools": settings_store.get_autonomy_tools()}
 
 
 # ── Google integration (Gmail + Calendar, read-only) ────────────────────────
@@ -3275,15 +3280,20 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # an agentic turn may also pull it in through search_memory, which the
         # dispatch wrapper below records here. Once set, nothing from this turn
         # goes to a tool that sends data off the box or to a closed model.
-        _lo_seen = {"v": _privacy.has_local_only(relevant_docs)}
+        # A marked session counts too (audit 2026-11-13, local-only-clamp-ignores-
+        # session-mark): its history, which goes into this prompt, holds quotes
+        # of local-only memory even when this turn retrieved only open chunks.
+        _lo_seen = {"v": _privacy.has_local_only(relevant_docs)
+                    or bool(session_id and _session_marked(session_id))}
         # Every local-only chunk a model saw this turn, for the one audit line
         # (document names and a count, never content) and the session mark.
         _lo_docs = [d for d in relevant_docs if _privacy.level_of(d.get("metadata")) != _privacy.OPEN]
         _lo_done = {"v": False}
 
         def _record_local_read():
-            # Once per turn: mark the session, write the audit line.
-            if not _lo_seen["v"] or _lo_done["v"]:
+            # Once per turn: mark the session, write the audit line (only when
+            # local-only chunks were read, not for a session that is already marked).
+            if not _lo_docs or _lo_done["v"]:
                 return
             _lo_done["v"] = True
             if session_id:
@@ -3355,8 +3365,14 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # GREEN tools (own memory, own task list). Every YELLOW/RED/MCP tool puts
         # its arguments on an outside wire, and the model could write the
         # local-only text into them.
+        # task_add is GREEN but persists model text to the task store, which the
+        # reminder loop sends to Telegram, task_list returns to closed turns and
+        # the app bridge serves to brain apps (audit 2026-11-13,
+        # local-only-clamp-allows-task-add-laundering): refused in this state too.
+        _LO_REFUSED = {"task_add"}
         if _lo_seen["v"]:
-            _tools_spec = [_t for _t in _tools_spec if _t.get("tier") == _agentic_tools.GREEN]
+            _tools_spec = [_t for _t in _tools_spec if _t.get("tier") == _agentic_tools.GREEN
+                           and _t.get("name") not in _LO_REFUSED]
 
         # RED proposals raised during this agentic turn. The /chat surface has a
         # live operator who can see an Approve/Reject card, so RED dispatch is
@@ -3366,7 +3382,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         _pending_approvals: list = []
 
         def _egress_tool(name) -> bool:
-            if not isinstance(name, str) or name.startswith("mcp__"):
+            if not isinstance(name, str) or name.startswith("mcp__") or name in _LO_REFUSED:
                 return True
             _t = _agentic_tools.get(name)
             return _t is None or _t.tier != _agentic_tools.GREEN
@@ -8671,7 +8687,8 @@ def _onboarding_active() -> bool:
     return _onb_core.is_fresh_brain() and _trial.is_available()
 
 
-def _store_onboarding_fact(text: str, category: str = "identity") -> Optional[dict]:
+def _store_onboarding_fact(text: str, category: str = "identity",
+                           privacy: Optional[str] = None) -> Optional[dict]:
     """Persist one self-stated fact about the owner via the hardened write path.
 
     Operator-direct (the owner stated it about themselves) → semantic, trust 1.0,
@@ -8702,6 +8719,9 @@ def _store_onboarding_fact(text: str, category: str = "identity") -> Optional[di
             "stored_at": datetime.utcnow().isoformat(),
             **provenance,
         }
+        # A fact derived from local-only memory stays local-only (audit 2026-11-13).
+        if privacy:
+            metadata_base["privacy"] = privacy
         conn = get_db_connection()
         cursor = conn.cursor()
         first_id = None
@@ -8827,8 +8847,14 @@ async def _maybe_extract_mind_facts(user_query: str, reply: str,
                  {"role": "assistant", "content": reply}]
         result = await _onb_core.extract_facts(convo, _providers_extraction_reasoner())
         facts_out = []
+        # Facts restating local-only memory are stored local-only, like every
+        # other derived write (audit 2026-11-13, mind-facts-local-only-derived-stored-open).
+        _fact_privacy = None
+        if used_local_only:
+            from api import privacy as _privacy
+            _fact_privacy = _privacy.LOCAL_ONLY
         for f in result.get("facts", []):
-            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"))
+            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"), privacy=_fact_privacy)
             if stored:
                 facts_out.append(stored)
         if not facts_out:

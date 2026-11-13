@@ -243,7 +243,9 @@ PROBE_INPUT = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
 
 
 # ------------------------------------------------------------ the hook's mapping ----
-_PATCH_FILE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+?)\s*$", re.M)
+# "*** Move to: <path>" under an Update writes the destination too (audit 2026-11-13,
+# codex-gate-patch-move-destination-not-asked): it is asked as a Write of that path.
+_PATCH_FILE = re.compile(r"^\*\*\* (Add File|Update File|Delete File|Move to): (.+?)\s*$", re.M)
 
 
 def asks(payload: dict) -> list[tuple[str, dict]]:
@@ -259,7 +261,7 @@ def asks(payload: dict) -> list[tuple[str, dict]]:
         return [("Bash", {"command": c})]
     if tool.lower() in ("apply_patch", "applypatch", "edit", "write"):
         text = str(inp.get("command") or inp.get("patch") or inp.get("input") or "")
-        files = [(m.group(1), m.group(2)) for m in _PATCH_FILE.finditer(text)]
+        files = [(m.group(1).split()[0], m.group(2)) for m in _PATCH_FILE.finditer(text)]
         if not files and inp.get("file_path"):
             files = [("Update", str(inp["file_path"]))]
         if not files:
@@ -267,7 +269,7 @@ def asks(payload: dict) -> list[tuple[str, dict]]:
         out = []
         for verb, p in files:
             fp = p if p.startswith("/") or not cwd else str(Path(cwd) / p)
-            out.append(("Write" if verb == "Add" else "Edit", {"file_path": fp}))
+            out.append(("Write" if verb in ("Add", "Move") else "Edit", {"file_path": fp}))
         return out
     return [(tool or "unknown", inp)]
 

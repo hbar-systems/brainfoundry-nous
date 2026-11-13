@@ -134,7 +134,7 @@ def test_hook_script_denies_without_bridge(tmp_path):
 def test_posture_auto_adds_ask_rules_and_mode(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     assert m._posture_current() == "cards"
-    assert "permissions" not in json.loads(m._hook_settings())
+    assert "ask" not in json.loads(m._hook_settings())["permissions"]
     monkeypatch.setenv("CC_POSTURE", "auto")
     s = json.loads(m._hook_settings())
     assert s["permissions"]["ask"] == list(m.ASK_ALWAYS)
@@ -260,3 +260,86 @@ def test_box_key_every_card_can_be_remembered(monkeypatch, tmp_path):
     assert m._box_key("WebFetch", {"url": "https://x"}) == ("WebFetch", "use WebFetch", False)
     assert m._box_key("Agent", {"prompt": "x"})[2] is True
     assert m._box_key("Edit", {"file_path": "/home/hands/world/a/b.md"})[2]
+
+
+def test_box_card_cut_is_marked_and_same_turn_binds_full_command(monkeypatch, tmp_path):
+    """Audit 2026-11-13 (cc-bridge-permit-card-summary-truncation): a summary cut at 300 characters
+    says so and carries the full text, and a same-turn allow binds the whole command, so a different
+    command sharing the first 300 characters raises its own card."""
+    m = _load(monkeypatch, tmp_path)
+    head = "echo " + " ".join(f"word{i}" for i in range(80))
+    assert len(head) > 300
+    _, summary, _ = m._box_key("Bash", {"command": head})
+    assert "CUT" in summary and str(len(head)) in summary
+    _, short, _ = m._box_key("Bash", {"command": "ls /tmp"})
+    assert short == "run on the box: ls /tmp"
+    cards = []
+    m.RUNS.clear(); run = m.Run(None, "x"); run.claude_sid = "s-cut"; m.RUNS[run.id] = run
+    run.attach(lambda kind, payload: cards.append(payload) if kind == "ask" else None)
+
+    def ask_and_answer(cmd, answer):
+        before = len(cards)
+        out = {}
+        th = threading.Thread(target=lambda: out.update(d=m._box_ask("Bash", {"command": cmd}, session_id="s-cut")))
+        th.start()
+        for _ in range(60):
+            if len(cards) > before:
+                break
+            time.sleep(0.05)
+        card = cards[before]
+        if not card.get("auto"):
+            m._box_settle(card["id"], answer, "no")
+        th.join(3)
+        return card, out["d"]
+
+    card, d = ask_and_answer(head, "allow")
+    assert d == {"behavior": "allow"} and not card.get("auto")
+    assert card["full"] == head and card["full_length"] == len(head)
+    # same prefix, different tail: a fresh card, refused here
+    card2, d2 = ask_and_answer(head + " && echo tail", "deny")
+    assert not card2.get("auto") and d2["behavior"] == "deny"
+    # the identical command again in the same turn: allowed without a card
+    card3, d3 = ask_and_answer(head, "allow")
+    assert card3.get("auto") is True and d3 == {"behavior": "allow"}
+    assert m._tg_card_text(card).endswith(head)
+
+
+def test_agent_seals_kept_by_the_bridge(monkeypatch, tmp_path):
+    """Audit 2026-11-13: the bridge seals charters it creates or updates and sends the seals on tick and run."""
+    m = _load(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "AGENT_SEALS", tmp_path / "seals.json")
+    calls = []
+
+    def fake(args, body=None):
+        calls.append((list(args), body))
+        if args[0] == "list":
+            return 200, {"agents": [{"id": "old", "seal": "s-old"}]}
+        if args[0] in ("create", "update"):
+            return 200, {"ok": True, "agent": {"id": "new"}, "seal": "s-new"}
+        return 200, {"ok": True}
+    monkeypatch.setattr(m, "_agents_call", fake)
+    m._agents_sealed_call(["create"], {"name": "x"})
+    assert json.loads((tmp_path / "seals.json").read_text()) == {"old": "s-old", "new": "s-new"}
+    m._agents_sealed_call(["tick"])
+    assert calls[-1] == (["tick"], {"seals": {"old": "s-old", "new": "s-new"}})
+    m._agents_sealed_call(["delete", "old"])
+    m._agents_sealed_call(["run", "new"])
+    assert calls[-1] == (["run", "new"], {"seals": {"new": "s-new"}})
+
+
+def test_turn_pins_setting_sources(monkeypatch, tmp_path):
+    """Audit 2026-11-13 (cc-bridge-claude-turn-trusts-hands-writable-settings-layers): the turn names its
+    settings layers, so <cwd>/.claude/settings*.json written by the hands is not merged under the card hook."""
+    monkeypatch.delenv("CC_SETTING_SOURCES", raising=False)
+    m = _load(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake(cmd, fwd, run=None, prompt=""):
+        seen["cmd"] = list(cmd)
+        return {"result": "ok", "session_id": "s"}, "", 0
+    monkeypatch.setattr(m, "_stream_turn", fake)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._run_turn("hi", None, on_event=lambda k, p: None)
+    cmd = seen["cmd"]
+    i = cmd.index("--setting-sources")
+    assert cmd[i + 1] == "user" and "--settings" in cmd

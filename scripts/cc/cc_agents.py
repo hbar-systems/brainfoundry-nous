@@ -39,15 +39,22 @@ MAX_BUDGET_USD = 20.0          # the owner picks the budget on the page (that pr
 MAX_PER_TICK = 3               # at most three agents start in one tick; the rest wait a minute
 SCHEDULES = {"on call": 0, "15 min": 15, "30 min": 30, "hourly": 60, "every 6 h": 360, "daily": 1440, "weekly": 10080}
 
-BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "find *", "wc *", "head *", "tail *", "date", "date *",
+# Audit 2026-11-13 (cc-agents-standing-allow-python-c-escapes-ground): no interpreter or command runner is a
+# standing allow: "python3 -c *", "cc-job *" (cc-job run -- <anything>), "find *" (-exec, -delete, -fprint) and
+# "sed -n *" (the w and e commands) ran any code as the hands with no card, outside the ground. The bridge's own
+# BOX_NO_FIRST_WORD list says the same for the console (SEC-2). The owner's permissions file may still add one.
+BASH_ALLOW = ("ls", "ls *", "cat *", "grep *", "rg *", "wc *", "head *", "tail *", "date", "date *",
               "git status", "git status *", "git diff *", "git log *", "git show *", "git add *", "git commit *",
-              "df *", "du *", "cc-job *", "python3 -c *",
+              "df *", "du *",
               # read-only checks an unattended agent needs (2026-10-17): status codes with the body discarded,
               # headers, git state, tests; and moving between folders. No POST pattern, no branch deletion.
               "cd *", "pwd", "curl -sI *", "curl -s -o /dev/null *", "curl -sS -o /dev/null *",
               "git rev-parse *", "git ls-files *", "git branch --show-current", "git worktree list",
               "git fetch", "git fetch --quiet", "python3 -m pytest *", "node registry/validate.js",
-              "dig *", "openssl s_client *", "sed -n *", "sort *", "uniq *", "cut *", "tr *", "jq *", "stat *",
+              "dig *", "openssl s_client *",
+              # sort and uniq only in these forms: "sort -o FILE" and "uniq IN OUT" write files (audit 2026-11-13)
+              "sort", "sort -u", "sort -n", "sort -r", "sort -rn", "sort -nr", "sort -h", "sort -rh",
+              "uniq", "uniq -c", "uniq -d", "uniq -u", "cut *", "tr *", "jq *", "stat *",
               "npm test", "npm test *", "npm run test*", "node --test*", "make test*", "WebFetch")
 PUSH_DENY = ("Bash(git push*)", "Bash(git push)", "Bash(git push *)", "Bash(git -C * push*)", "Bash(* git push*)")
 FORCE_DENY = ("Bash(git push -f*)", "Bash(git push --force*)", "Bash(git push * -f*)", "Bash(git push * --force*)",
@@ -57,6 +64,17 @@ DENY = ("Bash(rm -rf*)", "Bash(rm -rf *)", "Bash(* rm -rf *)", "Bash(rm -fr *)",
         "Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)",
         "Bash(*/.env*)", "Bash(* .env*)", "Bash(cat .env*)")
 ASK = ("Bash(sudo *)", "Bash(sudo:*)")
+# Flags of allowed read commands that write a file or run a program (audit 2026-11-13): refused whatever is allowed.
+WRITE_FLAG_DENY = ("Bash(rg *--pre*)", "Bash(git * --output*)",
+                   "Bash(git *--ext-diff*)", "Bash(git -c*)", "Bash(git -C * -c *)", "Bash(git *--exec-path*)",
+                   "Bash(openssl s_client *-sess_out*)", "Bash(openssl s_client *-keylogfile*)",
+                   "Bash(openssl s_client *-msgfile*)",
+                   "Edit(**/.git/**)",
+                   "Bash(curl * -O*)", "Bash(curl * --remote-name*)", "Bash(curl * --output*)",
+                   "Bash(curl * -D*)", "Bash(curl * --dump-header*)", "Bash(curl * -c *)", "Bash(curl * --cookie-jar*)",
+                   "Bash(curl * -K*)", "Bash(curl * --config*)", "Bash(curl * --trace*)", "Bash(curl * --libcurl*)",
+                   "Bash(curl -s -o /dev/null * -o*)", "Bash(curl -sS -o /dev/null * -o*)", "Bash(curl -sI * -o*)",
+                   "Bash(curl -sI *-o *)")
 # A curl with a body or a method is a write; it is refused whatever the owner's file allows (2026-10-18).
 CURL_WRITE_DENY = ("Bash(curl * -d*)", "Bash(curl * --data*)", "Bash(curl * -X*)", "Bash(curl * --request*)",
                    "Bash(curl * -F*)", "Bash(curl * --form*)", "Bash(curl * -T*)", "Bash(curl * --upload*)")
@@ -103,6 +121,27 @@ def load_permissions() -> dict:
 # onto main of the repo in its worktree; never force, never delete). Only the owner sets a level, on the page.
 LEVELS = {0: "propose", 1: "branch", 2: "ship"}
 FORBIDDEN_GROUND = ("/", "/etc", "/root", "/home", "/usr", "/var", "/boot", "/proc", "/sys")
+# The fields that make up an agent's charter: they change only through the owner's validated create/update.
+# The bridge keeps a seal of them in its own state folder (not writable by the hands) and tick/run refuse an
+# agent whose file no longer matches (audit 2026-11-13: an agent could rewrite its own level, ground, budget).
+SEALED = ("id", "name", "mission", "ground", "every_minutes", "budget_usd", "model", "enabled", "level", "post")
+
+
+def seal_of(a: dict) -> str:
+    import hashlib
+    return hashlib.sha256(json.dumps({k: a.get(k) for k in SEALED}, sort_keys=True).encode()).hexdigest()
+
+
+def checked(a: dict, seals: dict | None = None) -> dict:
+    """The charter as the owner set it, or ValueError: it must pass validate() again (bounds, ground, level)
+    and, when the caller holds seals, match the owner's seal."""
+    v = validate(a)
+    if v.get("ground") != list(a.get("ground") or []) or v.get("every_minutes") != a.get("every_minutes") \
+            or v.get("budget_usd") != a.get("budget_usd") or v.get("level") != a.get("level"):
+        raise ValueError("the charter on disk is not what validation gives back")
+    if seals is not None and seals.get(a.get("id")) != seal_of(a):
+        raise ValueError("the charter changed outside the owner's page; re-save it there to run it again")
+    return a
 
 
 def now() -> float:
@@ -161,6 +200,10 @@ def _clean_ground(ground) -> list[str]:
             raise ValueError(f"ground must be absolute paths: {g}")
         if g in FORBIDDEN_GROUND or ".env" in g or "/.git" in g:
             raise ValueError(f"not allowed as ground: {g}")
+        # the agents' own charters and the owner's permissions file are never inside a ground (audit 2026-11-13)
+        ad = str(AGENTS_DIR).rstrip("/")
+        if ad == g or ad.startswith(g + "/") or g.startswith(ad + "/") or "/.claude" in g:
+            raise ValueError(f"not allowed as ground (agent charters or Claude settings live there): {g}")
         out.append(g)
     return out[:8]
 
@@ -357,7 +400,11 @@ def settings(a: dict) -> dict:
     allow += [f"Bash({c})" for c in perm["bash_allow"]] + [t for t in perm["tools"] if t not in allow]
     if perm["fetch_tool"]:
         allow += [f"Bash(python3 {perm['fetch_tool']} *)"]
-    deny = list(DENY) + list(CURL_WRITE_DENY) + list(PUSH_DENY)
+    deny = list(DENY) + list(CURL_WRITE_DENY) + list(PUSH_DENY) + list(WRITE_FLAG_DENY)
+    # the charter, the permissions file and the settings this turn runs under are never edited by the agent
+    ad = str(AGENTS_DIR).lstrip("/")
+    deny += [f"Edit(//{ad}/*.json)", f"Edit(//{ad}/.serial)", f"Edit(//{ad}/{a['id']}/settings.json)",
+             f"Edit(//{ad}/{a['id']}/prompt.md)", "Edit(**/.claude/**)"]
     return {
         "hooks": {"PermissionRequest": [{"hooks": [{"type": "command",
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
@@ -370,7 +417,7 @@ def settings(a: dict) -> dict:
 def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     """Pure: one shell line for cc-job."""
     parts = ["claude", "-p", "--output-format", "text", "--max-budget-usd", str(a.get("budget_usd") or 1),
-             "--settings", str(settings_path)]
+             "--settings", str(settings_path), "--setting-sources", "user"]
     # Folders the turn may READ (2026-10-17: the first unattended runs were refused reading their own standard,
     # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (an
     # agent that coordinates or audits others reads every report). Writing stays limited to the ground by the allow list.
@@ -410,8 +457,8 @@ def open_job(a: dict, cmd: str, cwd: str) -> str:
     return jid
 
 
-def run(aid: str, opener=open_job) -> dict:
-    a = load(aid)
+def run(aid: str, opener=open_job, seals: dict | None = None) -> dict:
+    a = checked(load(aid), seals)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%MZ")
     d = AGENTS_DIR / a["id"]
     sitrep_dir(a).mkdir(parents=True, exist_ok=True)
@@ -430,13 +477,18 @@ def run(aid: str, opener=open_job) -> dict:
     return a
 
 
-def tick(opener=open_job, t: float | None = None) -> list[dict]:
+def tick(opener=open_job, t: float | None = None, seals: dict | None = None) -> list[dict]:
     started = []
     for a in load_all():
         if len(started) >= MAX_PER_TICK:
             break
+        try:
+            checked(a, seals)                   # a charter that fails validation or its seal never runs
+        except (ValueError, TypeError, KeyError) as e:
+            print(f"agent {a.get('id')} refused: {e}", file=sys.stderr)
+            continue
         if due(a, t):
-            started.append(run(a["id"], opener=opener))
+            started.append(run(a["id"], opener=opener, seals=seals))
     return started
 
 
@@ -454,9 +506,21 @@ def last_sitrep(a: dict) -> dict | None:
 def view() -> dict:
     agents = []
     for a in load_all():
-        agents.append({**a, "tag": tag(a), "next_due": iso(next_due(a)) if (a.get("enabled") and int(a.get("every_minutes") or 0)) else None, "sitrep": last_sitrep(a)})
+        agents.append({**a, "seal": seal_of(a), "tag": tag(a), "next_due": iso(next_due(a)) if (a.get("enabled") and int(a.get("every_minutes") or 0)) else None, "sitrep": last_sitrep(a)})
     return {"agents": agents, "dir": str(AGENTS_DIR), "schedules": SCHEDULES,
             "limits": {"min_every_minutes": MIN_EVERY_MIN, "max_budget_usd": MAX_BUDGET_USD, "max_per_tick": MAX_PER_TICK}}
+
+
+def _stdin_seals() -> dict | None:
+    """The bridge sends {"seals": {id: seal}} on stdin for tick and run; none from a hand-run CLI."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return None
+        d = json.loads(sys.stdin.read() or "{}")
+    except (OSError, ValueError):
+        return None
+    s = d.get("seals") if isinstance(d, dict) else None
+    return s if isinstance(s, dict) else None
 
 
 def main(argv: list[str]) -> int:
@@ -465,17 +529,20 @@ def main(argv: list[str]) -> int:
         if cmd == "list":
             out = view()
         elif cmd == "create":
-            out = {"ok": True, "agent": create(json.loads(sys.stdin.read() or "{}"))}
+            a = create(json.loads(sys.stdin.read() or "{}"))
+            out = {"ok": True, "agent": a, "seal": seal_of(a)}
         elif cmd == "update":
-            out = {"ok": True, "agent": update(argv[2], json.loads(sys.stdin.read() or "{}"))}
+            a = update(argv[2], json.loads(sys.stdin.read() or "{}"))
+            out = {"ok": True, "agent": a, "seal": seal_of(a)}
         elif cmd == "delete":
             out = delete(argv[2])
         elif cmd in ("run", "tick") and cc_halt.halted(Path.home(), cc_halt.OWNER_DIR):
             out = {"ok": False, "error": cc_halt.halted(Path.home(), cc_halt.OWNER_DIR), "started": []}
         elif cmd == "run":
-            out = {"ok": True, "agent": run(argv[2])}
+            out = {"ok": True, "agent": run(argv[2], seals=_stdin_seals())}
         elif cmd == "tick":
-            out = {"ok": True, "started": [{"id": a["id"], "job": a.get("last_job"), "error": a.get("last_error")} for a in tick()]}
+            out = {"ok": True, "started": [{"id": a["id"], "job": a.get("last_job"), "error": a.get("last_error")}
+                                           for a in tick(seals=_stdin_seals())]}
         else:
             out = {"ok": False, "error": f"unknown command {cmd}"}
     except (ValueError, FileNotFoundError, KeyError) as e:

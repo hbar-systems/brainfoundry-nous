@@ -81,6 +81,10 @@ def test_asks_mapping():
     assert g.asks({"tool_name": "apply_patch", "tool_input": {"command": p}, "cwd": "/w"}) == [
         ("Write", {"file_path": "/w/a.txt"}), ("Edit", {"file_path": "/abs/b.py"})]
     assert g.asks({"tool_name": "mcp__ableton__live_do", "tool_input": {"a": 1}}) == [("mcp__ableton__live_do", {"a": 1})]
+    # audit 2026-11-13: a move's destination is asked too, as a write of that path
+    mv = "*** Begin Patch\n*** Update File: src/a.py\n*** Move to: /home/x/.bashrc\n@@\n-a\n+b\n*** End Patch"
+    assert g.asks({"tool_name": "apply_patch", "tool_input": {"command": mv}, "cwd": "/w"}) == [
+        ("Edit", {"file_path": "/w/src/a.py"}), ("Write", {"file_path": "/home/x/.bashrc"})]
 
 
 def test_hook_fails_closed_without_bridge():
