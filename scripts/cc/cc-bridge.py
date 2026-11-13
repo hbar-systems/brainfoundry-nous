@@ -3967,13 +3967,64 @@ def _tg_send(chat_id, text: str, **extra) -> dict | None:
 
 
 def _is_direct_local(client_ip: str, forwarded_for) -> bool:
-    """A call from a program on this box: loopback and no X-Forwarded-For (the proxy always adds one)."""
+    """A call from a program on this box: loopback and no X-Forwarded-For (the proxy always adds one).
+    Loopback carries no Unix identity, so this alone never admits a caller: _local_caller_ok also
+    checks whose socket it is (audit 2026-11-13, another member's users reach the same loopback)."""
     return client_ip in ("127.0.0.1", "::1") and not forwarded_for
+
+
+def _peer_uid(client_port: int, server_port: int, tables=("/proc/net/tcp", "/proc/net/tcp6")) -> int | None:
+    """The Unix uid that owns the client end of a loopback TCP connection to this bridge (2026-11-13).
+
+    The kernel lists every socket of this network namespace with its owner in /proc/net/tcp{,6}; the
+    client's socket is the established row whose local port is the caller's port and whose remote
+    port is ours. Any read or parse failure, or no such row, returns None, and callers refuse."""
+    want_local, want_rem = f"{int(client_port):04X}", f"{int(server_port):04X}"
+    for t in tables:
+        try:
+            lines = Path(t).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for ln in lines:
+            f = ln.split()
+            if len(f) < 8 or f[3] != "01":       # 01 = ESTABLISHED
+                continue
+            if f[1].rsplit(":", 1)[-1] == want_local and f[2].rsplit(":", 1)[-1] == want_rem:
+                try:
+                    return int(f[7])
+                except ValueError:
+                    return None
+    return None
+
+
+def _uid_of(user: str) -> int | None:
+    import pwd
+    try:
+        return int(user) if user.isdigit() else pwd.getpwnam(user).pw_uid
+    except (KeyError, ValueError):
+        return None
+
+
+def _local_uids() -> set:
+    """Who may call the tokenless local routes (job list and tail, task list, /notify): this
+    bridge's own user, its hands user (cc-job and the box's crons run as it), and any user named in
+    CC_LOCAL_USERS (comma separated). Never another member's users on a shared box."""
+    uids = {os.getuid()}
+    names = [HANDS_USER] + [u.strip() for u in os.environ.get("CC_LOCAL_USERS", "").split(",")]
+    for n in names:
+        u = _uid_of(n) if n else None
+        if u is not None:
+            uids.add(u)
+    return uids
+
+
+JOB_TAIL_MAX = 200_000      # bytes of a job log one GET /jobs/<id>?tail= may return
 
 
 def _get_local_ok(route: str) -> bool:
     """GET reads a direct local call may make without a token (2026-10-26): the job list and a job's
-    tail, and the task list, so cc-job list and task list work from cron, where no turn set CC_ASK_TOKEN."""
+    tail, and the task list, so cc-job list and task list work from cron, where no turn set CC_ASK_TOKEN.
+    Since 2026-11-13 only from this brain's own users (_local_uids), checked in Handler._direct_local."""
     return route == "/tasks" or route == "/jobs" or route.startswith("/jobs/")
 
 
@@ -4687,8 +4738,21 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return _hmac.compare_digest(self.headers.get("X-CC-Operator", ""), OPERATOR_TOKEN)
 
+    def _peer_in(self, uids: set) -> bool:
+        if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return False
+        try:
+            uid = _peer_uid(self.client_address[1], self.connection.getsockname()[1])
+        except Exception:  # noqa: BLE001
+            return False
+        return uid is not None and uid in uids
+
     def _direct_local(self) -> bool:
-        return _is_direct_local(self.client_address[0], self.headers.get("X-Forwarded-For"))
+        """A tokenless program on this box that is this brain's own: loopback, no proxy header, and
+        the socket belongs to the bridge's user or its hands (audit 2026-11-13,
+        cc-bridge-direct-local-reads-cross-member)."""
+        return _is_direct_local(self.client_address[0], self.headers.get("X-Forwarded-For")) \
+            and self._peer_in(_local_uids())
 
     def do_GET(self) -> None:  # noqa: N802
         route = self._route()
@@ -4925,7 +4989,11 @@ class Handler(BaseHTTPRequestHandler):
                              "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
                              "others": others})
         elif route.startswith("/jobs/"):
-            j = JOBS.get(route[len("/jobs/"):], int(self._query().get("tail") or 4000))
+            try:
+                tail = max(0, min(int(self._query().get("tail") or 4000), JOB_TAIL_MAX))
+            except ValueError:
+                tail = 4000
+            j = JOBS.get(route[len("/jobs/"):], tail)
             self._send(200 if j else 404, j or {"error": "no such job"})
         else:
             self._send(404, {"error": "not_found"})
@@ -5339,13 +5407,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/notify":
             # One plain line to the owner's Telegram (2026-10-26, the box watch's alert route). Open to
-            # the console, the ask token, or a direct call on this box: the proxy always adds
-            # X-Forwarded-For, so a call without it came from a local program, never from outside.
+            # the console, the ask token, or a direct call on this box from this brain's own users
+            # (the bridge's or its hands', 2026-11-13): the proxy always adds X-Forwarded-For, and
+            # the socket's owner tells this brain's programs from another member's.
             if not (self._direct_local() or self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
                 self._send(403, {"ok": False, "error": "only programs on this server may notify"})
                 return
-            body = self._json(limit=2000) or {}
-            self._send(*_notify(str(body.get("text") or "")))
+            # the body was read once above (req); reading it again blocked every real client
+            self._send(*_notify(str(req.get("text") or "")[:2000]))
             return
         if route == "/send-file":
             # A file to the owner's Telegram on the person's ask (2026-11-08): the reasoner's token or the console.
