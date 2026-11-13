@@ -409,7 +409,8 @@ preview-before-execute contract for the actions it does run.
 ### Internal-only access
 
 NodeOS binds only to `127.0.0.1:8001` on the host and is never exposed to
-browsers. All state-mutating NodeOS endpoints require an `X-Internal-Key`
+browsers. Every NodeOS endpoint except `/health` and `/v1/identity`, reads
+included, requires an `X-Internal-Key`
 header matching `NODEOS_INTERNAL_KEY`. The brain API forwards this header
 automatically; other callers on the Docker network cannot forge requests
 without the secret.
@@ -571,7 +572,7 @@ This brain node is designed for **personal self-hosted use** by a single owner.
 - All private endpoints require API key authentication
 - PostgreSQL never binds to a public interface (127.0.0.1 only)
 - BrainKernel requires a valid loop permit on every chat completion
-- NodeOS state-mutating endpoints require `X-Internal-Key` (service-to-service auth)
+- NodeOS endpoints (all but `/health` and `/v1/identity`, reads included) require `X-Internal-Key` (service-to-service auth)
 - Startup refuses if secrets are missing or default (in prod mode)
 - BrainKernel request bodies are size-limited
 

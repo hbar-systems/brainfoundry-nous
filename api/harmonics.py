@@ -408,7 +408,8 @@ def _fetch_peer(handle: str) -> Tuple[str, str]:
 def _receiver_context(contribution: str, conn=None) -> Optional[str]:
     """Compute R — this brain's relevant prior knowledge for a contribution.
 
-    Searches this brain's own document_embeddings for the nearest chunk.
+    Searches this brain's own public-scope, live, unquarantined, open chunks
+    for the nearest one (never private memory: the caller may be anyone).
     Returns None when the brain has no corpus to receive the contribution
     against — a brain with no knowledge cannot have a contribution land.
     """
@@ -425,11 +426,18 @@ def _receiver_context(contribution: str, conn=None) -> Optional[str]:
     try:
         with conn.cursor() as cur:
             try:
-                # Privacy gate: the score goes back to a peer, so the
-                # receiver context is drawn from open memory only.
+                # Privacy gate: the score and content_hash go back to an
+                # unauthenticated caller, so the receiver context is drawn only
+                # from what every outside door may read: open, scope=public,
+                # not trashed, not quarantined (audit 2026-11-13,
+                # harmonics-exchange-receiver-context-not-public-scoped).
                 cur.execute(
                     "SELECT content FROM document_embeddings "
                     "WHERE COALESCE(metadata->>'privacy', 'open') = 'open' "
+                    "AND metadata->>'scope' = 'public' "
+                    "AND metadata->>'deleted_at' IS NULL "
+                    "AND metadata->>'quarantined' IS NULL "
+                    "AND embedding IS NOT NULL "
                     "ORDER BY embedding <=> %s::vector LIMIT 1",
                     (vec_literal,),
                 )

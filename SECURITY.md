@@ -78,7 +78,7 @@ memory proposals, action proposals, and the append-only audit log.
   second verify attempt with the same `jti` within the token's TTL is
   rejected with 401 `replay_detected`. Tokens without a `jti` are
   rejected with 400 `missing_jti` — there is no opt-out.
-- All state-mutating NodeOS endpoints require `X-Internal-Key`
+- Every NodeOS endpoint except `/health` and `/v1/identity`, reads included, requires `X-Internal-Key`
   (service-to-service auth). NodeOS binds only to `127.0.0.1:8001` and has
   no browser proxy.
 

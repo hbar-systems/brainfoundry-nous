@@ -1740,9 +1740,9 @@ if BRAIN_ENV != "dev" and not NODEOS_INTERNAL_KEY:
 def _nodeos_headers() -> dict:
     """Headers for service-to-service calls to NodeOS.
 
-    NodeOS requires X-Internal-Key on state-mutating routes. Read routes
-    (e.g. /v1/loops/status) do not require it, but sending it is harmless
-    and keeps all NodeOS traffic uniformly authenticated.
+    NodeOS requires X-Internal-Key on every route except /health and
+    /v1/identity, reads included (audit 2026-11-13). Every NodeOS call from
+    the api must send these headers.
     """
     return {"X-Internal-Key": NODEOS_INTERNAL_KEY} if NODEOS_INTERNAL_KEY else {}
 
@@ -2010,10 +2010,12 @@ try:
 except Exception as e:
     print(f"[startup] submissions router mount skipped: {e}", flush=True)
 
-# Mount compute meter router (/meter/usage, /meter/ledger — read-only metering)
+# Mount compute meter router (/meter/usage, /meter/ledger — read-only metering).
+# Owner-key gated: the ledger is the owner's per-call model, token and spend log
+# (audit 2026-11-13, meter-routes-unauthenticated-usage-disclosure).
 try:
     from api.compute_meter import router as _compute_meter_router
-    app.include_router(_compute_meter_router)
+    app.include_router(_compute_meter_router, dependencies=[Depends(get_api_key)])
 except Exception as e:
     print(f"[startup] compute_meter router mount skipped: {e}", flush=True)
 
@@ -4868,7 +4870,8 @@ def list_memory_proposals(
     if status:
         params["status"] = status
     try:
-        r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params=params, timeout=10)
+        r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params=params,
+                         headers=_nodeos_headers(), timeout=10)
         r.raise_for_status()
         return r.json()
     except requests.RequestException as e:
@@ -7792,7 +7795,8 @@ _APPROVE_QUEUE: List[Dict[str, Any]] = []   # proposals handed in while a batch 
 
 
 def _pending_document_proposals() -> List[Dict[str, Any]]:
-    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": 1000}, timeout=15)
+    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": 1000},
+                     headers=_nodeos_headers(), timeout=15)
     r.raise_for_status()
     items = r.json().get("proposals") or []
     return [p for p in items if p.get("memory_type") == "document_embedding" and p.get("proposal_id")]

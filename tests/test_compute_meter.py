@@ -99,3 +99,24 @@ def test_non_claude_unknown_still_zero():
 
 def test_listed_model_not_marked_assumed():
     assert cm.rate_lookup("gpt-4o")[1] == "listed"
+
+
+
+def test_meter_routes_require_owner_key(monkeypatch):
+    """Audit 2026-11-13 (meter-routes-unauthenticated-usage-disclosure): the
+    usage and ledger routes are owner telemetry, mounted behind get_api_key."""
+    import os
+    import tempfile
+    os.environ.setdefault("BRAIN_IDENTITY_SECRET", "test-only-secret")
+    _rt = tempfile.mkdtemp(prefix="meter-test-")
+    os.environ.setdefault("BRAIN_RUNTIME_DIR", _rt)
+    os.environ.setdefault("SETTINGS_PATH", os.path.join(_rt, "settings.json"))
+    from fastapi.testclient import TestClient
+    from api import main as m
+    monkeypatch.setattr(m, "BRAIN_API_KEY", "owner-key")
+    monkeypatch.setattr(cm, "usage", lambda window="today": {"window": window, "models": []}, raising=False)
+    c = TestClient(m.app, raise_server_exceptions=False)
+    for path in ("/meter/usage", "/meter/ledger"):
+        assert c.get(path).status_code == 401, path
+        assert c.get(path, headers={"X-API-Key": "wrong"}).status_code == 401, path
+        assert c.get(path, headers={"X-API-Key": "owner-key"}).status_code != 401, path

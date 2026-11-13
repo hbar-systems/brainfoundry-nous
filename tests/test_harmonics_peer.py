@@ -89,3 +89,64 @@ def test_score_without_record_stays_open(monkeypatch):
     c = _score_client(monkeypatch, recorded)
     r = c.post("/harmonics/score", json={"contribution": "c", "receiver_context": "r"})
     assert r.status_code == 200 and r.json()["event_id"] is None and recorded == []
+
+
+# ── receiver context is public-scoped (audit 2026-11-13) ────────────────────
+
+_CHUNKS = [
+    ("PRIVATE open note", {}),
+    ("TRASHED public", {"scope": "public", "deleted_at": "2026-11-01"}),
+    ("QUARANTINED public", {"scope": "public", "quarantined": True}),
+    ("LOCAL public", {"scope": "public", "privacy": "local-only"}),
+    ("PUBLIC live", {"scope": "public"}),
+]
+
+
+class _ScopeCur:
+    """Applies the WHERE clauses it recognises; an unrecognised filter set
+    would leave private rows in, so a weakened query fails the test."""
+    def __init__(self): self.sql = ""
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        rows = list(_CHUNKS)
+        if "COALESCE(metadata->>'privacy', 'open') = 'open'" in sql:
+            rows = [r for r in rows if r[1].get("privacy", "open") == "open"]
+        if "metadata->>'scope' = 'public'" in sql:
+            rows = [r for r in rows if r[1].get("scope") == "public"]
+        if "metadata->>'deleted_at' IS NULL" in sql:
+            rows = [r for r in rows if "deleted_at" not in r[1]]
+        if "metadata->>'quarantined' IS NULL" in sql:
+            rows = [r for r in rows if "quarantined" not in r[1]]
+        self.rows = rows
+
+    def fetchone(self):
+        return (self.rows[0][0],) if self.rows else None
+
+
+class _ScopeConn:
+    def cursor(self): return _ScopeCur()
+
+
+def _fake_model(monkeypatch):
+    import types
+    mod = types.ModuleType("api.embeddings.model")
+
+    class _M:
+        def encode(self, text, normalize_embeddings=True):
+            return [0.0, 1.0]
+    mod.get_model = lambda: _M()
+    monkeypatch.setitem(sys.modules, "api.embeddings.model", mod)
+
+
+def test_receiver_context_reads_only_public_live_chunks(monkeypatch):
+    _fake_model(monkeypatch)
+    assert h._receiver_context("anything", conn=_ScopeConn()) == "PUBLIC live"
+
+
+def test_receiver_context_none_when_no_public_chunk(monkeypatch):
+    _fake_model(monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "_CHUNKS", _CHUNKS[:4])
+    assert h._receiver_context("PRIVATE open note", conn=_ScopeConn()) is None

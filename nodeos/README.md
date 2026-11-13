@@ -156,8 +156,9 @@ NodeOS is an **internal-only service**. It has no browser-facing proxy and
 binds only to `127.0.0.1:8001` on the host. The only legitimate caller is the
 brain `api` container on the Docker network.
 
-All state-mutating endpoints (permit request/revoke, memory propose/decide,
-action propose/decide) additionally require an `X-Internal-Key` header matching
+Every endpoint except `/health` and `/v1/identity` (permit request/revoke,
+memory propose/decide, action propose/decide, and since 2026-11-13 every read:
+proposals, actions, operator views, audit, permit status) additionally requires an `X-Internal-Key` header matching
 `NODEOS_INTERNAL_KEY`. The brain API forwards this header automatically when it
 calls NodeOS. Requests without the header are rejected `401`.
 

@@ -103,7 +103,10 @@ if not SIGNING_SECRET or SIGNING_SECRET == _DEFAULT_SECRET:
     else:
         SIGNING_SECRET = _DEFAULT_SECRET
         print("WARNING: NodeOS using default signing secret. Set NODEOS_SIGNING_SECRET before deploying to production.")
-# Internal service-to-service key — required on all state-mutating POST routes.
+# Internal service-to-service key: required on every route except /health and
+# /v1/identity, reads included (audit 2026-11-13: memory proposals carry the
+# owner's remembered text, and a 127.0.0.1-published port is open to every
+# local user on a shared box).
 # The brain `api` container forwards this as `X-Internal-Key`. NodeOS is not
 # reachable from browsers, and this header makes it explicit that only trusted
 # in-network callers can issue permits, propose memory, or decide proposals.
@@ -124,7 +127,8 @@ if not NODEOS_INTERNAL_KEY or NODEOS_INTERNAL_KEY in _INTERNAL_KEY_DEFAULTS:
 
 
 def require_internal_key(x_internal_key: Optional[str] = Header(default=None)) -> None:
-    """FastAPI dependency that fails closed on state-mutating NodeOS routes.
+    """FastAPI dependency that fails closed on every NodeOS route but /health
+    and /v1/identity.
 
     If NODEOS_INTERNAL_KEY is configured, the caller must present a matching
     X-Internal-Key header. If it is unset (dev mode only), the check is
@@ -988,7 +992,7 @@ def health_check():
     }
 
 
-@app.get("/v1/audit")
+@app.get("/v1/audit", dependencies=[Depends(require_internal_key)])
 def list_audit_events(
     limit: int = 100,
     conn: sqlite3.Connection = Depends(get_db)
@@ -1188,7 +1192,7 @@ def propose_memory(
     }
 
 
-@app.get("/v1/actions/policy")
+@app.get("/v1/actions/policy", dependencies=[Depends(require_internal_key)])
 def get_action_policy_index():
     """
     Read-only: expose NodeOS action policy so operators/console can inspect
@@ -1219,7 +1223,7 @@ def get_action_policy_index():
 
 
 
-@app.get("/v1/operator/overview")
+@app.get("/v1/operator/overview", dependencies=[Depends(require_internal_key)])
 def operator_overview(conn: sqlite3.Connection = Depends(get_db)):
     """
     Read-only operator landing view.
@@ -1385,7 +1389,7 @@ def operator_overview(conn: sqlite3.Connection = Depends(get_db)):
 
 
 
-@app.get("/v1/operator/proposals")
+@app.get("/v1/operator/proposals", dependencies=[Depends(require_internal_key)])
 def operator_proposals(
     status: Optional[List[str]] = None,
     limit: int = 50,
@@ -1564,7 +1568,7 @@ def operator_proposals(
 
 
 
-@app.get("/v1/operator/proposals/{proposal_id}")
+@app.get("/v1/operator/proposals/{proposal_id}", dependencies=[Depends(require_internal_key)])
 def operator_proposal_detail(
     proposal_id: str,
     conn: sqlite3.Connection = Depends(get_db),
@@ -1701,7 +1705,7 @@ def operator_proposal_detail(
 
 
 
-@app.get("/v1/operator/permits")
+@app.get("/v1/operator/permits", dependencies=[Depends(require_internal_key)])
 def operator_permits(
     status: Optional[List[str]] = None,
     limit: int = 50,
@@ -1831,7 +1835,7 @@ def operator_permits(
 
 
 
-@app.get("/v1/operator/permits/{permit_id}")
+@app.get("/v1/operator/permits/{permit_id}", dependencies=[Depends(require_internal_key)])
 def operator_permit_detail(
     permit_id: str,
     conn: sqlite3.Connection = Depends(get_db),
@@ -1920,7 +1924,7 @@ def operator_permit_detail(
 
 
 
-@app.get("/v1/operator/audit")
+@app.get("/v1/operator/audit", dependencies=[Depends(require_internal_key)])
 def operator_audit(
     event_type: Optional[List[str]] = None,
     outcome: Optional[List[str]] = None,
@@ -2036,7 +2040,7 @@ def operator_audit(
 
 
 
-@app.get("/v1/actions")
+@app.get("/v1/actions", dependencies=[Depends(require_internal_key)])
 def list_action_proposals(
     status: str = "PENDING",
     limit: int = 50,
@@ -2097,7 +2101,7 @@ def list_action_proposals(
     return {"ok": True, "status": status, "count": len(out), "proposals": out}
 
 
-@app.get("/v1/actions/{proposal_id}")
+@app.get("/v1/actions/{proposal_id}", dependencies=[Depends(require_internal_key)])
 def get_action_proposal(
     proposal_id: str,
     conn: sqlite3.Connection = Depends(get_db),
@@ -2140,7 +2144,7 @@ def get_action_proposal(
 
 
 
-@app.get("/v1/actions/{proposal_id}/commit")
+@app.get("/v1/actions/{proposal_id}/commit", dependencies=[Depends(require_internal_key)])
 def get_action_commit(
     proposal_id: str,
     conn: sqlite3.Connection = Depends(get_db),
@@ -2495,7 +2499,7 @@ def decide_memory_proposal(
     }
 
 
-@app.get("/v1/audit/events", response_model=List[AuditEvent])
+@app.get("/v1/audit/events", response_model=List[AuditEvent], dependencies=[Depends(require_internal_key)])
 def get_audit_events(
     since_unix: Optional[int] = None,
     limit: int = 100,
@@ -2546,7 +2550,7 @@ def get_audit_events(
     return events
 
 
-@app.get("/v1/loops/status/{permit_id}")
+@app.get("/v1/loops/status/{permit_id}", dependencies=[Depends(require_internal_key)])
 def get_permit_status(
     permit_id: str,
     conn: sqlite3.Connection = Depends(get_db)
@@ -2635,7 +2639,7 @@ def verify_loop_permit(
     }
 
 
-@app.get("/v1/memory/proposals/{proposal_id}")
+@app.get("/v1/memory/proposals/{proposal_id}", dependencies=[Depends(require_internal_key)])
 def get_memory_proposal(
     proposal_id: str,
     conn: sqlite3.Connection = Depends(get_db)
@@ -2675,7 +2679,7 @@ def get_memory_proposal(
     }
 
 
-@app.get("/v1/memory/proposals")
+@app.get("/v1/memory/proposals", dependencies=[Depends(require_internal_key)])
 def list_memory_proposals(
     status: Optional[str] = None,
     agent_id: Optional[str] = None,
