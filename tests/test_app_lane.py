@@ -386,3 +386,27 @@ def test_terminal_checks_origin():
     unit = (ROOT / "scripts" / "cc" / "install.sh").read_text()
     line = next(l for l in unit.splitlines() if l.startswith("ExecStart=/usr/bin/ttyd"))
     assert " -O " in line
+
+
+def test_app_root_path_is_an_app_file_with_the_sandbox():
+    # bf-proxy-app-root-path-serves-app-html-without-sandbox-csp (audit 2026-11-13)
+    for headers in (FRAME, CONSOLE, {"sec-fetch-site": "none"}):
+        for method in ("GET", "HEAD"):
+            d = _decide(["apps", "poker-journal"], method, headers)
+            assert d["action"] == "forward" and d["appFile"] is True and d["ownerKey"] is False, (headers, d)
+    # router words stay core (the console's own apps page lists them with the owner key)
+    d = _decide(["apps", "list"], "GET", CONSOLE)
+    assert d["action"] == "forward" and d["ownerKey"] is True and d["appFile"] is False
+    # a non-read of the root is core: refused from a frame
+    assert _decide(["apps", "poker-journal"], "POST", FRAME)["action"] == "refuse"
+
+
+def test_every_router_word_is_a_reserved_app_id():
+    sys.path.insert(0, str(ROOT))
+    from api import apps
+    words = _node_json("console.log(JSON.stringify([...require('./appLane.js').APPS_ROUTER_WORDS]))")
+    assert set(words) <= apps.RESERVED_APP_IDS
+    # and every first word of the apps router is a router word
+    src = (ROOT / "api" / "apps.py").read_text()
+    firsts = {m for m in re.findall(r'@router\.\w+\("/([a-z]+)', src)}
+    assert firsts <= set(words), firsts - set(words)

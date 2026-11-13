@@ -59,7 +59,10 @@ PACKS_ENV = "BRAIN_PACKS"
 # A pack entry names one with {"id": <id>, "shipped": <id>} in place of repo_url.
 SHIPPED_DIR = BRAIN_APPS_DIR / "shipped"
 # Directory names under brain-apps/ that are template config, never an app id.
-RESERVED_APP_IDS: set[str] = {"packs", "shipped", "installed"}
+# Every first path word of the apps router (and of ui/lib/appLane.js APPS_ROUTER_WORDS): an app
+# with one of these ids would have its files classified as core by the console proxy, served
+# without the sandbox CSP (audit 2026-11-13).
+RESERVED_APP_IDS: set[str] = {"packs", "shipped", "installed", "list", "install"}
 
 # Built-in nav entries the brain ships with. The UI Nav renders ONLY these —
 # installed apps live behind the single `_apps` hub at /apps, which lists
