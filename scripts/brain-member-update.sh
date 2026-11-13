@@ -76,6 +76,10 @@ checks() {
         [ -d "$DIR/$d" ] || continue
         found=$(find "$DIR/$d" -type l -print -quit)
         [ -z "$found" ] || refuse "symlink in a directory the api writes: ${found#"$DIR/"}"
+        # the api is root in its container: a set-uid/set-gid file it leaves in a bind mount would make a
+        # member's host user root (audit 2026-11-13, member-api-root-writes-into-host-bind-mounts-reachable-by-member-users)
+        found=$(find "$DIR/$d" -xdev -type f -perm /6000 -print -quit)
+        [ -z "$found" ] || refuse "set-uid or set-gid file in a directory the api writes: ${found#"$DIR/"}; the admin looks first"
     done
     as_admin git -C "$DIR" diff --quiet HEAD -- scripts docker-compose.yml \
         || refuse "tracked scripts/ or docker-compose.yml changed locally in $DIR; the admin looks first"

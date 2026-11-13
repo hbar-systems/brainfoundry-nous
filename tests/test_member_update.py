@@ -158,6 +158,7 @@ def test_refuses_a_second_run(tmp_path):
     (lambda d: os.chmod(d / "docker-compose.yml", 0o666), "group- or world-writable"),
     (lambda d: os.chmod(d / ".git" / "hooks", 0o777), "group- or world-writable"),
     (lambda d: (d / "brain-apps" / "installed.json").symlink_to("/etc/passwd"), "symlink in a directory the api writes"),
+    (lambda d: ((d / "brain-apps" / "x").write_text("x"), os.chmod(d / "brain-apps" / "x", 0o4755)), "set-uid or set-gid file"),
     (lambda d: (d / "docker-compose.override.yml").symlink_to(d / "docker-compose.yml"), "is a symlink"),
     (lambda d: (d / "scripts" / "update_brain.sh").write_text("#!/bin/bash\necho mine\n"), "changed locally"),
     (lambda d: (d / "docker-compose.yml").write_text("services: {x: {}}\n"), "changed locally"),
