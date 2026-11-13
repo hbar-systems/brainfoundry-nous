@@ -3268,15 +3268,20 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # an agentic turn may also pull it in through search_memory, which the
         # dispatch wrapper below records here. Once set, nothing from this turn
         # goes to a tool that sends data off the box or to a closed model.
-        _lo_seen = {"v": _privacy.has_local_only(relevant_docs)}
+        # A marked session counts too (audit 2026-11-13, local-only-clamp-ignores-
+        # session-mark): its history, which goes into this prompt, holds quotes
+        # of local-only memory even when this turn retrieved only open chunks.
+        _lo_seen = {"v": _privacy.has_local_only(relevant_docs)
+                    or bool(session_id and _session_marked(session_id))}
         # Every local-only chunk a model saw this turn, for the one audit line
         # (document names and a count, never content) and the session mark.
         _lo_docs = [d for d in relevant_docs if _privacy.level_of(d.get("metadata")) != _privacy.OPEN]
         _lo_done = {"v": False}
 
         def _record_local_read():
-            # Once per turn: mark the session, write the audit line.
-            if not _lo_seen["v"] or _lo_done["v"]:
+            # Once per turn: mark the session, write the audit line (only when
+            # local-only chunks were read, not for a session that is already marked).
+            if not _lo_docs or _lo_done["v"]:
                 return
             _lo_done["v"] = True
             if session_id:
