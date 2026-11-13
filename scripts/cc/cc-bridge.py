@@ -30,6 +30,9 @@ Endpoints (JSON):
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
+  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread}],built} (BOARD-3, cc_systems.py)
+  POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
+  POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -487,6 +490,7 @@ import cc_codex  # noqa: E402
 import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
+import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
@@ -4535,6 +4539,101 @@ def foreign_page(headers, method: str = "GET") -> bool:
     return False
 
 
+# ---- the systems board (BOARD-3, 2026-11-12; scripts/cc/cc_systems.py, docs/CC.md "The systems board") ----
+# GET /cc/systems: the tiles. POST /cc/systems/thread {system}: the system's one standing thread, created once
+# (a brain session titled "CC: <system>: standing thread", registered in threads.json) and kept in
+# ~/.cc-bridge/systems-threads.json; the page then posts to /cc/chat with that thread, the same call the chat
+# page makes. POST /cc/systems/voice?system=<id>: a recording, saved as in/<date>/memo_<system>_<stamp>.<ext>
+# (where the console's attachments and Telegram's files land) with a <name>.system.json beside it; the memo
+# tape takes files there whose name starts with "memo".
+SYSTEMS_THREADS = cc_systems.ThreadMap(STATE_DIR / "systems-threads.json",
+                                       seed=Path(os.environ.get("CC_SYSTEMS_SEED", "").strip() or str(OUT_DIR / "board" / "threads.json")))
+SYSTEMS_VOICE_MAX = TRANSCRIBE_MAX
+
+
+def _systems_known() -> set:
+    return cc_systems.known_ids(Path(WORLD_DIR)) if WORLD_DIR else {i for i, _ in cc_systems.EXTRA}
+
+
+def _systems_id(raw) -> str | None:
+    sid = str(raw or "").strip()
+    return sid if cc_systems.ID_RE.match(sid) and sid in _systems_known() else None
+
+
+def _systems_register(tid: str, title: str, sid: str, keep: dict | None = None) -> None:
+    """Put a standing thread into threads.json (the list /cc/chat continues from) when it is not there."""
+    threads = _threads_load()
+    if any(x.get("brain") == tid for x in threads):
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    entry = {"claude": None, "brain": tid, "title": title, "started": now, "last": now, "via": "systems", "system": sid}
+    for k, v in (keep or {}).items():
+        if k in ("claude", "codex", "local", "reasoner", "title") and v:
+            entry[k] = v
+    threads.append(entry)
+    _threads_save(threads)
+
+
+def _systems_create(sid: str) -> str | None:
+    title = f"CC: {sid}: standing thread"
+    created = _brain_api("POST", "/sessions", {"model_name": "cc", "title": title})
+    tid = (created or {}).get("session_id")
+    if not tid:
+        return None
+    _systems_register(str(tid), title, sid)
+    print(f"systems: standing thread for {sid} created {str(tid)[:8]}", flush=True)
+    return str(tid)
+
+
+def _systems_keep(sid: str, ent: dict) -> dict:
+    """A mapped thread is never replaced. When the bridge's list (the last 200) has dropped it, it goes back in
+    as it was last seen; when it is there, its title and seat ids are kept beside the map entry for that day."""
+    tid = ent["thread"]
+    row = next((x for x in _threads_load() if x.get("brain") == tid), None)
+    if row is None:
+        keep = ent.get("keep") or {}
+        _systems_register(tid, keep.get("title") or f"CC: {sid}: standing thread", sid, keep)
+        return keep
+    return {k: row.get(k) for k in ("claude", "codex", "local", "reasoner", "title") if row.get(k)}
+
+
+def _systems_thread(sid: str) -> tuple[str | None, bool]:
+    exists = lambda t: any(x.get("brain") == t for x in _threads_load())   # noqa: E731
+    return SYSTEMS_THREADS.resolve(sid, _systems_create, exists=exists, keep=_systems_keep)
+
+
+def _systems_view() -> dict:
+    try:
+        SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
+    except OSError as e:
+        print(f"systems: thread map not refreshed: {type(e).__name__}", flush=True)
+    d = cc_systems.board(WORLD_DIR or None, JOBS.list(), SYSTEMS_THREADS.threads())
+    d["world"] = bool(WORLD_DIR)
+    return d
+
+
+def _systems_voice(sid: str, ctype: str, raw: bytes) -> tuple[int, dict]:
+    got = _multipart_first_file(ctype, raw)
+    if not got or not got[1]:
+        return 400, {"ok": False, "error": "no audio in the upload"}
+    fn, data = got
+    name = cc_systems.voice_name(sid, fn)
+    try:
+        path = UPLOADS.save_bytes(name, data)
+    except OSError as e:
+        return 500, {"ok": False, "error": f"could not save the recording: {type(e).__name__}"}
+    side = {"system": sid, "via": "systems", "thread": SYSTEMS_THREADS.get(sid), "bytes": len(data),
+            "saved": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        sp = Path(path + ".system.json")
+        sp.write_text(json.dumps(side))
+        os.chmod(sp, 0o664)
+    except OSError:
+        pass
+    print(f"systems: voice for {sid} saved {Path(path).name} ({len(data)} bytes)", flush=True)
+    return 200, {"ok": True, "system": sid, "path": path, "size": len(data)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "cc-bridge/0.2"
 
@@ -4767,6 +4866,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _state(t))
         elif route == "/board":
             self._send(200, _board())
+        elif route == "/systems":
+            self._send(200, _systems_view())
         elif route == "/actions":
             self._send(200, _actions())
         elif route == "/agents":
@@ -4933,6 +5034,29 @@ class Handler(BaseHTTPRequestHandler):
                 return
             print(f"files/save from app {str(body.get('app') or '?')[:64]}: {path}", flush=True)
             self._send(200, {"ok": True, "path": path, "size": len(data)})
+            return
+        if route == "/systems/voice":
+            # a tile's mic (BOARD-3): the recording is kept as a memo for that system, never transcribed here
+            sid = _systems_id(self._query().get("system"))
+            n = int(self.headers.get("Content-Length") or 0)
+            if sid is None:
+                self._send(400, {"ok": False, "error": "which system? (not in the registry)"})
+            elif n <= 0 or n > SYSTEMS_VOICE_MAX:
+                self._send(413 if n > SYSTEMS_VOICE_MAX else 400, {"ok": False, "error": f"the recording must be between 1 byte and {SYSTEMS_VOICE_MAX // (1024 * 1024)} MB"})
+            else:
+                self._send(*_systems_voice(sid, self.headers.get("Content-Type", ""), self.rfile.read(n)))
+            return
+        if route == "/systems/thread":
+            body = self._json(limit=2000)
+            sid = _systems_id((body or {}).get("system"))
+            if sid is None:
+                self._send(400, {"ok": False, "error": "which system? (not in the registry)"})
+                return
+            tid, created = _systems_thread(sid)
+            if not tid:
+                self._send(502, {"ok": False, "error": "the brain did not open the thread (its api did not answer)"})
+                return
+            self._send(200, {"ok": True, "system": sid, "thread": tid, "created": created})
             return
         if route == "/upload":
             try:

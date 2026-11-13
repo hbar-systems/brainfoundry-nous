@@ -1015,7 +1015,7 @@ const PANE_ROUTES = [
   ['/dashboard', 'Dashboard'], ['/economy', 'Economy'], ['/federation', 'Federation'], ['/files', 'Files'],
   ['/future', 'Future'], ['/guide', 'Guide'], ['/integrations', 'Integrations'], ['/upload', 'Knowledge'],
   ['/layout', 'Layout'], ['/map', 'Map'], ['/graph', 'Memory graph'], ['/permits', 'Permits'], ['/persona', 'Persona'],
-  ['/profile', 'Profile'], ['/research', 'Research'], ['/settings', 'Settings'], ['/tasks', 'Tasks'],
+  ['/profile', 'Profile'], ['/research', 'Research'], ['/settings', 'Settings'], ['/systems', 'Systems'], ['/tasks', 'Tasks'],
   ['/terminal', 'Terminal'], ['/trace', 'Trace'], ['/update', 'Update'],
 ]
 
