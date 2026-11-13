@@ -1278,6 +1278,7 @@ function CC() {
   const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
+  const autoAskRef = useRef(null)                   // ?ask= from the brain's own pages: sent once the console is up (2026-11-13)
   // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
   // right margin anchored to that message (below it on a narrow screen), typed at leisure, kept
   // per thread in this browser, and sent with the next message as a structured block: which
@@ -1995,8 +1996,22 @@ function CC() {
       })
       .catch(() => setHealth(false))
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
-    try { const q = new URLSearchParams(window.location.search).get('ask'); if (q) setDraft(q) } catch {}
+    // ?ask= prefills; from the brain's own desk pages (same origin, /cc/files/raw/: the court, the board)
+    // it is sent on arrival, so one press there acts (hbar 2026-11-12 "i got sent back"). Any other
+    // origin, or no referrer (Telegram, typed), keeps prefill only.
+    try {
+      const q = new URLSearchParams(window.location.search).get('ask')
+      const own = (document.referrer || '').startsWith(window.location.origin + '/cc/files/raw/')
+      if (q && own) autoAskRef.current = q
+      else if (q) setDraft(q)
+    } catch {}
   }, [])
+  useEffect(() => {
+    if (!health || !autoAskRef.current) return
+    const q = autoAskRef.current; autoAskRef.current = null
+    try { const u = new URL(window.location.href); u.searchParams.delete('ask'); window.history.replaceState(null, '', u.toString()) } catch {}
+    send(q)
+  }, [health])
   // Telegram on the laptop (2026-10-12): read the 20 s list (no timer of its own). The thread shown
   // reloads its turns when its `last` moved and nothing was answering it here (a turn this page
   // sent or followed sets the slot to null first, so its own completion is adopted, not reloaded).
