@@ -387,6 +387,11 @@ class Files:
         handler.send_header("Content-Length", str(length))
         handler.send_header("Cache-Control", "no-store")
         handler.send_header("Content-Disposition", f'inline; filename="{p.name}"')
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        if ctype.split(";")[0].strip() in ("text/html", "application/xhtml+xml", "image/svg+xml"):
+            # audit 2026-11-13 (app-files-save-html-runs-unsandboxed-on-console-origin): a desk page opened
+            # top level (a Telegram link, a new tab) runs in an opaque origin and cannot read the console.
+            handler.send_header("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-downloads")
         if partial:
             handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         handler.end_headers()

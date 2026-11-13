@@ -13,7 +13,9 @@ function fmtSize(n) { if (n < 1024) return `${n} B`; if (n < 1048576) return `${
 function fmtWhen(ts) { const d = new Date(ts * 1000); return d.toISOString().slice(0, 16).replace('T', ' ') }
 const isMdPath = (p) => /\.(md|markdown)$/i.test(p || '')
 // The sidecar view is hand-made html; it runs in a sandbox that has scripts but no forms (hbar 2026-10-09).
-const VIEW_SANDBOX = 'allow-scripts allow-same-origin allow-popups allow-downloads'
+// audit 2026-11-13 (app-files-save-html-runs-unsandboxed-on-console-origin): desk HTML runs in an opaque
+// origin (no allow-same-origin), so a page saved by an app or a job can never read the console's owner key.
+const VIEW_SANDBOX = 'allow-scripts allow-popups allow-downloads'
 function raw(p) { return '/cc/files/raw' + p.split('/').map(encodeURIComponent).join('/') }
 
 export default function Files() {
@@ -208,7 +210,7 @@ export default function Files() {
               {sel.kind === 'audio' && <audio controls preload="metadata" src={raw(sel.path)} style={{ width: '100%' }} />}
               {sel.kind === 'video' && <video controls preload="metadata" src={raw(sel.path)} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000' }} />}
               {sel.kind === 'image' && <img src={raw(sel.path)} alt={sel.path} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain' }} />}
-              {(sel.kind === 'pdf' || sel.kind === 'html') && <iframe src={raw(sel.path)} title={sel.path} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: sel.kind === 'html' ? '#fff' : 'transparent' }} />}
+              {(sel.kind === 'pdf' || sel.kind === 'html') && <iframe src={raw(sel.path)} title={sel.path} sandbox={sel.kind === 'html' ? VIEW_SANDBOX : undefined} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: sel.kind === 'html' ? '#fff' : 'transparent' }} />}
               {sel.kind === 'text' && isMdPath(sel.path) && mode === 'view' && !editing && (sel.view
                 ? <iframe key={sel.view} src={raw(sel.view)} title={sel.view} sandbox={VIEW_SANDBOX} allow="fullscreen" allowFullScreen style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: '#fff' }} />
                 : (text === null ? <p style={{ color: T.dim, fontSize: '13px' }}>{sel.size >= 400000 ? 'Too large for the view; open the source or download it.' : 'reading…'}</p>
