@@ -105,7 +105,7 @@ def test_adding_a_backend_is_a_scope_change(env):
     assert e.value.status_code == 409
     assert e.value.detail["error"] == "scope_change_requires_approval"
     assert "api" not in (_entry()["entries"] or {})
-    assert not any(getattr(r, "path", "").startswith("/apps/demo/api") for r in app.routes)
+    assert not any(p.startswith("/apps/demo/api") for p in _routes(app))
     out = apps.update_app("demo", apps.UpdateRequest(accept_scope_change=True), _Req(app))
     assert out.scope_changed and _entry()["entries"]["api"] == "backend.py"
 
@@ -122,3 +122,56 @@ def test_frontend_only_update_stays_one_click(env):
     installed = {"permissions": ["llm.invoke"], "requires_layers": [], "compute": None,
                  "entries": {"ui_bundle": "./"}, "commit_sha": "a"}
     assert not apps._scope_changed(apps._scope_diff(installed, _manifest(), "b"))
+
+
+# ── app-disable-does-not-unmount-routes ──────────────────────────────────
+
+def _routes(app, app_id="demo"):
+    from api.apps_mount import _route_path
+    return [_route_path(r) for r in app.routes if _route_path(r).startswith(f"/apps/{app_id}")]
+
+
+def test_disable_takes_routes_down_at_once_and_enable_brings_them_back(env):
+    app = FastAPI()
+    _install(env, app, _manifest(api="backend.py"), BACKEND)
+    c = TestClient(app)
+    assert c.get("/apps/demo/api/whoami").status_code == 200
+    assert c.get("/apps/demo/index.html").status_code == 200
+    apps.disable_app("demo", _Req(app))
+    assert _routes(app) == []
+    assert c.get("/apps/demo/api/whoami").status_code == 404
+    assert c.get("/apps/demo/index.html").status_code == 404
+    apps.enable_app("demo", _Req(app))
+    assert c.get("/apps/demo/api/whoami").status_code == 200
+    apps.enable_app("demo", _Req(app))  # no stacking
+    assert len(_routes(app)) == 2
+
+
+def test_mounted_routes_check_enabled_per_request(env):
+    app = FastAPI()
+    _install(env, app, _manifest(api="backend.py"), BACKEND)
+    c = TestClient(app)
+    state = apps._load_installed()
+    state["apps"][0]["enabled"] = False
+    apps._save_installed(state)  # flag flipped with routes still in app.routes
+    assert _routes(app)
+    assert c.get("/apps/demo/api/whoami").status_code == 404
+    assert c.get("/apps/demo/index.html").status_code == 404
+    assert c.get("/apps/demo/").status_code == 404
+
+
+def test_update_does_not_remount_a_disabled_app(env):
+    app = FastAPI()
+    _install(env, app, _manifest(api="backend.py"), BACKEND)
+    apps.disable_app("demo", _Req(app))
+    env.write(_manifest(api="backend.py", version="0.2.0"), BACKEND)
+    apps.update_app("demo", apps.UpdateRequest(accept_scope_change=True), _Req(app))
+    assert _routes(app) == [] and _entry()["enabled"] is False
+
+
+def test_uninstall_removes_the_backend_router_too(env):
+    app = FastAPI()
+    _install(env, app, _manifest(api="backend.py"), BACKEND)
+    apps.uninstall_app("demo", _Req(app))
+    assert _routes(app) == []
+    assert TestClient(app).get("/apps/demo/api/whoami").status_code == 404

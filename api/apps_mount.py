@@ -27,10 +27,44 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import PlainTextResponse
 
 from api.apps import BRAIN_APPS_DIR, _load_installed
+
+
+def app_is_enabled(app_id: str) -> bool:
+    """Is the app installed and enabled right now? Read per request, so a
+    disable takes effect at once even if a route is still in app.routes."""
+    try:
+        from api import apps as _apps
+        state = _apps._load_installed()
+    except Exception:
+        return False
+    entry = next((a for a in state.get("apps", []) if a.get("id") == app_id), None)
+    return bool(entry) and bool(entry.get("enabled", True))
+
+
+class _AppStaticFiles(StaticFiles):
+    """An app's static bundle that answers 404 once the app is disabled or gone."""
+
+    def __init__(self, *args, app_id: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.app_id = app_id
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and not app_is_enabled(self.app_id):
+            await PlainTextResponse("Not Found", status_code=404)(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+def _enabled_dependency(app_id: str):
+    def _require_enabled() -> None:
+        if not app_is_enabled(app_id):
+            raise HTTPException(status_code=404, detail={"error": "app_not_enabled", "id": app_id})
+    return _require_enabled
 
 
 def _is_under(child: Path, parent: Path) -> bool:
@@ -84,7 +118,7 @@ def _mount_ui(app: FastAPI, app_id: str, app_dir: Path, ui_bundle: str) -> None:
     if bundle_dir.exists() and (bundle_dir / "index.html").exists():
         app.mount(
             f"/apps/{app_id}",
-            StaticFiles(directory=str(bundle_dir), html=True),
+            _AppStaticFiles(directory=str(bundle_dir), html=True, app_id=app_id),
             name=f"app-{app_id}",
         )
         print(f"[brain-apps] mounted ui {app_id} -> {bundle_dir}", flush=True)
@@ -116,10 +150,20 @@ def _mount_api(app: FastAPI, app_id: str, app_dir: Path, api_path: str) -> None:
         if api_router is None:
             print(f"[brain-apps] api module has no `router` attribute for {app_id}", flush=True)
             return
-        app.include_router(api_router, prefix=f"/apps/{app_id}/api")
+        app.include_router(api_router, prefix=f"/apps/{app_id}/api",
+                           dependencies=[Depends(_enabled_dependency(app_id))])
         print(f"[brain-apps] mounted api {app_id}", flush=True)
     except Exception as e:
         print(f"[brain-apps] api mount failed for {app_id}: {e}", flush=True)
+
+
+def _route_path(route) -> str:
+    """A route's path; newer FastAPI keeps an included router as one lazy
+    entry with no `path`, its prefix on `include_context`."""
+    path = getattr(route, "path", None)
+    if path is None:
+        path = getattr(getattr(route, "include_context", None), "prefix", None)
+    return path or ""
 
 
 def unmount_app(app: FastAPI, app_id: str) -> None:
@@ -134,7 +178,7 @@ def unmount_app(app: FastAPI, app_id: str) -> None:
     keep = []
     removed = 0
     for route in app.routes:
-        path = getattr(route, "path", "")
+        path = _route_path(route)
         if path == prefix or path.startswith(prefix + "/"):
             removed += 1
             continue

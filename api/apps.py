@@ -984,13 +984,30 @@ def uninstall_app(app_id: str, request: Request) -> dict:
 
 
 @router.post("/{app_id}/enable")
-def enable_app(app_id: str) -> dict:
-    return _set_enabled(app_id, True)
+def enable_app(app_id: str, request: Request) -> dict:
+    out = _set_enabled(app_id, True)
+    # Mount now (unmount first so a re-enable never stacks a second copy).
+    try:
+        from api.apps_mount import mount_app as _mount_app, unmount_app as _unmount_app
+        entry = next(a for a in _load_installed().get("apps", []) if a["id"] == app_id)
+        _unmount_app(request.app, app_id)
+        _mount_app(request.app, entry)
+    except Exception as e:
+        print(f"[brain-apps] hot-mount on enable failed for {app_id}: {e}", flush=True)
+    return out
 
 
 @router.post("/{app_id}/disable")
-def disable_app(app_id: str) -> dict:
-    return _set_enabled(app_id, False)
+def disable_app(app_id: str, request: Request) -> dict:
+    """Disable takes the app's routes down at once (static bundle and backend),
+    as uninstall does; mounted routes also check `enabled` per request."""
+    out = _set_enabled(app_id, False)
+    try:
+        from api.apps_mount import unmount_app as _unmount_app
+        _unmount_app(request.app, app_id)
+    except Exception as e:
+        print(f"[brain-apps] hot-unmount on disable failed for {app_id}: {e}", flush=True)
+    return out
 
 
 def _set_enabled(app_id: str, enabled: bool) -> dict:
@@ -1132,10 +1149,12 @@ def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateRespo
     _save_installed(state)
 
     # Hot-remount so the swapped bundle and routes serve without a restart.
+    # A disabled app stays unmounted: updating it never brings its routes back.
     try:
         from api.apps_mount import mount_app as _mount_app, unmount_app as _unmount_app
         _unmount_app(request.app, app_id)
-        _mount_app(request.app, entry)
+        if entry.get("enabled", True):
+            _mount_app(request.app, entry)
     except Exception as e:
         print(f"[brain-apps] hot-remount failed for {app_id}: {e}", flush=True)
 
