@@ -178,6 +178,9 @@ if(q.has('greeting')) cfg.greeting=q.get('greeting');
 if(q.has('accent')) cfg.accent=q.get('accent');
 if(q.has('uses')) cfg.firstUses=q.get('uses').split('|');
 if(q.has('start')) cfg.start=q.get('start');
+// audit 2026-11-13 (onboarding-start-param-javascript-url-navigation): start is only ever a same-origin path.
+function safeStart(s){try{var raw=String(s||'');if(raw.charAt(0)!=='/'||raw.charAt(1)==='/'||raw.charAt(1)==='\\')return '';var u=new URL(raw,location.href);return u.origin===location.origin?u.pathname+u.search+u.hash:'';}catch(e){return '';}}
+cfg.start=safeStart(cfg.start);
 function clean(s,n){return String(s==null?'':s).replace(/[\u0000-\u001f<>]/g,'').replace(/\s+/g,' ').trim().slice(0,n);}
 cfg.name=clean(cfg.name,32);
 cfg.greeting=clean(cfg.greeting,24)||'Hello';
@@ -557,7 +560,7 @@ go.addEventListener('click',function(e){
   setTimeout(function(){veil.classList.remove('up');veil.classList.add('down');},500);
   setTimeout(function(){
     var inFrame=parent!==window, local=location.protocol==='file:';
-    if(!inFrame&&!local&&cfg.start) location.href=cfg.start;
+    if(!inFrame&&!local&&safeStart(cfg.start)) location.href=safeStart(cfg.start);
     else{ /* standalone preview: come back to the start */
       leaving=false; veil.classList.remove('down'); veil.classList.add('up'); cur=-1; show(0); }
   },1900);
