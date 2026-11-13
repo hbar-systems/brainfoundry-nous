@@ -417,7 +417,7 @@ def settings(a: dict) -> dict:
 def job_command(a: dict, prompt_path: Path, settings_path: Path) -> str:
     """Pure: one shell line for cc-job."""
     parts = ["claude", "-p", "--output-format", "text", "--max-budget-usd", str(a.get("budget_usd") or 1),
-             "--settings", str(settings_path)]
+             "--settings", str(settings_path), "--setting-sources", "user"]
     # Folders the turn may READ (2026-10-17: the first unattended runs were refused reading their own standard,
     # which sits one folder above their ground): the ground, each ground's parent, and the agents folder (an
     # agent that coordinates or audits others reads every report). Writing stays limited to the ground by the allow list.

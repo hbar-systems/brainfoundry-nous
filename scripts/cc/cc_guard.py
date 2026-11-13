@@ -18,6 +18,25 @@ import shlex
 
 POSTURES = ("cards", "auto", "judged")
 ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
+# Which Claude Code settings layers a turn or job merges (audit 2026-11-13, cc-bridge-claude-turn-trusts-hands-
+# writable-settings-layers): the project and local layers (<cwd>/.claude/settings*.json) are files the hands can
+# write, and an allow, a defaultMode or disableAllHooks there could take the card hook's place. Only the user
+# layer is loaded unless the owner sets CC_SETTING_SOURCES (comma list of user, project, local; "off" = the
+# CLI's default, all three). The .env rule that used to come from a project layer is carried here instead.
+DENY_ALWAYS = ["Edit(**/.env)", "Edit(**/.env.*)", "Write(**/.env)", "Write(**/.env.*)"]
+
+
+def setting_sources() -> str:
+    v = os.environ.get("CC_SETTING_SOURCES", "user").strip()
+    if v.lower() == "off":
+        return ""
+    parts = [x.strip() for x in v.split(",") if x.strip() in ("user", "project", "local")]
+    return ",".join(dict.fromkeys(parts)) or "user"
+
+
+def setting_sources_args() -> list:
+    v = setting_sources()
+    return ["--setting-sources", v] if v else []
 
 
 def hook_settings(posture: str, hook_python: str, hook_script, post_hook_script, ttl: int) -> str:
@@ -29,8 +48,9 @@ def hook_settings(posture: str, hook_python: str, hook_script, post_hook_script,
         # split) can show it in the Files pane (2026-10-01)
         "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [
         {"type": "command", "command": f"{hook_python} {post_hook_script}", "timeout": 10}]}]}}
+    s["permissions"] = {"deny": list(DENY_ALWAYS)}
     if posture == "auto":
-        s["permissions"] = {"ask": ASK_ALWAYS}
+        s["permissions"]["ask"] = ASK_ALWAYS
     return json.dumps(s)
 
 
@@ -221,10 +241,10 @@ def _calls(toks: list) -> list:
     return found
 
 
-def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool]:
+def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool, bool]:
     """Refuse the flags that loosen a job's reasoner. Returns (an accepted agents' --settings is present,
-    a --permission-mode is given)."""
-    agent, mode, k = False, False, 0
+    a --permission-mode is given, a --setting-sources is given)."""
+    agent, mode, sources, k = False, False, False, 0
     while k < len(args):
         a = args[k]
         if a == "--":
@@ -232,6 +252,16 @@ def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool]:
         name, sep, val = a.partition("=")
         if name in ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"):
             raise Refused(f"{name} is never allowed in a job; the job's reasoner asks like any turn")
+        if name == "--setting-sources":
+            if not sep:
+                val = args[k + 1] if k + 1 < len(args) else ""
+                k += 1
+            wanted = {x.strip() for x in val.split(",") if x.strip()}
+            if not wanted <= set(setting_sources().split(",") if setting_sources() else ("user", "project", "local")):
+                raise Refused(f"--setting-sources {val!r} loads layers the owner's turns do not")
+            sources = True
+            k += 1
+            continue
         if name in ("--permission-mode", "--settings", "--allowedTools", "--allowed-tools"):
             if not sep:
                 val = args[k + 1] if k + 1 < len(args) else ""
@@ -251,7 +281,7 @@ def _check_args(args: list, posture: str, agent_ok) -> tuple[bool, bool]:
             elif posture != "auto":
                 raise Refused(f"{name} would let the job skip its cards; it needs the auto posture, the posture is {posture}")
         k += 1
-    return agent, mode
+    return agent, mode, sources
 
 
 # ------------------------------------------------------------ reach ----
@@ -420,13 +450,17 @@ def check_job(command: str, posture: str, settings: str | None, agent_ok=lambda 
                 edits.append((toks[m][1], toks[m][2], shlex.quote(new)))
             continue
         _, w, end = call
-        agent, mode = _check_args([t[3] for t in toks[w + 1:end]], posture, agent_ok)
+        agent, mode, sources = _check_args([t[3] for t in toks[w + 1:end]], posture, agent_ok)
+        if settings is not None and agent and not sources and setting_sources():
+            edits.append((toks[w][2], toks[w][2], " --setting-sources " + shlex.quote(setting_sources())))
         if settings is not None and not agent:
             # The job's reasoner takes the turn's posture as well as its settings (2026-10-20): in auto the
             # turn runs with --permission-mode auto, so a job without a mode of its own gets the same. Before,
             # a job in the auto posture asked a card for every edit, and with no turn answering to show the
             # card the bridge refused it: two jobs of 2026-10-19 died that way overnight.
             add = " --settings " + shlex.quote(settings)
+            if setting_sources() and not sources:
+                add += " --setting-sources " + shlex.quote(setting_sources())
             if posture == "auto" and not mode:
                 add += " --permission-mode auto"
             edits.append((toks[w][2], toks[w][2], add))

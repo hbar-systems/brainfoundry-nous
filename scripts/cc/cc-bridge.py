@@ -3290,7 +3290,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
     if _model_current():
         cmd += ["--model", _model_current()]
     if BOX_ENABLED and GATE is not None:
-        cmd += ["--settings", _hook_settings()]
+        cmd += ["--settings", _hook_settings(), *cc_guard.setting_sources_args()]
         if _posture_current() == "auto":
             cmd += ["--permission-mode", "auto"]
     if session_id:

@@ -74,7 +74,7 @@ def test_ordinary_jobs_pass(cmd):
 
 def test_claude_jobs_still_get_settings_with_reach_on():
     out = G.check_job("claude -p hi", "cards", S, hosts=[])
-    assert out == f"claude --settings {shlex.quote(S)} -p hi"
+    assert out == f"claude --settings {shlex.quote(S)} --setting-sources user -p hi"
 
 
 def test_no_hosts_means_no_remote():

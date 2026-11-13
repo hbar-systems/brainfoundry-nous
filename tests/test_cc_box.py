@@ -134,7 +134,7 @@ def test_hook_script_denies_without_bridge(tmp_path):
 def test_posture_auto_adds_ask_rules_and_mode(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     assert m._posture_current() == "cards"
-    assert "permissions" not in json.loads(m._hook_settings())
+    assert "ask" not in json.loads(m._hook_settings())["permissions"]
     monkeypatch.setenv("CC_POSTURE", "auto")
     s = json.loads(m._hook_settings())
     assert s["permissions"]["ask"] == list(m.ASK_ALWAYS)
@@ -325,3 +325,21 @@ def test_agent_seals_kept_by_the_bridge(monkeypatch, tmp_path):
     m._agents_sealed_call(["delete", "old"])
     m._agents_sealed_call(["run", "new"])
     assert calls[-1] == (["run", "new"], {"seals": {"new": "s-new"}})
+
+
+def test_turn_pins_setting_sources(monkeypatch, tmp_path):
+    """Audit 2026-11-13 (cc-bridge-claude-turn-trusts-hands-writable-settings-layers): the turn names its
+    settings layers, so <cwd>/.claude/settings*.json written by the hands is not merged under the card hook."""
+    monkeypatch.delenv("CC_SETTING_SOURCES", raising=False)
+    m = _load(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake(cmd, fwd, run=None, prompt=""):
+        seen["cmd"] = list(cmd)
+        return {"result": "ok", "session_id": "s"}, "", 0
+    monkeypatch.setattr(m, "_stream_turn", fake)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._run_turn("hi", None, on_event=lambda k, p: None)
+    cmd = seen["cmd"]
+    i = cmd.index("--setting-sources")
+    assert cmd[i + 1] == "user" and "--settings" in cmd
