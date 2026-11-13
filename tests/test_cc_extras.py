@@ -651,3 +651,104 @@ def test_commit_info_runs_nothing_a_repo_config_names(tmp_path):
     sha = g("rev-parse", "HEAD").stdout.strip()
     d = X.commit_info(sha, [repo])
     assert d and not marker.exists()
+
+
+def _wait_end(j, jid):
+    """Until the job has ended and its result is stored on the record (the step after its end)."""
+    for _ in range(80):
+        rec = next(r for r in json.loads(j.reg.read_text()) if r["id"] == jid)
+        if rec.get("result"):
+            return j.get(jid)
+        time.sleep(0.1)
+    raise AssertionError("job did not end")
+
+
+def test_job_result_from_a_redirected_file(tmp_path):
+    """JOBCARD-1 (2026-11-13): a claude job sends its answer to out/<date>/<tag>.out; on finish the bridge
+    copies it into the log under RESULT_MARK, stores the result on the record (text without the CLI's
+    settings warning, rc, measured seconds, files), and `full` reads past the stored cut."""
+    out = tmp_path / "out"
+    day = out / time.strftime("%Y-%m-%d", time.gmtime())
+    day.mkdir(parents=True)
+    assert X.job_redirect(f"claude -p 'x' > {day}/t.out 2>&1", out) == (day / "t.out").resolve()
+    assert X.job_redirect("echo a > /etc/x", out) is None                       # outside out/
+    assert X.job_redirect(f"echo a > {day}/a.out; echo b > {day}/b.out", out) is None   # two: no guess
+    assert X.job_redirect("make 2>/dev/null >&2", out) is None
+    j = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"})
+    long = "x" * (X.RESULT_CHARS + 50)
+    cmd = (f"mkdir -p {day}/t && touch {day}/t/shot.png && "
+           f"(echo 'Permission allow rule (.claude/settings.json): Bash(x *) has a wildcard'; "
+           f"echo '**Done.** the page is live'; echo {long}) > {day}/t.out 2>&1")
+    g = _wait_end(j, j.start(cmd, str(tmp_path), "T-1 world: test")["id"])
+    r = g["result"]
+    assert r["text"].startswith("**Done.** the page is live") and r["more"] and r["text"].endswith("…")
+    assert r["rc"] == 0 and r["secs"] is not None and r["source"] == str((day / "t.out").resolve())
+    assert [f["name"] for f in r["files"]] == ["shot.png"] and r["files"][0]["kind"] == "image"
+    log = Path(g["log"]).read_text()
+    assert X.RESULT_MARK in log and "the page is live" in log                  # the log holds the answer itself
+    stored = json.loads((out / "jobs" / "jobs.json").read_text())[0]["result"]
+    assert stored["text"] == r["text"]                                          # kept on the record at the end
+    (day / "t.out").unlink()                                                    # swept: the log still answers
+    full = j.get(g["id"], full=True)["result"]
+    assert not full["more"] and full["text"].endswith(long)
+
+
+def test_job_result_from_a_plain_log(tmp_path):
+    """No redirect: the log is the result, without cc-job's two header lines; progress rewritten with \\r
+    keeps its last state; a long log keeps its end; a failed job carries its rc."""
+    out = tmp_path / "out"
+    j = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"})
+    g = _wait_end(j, j.start("printf '10%%\\r50%%\\r100%%\\n'; echo stems written; exit 3", str(tmp_path))["id"])
+    r = g["result"]
+    assert r["text"] == "100%\nstems written" and r["rc"] == 3 and r["files"] == []
+    assert r["source"] == g["log"]
+    rec = {"log": str(tmp_path / "l.log"), "command": "x", "started": 1, "ended": 2, "rc": 0}
+    Path(rec["log"]).write_text("# J1 t in /\n# x\n" + "a\n" * 2000 + "THE END\n")
+    r = X.job_result(rec, out)
+    assert r["more"] and r["text"].startswith("…") and r["text"].endswith("THE END")
+
+
+def test_job_files_window_own_folder_images_first(tmp_path):
+    """Files the job made: written under out/<date>/ between its start and end, only its own folder when it
+    wrote there, images first, newest after; outside the window, dot files, the excluded and more than six stay out."""
+    out = tmp_path / "out"
+    t0 = time.time()
+    day = out / time.strftime("%Y-%m-%d", time.gmtime(t0))
+    (day / "tag").mkdir(parents=True)
+    (day / "other").mkdir()
+
+    def put(p, age):
+        p.write_text("x")
+        os.utime(p, (t0 - age, t0 - age))
+    put(day / "other" / "a.png", 10)
+    put(day / "other" / "notes.md", 5)
+    put(day / "tag" / "report.html", 20)
+    put(day / "tag" / "pic.png", 30)
+    put(day / "old.png", 4000)                     # before the job started
+    put(day / ".hidden.png", 10)
+    put(day / "else.out", 10)                      # another job's result file
+    for i in range(6):
+        put(day / "other" / f"n{i}.txt", 40 + i)
+    fs = X.job_files(t0 - 100, t0, out, prefer="tag", exclude={str(day / "else.out")})
+    assert [f["name"] for f in fs] == ["pic.png", "report.html"]   # it wrote in its own folder: only that, image first
+    names = [f["name"] for f in X.job_files(t0 - 100, t0, out, prefer="none", exclude={str(day / "else.out")})]
+    assert names[:2] == ["a.png", "pic.png"] and names[2] == "notes.md" and len(names) == 6   # no folder: the window
+    assert not {"old.png", ".hidden.png", "else.out"} & set(names)
+
+
+def test_job_result_reads_only_its_own_log_and_desk_files(tmp_path):
+    # audit 2026-11-13 merge: the registry is hands-writable, so a record naming another file as its log
+    # or its redirect never makes the bridge read that file into a job result.
+    out = tmp_path / "out"; out.mkdir()
+    secret = tmp_path / "bridge-env"; secret.write_text("CC_SECRET_LINE=1\n")
+    j = X.Jobs(out, lambda: {})
+    rec = {"id": "J1700000000001", "log": str(secret), "out_file": str(secret),
+           "command": "echo hi", "started": 1700000000, "ended": 1700000001, "rc": 0}
+    r = j.result(rec)
+    assert "CC_SECRET_LINE" not in (r or {}).get("text", "")
+    (j.dir / "J1700000000001.log").symlink_to(secret)        # a planted link where the log belongs
+    r = j.result(rec)
+    assert "CC_SECRET_LINE" not in (r or {}).get("text", "")
+    (j.dir / "J1700000000001.log").unlink()
+    (j.dir / "J1700000000001.log").write_text("# J1 t\n# echo hi\nhello\n")
+    assert "hello" in j.result(rec)["text"]

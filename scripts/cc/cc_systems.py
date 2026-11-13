@@ -325,11 +325,25 @@ def _jobs(jobs: list, known: set, filing: dict, world: Path | None = None, job_s
             sid = system_for(title, known, filing)
             if sid == "world" and world is not None:
                 sid = _brief_system(world, str(j.get("command") or ""), known, briefs) or "world"
-        out.append({"system": sid, "ended": ended,
-                    "line": _line(title.split(":", 1)[1] if ":" in title else title, href, "jobs",
-                                  3 if j.get("ended") is None else 1, ended or started, j.get("ended") is None),
-                    "running": j.get("ended") is None})
+        line = _line(title.split(":", 1)[1] if ":" in title else title, href, "jobs",
+                     3 if j.get("ended") is None else 1, ended or started, j.get("ended") is None)
+        if j.get("ended") is not None and isinstance(j.get("result"), dict):
+            line["result"] = _result(j["result"])
+        out.append({"system": sid, "ended": ended, "line": line, "running": j.get("ended") is None})
     return out
+
+
+def _result(res: dict) -> dict:
+    """A finished job's result on its line (JOBCARD-1, 2026-11-13): the first sentence of its final text, its
+    exit code, the result file and the files it made as pane links, images marked. The bridge stores the result
+    on the job record when the job ends (cc_extras.job_result)."""
+    text = re.sub(r"[*_`#>]+", "", str(res.get("text") or "")).strip()
+    first = re.split(r"(?<=[.!?])\s|\n", text, maxsplit=1)[0].strip()[:220] if text else ""
+    src = str(res.get("source") or "")
+    return {"first": first, "rc": res.get("rc"), "href": _files(src) if src else "",
+            "files": [{"name": str(f.get("name") or ""), "href": _files(f.get("path") or ""),
+                       "image": f.get("kind") == "image"} for f in (res.get("files") or [])[:6]
+                      if isinstance(f, dict) and not str(f.get("name") or "").endswith(".json")]}   # never a raw json file
 
 
 def _court(world: Path, known: set, filing: dict, rows: list | None = None) -> list:

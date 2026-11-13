@@ -1616,22 +1616,77 @@ def _spoke_answers(url: str, now: float | None = None, probe=None) -> bool:
     return up
 
 
+# Russian aloud without a key (VOICE-RU-1, 2026-11-13). Kokoro has no Russian voice and
+# ElevenLabs costs money, so a brain whose console speaks Russian (GET /layout lang "ru") and
+# has no ElevenLabs key speaks through Piper on the box itself: the GPL piper-tts CLI run as a
+# separate process from CC_PIPER_BIN (default /opt/piper/venv/bin/piper), one voice model from
+# CC_PIPER_DIR/voices (scripts/cc/install-piper.sh puts both there, once per box, shared by
+# every member). About 63 MB a voice, a model load of ~1.5 s and a real-time factor of 0.2 to
+# 0.5 on four ARM cores (measured 2026-11-13). mp3 through ffmpeg when the box has it, else wav.
+# CC_VOICE_BACKEND=piper forces it in any language; auto takes it only for ru, after a spoke
+# and after ElevenLabs, except that a Kokoro spoke never reads Russian when Piper can.
+PIPER_DIR = Path(os.environ.get("CC_PIPER_DIR", "/opt/piper").strip() or "/opt/piper")
+PIPER_BIN = os.environ.get("CC_PIPER_BIN", "").strip() or str(PIPER_DIR / "venv" / "bin" / "piper")
+PIPER_VOICE = os.environ.get("CC_PIPER_VOICE", "dmitri").strip().lower() or "dmitri"
+# name -> (model file stem, label for /voices); licences are in docs/VOICE.md
+PIPER_VOICES = {
+    "dmitri": ("ru_RU-dmitri-medium", "male, Russian (CC0)"),
+    "denis": ("ru_RU-denis-medium", "male, Russian (CC0)"),
+    "irina": ("ru_RU-irina-medium", "female, Russian (dataset licence unknown; non-commercial use)"),
+    "ruslan": ("ru_RU-ruslan-medium", "male, Russian (CC BY-NC-SA 4.0; non-commercial use)"),
+}
+
+
+def _piper_model(voice: str | None = None):
+    """The .onnx for `voice` (default the chosen one) when it and its .json are on the box, else None."""
+    v = PIPER_VOICES.get((voice or PIPER_VOICE).lower())
+    if not v:
+        return None
+    p = PIPER_DIR / "voices" / f"{v[0]}.onnx"
+    return p if p.is_file() and Path(str(p) + ".json").is_file() else None
+
+
+def _piper_ready() -> bool:
+    return os.access(PIPER_BIN, os.X_OK) and _piper_model() is not None
+
+
+def _piper_installed() -> list:
+    """The Piper voices whose models are on the box, in PIPER_VOICES order."""
+    return [k for k in PIPER_VOICES if _piper_model(k) is not None]
+
+
+def _console_lang() -> str:
+    try:
+        return LAYOUT.lang()
+    except Exception:  # noqa: BLE001   LAYOUT not built yet, or its file unreadable
+        return "en"
+
+
 def _voice_backend(kind: str = "tts"):
-    """Which backend speaks ("tts") or hears ("stt") right now: "spoke", "eleven" or None."""
+    """Which backend speaks ("tts") or hears ("stt") right now: "spoke", "eleven", "piper" (tts only) or None."""
     url = TTS_URL if kind == "tts" else STT_URL
     if VOICE_BACKEND == "spoke":
         return "spoke" if url else None
     if VOICE_BACKEND == "eleven":
         return "eleven" if ELEVEN_KEY else None
-    if url and _spoke_answers(url):
+    if VOICE_BACKEND == "piper":
+        if kind == "tts":
+            return "piper" if _piper_ready() else None
+        return "spoke" if url and _spoke_answers(url) else ("eleven" if ELEVEN_KEY else None)
+    ru_piper = kind == "tts" and _console_lang() == "ru" and _piper_ready()
+    if url and not (ru_piper and TTS_MODEL.lower().startswith("kokoro")) and _spoke_answers(url):
         return "spoke"
-    return "eleven" if ELEVEN_KEY else None
+    if ELEVEN_KEY:
+        return "eleven"
+    return "piper" if ru_piper else None
 
 
 def _voice_current_name():
     """The voice's name for the footer: the Kokoro voice while the spoke speaks, the
     ElevenLabs voice while that does, None when nothing speaks."""
     b = _voice_backend("tts")
+    if b == "piper":
+        return PIPER_VOICE
     return TTS_VOICE if b == "spoke" else (_voice_name(VOICE_ID) if b == "eleven" else None)
 
 
@@ -1640,8 +1695,21 @@ def _spoke_voices() -> list:
     return [{"id": v, "name": v, "category": "kokoro", "labels": _KOKORO_LABELS.get(v[:2], "")} for v in KOKORO_VOICES]
 
 
+def _piper_voices() -> list:
+    """The Piper voices on the box in the shape /voices gives for ElevenLabs."""
+    return [{"id": v, "name": v, "category": "piper", "labels": PIPER_VOICES[v][1]} for v in _piper_installed()]
+
+
+def _ffmpeg():
+    import shutil
+    return shutil.which("ffmpeg")
+
+
 def _tts_mime(backend) -> str:
-    """The Content-Type /speak streams: mp3 from ElevenLabs, CC_TTS_FORMAT from the spoke."""
+    """The Content-Type /speak streams: mp3 from ElevenLabs, CC_TTS_FORMAT from the spoke,
+    mp3 from Piper when the box has ffmpeg and wav when it does not."""
+    if backend == "piper":
+        return "audio/mpeg" if _ffmpeg() else "audio/wav"
     return _TTS_MIME.get(TTS_FORMAT, "application/octet-stream") if backend == "spoke" else "audio/mpeg"
 
 
@@ -1660,6 +1728,39 @@ def _speak_stream_spoke(text: str):
             yield chunk
 
 
+def _speak_stream_piper(text: str, run=subprocess.run):
+    """Yield audio bytes from Piper on the box for `text`: raw 16-bit mono PCM from the CLI at
+    the model's sample rate, then mp3 through ffmpeg or a wav header. Raises on any error.
+    `run` is injectable for tests."""
+    import io
+    import wave
+    model = _piper_model()
+    if model is None:
+        raise RuntimeError("piper voice not installed")
+    try:
+        rate = int(json.loads(Path(str(model) + ".json").read_text()).get("audio", {}).get("sample_rate") or 22050)
+    except (OSError, ValueError):
+        rate = 22050
+    line = " ".join((text or "").split())
+    r = run([PIPER_BIN, "-m", str(model), "--output-raw"], input=line.encode(), capture_output=True, timeout=120)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError(f"piper exited {r.returncode}")
+    ff = _ffmpeg()
+    if ff:
+        m = run([ff, "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", "-",
+                 "-codec:a", "libmp3lame", "-q:a", "4", "-f", "mp3", "-"], input=r.stdout, capture_output=True, timeout=120)
+        if m.returncode != 0 or not m.stdout:
+            raise RuntimeError(f"ffmpeg exited {m.returncode}")
+        audio = m.stdout
+    else:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(r.stdout)
+        audio = buf.getvalue()
+    for i in range(0, len(audio), 16384):
+        yield audio[i:i + 16384]
+
+
 def _tts_stream(text: str, backend=None):
     """Audio for `text` as chunks from `backend`, or from whichever speaks now. Raises when none does."""
     b = backend or _voice_backend("tts")
@@ -1667,6 +1768,8 @@ def _tts_stream(text: str, backend=None):
         return _speak_stream_spoke(text)
     if b == "eleven":
         return _speak_stream(text)
+    if b == "piper":
+        return _speak_stream_piper(text)
     raise RuntimeError("no voice backend")
 
 
@@ -1686,6 +1789,21 @@ TRANSCRIBE_MAX = int(os.environ.get("CC_TRANSCRIBE_MAX", str(10 * 1024 * 1024)))
 # ElevenLabs, which has one scribe model); the ElevenLabs one is CC_ELEVEN_STT_MODEL.
 STT_MODEL = os.environ.get("CC_STT_MODEL", "Systran/faster-whisper-small").strip()
 ELEVEN_STT_MODEL = os.environ.get("CC_ELEVEN_STT_MODEL", "scribe_v1").strip()
+# The language the clips are heard in (PARENTS-1, 2026-11-13): CC_STT_LANGUAGE (a two-letter code)
+# wins; else a console set to a language other than English (layout lang, ru for hbar's parents)
+# names it; else nothing is sent and the backend guesses from the clip, which a short note can get wrong.
+STT_LANGUAGE = os.environ.get("CC_STT_LANGUAGE", "").strip().lower()
+
+
+def _stt_language() -> str:
+    """The language hint for transcription, or "" for the backend's own guess."""
+    if re.fullmatch(r"[a-z]{2}", STT_LANGUAGE):
+        return STT_LANGUAGE
+    try:
+        lang = LAYOUT.lang()
+    except Exception:  # noqa: BLE001  (no layout yet: the bridge is still starting, or a test)
+        return ""
+    return lang if lang and lang != "en" else ""
 
 
 def _multipart_encode(fields: dict, file_field: str, filename: str, data: bytes, mime: str,
@@ -1732,12 +1850,15 @@ def _transcribe(data: bytes, filename: str, mime: str) -> str:
     speech-to-text. Raises on any error, and when nothing hears."""
     import urllib.request
     b = _voice_backend("stt")
+    lang = _stt_language()
     if b == "spoke":
-        body, ctype = _multipart_encode({"model": STT_MODEL}, "file", filename, data, mime)
+        body, ctype = _multipart_encode({"model": STT_MODEL, **({"language": lang} if lang else {})},
+                                        "file", filename, data, mime)
         req = urllib.request.Request(STT_URL, data=body, method="POST",
                                      headers={"Content-Type": ctype, "Accept": "application/json"})
     elif b == "eleven":
-        body, ctype = _multipart_encode({"model_id": ELEVEN_STT_MODEL}, "file", filename, data, mime)
+        body, ctype = _multipart_encode({"model_id": ELEVEN_STT_MODEL, **({"language_code": lang} if lang else {})},
+                                        "file", filename, data, mime)
         req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST",
                                      headers={"xi-api-key": ELEVEN_KEY, "Content-Type": ctype, "Accept": "application/json"})
     else:
@@ -5078,7 +5199,9 @@ class Handler(BaseHTTPRequestHandler):
             invoices = cc_extras.invoices_read(inv_file) if inv_file and Path(inv_file).exists() else None
             self._send(200, cc_extras.usage_summary(lines, titles=titles, invoices=invoices))
         elif route == "/voices":
-            if _voice_backend("tts") == "spoke":
+            if _voice_backend("tts") == "piper":
+                self._send(200, {"voices": _piper_voices(), "current": PIPER_VOICE, "current_name": PIPER_VOICE, "model": "piper", "backend": "piper"})
+            elif _voice_backend("tts") == "spoke":
                 self._send(200, {"voices": _spoke_voices(), "current": TTS_VOICE, "current_name": TTS_VOICE, "model": TTS_MODEL, "backend": "spoke"})
             else:
                 self._send(200, {"voices": _voices(), "current": VOICE_ID, "current_name": _voice_name(VOICE_ID), "model": VOICE_MODEL, "backend": "eleven" if ELEVEN_KEY else None})
@@ -5103,11 +5226,12 @@ class Handler(BaseHTTPRequestHandler):
                              "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
                              "others": others})
         elif route.startswith("/jobs/"):
+            q = self._query()   # full=1: the whole result text, for the card's "more" (JOBCARD-1)
             try:
-                tail = max(0, min(int(self._query().get("tail") or 4000), JOB_TAIL_MAX))
+                tail = max(0, min(int(q.get("tail") or 4000), JOB_TAIL_MAX))
             except ValueError:
                 tail = 4000
-            j = JOBS.get(route[len("/jobs/"):], tail)
+            j = JOBS.get(route[len("/jobs/"):], tail, full=q.get("full") == "1")
             self._send(200 if j else 404, j or {"error": "no such job"})
         else:
             self._send(404, {"error": "not_found"})
@@ -5288,7 +5412,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/speak":
             backend = _voice_backend("tts")
             if backend is None:
-                self._send(409, {"ok": False, "error": "voice needs CC_TTS_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env (enter it on the box)"})
+                self._send(409, {"ok": False, "error": "voice needs CC_TTS_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env (enter it on the box), or Piper on the box (scripts/cc/install-piper.sh) for a Russian console"})
                 return
             text = _speakable(str(req.get("text") or ""))
             parts = _speak_parts(text)
@@ -5321,12 +5445,23 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/voice":
             # Choose the voice by name: a Kokoro voice while the spoke speaks (CC_TTS_VOICE),
             # else one from the owner's ElevenLabs account (CC_VOICE_ID); remembered in the env file.
-            global VOICE_ID, TTS_VOICE
+            global VOICE_ID, TTS_VOICE, PIPER_VOICE
             backend = _voice_backend("tts")
             if backend is None:
                 self._send(409, {"ok": False, "error": "voice needs CC_TTS_URL (a voice spoke) or ELEVENLABS_API_KEY in the bridge env"})
                 return
             want = str(req.get("voice") or "").strip().lower()
+            if backend == "piper":
+                have = _piper_installed()
+                match = [v for v in have if v == want] or [v for v in have if want and want in v]
+                if len(match) != 1:
+                    self._send(404 if not match else 409, {"ok": False, "error": ("no voice called " + want + " on this box; there are " + ", ".join(have)) if not match else "several voices match: " + ", ".join(match)})
+                    return
+                PIPER_VOICE = match[0]
+                _env_file_set("CC_PIPER_VOICE", PIPER_VOICE); os.environ["CC_PIPER_VOICE"] = PIPER_VOICE
+                print(f"voice set to {PIPER_VOICE} (piper)", flush=True)
+                self._send(200, {"ok": True, "voice": PIPER_VOICE, "id": PIPER_VOICE})
+                return
             if backend == "spoke":
                 match = [v for v in KOKORO_VOICES if v == want] or [v for v in KOKORO_VOICES if want and want in v]
                 if len(match) > 1:

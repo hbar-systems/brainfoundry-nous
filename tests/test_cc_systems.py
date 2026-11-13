@@ -177,6 +177,24 @@ def test_board_counts_live_agents_and_detail(tmp_path):
     assert bf["count"] == 0                                 # ideas and questions of the chopper are not tasks
 
 
+def test_done_job_line_carries_its_result(tmp_path):
+    """JOBCARD-1: a done job's line shows the first sentence of its result, the result file and the files it
+    made as pane links (a json file never); a running job has none."""
+    w, now = _world(tmp_path)
+    t = int(now.timestamp())
+    res = {"text": "**Built.** The page is live at /systems. More after.", "rc": 0, "secs": 300,
+           "source": "/home/hands/out/d/m.out",
+           "files": [{"name": "shot.png", "path": "/home/hands/out/d/m/shot.png", "kind": "image"},
+                     {"name": "state.json", "path": "/home/hands/out/d/m/state.json", "kind": "text"}]}
+    jobs = [{"id": "J2", "title": "MUSIC-2 hbar.music: mix", "started": t - 600, "ended": t - 300, "rc": 0, "result": res},
+            {"id": "J1", "title": "MUSIC-1 hbar.music: render", "started": t - 60, "ended": None}]
+    tl = {x["id"]: x for x in cc_systems.board(w, jobs, {}, now=now)["tiles"]}
+    done = tl["hbar.music"]["detail"]["done_today"]["lines"][0]["result"]
+    assert done["first"] == "Built." and done["href"] == "/files?path=/home/hands/out/d/m.out"
+    assert done["files"] == [{"name": "shot.png", "href": "/files?path=/home/hands/out/d/m/shot.png", "image": True}]
+    assert "result" not in tl["hbar.music"]["detail"]["running"]["lines"][0]
+
+
 def test_board_reads_the_static_board_as_data(tmp_path):
     """BOARD-4: board.json (scripts/board.py) is the source of court, thoughts and next, and of job filing."""
     w, now = _world(tmp_path)
