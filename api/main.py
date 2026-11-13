@@ -2005,10 +2005,12 @@ try:
 except Exception as e:
     print(f"[startup] submissions router mount skipped: {e}", flush=True)
 
-# Mount compute meter router (/meter/usage, /meter/ledger — read-only metering)
+# Mount compute meter router (/meter/usage, /meter/ledger — read-only metering).
+# Owner-key gated: the ledger is the owner's per-call model, token and spend log
+# (audit 2026-11-13, meter-routes-unauthenticated-usage-disclosure).
 try:
     from api.compute_meter import router as _compute_meter_router
-    app.include_router(_compute_meter_router)
+    app.include_router(_compute_meter_router, dependencies=[Depends(get_api_key)])
 except Exception as e:
     print(f"[startup] compute_meter router mount skipped: {e}", flush=True)
 
