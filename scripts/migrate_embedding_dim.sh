@@ -86,7 +86,7 @@ if [[ "${ROWS:-0}" -gt 0 ]]; then
   SAFE_HOST=${HOST//./_}
   BACKUP="/home/hbar/brain-backups/${SAFE_HOST}-document_embeddings-${STAMP}.sql"
   echo "  pg_dump backup -> ${BACKUP}"
-  "${SSH[@]}" "mkdir -p /home/hbar/brain-backups && docker compose -f /home/hbar/brain/docker-compose.yml exec -T postgres pg_dump -U postgres -d llm_db -t document_embeddings --column-inserts > ${BACKUP} && wc -c ${BACKUP}"
+  "${SSH[@]}" "umask 077 && install -d -m 700 /home/hbar/brain-backups && chmod 700 /home/hbar/brain-backups && docker compose -f /home/hbar/brain/docker-compose.yml exec -T postgres pg_dump -U postgres -d llm_db -t document_embeddings --column-inserts > ${BACKUP} && wc -c ${BACKUP}"
 fi
 
 echo "  ALTER + recreate ivfflat..."
