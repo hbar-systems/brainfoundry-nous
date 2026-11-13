@@ -14,7 +14,7 @@
 #   peek <file>           the first 64 KB of one file (organise only)
 #   apply                 a plan on stdin, lines "mkdir<TAB>folder" or "mv<TAB>from<TAB>to" (organise only);
 #                         never overwrites, never deletes; writes an undo file and prints its id
-#   undo <id>             moves a plan's files back
+#   undo <id>             moves a plan's files back (organise only)
 #   leave                 removes the brain's key line (the brain can let go of the laptop itself)
 # Paths are relative to the home folder. Refused always: anything under Library, any hidden folder,
 # .brain-spoke itself, "..", links that lead outside home. There is no delete verb and no shell.
@@ -31,16 +31,26 @@ refuse() { log "REFUSED	$*"; say "refused: $*" >&2; exit 3; }
 mode() { cat "$D/mode" 2>/dev/null || echo look; }
 need_organise() { [ "$(mode)" = organise ] || refuse "$1 needs organise mode (the friend's yes)"; }
 
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
 safe() {
-    # prints the absolute path for a home-relative path, or refuses
-    local rel=$1 abs dir
+    # prints the absolute path for a home-relative path, or refuses. The whole path is judged,
+    # the last part included (audit 2026-11-13): a link as the last part is refused outright
+    # (door.sh never needs to follow one), and the Library and hidden rules run on the resolved
+    # path without regard to case, as macOS file names are case-insensitive.
+    local rel=$1 abs dir base home lc
     case "$rel" in ''|/*|*'..'*) refuse "path $rel" ;; esac
-    case "/$rel/" in */.*/*|/Library/*) refuse "path $rel (hidden or Library)" ;; esac
+    lc=$(lower "/$rel/")
+    case "$lc" in */.*/*|/library/*) refuse "path $rel (hidden or Library)" ;; esac
     abs="$HOME/$rel"
+    [ -L "$abs" ] && refuse "path $rel (a link)"
     dir=$(cd -P "$(dirname "$abs")" 2>/dev/null && pwd -P) || refuse "path $rel (no such folder)"
-    case "$dir/" in "$(cd -P "$HOME" && pwd -P)"/*) ;; *) refuse "path $rel (leads outside home)" ;; esac
-    case "$dir/" in */Library/*|*/.*) refuse "path $rel (hidden or Library)" ;; esac
-    printf '%s/%s\n' "$dir" "$(basename "$abs")"
+    home=$(cd -P "$HOME" && pwd -P)
+    case "$dir/" in "$home"/*) ;; *) refuse "path $rel (leads outside home)" ;; esac
+    base=$(basename "$abs")
+    lc=$(lower "${dir#"$home"}/$base/")
+    case "$lc" in */library/*|*/.*) refuse "path $rel (hidden or Library)" ;; esac
+    printf '%s/%s\n' "$dir" "$base"
 }
 
 # the brain's command arrives in SSH_ORIGINAL_COMMAND; run locally, the arguments
@@ -82,12 +92,20 @@ case "$verb" in
         done
         log "applied	$id	$n steps"; say "applied $n steps; undo id $id" ;;
     undo)
-        U="$D/undo/${1:-none}.tsv"; [ -f "$U" ] || refuse "no undo $1"
+        # organise only, an id in apply's own format, every replayed path fenced again (audit 2026-11-13)
+        need_organise undo
+        case "${1:-}" in
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+            *) refuse "undo id ${1:-none}" ;;
+        esac
+        U="$D/undo/$1.tsv"; [ -f "$U" ] || refuse "no undo $1"
+        H=$(cd -P "$HOME" && pwd -P)
         tail -r "$U" 2>/dev/null > "$U.rev" || tac "$U" > "$U.rev"
         while IFS="$TAB" read -r op a b; do
             case "$op" in
-                mv) [ -e "$b" ] || mv -n "$a" "$b" ;;
-                rmdir) rmdir "$a" 2>/dev/null ;;
+                mv) s=$(safe "${a#"$H"/}") || exit 3; t=$(safe "${b#"$H"/}") || exit 3
+                    [ -e "$t" ] || mv -n "$s" "$t" ;;
+                rmdir) p=$(safe "${a#"$H"/}") || exit 3; rmdir "$p" 2>/dev/null ;;
             esac
         done < "$U.rev"
         mv "$U" "$U.undone"; rm -f "$U.rev"; say "undone $1" ;;
