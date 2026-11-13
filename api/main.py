@@ -5105,28 +5105,29 @@ async def _import_laptop_audio(file, rel: str, raw: str):
     cap = _laptop_import.MAX_AUDIO_FILE_BYTES
     try:
         rec = _LAPTOP_TOKENS.check(raw)
-        dest = _laptop_import.audio_dest(_LAPTOP_AUDIO_DIR, rel, rec["created"])
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        # ~/in is the member's hands' folder: every step by descriptor, no link followed (audit 2026-11-13)
+        place = _laptop_import.AudioPlace(_LAPTOP_AUDIO_DIR, rel, rec["created"])
     except _laptop_import.TokenError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=507, detail=f"no place for audio on the brain: {str(e)[:200]}")
-    tmp = dest.with_name(f".{dest.name}.part")
     sha, size = _hashlib.sha256(), 0
     try:
-        with open(tmp, "wb") as out:
+        with place.open_tmp() as out:
             while chunk := await file.read(1 << 20):
                 size += len(chunk)
                 if size > cap:
                     raise _laptop_import.TokenError(413, f"file over {cap // 1024 ** 2} MB")
                 sha.update(chunk)
                 out.write(chunk)
-        _LAPTOP_TOKENS.charge(raw, size, _laptop_import.extension(rel))
-        where = _laptop_import.keep_audio(_LAPTOP_AUDIO_DIR, dest, tmp, size, sha.hexdigest())
+            _LAPTOP_TOKENS.charge(raw, size, _laptop_import.extension(rel))
+            where = place.keep(out, size, sha.hexdigest())
     except _laptop_import.TokenError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=507, detail=f"could not keep the audio: {str(e)[:200]}")
     finally:
-        tmp.unlink(missing_ok=True)
+        place.close()
     _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "audio", "where": where})
     print(f"[import-laptop] audio kept: {where} ({size} bytes)", flush=True)
     return {"path": rel, "status": "KEPT", "where": where}

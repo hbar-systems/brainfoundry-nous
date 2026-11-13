@@ -22,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import time
 from pathlib import Path, PurePosixPath
@@ -198,57 +199,138 @@ def max_file_bytes(ext: str) -> int:
     return MAX_AUDIO_FILE_BYTES if ext in AUDIO_EXT else MAX_FILE_BYTES
 
 
-def _chown_like(path: Path, root: Path) -> None:
-    """The api runs as root in its container; files it writes into a member's ~/in take
-    the owner of that folder, so the member's hands can read and move them."""
+_NOFOLLOW_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _chown_fd(fd: int, root_st) -> None:
+    """The api runs as root in its container; what it creates in a member's ~/in takes the owner of
+    that folder, so the member's hands can read and move it. On the descriptor, never by path."""
     try:
-        st = root.stat()
-        if os.geteuid() == 0 and (st.st_uid, st.st_gid) != (0, 0):
-            os.chown(path, st.st_uid, st.st_gid)
+        if os.geteuid() == 0 and (root_st.st_uid, root_st.st_gid) != (0, 0):
+            os.fchown(fd, root_st.st_uid, root_st.st_gid)
     except OSError:
         pass
 
 
-def audio_dest(root: Path, rel: str, created: float) -> Path:
-    """Where one audio file lands: <root>/<date of the run>/import/<laptop path>; a name
-    already taken gets ' (2)', ' (3)', ... (nothing is overwritten)."""
-    day = time.strftime("%Y-%m-%d", time.gmtime(created))
-    dest = Path(root) / day / "import" / rel
-    if not dest.exists():
-        return dest
-    stem, suf = dest.stem, dest.suffix
-    for i in range(2, 1000):
-        cand = dest.with_name(f"{stem} ({i}){suf}")
-        if not cand.exists():
-            return cand
-    raise ValueError("too many files of that name")
+class AudioPlace:
+    """Where one audio file lands: <root>/<date of the run>/import/<laptop path>; a name already taken
+    gets ' (2)', ' (3)', ... (nothing is overwritten).
 
+    The root (~/in, bind-mounted) belongs to the member's hands, a lower-trust user, while the api
+    writes as root (audit 2026-11-13, laptop-import-audio-writer-follows-hands-links). So every step
+    works from directory descriptors reached with O_NOFOLLOW: a folder, temp file, audio file or
+    audio.tsv planted as a link makes the import fail; nothing outside ~/in is opened, created,
+    chmodded or chowned, and mode and owner are set only on descriptors this writer created."""
 
-def keep_audio(root: Path, dest: Path, tmp: Path, size: int, sha: str) -> str:
-    """Move a fully received file into place, open it to the member, list it in audio.tsv.
-    Returns the path as the member sees it under ~/in."""
-    root = Path(root)
-    made = []
-    d = dest.parent
-    while d != root and not d.exists():
-        made.append(d)
-        d = d.parent
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    for d in reversed(made):
-        os.chmod(d, 0o755)
-        _chown_like(d, root)
-    os.replace(tmp, dest)
-    os.chmod(dest, 0o644)
-    _chown_like(dest, root)
-    import_dir = dest.relative_to(root).parts[:2]  # (<date>, "import")
-    index = root.joinpath(*import_dir) / "audio.tsv"
-    fresh = not index.exists()
-    with open(index, "a", encoding="utf-8") as f:
-        if fresh:
-            f.write("file\tbytes\tsha256\tarrived\n")
-        f.write(f"{dest.relative_to(index.parent).as_posix()}\t{size}\t{sha}\t"
-                f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
-    if fresh:
-        os.chmod(index, 0o644)
-        _chown_like(index, root)
-    return "in/" + dest.relative_to(root).as_posix()
+    def __init__(self, root: Path, rel: str, created: float):
+        self.root = Path(root)
+        self.fds: list[int] = []
+        self.tmp_name = None
+        day = time.strftime("%Y-%m-%d", time.gmtime(created))
+        parts = [day, "import", *PurePosixPath(rel).parts]
+        if any(x in ("", ".", "..") or "/" in x for x in parts):
+            raise ValueError("bad path")
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)   # the api's own mount point (config), not the member's
+            fd = os.open(str(self.root), _NOFOLLOW_DIR)
+            self.fds.append(fd)
+            self.root_st = os.fstat(fd)
+            self.import_fd = None
+            for i, part in enumerate(parts[:-1]):
+                fresh = False
+                try:
+                    os.mkdir(part, 0o755, dir_fd=fd)
+                    fresh = True
+                except FileExistsError:
+                    pass
+                fd = os.open(part, _NOFOLLOW_DIR, dir_fd=fd)   # ELOOP / ENOTDIR on a planted link
+                self.fds.append(fd)
+                if fresh:
+                    os.fchmod(fd, 0o755)
+                    _chown_fd(fd, self.root_st)
+                if i == 1:
+                    self.import_fd = fd
+            self.dir_fd = fd
+            base = parts[-1]
+            stem, suf = PurePosixPath(base).stem, PurePosixPath(base).suffix
+            self.name = None
+            for i in range(1, 1000):
+                cand = base if i == 1 else f"{stem} ({i}){suf}"
+                try:
+                    os.stat(cand, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    self.name = cand
+                    break
+            if self.name is None:
+                raise ValueError("too many files of that name")
+            self.rel = "/".join([*parts[:-1], self.name])
+        except BaseException:
+            self.close()
+            raise
+
+    def open_tmp(self):
+        """A new temp file beside the place, unguessable name, exclusive, never through a link."""
+        for _ in range(20):
+            name = f".{self.name}.{os.urandom(6).hex()}.part"
+            try:
+                fd = os.open(name, _NEW_FILE, 0o600, dir_fd=self.dir_fd)
+                self.tmp_name = name
+                return os.fdopen(fd, "wb")
+            except FileExistsError:
+                continue
+        raise FileExistsError("no temp name free")
+
+    def keep(self, out, size: int, sha: str) -> str:
+        """The received file (its open temp `out`) into place, opened to the member, listed in audio.tsv.
+        Returns the path as the member sees it under ~/in."""
+        out.flush()
+        os.fchmod(out.fileno(), 0o644)
+        _chown_fd(out.fileno(), self.root_st)
+        out.close()
+        # link, not rename: a name that appeared meanwhile fails instead of being replaced
+        name = self.name
+        for i in range(1, 1000):
+            try:
+                os.link(self.tmp_name, name, src_dir_fd=self.dir_fd, dst_dir_fd=self.dir_fd, follow_symlinks=False)
+                break
+            except FileExistsError:
+                stem, suf = PurePosixPath(self.name).stem, PurePosixPath(self.name).suffix
+                name = f"{stem} ({i + 1}){suf}"
+        else:
+            raise ValueError("too many files of that name")
+        os.unlink(self.tmp_name, dir_fd=self.dir_fd)
+        self.tmp_name = None
+        self.rel = "/".join([*self.rel.split("/")[:-1], name])
+        fresh = True
+        try:
+            fd = os.open("audio.tsv", _NEW_FILE, 0o644, dir_fd=self.import_fd)
+        except FileExistsError:
+            fresh = False
+            fd = os.open("audio.tsv", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                         dir_fd=self.import_fd)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise ValueError("audio.tsv is not a plain file")
+            if fresh:
+                os.fchmod(fd, 0o644)
+                _chown_fd(fd, self.root_st)
+                f.write("file\tbytes\tsha256\tarrived\n")
+            f.write(f"{self.rel.split('/', 2)[2]}\t{size}\t{sha}\t"
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+        return "in/" + self.rel
+
+    def close(self) -> None:
+        if self.tmp_name and getattr(self, "dir_fd", None) is not None:
+            try:
+                os.unlink(self.tmp_name, dir_fd=self.dir_fd)
+            except OSError:
+                pass
+            self.tmp_name = None
+        for fd in reversed(self.fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.fds = []
