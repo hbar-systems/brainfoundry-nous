@@ -36,10 +36,12 @@ def status() -> Dict[str, Any]:
 
 def _public(host: str) -> bool:
     try:
-        for info in socket.getaddrinfo(host, None):
-            ip = ipaddress.ip_address(info[4][0])
-            if (ip.is_private or ip.is_loopback or ip.is_link_local
-                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        from api.tools.fetch_url import ip_is_public  # one rule for every public-only fetch
+        infos = socket.getaddrinfo(host, None)
+        if not infos:
+            return False
+        for info in infos:
+            if not ip_is_public(ipaddress.ip_address(info[4][0])):
                 return False
         return True
     except Exception:
