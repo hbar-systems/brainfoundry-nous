@@ -1532,3 +1532,105 @@ def test_transcribe_language_env_wins_and_reaches_elevenlabs(monkeypatch, tmp_pa
     url, body = _stt_post_fields(monkeypatch, m)
     assert url == "https://api.elevenlabs.io/v1/speech-to-text"
     assert b'name="language_code"\r\n\r\nhe\r\n' in body
+
+# VOICE-RU-1 (2026-11-13): Piper on the box speaks a Russian console when no key is set.
+def _piper_box(monkeypatch, tmp_path, lang="ru", voices=("dmitri",)):
+    d = tmp_path / "piper"
+    (d / "voices").mkdir(parents=True)
+    exe = d / "venv" / "bin" / "piper"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n"); exe.chmod(0o755)
+    for v in voices:
+        (d / "voices" / f"ru_RU-{v}-medium.onnx").write_bytes(b"onnx")
+        (d / "voices" / f"ru_RU-{v}-medium.onnx.json").write_text('{"audio": {"sample_rate": 22050}}')
+    monkeypatch.setenv("CC_PIPER_DIR", str(d))
+    for k in ("CC_TTS_URL", "CC_STT_URL", "ELEVENLABS_API_KEY", "CC_VOICE_BACKEND", "CC_PIPER_BIN", "CC_PIPER_VOICE"):
+        monkeypatch.delenv(k, raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    if lang != "en":
+        m.LAYOUT.set_lang(lang)
+    return m
+
+
+def test_piper_speaks_a_russian_console_without_a_key(monkeypatch, tmp_path):
+    m = _piper_box(monkeypatch, tmp_path)
+    assert m._voice_backend() == "piper"
+    assert m._voice_backend("stt") is None          # Piper only speaks
+    assert m._voice_current_name() == "dmitri"
+    assert [v["id"] for v in m._piper_voices()] == ["dmitri"]
+
+
+def test_piper_stays_silent_for_english_and_when_not_installed(monkeypatch, tmp_path):
+    m = _piper_box(monkeypatch, tmp_path, lang="en")
+    assert m._voice_backend() is None
+    m = _piper_box(monkeypatch, tmp_path / "b", voices=())
+    assert m._voice_backend() is None
+    m = _piper_box(monkeypatch, tmp_path / "c")
+    monkeypatch.setattr(m, "PIPER_VOICE", "nobody")
+    assert m._piper_ready() is False and m._voice_backend() is None
+
+
+def test_eleven_key_still_wins_over_piper(monkeypatch, tmp_path):
+    m = _piper_box(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "ELEVEN_KEY", "secret-a")
+    assert m._voice_backend() == "eleven"
+
+
+def test_kokoro_spoke_never_reads_russian_when_piper_can(monkeypatch, tmp_path):
+    m = _piper_box(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "TTS_URL", "http://100.84.44.71:8880/v1/audio/speech")
+    monkeypatch.setattr(m, "_spoke_answers", lambda url, **k: True)
+    assert m._voice_backend() == "piper"
+    monkeypatch.setattr(m, "TTS_MODEL", "some-russian-model")
+    assert m._voice_backend() == "spoke"
+    m.LAYOUT.set_lang("en")
+    monkeypatch.setattr(m, "TTS_MODEL", "kokoro")
+    assert m._voice_backend() == "spoke"
+
+
+def test_piper_forced_by_env_in_any_language(monkeypatch, tmp_path):
+    m = _piper_box(monkeypatch, tmp_path, lang="en")
+    monkeypatch.setattr(m, "VOICE_BACKEND", "piper")
+    assert m._voice_backend() == "piper"
+
+
+def test_piper_stream_wraps_raw_pcm(monkeypatch, tmp_path):
+    import types
+    m = _piper_box(monkeypatch, tmp_path)
+    calls = []
+
+    def fake_run(cmd, input=None, capture_output=None, timeout=None):
+        calls.append((cmd, input))
+        if cmd[0] == m.PIPER_BIN:
+            return types.SimpleNamespace(returncode=0, stdout=b"\x00\x01" * 100)
+        return types.SimpleNamespace(returncode=0, stdout=b"ID3mp3")
+    monkeypatch.setattr(m, "_ffmpeg", lambda: None)
+    wav = b"".join(m._speak_stream_piper("Привет.\nКак дела?", run=fake_run))
+    assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE" and len(wav) == 44 + 200
+    assert calls[0][0][1:] == ["-m", str(m._piper_model()), "--output-raw"]
+    assert calls[0][1] == "Привет. Как дела?".encode()     # one line: one utterance
+    assert m._tts_mime("piper") == "audio/wav"
+    monkeypatch.setattr(m, "_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    assert b"".join(m._speak_stream_piper("Привет.", run=fake_run)) == b"ID3mp3"
+    assert "-ar" in calls[-1][0] and calls[-1][0][calls[-1][0].index("-ar") + 1] == "22050"
+    assert m._tts_mime("piper") == "audio/mpeg"
+    import pytest
+    with pytest.raises(RuntimeError):
+        list(m._speak_stream_piper("x", run=lambda *a, **k: types.SimpleNamespace(returncode=1, stdout=b"")))
+
+
+def test_piper_speaks_for_real_when_installed(monkeypatch, tmp_path):
+    # Runs only on a box with scripts/cc/install-piper.sh done (CC_PIPER_TEST_DIR names it).
+    import os
+    import pytest
+    d = os.environ.get("CC_PIPER_TEST_DIR")
+    if not d:
+        pytest.skip("no CC_PIPER_TEST_DIR")
+    monkeypatch.setenv("CC_PIPER_DIR", d)
+    for k in ("ELEVENLABS_API_KEY", "CC_TTS_URL", "CC_VOICE_BACKEND", "CC_PIPER_BIN", "CC_PIPER_VOICE"):
+        monkeypatch.delenv(k, raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m.LAYOUT.set_lang("ru")
+    assert m._voice_backend() == "piper"
+    audio = m._tts_bytes("Доброе утро.")
+    assert len(audio) > 4000
