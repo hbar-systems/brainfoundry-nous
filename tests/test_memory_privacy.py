@@ -574,3 +574,34 @@ def test_operator_turn_keeps_the_configured_architecture(m, sent, monkeypatch):
     calls = _record_search(m, monkeypatch)
     _chat(m, "claude-opus-4-8")
     assert calls and calls[0]["architecture"] == "flat" and calls[0]["layers"] is None
+
+
+def test_app_turn_gets_no_agentic_tools_or_web(m, sent, monkeypatch, tmp_path):
+    # app-llm-complete-inherits-agentic-tools-beyond-manifest
+    from api import providers as _p
+    from api import settings_store as _ss
+    monkeypatch.setattr(m, "_verify_loop_permit", lambda pid, tok: {"agent_id": "app:demo"})
+    _install_app_entry(tmp_path, monkeypatch, [("semantic", "read")])
+    monkeypatch.setattr(_ss, "get_agentic_tools_enabled", lambda: True)
+    monkeypatch.setattr(_ss, "get_web_search_enabled", lambda: True)
+    monkeypatch.setattr(_p, "supports_native_tools", lambda model: True)
+    offered = []
+
+    async def fake_tools(model, messages, tools, dispatch, max_tokens=2048):
+        offered.append([t["name"] for t in tools])
+        return {"text": "ok", "tool_events": []}
+    monkeypatch.setattr(_p, "complete_with_tools", fake_tools)
+    from api import tools as _tools
+    ran = []
+
+    async def no_dispatch(*a, **k):
+        ran.append(a)
+        raise AssertionError("no tool may run on an app turn")
+    monkeypatch.setattr(_tools, "dispatch", no_dispatch)
+    out = _app_chat(m, web=True)
+    assert offered == [] and ran == []
+    assert out["rag_metadata"]["web_search"]["requested"] is False
+    # control: the operator's own turn still gets the tools
+    monkeypatch.setattr(m, "_verify_loop_permit", lambda pid, tok: {"agent_id": "ui"})
+    _app_chat(m)
+    assert offered and offered[0]

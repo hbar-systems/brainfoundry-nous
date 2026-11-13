@@ -3109,7 +3109,9 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         layers = request.get("layers") or None
         # A brain app's turn (audit 2026-11-13) keeps to its manifest: retrieval
         # only over the read layers the operator approved for it (looked up
-        # here, narrowed by the request, never widened).
+        # here, narrowed by the request, never widened), no web search and no
+        # agentic tools (mail, Drive, calendar, fetch, MCP, tasks), which the
+        # app reaches only through bridge intents its manifest permits.
         _app_turn = _permit_agent.startswith("app:")
         _app_layers = None
         if _app_turn:
@@ -3238,7 +3240,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # enabled web search in Settings (standing authorization) — the
         # dispatcher enforces the tier; this just avoids a pointless call.
         web_context = ""
-        web_meta = {"requested": bool(request.get("web_search")), "used": False,
+        web_meta = {"requested": bool(request.get("web_search")) and not _app_turn, "used": False,
                     "results": [], "error": None}
         if web_meta["requested"]:
             if settings_store.get_web_search_enabled():
@@ -3333,7 +3335,8 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # (capable ones tool-call; tiny ones just answer) — federation never
         # requires a cloud model.
         tool_events = []
-        agentic = (settings_store.get_agentic_tools_enabled()
+        agentic = (not _app_turn
+                   and settings_store.get_agentic_tools_enabled()
                    and _providers.supports_native_tools(model))
         import copy as _copy
         from api import tools as _agentic_tools
