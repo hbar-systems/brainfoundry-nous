@@ -52,6 +52,21 @@ function fromForeignPage(headers) {
   return false
 }
 
+// The console token (audit 2026-11-13, console-ui-loopback-releases-owner-key-to-local-users). The ui
+// listens on loopback, so any local Unix user (split hands, another member on a shared box) could call it
+// with no browser headers and get the owner key. When CONSOLE_PROXY_TOKEN is set, every owner-authority
+// route requires the X-Console-Token header that only the web server (Caddy header_up) adds. Unset keeps
+// the old behaviour, so a box keeps working until its Caddy block carries the token.
+function consoleTokenMissing(headers) {
+  const want = process.env.CONSOLE_PROXY_TOKEN || ''
+  if (!want) return false
+  const got = header(headers, 'x-console-token')
+  if (got.length !== want.length) return true
+  let diff = 0
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i)
+  return diff !== 0
+}
+
 // Where an /api/bf path goes. Segments are the decoded catch-all parts (req.query.path).
 //   { kind: 'app-static', appId }  GET/HEAD of an app's own file
 //   { kind: 'app-api', appId }     the app's own backend router (apps/<id>/api/...)
@@ -81,6 +96,7 @@ function decide(parts, method, headers) {
   const c = classify(parts, method)
   if (c.kind === 'bad') return { action: 'refuse', status: 400, error: 'bad_path' }
   const foreign = fromForeignPage(headers)
+  if (c.kind !== 'app-static' && consoleTokenMissing(headers)) return { action: 'refuse', status: 403, error: 'console_token_required' }
   if (c.kind === 'app-static') return { action: 'forward', ownerKey: false, appFile: true, cors: foreign, appId: c.appId }
   if (c.kind === 'app-api') return { action: 'forward', ownerKey: !foreign, appFile: false, cors: foreign, appId: c.appId }
   if (foreign) return { action: 'refuse', status: 403, error: 'app_frame_refused' }
@@ -170,4 +186,4 @@ function injectShim(html) {
   return tag + s
 }
 
-module.exports = { APP_ID_RE, APP_SANDBOX, APP_CSP, SHIM_JS, fromForeignPage, classify, decide, corsHeaders, injectShim }
+module.exports = { APP_ID_RE, APP_SANDBOX, APP_CSP, SHIM_JS, fromForeignPage, consoleTokenMissing, classify, decide, corsHeaders, injectShim }

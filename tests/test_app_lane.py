@@ -379,3 +379,23 @@ def test_terminal_checks_origin():
     unit = (ROOT / "scripts" / "cc" / "install.sh").read_text()
     line = next(l for l in unit.splitlines() if l.startswith("ExecStart=/usr/bin/ttyd"))
     assert " -O " in line
+
+
+# ---- the console token (audit 2026-11-13, console-ui-loopback-releases-owner-key-to-local-users) ----
+
+def _decide_env(parts, method, headers, token):
+    return _node_json("process.env.CONSOLE_PROXY_TOKEN=%s;const l=require('./appLane.js');console.log(JSON.stringify(l.decide(%s,%s,%s)))"
+                      % (json.dumps(token), json.dumps(parts), json.dumps(method), json.dumps(headers)))
+
+
+def test_console_token_enforced_when_set():
+    refused = {"action": "refuse", "status": 403, "error": "console_token_required"}
+    # a header-less loopback caller (another local user) gets nothing once the token is set
+    assert _decide_env(["documents", "search"], "POST", {}, "T0k3n") == refused
+    assert _decide_env(["documents", "search"], "POST", {"x-console-token": "wrong"}, "T0k3n") == refused
+    ok = _decide_env(["documents", "search"], "POST", {"x-console-token": "T0k3n"}, "T0k3n")
+    assert ok["action"] == "forward" and ok["ownerKey"] is True
+    # app static files carry no owner authority and stay reachable
+    assert _decide_env(["apps", "demo", "index.html"], "GET", {}, "T0k3n")["action"] == "forward"
+    # unset: old behaviour, so a box without the Caddy line keeps working
+    assert _decide_env(["documents", "search"], "POST", {}, "")["action"] == "forward"

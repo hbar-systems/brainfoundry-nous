@@ -1,4 +1,4 @@
-import { fromForeignPage } from "../../lib/appLane";
+import { fromForeignPage, consoleTokenMissing } from "../../lib/appLane";
 
 // Returns the brain's CLI access info (endpoint + API key).
 // Behind the console basicauth gate — only authenticated console users
@@ -8,6 +8,7 @@ import { fromForeignPage } from "../../lib/appLane";
 export default function handler(req, res) {
   // App lane (2026-10-16, ui/lib/appLane.js): an app frame or another site never reaches this.
   if (fromForeignPage(req.headers)) return res.status(403).json({ error: "app_frame_refused" })
+  if (consoleTokenMissing(req.headers)) return res.status(403).json({ error: "console_token_required" })
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ error: "Method Not Allowed" });
