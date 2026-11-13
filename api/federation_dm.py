@@ -21,13 +21,14 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 import uuid
-from typing import Optional
+from typing import Dict, List, Optional
 
 import httpx
 import psycopg2
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -237,11 +238,78 @@ async def send_dm(req: SendDMRequest, _auth: str = Depends(_operator_auth)):
     return {"id": new_id, "delivered": delivered, "delivery_code": delivery_code, "error": delivery_err}
 
 
+# ─── Receive bounds (audit 2026-11-13) ──────────────────────────────────────
+# The door is public and the signing key is the sender's own, so volume is bounded here:
+# the send path's 8000-character cap, short header fields, a per-address window, and
+# per-sender-key and brain-wide daily counts read from the inbox itself.
+
+DM_MAX_MESSAGE_CHARS = 8000
+DM_MAX_FIELD_CHARS = 256
+
+
+class _AddrWindow:
+    def __init__(self):
+        self.hits: Dict[str, List[float]] = {}
+        self.lock = threading.Lock()
+
+    def allow(self, addr: str, now: Optional[float] = None) -> bool:
+        maxn = int(os.getenv("DM_RECEIVE_RATE_MAX", "20"))
+        window = float(os.getenv("DM_RECEIVE_RATE_WINDOW", "3600"))
+        now = time.time() if now is None else now
+        with self.lock:
+            if len(self.hits) > 10000:  # keep the table itself bounded
+                self.hits = {a: h for a, h in self.hits.items() if h and now - h[-1] < window}
+            hits = [t for t in self.hits.get(addr, []) if now - t < window]
+            ok = len(hits) < maxn
+            if ok:
+                hits.append(now)
+            self.hits[addr] = hits
+            return ok
+
+
+_receive_window = _AddrWindow()
+
+
+def _client_addr(request: Optional[Request]) -> str:
+    if request is None:
+        return "unknown"
+    try:
+        from api import main as m
+        return m._public_client_ip(request)
+    except Exception:
+        return request.client.host if request.client else "unknown"
+
+
+def _check_receive_bounds(req: "ReceiveDMRequest") -> None:
+    if len(req.message) > DM_MAX_MESSAGE_CHARS:
+        raise HTTPException(413, f"message too long (max {DM_MAX_MESSAGE_CHARS} chars)")
+    for name in ("from_brain", "from_pubkey", "nonce", "signature"):
+        if len(getattr(req, name) or "") > DM_MAX_FIELD_CHARS:
+            raise HTTPException(413, f"{name} too long")
+
+
+def _inbox_counts_ok(cur, from_pubkey: str) -> Optional[str]:
+    """None when the daily counts allow one more row, else the refusal reason."""
+    per_sender = int(os.getenv("DM_PER_SENDER_DAILY_MAX", "50"))
+    brain_wide = int(os.getenv("DM_INBOX_DAILY_MAX", "500"))
+    cur.execute("SELECT COUNT(*) FROM federation_inbox WHERE received_at > NOW() - INTERVAL '1 day'")
+    if brain_wide > 0 and cur.fetchone()[0] >= brain_wide:
+        return "inbox is full for today"
+    cur.execute("SELECT COUNT(*) FROM federation_inbox WHERE from_pubkey = %s "
+                "AND received_at > NOW() - INTERVAL '1 day'", (from_pubkey,))
+    if per_sender > 0 and cur.fetchone()[0] >= per_sender:
+        return "this sender has sent enough for today"
+    return None
+
+
 @router.post("/receive")
-async def receive_dm(req: ReceiveDMRequest):
+async def receive_dm(req: ReceiveDMRequest, request: Request):
     """Accept a signed DM from another brain. Public — no auth required."""
     if not req.from_brain or not req.message.strip():
         raise HTTPException(400, "from_brain and message required")
+    _check_receive_bounds(req)
+    if not _receive_window.allow(_client_addr(request)):
+        raise HTTPException(429, "too many messages from this address")
 
     # Anti-clock-skew + replay window: reject DMs older than 5 min or future-dated
     now = int(time.time())
@@ -267,6 +335,9 @@ async def receive_dm(req: ReceiveDMRequest):
     try:
         with _db() as conn:
             with conn.cursor() as cur:
+                full = _inbox_counts_ok(cur, req.from_pubkey)
+                if full:
+                    raise HTTPException(429, full)
                 cur.execute(
                     """INSERT INTO federation_inbox
                        (from_brain, from_pubkey, message, payload_ts, nonce, signature)
@@ -280,6 +351,8 @@ async def receive_dm(req: ReceiveDMRequest):
         if row is None:
             return {"received": True, "duplicate": True}
         return {"received": True, "id": row[0]}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"DM persist failed: {e}")
 
