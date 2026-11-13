@@ -131,7 +131,8 @@ never retrieved, never put in the prompt, and never sent to that provider.
 This holds on every path that feeds memory to a model: `/chat/rag` (all three
 retrieval architectures, the corroboration pass, the agentic `search_memory`
 tool), brain-app `llm.complete`, Telegram, `/v1/public/chat`,
-`/v1/federation/query`, the harmonics receiver context, the layer-scheme
+`/v1/federation/query`, the harmonics receiver context (which also reads only
+scope=public, non-trashed, non-quarantined chunks), the layer-scheme
 proposal, and `/documents/search` (which the CC bridge uses to give Claude Code
 memory; it returns local-only chunks only when the caller sends
 `include_local_only: true`, which only the Knowledge tab does).
