@@ -85,7 +85,7 @@ def test_no_operator_token_fails_closed_to_other_users(monkeypatch, tmp_path):
 def test_job_tail_is_capped(monkeypatch, tmp_path):
     m, srv, base, _ = _bridge(monkeypatch, tmp_path, token="")
     seen = []
-    monkeypatch.setattr(m.JOBS, "get", lambda jid, tail=4000: seen.append(tail) or {"id": jid})
+    monkeypatch.setattr(m.JOBS, "get", lambda jid, tail=4000, full=False: seen.append(tail) or {"id": jid})
     try:
         assert _call(base + "/jobs/J1?tail=99999999")[0] == 200
         assert _call(base + "/jobs/J1?tail=junk")[0] == 200
