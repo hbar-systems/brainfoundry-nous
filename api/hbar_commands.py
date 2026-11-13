@@ -38,16 +38,18 @@ def _validate_peer_url(url: str) -> None:
         raise ValueError("peer endpoint has no hostname")
     if host.lower() in _CLOUD_METADATA_HOSTNAMES:
         raise ValueError(f"peer endpoint host {host!r} is a reserved metadata address")
-    # Resolve hostname to IP and check for private/internal ranges
+    # Resolve hostname and check EVERY address (IPv4 and IPv6) with the one public-only rule
+    # (api/tools/fetch_url.ip_is_public): gethostbyname saw only the first IPv4 and the category
+    # flags admitted 100.64.0.0/10, the owner's tailnet (SEC-PASS-1 2026-11-13).
+    from api.tools.fetch_url import ip_is_public
     try:
-        resolved_ip = _socket.gethostbyname(host)
-        addr = ipaddress.ip_address(resolved_ip)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        infos = _socket.getaddrinfo(host, None)
+    except OSError:
+        return  # DNS resolution failure — let the HTTP client handle it
+    for info in infos:
+        resolved_ip = info[4][0]
+        if not ip_is_public(ipaddress.ip_address(resolved_ip.split("%")[0])):
             raise ValueError(f"peer endpoint resolves to a private/internal address: {resolved_ip}")
-    except (OSError, ValueError) as e:
-        if "private" in str(e) or "internal" in str(e) or "loopback" in str(e):
-            raise ValueError(str(e)) from None
-        # DNS resolution failure — let the HTTP client handle it
 
 # ── simple in-process context store (resets on restart — intentional for a template) ──
 _context: Dict[str, Any] = {}
