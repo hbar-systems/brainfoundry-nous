@@ -98,6 +98,7 @@ def env(monkeypatch, tmp_path):
     limiter = m._ask_rate_limiter
     monkeypatch.setattr(limiter, "_client", FakeRedis())
     monkeypatch.setattr(limiter, "max_hits", 30)
+    monkeypatch.setattr(m._ask_public_global_limiter, "_client", limiter._client)
     replay_cache.clear()
     yield types.SimpleNamespace(client=TestClient(m.app), seen=seen, audit=federation_audit,
                                 limiter=limiter)
@@ -353,3 +354,25 @@ def test_brain_call_signs_the_query(monkeypatch):
     tok = brain_call._sign_outbound(THIS, "what is up")
     claims = verify_federation_assertion(public_key_b64=PEER_PUB, token=tok, expected_audience=THIS)
     assert claims["sub"] == "federation_query" and claims["qh"] == ask.question_hash("what is up")
+
+
+def test_public_askers_limited_per_address_whatever_their_key(env, monkeypatch):
+    from api.identity.core import generate_brain_keypair as _gen
+    monkeypatch.setattr(settings_store, "get_ask_public_enabled", lambda: True)
+    monkeypatch.setattr(env.limiter, "max_hits", 3)
+    codes = []
+    for i in range(4):
+        priv, pub = _gen()
+        codes.append(_ask(env, question=f"q{i}", priv=priv, iss=f"s{i}", public_key=pub).status_code)
+    assert codes == [200, 200, 200, 429]                    # fresh keys do not reset the floor
+    assert any(k.startswith("fed_rl:ask:ip:") for k in env.limiter._client.d)
+
+
+def test_public_askers_share_a_brain_wide_ceiling(env, monkeypatch):
+    from api.identity.core import generate_brain_keypair as _gen
+    monkeypatch.setattr(settings_store, "get_ask_public_enabled", lambda: True)
+    monkeypatch.setattr(m._ask_public_global_limiter, "max_hits", 2)
+    priv, pub = _gen()
+    codes = [_ask(env, question=f"q{i}", priv=priv, iss="s", public_key=pub).status_code for i in range(3)]
+    assert codes == [200, 200, 429]
+    assert _ask(env, question="pinned peers are not counted").status_code == 200

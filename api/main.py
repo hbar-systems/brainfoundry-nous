@@ -4076,6 +4076,13 @@ async def federation_query(request: dict, http_request: Request):
 # tools, no writes. Logic lives in api/ask.py; docs/ASK.md is the one page.
 
 _ask_rate_limiter = FederationRateLimiter()
+# Public askers mint their own keys for free, so a key is no floor (audit 2026-11-13): they are
+# also limited per client address (the proxy's last hop only, _public_client_ip) and by one
+# brain-wide ceiling, ASK_PUBLIC_RATE_MAX per FEDERATION_RATE_LIMIT_WINDOW (default 60) and
+# ASK_PUBLIC_DAILY_MAX a day (default 1000; 0 turns the daily ceiling off).
+_ask_public_global_limiter = FederationRateLimiter()
+_ask_public_global_limiter.max_hits = int(os.getenv("ASK_PUBLIC_RATE_MAX", "60"))
+_ask_public_global_limiter.daily_max = int(os.getenv("ASK_PUBLIC_DAILY_MAX", "1000"))
 
 
 def _ask_base_url(http_request: Request) -> str:
@@ -4230,6 +4237,9 @@ async def ask_door(http_request: Request):
                 caller.trust = "public"
 
     rl = _ask_rate_limiter.check(caller.rate_key)
+    if not rl and caller.trust == "public":
+        rl = (_ask_rate_limiter.check(f"ask:ip:{_public_client_ip(http_request)}")
+              or _ask_public_global_limiter.check("ask:public:all"))
     if rl:
         reason = "rate_limited" if rl.get("error") != "FAILURE" else "rate_limiter_unavailable"
         resp = _refuse(_ask.AskError(429, _ask.RATE_LIMITED, reason), caller)
