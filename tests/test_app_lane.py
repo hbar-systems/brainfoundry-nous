@@ -298,7 +298,7 @@ const fetch = async (url, opts) => {
 const mem = {}; const ls = { get length() { return Object.keys(mem).length }, key: i => Object.keys(mem)[i], getItem: k => k in mem ? mem[k] : null, setItem: (k, v) => { mem[k] = String(v) } }
 ls.setItem('hbar-ink-drops-v8', '[1]'); ls.setItem('cc.hidden', '{}'); ls.setItem('daybook:x', 'y')
 const llmApp = { id: 'oracle', name: 'Oracle', version: '1', permissions: ['llm.invoke'], requires_layers: [{ layer: 'semantic', mode: 'read' }] }
-const inkApp = { id: 'hbar-ink', name: 'ink', version: '1', permissions: ['memory.write'], requires_layers: [{ layer: 'episodic', mode: 'append' }] }
+const inkApp = { id: 'hbar-ink', name: 'ink', version: '1', preinstalled: true, permissions: ['memory.write'], requires_layers: [{ layer: 'episodic', mode: 'append' }] }
 ;(async () => {
   const o = b.makeBridge({ appInfo: llmApp, fetch, ls, brainName: 'hbar' })
   const r = {}
@@ -410,3 +410,49 @@ def test_every_router_word_is_a_reserved_app_id():
     src = (ROOT / "api" / "apps.py").read_text()
     firsts = {m for m in re.findall(r'@router\.\w+\("/([a-z]+)', src)}
     assert firsts <= set(words), firsts - set(words)
+
+
+STORE_SCRIPT = r"""
+const b = require('./appBridge.js')
+const mem = {}; const ls = { get length() { return Object.keys(mem).length }, key: i => Object.keys(mem)[i],
+  getItem: k => k in mem ? mem[k] : null, setItem: (k, v) => { mem[k] = String(v) }, removeItem: k => { delete mem[k] } }
+const A = { id: 'daybook', repo: 'https://github.com/hbar-systems/brain-app-daybook', installed_at: 't1', preinstalled: true }
+const B = { id: 'daybook', repo: 'https://github.com/other/not-daybook', installed_at: 't2' }
+const r = {}
+ls.setItem('daybook:2026-10-01', 'legacy')
+const a = b.makeBridge({ appInfo: A, fetch: null, ls, brainName: 'x' })
+r.aStore = a.store
+a.handleIntent({ type: 'storage.set', payload: { key: 'entry', value: 'private' } })
+// another browser kept A's store; a different install claiming the id starts empty
+r.bStore = b.loadStore('daybook', ls, B)
+r.bLegacy = 'daybook:2026-10-01' in r.bStore
+// reload of the same install keeps its data
+ls.setItem('bf.app-storage.daybook', JSON.stringify({ entry: 'kept' }))
+r.bAgain = b.loadStore('daybook', ls, B)
+// uninstall clears this browser: store, owner mark and legacy keys
+b.clearStore('daybook', ls)
+r.afterClear = Object.keys(mem).sort()
+// a store from before the owner mark existed is adopted by its installation
+mem['bf.app-storage.today'] = JSON.stringify({ x: '1' })
+r.adopted = b.loadStore('today', ls, { id: 'today', repo: 'r', installed_at: 't' })
+// a URL-installed app with a legacy id gets no legacy keys
+ls.setItem('qr-progress', '7')
+r.noLegacy = b.loadStore('quantum-room', ls, { id: 'quantum-room', repo: 'r', installed_at: 't' })
+console.log(JSON.stringify(r))
+"""
+
+
+def test_app_store_belongs_to_one_installation():
+    # app-storage-keyed-by-reusable-app-id (audit 2026-11-13)
+    r = _node_json(STORE_SCRIPT)
+    assert r["aStore"]["daybook:2026-10-01"] == "legacy"
+    assert r["bStore"] == {} and r["bLegacy"] is False
+    assert r["bAgain"] == {"entry": "kept"}
+    assert r["afterClear"] == []
+    assert r["adopted"] == {"x": "1"}
+    assert r["noLegacy"] == {}
+
+
+def test_uninstall_clears_the_app_store_in_the_console():
+    src = (ROOT / "ui" / "pages" / "apps" / "index.js").read_text()
+    assert "clearStore(id" in src

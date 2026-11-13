@@ -80,6 +80,10 @@
 //   federation.send   -> { peer, message }
 
 const STORAGE_PREFIX = 'bf.app-storage.'
+// Which installation a store belongs to (repo + install time). An id is chosen by the app author and
+// is free again after uninstall, so a later app from another repo that claims it must start empty
+// (audit 2026-11-13).
+const STORAGE_OWNER_PREFIX = 'bf.app-storage-owner.'
 const STORAGE_MAX_CHARS = 2000000
 
 // Keys the default-shelf apps wrote into the console's own localStorage while they shared its origin
@@ -101,12 +105,45 @@ function legacyStore(appId, ls) {
   return out
 }
 
+function installKey(appInfo) {
+  if (!appInfo || (!appInfo.repo && !appInfo.installed_at)) return ''
+  return `${appInfo.repo || ''}@${appInfo.installed_at || ''}`
+}
+
+// Forget an app's store in this browser (uninstall), its legacy console keys too.
+function clearStore(appId, ls) {
+  if (!ls) return
+  const drop = [STORAGE_PREFIX + appId, STORAGE_OWNER_PREFIX + appId]
+  const match = LEGACY_KEYS[appId]
+  if (match) {
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i)
+      if (k && match(k)) drop.push(k)
+    }
+  }
+  for (const k of drop) { try { ls.removeItem(k) } catch (_) { /* ignore */ } }
+}
+
 // The app's store, read from the console's localStorage (or the legacy keys on first load).
-function loadStore(appId, ls) {
+// `appInfo` (the installed.json entry) ties the store to one installation; a store written by an
+// earlier installation of another app with the same id is dropped, not handed over.
+function loadStore(appId, ls, appInfo) {
   if (!ls) return {}
+  const owner = installKey(appInfo)
+  if (owner) {
+    const mark = ls.getItem(STORAGE_OWNER_PREFIX + appId)
+    if (mark != null && mark !== owner) {
+      try { ls.removeItem(STORAGE_PREFIX + appId) } catch (_) { /* ignore */ }
+      try { ls.setItem(STORAGE_PREFIX + appId, '{}') } catch (_) { /* quota */ }
+    }
+    try { ls.setItem(STORAGE_OWNER_PREFIX + appId, owner) } catch (_) { /* quota */ }
+  }
   const raw = ls.getItem(STORAGE_PREFIX + appId)
   if (raw == null) {
-    const seeded = legacyStore(appId, ls)
+    // Legacy console keys go only to an app the brain pre-installed from a pack (the apps that wrote
+    // them), a flag the server sets; an app the owner installed later by URL never gets them.
+    const legacyOk = appInfo === undefined || (appInfo && appInfo.preinstalled === true)
+    const seeded = legacyOk ? legacyStore(appId, ls) : {}
     try { ls.setItem(STORAGE_PREFIX + appId, JSON.stringify(seeded)) } catch (_) { /* quota */ }
     return seeded
   }
@@ -146,7 +183,7 @@ function b64ToBlob(b64, mime) {
 }
 
 function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
-  const store = loadStore(appInfo.id, ls)
+  const store = loadStore(appInfo.id, ls, appInfo)
   function saveStore() {
     const s = JSON.stringify(store)
     if (s.length > STORAGE_MAX_CHARS) return false
@@ -436,4 +473,4 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
   return { handleIntent, store }
 }
 
-module.exports = { makeBridge, OPEN_ROUTE_RE, DESK_NAME_RE, FILES_READ_MAX, acceptMessage, seedName, loadStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_MAX_CHARS }
+module.exports = { makeBridge, OPEN_ROUTE_RE, DESK_NAME_RE, FILES_READ_MAX, acceptMessage, seedName, loadStore, clearStore, legacyStore, LEGACY_KEYS, STORAGE_PREFIX, STORAGE_OWNER_PREFIX, STORAGE_MAX_CHARS }

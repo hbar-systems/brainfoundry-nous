@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { clearStore } from '../../lib/appBridge'
 
 // Apps hub — the brain-app surface. A brain-app installs straight from a
 // GitHub URL here (no Settings detour), shows up as a card, and is managed
@@ -143,10 +144,12 @@ export default function AppsIndex() {
   }
 
   const doUninstall = async (id) => {
-    if (!confirm(`Uninstall ${id}? This deletes the app's clone and removes its tab.`)) return
+    if (!confirm(`Uninstall ${id}? This deletes the app's clone, removes its tab and clears its saved data in this browser.`)) return
     setBusy(`uninstall:${id}`); setErr(null)
     try {
       await api(`/apps/${id}/uninstall`, { method: 'POST' })
+      // The id is free for any app after this; its store must not pass to the next one.
+      try { clearStore(id, window.localStorage) } catch (_) { /* no storage */ }
       await load()
     } catch (e) { setErr(`Uninstall failed: ${e.message}`) }
     setBusy(null)
