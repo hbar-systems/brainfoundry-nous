@@ -8140,6 +8140,11 @@ class MemoryAppendRequest(BaseModel):
     privacy: Optional[str] = None
 
 
+# Metadata keys a /memory/append caller may never set: they change who outside
+# the brain can read a chunk (api/public_scope.py).
+_APPEND_VISIBILITY_KEYS = frozenset({"scope"})
+
+
 @app.post("/memory/append")
 def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key)) -> dict:
     if req.layer not in ("episodic", "semantic", "procedural"):
@@ -8229,8 +8234,12 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
         # appended_at) OR any provenance/gate key (mem_type, quarantined,
         # source_trust, …) — a brain app must not be able to launder its own
         # content up to `semantic` or clear a quarantine via passthrough metadata.
+        # Nor any visibility key: metadata.scope == "public" is what every
+        # outside door (public chat, federation, ask) answers from, and no app
+        # permission covers publishing. Publishing stays an owner action
+        # through the public layer (audit 2026-11-13).
         for k, v in req.metadata.items():
-            if k not in metadata_base:
+            if k not in metadata_base and k not in _APPEND_VISIBILITY_KEYS:
                 metadata_base[k] = v
 
     conn = get_db_connection()

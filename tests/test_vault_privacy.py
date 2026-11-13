@@ -614,3 +614,13 @@ def test_append_stricter_wins_on_reappend(m, monkeypatch):
     db = AppendDB(existing=[{"privacy": "local-only"}])
     out = _append(m, monkeypatch, db, privacy="open")
     assert out["privacy"] == "local-only"
+
+
+def test_append_metadata_cannot_publish(m, monkeypatch):
+    # memory-append-metadata-scope-public-passthrough (audit 2026-11-13)
+    from api import public_scope
+    db = AppendDB()
+    _append(m, monkeypatch, db, metadata={"scope": "public", "topic": "garden"})
+    assert db.inserted and all("scope" not in md for md in db.inserted)
+    assert all(md.get("topic") == "garden" for md in db.inserted)
+    assert not any(public_scope.is_public(md) for md in db.inserted)
