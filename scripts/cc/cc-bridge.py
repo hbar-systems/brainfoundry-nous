@@ -975,6 +975,29 @@ BOX_NO_FIRST_WORD = ("python", "python3", "node", "nodejs", "perl", "ruby", "php
                    "make", "docker", "rsync", "sftp", "nc", "socat", "one", "gh", "eval", "exec", "source", ".")
 
 
+BOX_SUMMARY_MAX = 300
+
+
+def _box_cmd_summary(cmd: str) -> str:
+    """The card line for a command. A long command is cut for the line, and the cut says so, with the
+    full length; the full text rides on the card as "full" (audit 2026-11-13: a silent cut at 300
+    hid whatever followed from the person who allowed it)."""
+    if len(cmd) <= BOX_SUMMARY_MAX:
+        return "run on the box: " + cmd
+    return ("run on the box: " + cmd[:BOX_SUMMARY_MAX]
+            + f" ... [CUT: showing {BOX_SUMMARY_MAX} of {len(cmd)} characters; read the full command before allowing]")
+
+
+def _box_call_fp(tool: str, inp) -> str:
+    """Fingerprint of the whole tool input: same-turn reuse binds this, never the (possibly cut) summary."""
+    import hashlib as _h
+    try:
+        raw = json.dumps(inp, sort_keys=True, default=str)
+    except Exception:
+        raw = repr(inp)
+    return tool + ":" + _h.sha256(raw.encode()).hexdigest()
+
+
 def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
     """(action_id, summary, remember_ok) for one tool call. The action id is what
     "don't ask again" remembers: a command's first word, or an edited file's directory."""
@@ -995,7 +1018,7 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         dangerous = any(w in BOX_NO_REMEMBER for w in head.split())
         if plain:
             runner = any(w in BOX_NO_FIRST_WORD for w in head.split())
-            return head or "command", "run on the box: " + cmd[:300], bool(head) and not dangerous and not runner
+            return head or "command", _box_cmd_summary(cmd), bool(head) and not dangerous and not runner
         # A compound command (pipes, &&, redirects) is remembered as exactly this command, never by
         # its first word (2026-09-29: every card gets the checkbox; a "python3" rule must not cover
         # "python3 ... && rm -rf"). Dangerous words still get no checkbox.
@@ -1003,7 +1026,7 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
         exact = "exact:" + _h.sha256(cmd.encode()).hexdigest()[:16]
         # E9: a dangerous word anywhere in it (find . -exec rm, x && sudo y) takes the box away, not only the first
         anywhere = any(w.strip("'\"();&|") in BOX_NO_REMEMBER for w in words)
-        return exact, "run on the box: " + cmd[:300], bool(head) and not dangerous and not anywhere
+        return exact, _box_cmd_summary(cmd), bool(head) and not dangerous and not anywhere
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
         d = str(Path(fp).parent) if fp else ""
@@ -1155,9 +1178,16 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
+    if tool == "Bash":
+        _full = str((inp if isinstance(inp, dict) else {}).get("command", "")).strip()
+        if len(_full) > BOX_SUMMARY_MAX:
+            card.update({"full": _full, "full_length": len(_full)})
+    # same-turn reuse is keyed on the whole input, not the summary (audit 2026-11-13: a cut summary let a
+    # different command sharing the first 300 characters run without a card)
+    call_fp = _box_call_fp(tool, inp)
     run = RUNS.get(run_id) if run_id else None
     run = run if run is not None and not run.done else _run_watching(session_id)
-    same_turn = run is not None and (tool, summary) in run.allowed and tool != "orfeo_post"
+    same_turn = run is not None and call_fp in run.allowed and tool != "orfeo_post"
     if (remember_ok and _auto_has(args)) or same_turn:
         # Already allowed: by the owner's standing choice, or the identical call earlier in this
         # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
@@ -1201,7 +1231,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
         run.waiting -= 1
         a = ASKS.pop(pid, {})
     if a.get("decision") == "allow":
-        run.allowed.add((tool, summary))
+        run.allowed.add(call_fp)
         _decision_log(pid, "allow", "the person", "card", session_id)
         return {"behavior": "allow"}
     if a.get("decision") is None:
@@ -4037,6 +4067,17 @@ def _send_file(raw: str, caption: str = "") -> tuple:
     return 200, {"ok": True, "file": str(p), "as": cc_extras.Telegram.file_method(p.name, p.stat().st_size)[1]}
 
 
+def _tg_card_text(payload: dict) -> str:
+    """The Telegram card shows the full command when the console line was cut. Longer than Telegram can
+    carry: no buttons there, the console card is the only place to decide (the caller checks)."""
+    full = payload.get("full")
+    if not full:
+        return str(payload.get("summary", ""))
+    if len(full) <= 3500:
+        return f"run on the box ({len(full)} characters, in full):\n{full}"
+    return str(payload.get("summary", ""))
+
+
 def _tg_turn(chat_id, text: str) -> None:
     st = TG.state()
     thread = st.get("thread")
@@ -4049,8 +4090,8 @@ def _tg_turn(chat_id, text: str) -> None:
         elif kind == "ask":
             if payload.get("auto"):
                 TG.call("sendMessage", chat_id=chat_id, text=f"did without asking: {payload.get('summary', '')}\n({payload.get('why', '')})")
-            elif TG_APPROVE:
-                TG.call("sendMessage", chat_id=chat_id, text=f"May I? {payload.get('summary', '')}",
+            elif TG_APPROVE and len(payload.get("full") or "") <= 3500:
+                TG.call("sendMessage", chat_id=chat_id, text="May I? " + _tg_card_text(payload),
                         reply_markup=cc_extras.Telegram.card_markup(payload.get("id", "")))
             else:
                 TG.call("sendMessage", chat_id=chat_id, text=f"A card waits for your yes in the console: {payload.get('summary', '')}")

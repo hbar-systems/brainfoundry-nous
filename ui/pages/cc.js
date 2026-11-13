@@ -963,6 +963,7 @@ function ProposalCard({ p, onDecide }) {
     )
   }
   const [remember, setRemember] = useState(false)
+  const [showFull, setShowFull] = useState(false)
   const decided = p.decided
   const box = p.platform === 'box'
   const run = p.platform === 'box-run'   // the Local seat's one command (2026-10-26): the card shows the exact command
@@ -984,6 +985,12 @@ function ProposalCard({ p, onDecide }) {
         {box ? `on this box · ${p.method || 'action'}` : run ? 'local seat proposes · one command on this box, run as the hands' : `proposed write · ${p.method || 'POST'} · ${p.platform || ''}`}
       </p>
       <p style={{ margin: '0 0 10px 0', color: C.ink, fontSize: '14px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: box || run ? "'JetBrains Mono', ui-monospace, monospace" : 'inherit' }}>{p.summary || 'an action in a connected app'}</p>
+      {p.full ? (
+        <div style={{ margin: '-4px 0 10px 0' }}>
+          <span onClick={() => setShowFull(!showFull)} style={{ ...mono, color: C.gold, fontSize: '11px', cursor: 'pointer' }}>{showFull ? 'hide the full command' : `cut above: show the full command (${p.full_length || p.full.length} characters)`}</span>
+          {showFull ? <p style={{ margin: '6px 0 0 0', color: C.ink, fontSize: '13px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: "'JetBrains Mono', ui-monospace, monospace" }}>{p.full}</p> : null}
+        </div>
+      ) : null}
       {run && p.why ? <p style={{ margin: '-4px 0 10px 0', color: C.dim, fontSize: '12px' }}>the model says: {p.why}</p> : null}
       {decided ? (
         <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? (box ? 'allowed' : 'sent') : (box ? 'refused' : 'cancelled')} · permit {p.id}</p>

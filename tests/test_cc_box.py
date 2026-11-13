@@ -260,3 +260,45 @@ def test_box_key_every_card_can_be_remembered(monkeypatch, tmp_path):
     assert m._box_key("WebFetch", {"url": "https://x"}) == ("WebFetch", "use WebFetch", False)
     assert m._box_key("Agent", {"prompt": "x"})[2] is True
     assert m._box_key("Edit", {"file_path": "/home/hands/world/a/b.md"})[2]
+
+
+def test_box_card_cut_is_marked_and_same_turn_binds_full_command(monkeypatch, tmp_path):
+    """Audit 2026-11-13 (cc-bridge-permit-card-summary-truncation): a summary cut at 300 characters
+    says so and carries the full text, and a same-turn allow binds the whole command, so a different
+    command sharing the first 300 characters raises its own card."""
+    m = _load(monkeypatch, tmp_path)
+    head = "echo " + " ".join(f"word{i}" for i in range(80))
+    assert len(head) > 300
+    _, summary, _ = m._box_key("Bash", {"command": head})
+    assert "CUT" in summary and str(len(head)) in summary
+    _, short, _ = m._box_key("Bash", {"command": "ls /tmp"})
+    assert short == "run on the box: ls /tmp"
+    cards = []
+    m.RUNS.clear(); run = m.Run(None, "x"); run.claude_sid = "s-cut"; m.RUNS[run.id] = run
+    run.attach(lambda kind, payload: cards.append(payload) if kind == "ask" else None)
+
+    def ask_and_answer(cmd, answer):
+        before = len(cards)
+        out = {}
+        th = threading.Thread(target=lambda: out.update(d=m._box_ask("Bash", {"command": cmd}, session_id="s-cut")))
+        th.start()
+        for _ in range(60):
+            if len(cards) > before:
+                break
+            time.sleep(0.05)
+        card = cards[before]
+        if not card.get("auto"):
+            m._box_settle(card["id"], answer, "no")
+        th.join(3)
+        return card, out["d"]
+
+    card, d = ask_and_answer(head, "allow")
+    assert d == {"behavior": "allow"} and not card.get("auto")
+    assert card["full"] == head and card["full_length"] == len(head)
+    # same prefix, different tail: a fresh card, refused here
+    card2, d2 = ask_and_answer(head + " && echo tail", "deny")
+    assert not card2.get("auto") and d2["behavior"] == "deny"
+    # the identical command again in the same turn: allowed without a card
+    card3, d3 = ask_and_answer(head, "allow")
+    assert card3.get("auto") is True and d3 == {"behavior": "allow"}
+    assert m._tg_card_text(card).endswith(head)
