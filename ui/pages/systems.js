@@ -53,6 +53,11 @@ const CSS = `
 .sy-lines{list-style:none;margin:0;padding:0 12px 6px;max-width:58ch}
 .sy-ln{display:flex;align-items:baseline;gap:8px;padding:4px 0;color:var(--dim);font-size:15px}
 .sy-ln span{flex:1}
+.sy-res{display:block;margin-top:3px;font-size:13px;line-height:1.45;color:var(--dim)}
+.sy-res a{color:inherit;text-decoration:underline;text-decoration-color:var(--muted);text-underline-offset:3px}
+.sy-res b{font-weight:500;color:var(--rust)}
+.sy-res .sy-f{display:inline-block;margin:2px 10px 0 0;font-size:12px;font-family:var(--font-mono,monospace)}
+.sy-res .sy-f.img::before{content:'▣ ';opacity:.6}
 .sy-ln.run span::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--rust);margin:0 9px 2px 0;vertical-align:middle}
 .sy-m{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;color:var(--muted);opacity:.65;border-radius:50%;flex:none;transition:opacity 200ms var(--ease),color 200ms var(--ease)}
 .sy-m:hover,.sy-m:focus-visible{opacity:1;color:var(--rust)}
@@ -95,10 +100,21 @@ const Glyph = ({ k }) => (k === 'running' ? <span className="sy-dot" aria-hidden
 const postJson = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 const fmt = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`)
 
+// A done job's line carries its result (JOBCARD-1, 2026-11-13): the first sentence it ended with and the files
+// it made, each a link, so the tile answers without asking anyone.
 function Line({ ln }) {
+  const r = ln.result
   return (
     <li className={'sy-ln' + (ln.run ? ' run' : '')}>
-      <span>{ln.text}</span>
+      <span>{ln.text}
+        {r && (r.first || (r.files && r.files.length)) ? (
+          <span className="sy-res">
+            {r.rc !== 0 && r.rc != null ? <b>exit {r.rc} </b> : null}
+            {r.first ? (r.href ? <a href={r.href} title={r.href}>{r.first}</a> : r.first) : null}
+            {(r.files || []).map(f => <a key={f.href} className={'sy-f' + (f.image ? ' img' : '')} href={f.href} title={f.href}>{f.name}</a>)}
+          </span>
+        ) : null}
+      </span>
       {ln.href ? <a className="sy-m" href={ln.href} aria-label="open" title={ln.href}><Svg k="link" /></a> : null}
     </li>
   )

@@ -951,6 +951,80 @@ function BrainText({ text, live, onChoice, pane }) {
   return <><Md text={body} />{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
+// A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS
+// COMPLETE"): the bridge hands the job over with its result (final text, rc, measured seconds, the files it made),
+// so the card shows it at once: the first lines as markdown, image thumbnails, each file opening in the pane, the
+// result's own file as the one link. "more" reads the whole text in place; "talk" is the only press that writes
+// into the chat, and only into the composer, prefilled with the job's id.
+const JOB_LINES = 6
+const fmtSecs = (s) => (s == null ? '' : s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`)
+
+function JobCard({ job, onOpen, onTalk }) {
+  const [res, setRes] = useState(job.result || null)
+  const [full, setFull] = useState(null)        // the whole text once "more" was pressed
+  const [open, setOpen] = useState(false)
+  useEffect(() => {                              // a card restored from before results were kept asks for its own
+    if (res || !job.id) return undefined
+    let stop = false
+    fetch('/cc/jobs/' + encodeURIComponent(job.id) + '?tail=600', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null)).then(d => { if (!stop && d && d.result) setRes(d.result) }).catch(() => {})
+    return () => { stop = true }
+  }, [job.id])   // eslint-disable-line react-hooks/exhaustive-deps
+  const more = async () => {
+    if (open) { setOpen(false); return }
+    setOpen(true)
+    if (full !== null) return
+    try {
+      const r = await fetch('/cc/jobs/' + encodeURIComponent(job.id) + '?tail=1&full=1', { cache: 'no-store' })
+      const d = r.ok ? await r.json() : null
+      setFull((d && d.result && d.result.text) || (res && res.text) || '')
+    } catch { setFull((res && res.text) || '') }
+  }
+  const rc = res && res.rc !== undefined ? res.rc : job.rc
+  const secs = res && res.secs != null ? res.secs : (job.ended && job.started ? job.ended - job.started : null)
+  const text = (res && res.text) || ''
+  const lines = text.split('\n')
+  const cut = lines.length > JOB_LINES || (res && res.more)
+  const shown = open && full !== null ? full : (lines.length > JOB_LINES ? lines.slice(0, JOB_LINES).join('\n') : text)
+  const files = (res && res.files) || []
+  const imgs = files.filter(f => f.kind === 'image')
+  const link = { color: C.dim, cursor: 'pointer', textDecoration: 'underline' }
+  return (
+    <div data-jobcard={job.id}>
+      <p style={{ ...mono, color: rc === 0 ? C.dim : '#d08a7a', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
+        job finished · {rc === 0 ? 'ok' : rc == null ? 'ended' : `exit ${rc}`}{secs != null ? ` · ${fmtSecs(secs)}` : ''}
+      </p>
+      <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{job.title}</p>
+      {res ? (text ? <div className="cc-md" style={{ fontSize: '0.92em', maxHeight: open ? 'none' : '12em', overflow: 'hidden', ...(open ? {} : { WebkitMaskImage: 'linear-gradient(to bottom, #000 70%, transparent)', maskImage: 'linear-gradient(to bottom, #000 70%, transparent)' }) }}><Md text={shown} /></div>
+                   : <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '0 0 8px 0' }}>no text came back</p>)
+           : <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>}
+      {imgs.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '8px 0' }}>
+          {imgs.map(f => (
+            <a key={f.path} onClick={() => onOpen(f.path)} title={f.path} style={{ cursor: 'pointer', display: 'block', lineHeight: 0 }}>
+              <img src={rawUrl(f.path)} alt={f.name} loading="lazy" style={{ width: '120px', height: '80px', objectFit: 'cover', borderRadius: '6px', border: `1px solid ${C.line}`, backgroundColor: C.card }} />
+            </a>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <p style={{ ...mono, fontSize: '11px', color: C.faint, margin: '6px 0', display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
+          {files.map(f => <a key={f.path} onClick={() => onOpen(f.path)} title={f.path} style={{ ...link, maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</a>)}
+        </p>
+      )}
+      {res && res.source ? (
+        <p style={{ ...mono, fontSize: '11px', color: C.faint, margin: '6px 0', wordBreak: 'break-all' }}>
+          <a onClick={() => onOpen(res.source)} title="the whole result, in the pane" style={link}>{res.source}</a>
+        </p>
+      ) : null}
+      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+        {cut ? <Btn small onClick={more}>{open ? 'less' : 'more'}</Btn> : null}
+        <Btn small onClick={() => onTalk(job)} title="put this job into the composer as an ask in this thread">talk</Btn>
+      </div>
+    </div>
+  )
+}
+
 function ProposalCard({ p, onDecide }) {
   // One proposed write, waiting for the person. The summary names platform,
   // action and target; Send mints the permit and runs exactly that. Nothing
@@ -3110,18 +3184,12 @@ function CC() {
                 </div>
               )}
               <div data-bubble="1" style={{
-                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && t.text && !t.job ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && (t.job || t.text) ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
-                {t.job && (
-                  <div>
-                    <p style={{ ...mono, color: t.job.rc === 0 ? C.dim : '#d08a7a', fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>job finished · {t.job.rc === 0 ? 'ok' : `exit ${t.job.rc}`} · {Math.round(((t.job.ended || 0) - t.job.started) / 60)} min</p>
-                    <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{t.job.title}</p>
-                    <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(t.job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>
-                    <Btn small onClick={() => send(`Read the log of job ${t.job.id} (${t.job.log}) and tell me the result in a few lines; if it made files, open them beside the chat.`)}>ask the brain about it</Btn>
-                  </div>
-                )}
+                {t.job && <JobCard job={t.job} onOpen={(path) => openPane({ route: '/files?path=' + encodeURIComponent(path), title: 'Files' })}
+                  onTalk={(j) => { setDraft(d => (d ? d + '\n' : '') + `About job ${j.id} (${j.title}): `); if (boxRef.current) boxRef.current.focus() }} />}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
                 {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} pane={t.pane} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
                 {t.voices && (

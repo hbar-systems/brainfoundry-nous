@@ -404,6 +404,148 @@ class Files:
             pass
 
 
+# A finished job's result (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER
+# AGENTS COMPLETE"): its final text, rc, measured seconds and the files it made, so the card shows it at
+# once and nobody has to ask a reasoner to read the log. A claude job sends its answer to a file with
+# `> /home/hands/out/<date>/<tag>.out`; on finish the bridge appends that file to the job's log under
+# RESULT_MARK, so the log alone holds the result even when the file moves.
+RESULT_MARK = "# result from "
+RESULT_CHARS = 1500            # the text kept on the record (the card shows its first lines; "more" reads the rest)
+RESULT_FULL = 200_000          # "more" reads this much
+RESULT_FILES = 6
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# lines the claude CLI writes to stderr before its answer (a settings rule it warns about); not the result
+_PRELUDE = re.compile(r"^(Permission (allow|deny|ask) rule \(|Warning: )")
+
+
+def job_redirect(command: str, out_dir: Path) -> Path | None:
+    """The file a command sends its stdout to, when it has exactly one `> <path>` (or `>> <path>`) and the
+    path is under out_dir; None otherwise. `2>`, `&>` and `>&` are not stdout redirects of that kind."""
+    try:
+        toks = shlex.split(command or "", posix=True)
+    except ValueError:
+        return None
+    hits = []
+    for i, t in enumerate(toks):
+        m = re.fullmatch(r"(>>?)(.*)", t)
+        if not m:
+            continue
+        target = m.group(2) or (toks[i + 1] if i + 1 < len(toks) else "")
+        if target.startswith("&") or not target:
+            continue
+        hits.append(target)
+    if len(hits) != 1:
+        return None
+    try:
+        p = Path(hits[0]).expanduser().resolve()
+        root = Path(out_dir).resolve()
+    except OSError:
+        return None
+    return p if p == root or root in p.parents else None
+
+
+def _clean(text: str) -> str:
+    """Terminal output as it would read: escapes gone, a line rewritten with \\r keeps its last state."""
+    lines = []
+    for ln in _ANSI.sub("", text).split("\n"):
+        parts = [x for x in ln.split("\r") if x.strip()]
+        lines.append(parts[-1] if parts else ("" if "\r" in ln else ln))
+    return "\n".join(lines).strip()
+
+
+def _read(p: Path, n: int, tail: bool = False) -> tuple[str, int]:
+    try:
+        size = p.stat().st_size
+        with open(p, "rb") as f:
+            if tail and size > n:
+                f.seek(size - n)
+            data = f.read(n)
+        return data.decode("utf-8", "replace"), size
+    except OSError:
+        return "", 0
+
+
+def job_files(started: float, ended: float, out_dir: Path, prefer: str = "", exclude=(), n: int = RESULT_FILES,
+              walk_max: int = 20000) -> list:
+    """Up to n files written under out/<date>/ between a job's start and end: the job's own folder
+    (out/<date>/<prefer>/) first, images next, then newest. `exclude`: paths not to list (its own
+    result file, other jobs' result files)."""
+    out_dir = Path(out_dir)
+    lo, hi = float(started) - 2, float(ended) + 2
+    days = {time.strftime("%Y-%m-%d", time.gmtime(t)) for t in (lo, hi)}
+    skip = {os.path.realpath(str(x)) for x in exclude}
+    seen, found = 0, []
+    for day in sorted(days):
+        stack = [out_dir / day]
+        while stack and seen < walk_max:
+            d = stack.pop()
+            try:
+                it = list(os.scandir(d))
+            except OSError:
+                continue
+            for e in it:
+                seen += 1
+                if e.name.startswith("."):
+                    continue
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(Path(e.path))
+                        continue
+                    if not e.is_file(follow_symlinks=False):
+                        continue
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if lo <= st.st_mtime <= hi and os.path.realpath(e.path) not in skip:
+                    found.append((e.path, st.st_mtime, st.st_size))
+    own = tuple(str(out_dir / d / prefer) + os.sep for d in days) if prefer else ()
+
+    def mine(path: str) -> bool:
+        return bool(own) and path.startswith(own)
+
+    found.sort(key=lambda x: (not mine(x[0]), Files.kind(Path(x[0])) != "image", -x[1]))
+    return [{"path": p, "name": os.path.basename(p), "kind": Files.kind(Path(p)), "size": s,
+             "mtime": int(m)} for p, m, s in found[:n]]
+
+
+def job_result(rec: dict, out_dir: Path, full: bool = False, exclude=()) -> dict:
+    """{text, more, source, rc, secs, files}: the job's final text (what its command redirected, else its
+    log without the two header lines; the start of a redirected answer, the end of a plain log), its exit
+    code, measured seconds, and the files it made. `full`: up to RESULT_FULL characters instead of RESULT_CHARS."""
+    out_dir = Path(out_dir)
+    cap = RESULT_FULL if full else RESULT_CHARS
+    log = Path(str(rec.get("log") or ""))
+    # the record keeps 1000 characters of the command; the redirect found at start is kept beside it
+    redir = Path(rec["out_file"]) if rec.get("out_file") else job_redirect(str(rec.get("command") or ""), out_dir)
+    text, source, from_log_tail = "", "", False
+    raw, _ = _read(log, RESULT_FULL * 2, tail=True) if rec.get("log") else ("", 0)
+    if RESULT_MARK in raw:                      # the bridge copied the redirected answer into the log
+        head, _, rest = raw.rpartition(RESULT_MARK)
+        first, _, body = rest.partition("\n")
+        text, source = body, first.strip()
+    elif redir is not None and redir.is_file():
+        text, _ = _read(redir, RESULT_FULL)
+        source = str(redir)
+    elif raw:
+        lines = raw.split("\n")
+        if len(lines) > 1 and lines[0].startswith("# ") and lines[1].startswith("# "):
+            lines = lines[2:]               # the header cc-job wrote: id, time, folder; the command
+        text, source, from_log_tail = "\n".join(lines), str(log), True
+    text = _clean(text)
+    while _PRELUDE.match(text):
+        text = text.partition("\n")[2].lstrip("\n")
+    more = len(text) > cap
+    if more:
+        text = ("…" + text[-cap:]) if from_log_tail else (text[:cap] + "…")
+    started, ended = rec.get("started"), rec.get("ended")
+    secs = int(float(ended) - float(started)) if started and ended else None
+    files = []
+    if started and ended:
+        skip = set(str(x) for x in exclude) | {str(log)} | ({str(redir)} if redir else set())
+        files = job_files(started, ended, out_dir, prefer=redir.stem if redir else "", exclude=skip)
+    return {"text": text, "more": more, "source": source, "rc": rec.get("rc"), "secs": secs, "files": files}
+
+
 class Jobs:
     """Commands that outlive a turn. One registry file; one log per job.
 
@@ -429,6 +571,7 @@ class Jobs:
         # command -> the command to run, or raises with the reason (2026-10-19: a claude started by a
         # job gets the turn's permission hook and may not loosen the owner's posture; cc_guard.check_job)
         self.guard = guard
+        self.out = Path(out_dir)
         self.dir = out_dir / "jobs"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.reg = self.dir / "jobs.json"
@@ -437,6 +580,7 @@ class Jobs:
         self.resolve = resolve or (lambda run_id: None)   # run id -> thread id, when the bridge knows it by now
         self.lock = threading.Lock()
         self.unseen: set[str] = set()
+        self.results: dict = {}      # id -> result read for a record that has none stored
 
     @classmethod
     def known(cls, thread) -> bool:
@@ -507,22 +651,35 @@ class Jobs:
             rec = {"id": jid, "title": (title or command)[:120], "command": command[:1000], "cwd": str(wd) if wd else None,
                    "pid": proc.pid, "started": int(time.time()), "ended": None, "rc": None, "log": str(log),
                    "thread": thread if self.known(thread) else self.UNKNOWN, "run": run}
+            redir = job_redirect(command, self.out)
+            if redir is not None:
+                rec["out_file"] = str(redir)
             items.append(rec)
             self._save(items)
 
         def _wait():
             rc = proc.wait()
-            lf.close()
+            ended = int(time.time())
             done = None
+            with self.lock:              # the end first, so a read in between never marks it lost
+                cur = self._load()
+                for r in cur:
+                    if r["id"] == jid:
+                        r["ended"] = ended; r["rc"] = rc; r.pop("lost", None)
+                        # by now the turn that started it has usually recorded its thread
+                        r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
+                self._save(cur)
+            self._keep_result(lf, command)
+            lf.close()
+            result = self.result(dict(rec, ended=ended, rc=rc))   # then its result, before any page is handed it
             with self.lock:
                 cur = self._load()
                 for r in cur:
                     if r["id"] == jid:
-                        r["ended"] = int(time.time()); r["rc"] = rc; r.pop("lost", None)
-                        # by now the turn that started it has usually recorded its thread
-                        r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
+                        r["result"] = result
                         done = dict(r)
                 self._save(cur)
+                self.results.pop(jid, None)
                 self.unseen.add(jid)
             if done and self.on_end:
                 try:
@@ -531,6 +688,35 @@ class Jobs:
                     pass
         threading.Thread(target=_wait, daemon=True).start()
         return rec
+
+    def _keep_result(self, lf, command: str) -> None:
+        """Copy what the command redirected (one `> <path>` under out/) into the job's log, under RESULT_MARK,
+        so the log holds the result even when the file is moved or swept (JOBCARD-1)."""
+        p = job_redirect(command, self.out)
+        if p is None:
+            return
+        try:
+            data = p.read_bytes()[:RESULT_FULL]
+            lf.write(f"\n{RESULT_MARK}{p}\n".encode() + data + (b"" if data.endswith(b"\n") else b"\n"))
+            lf.flush()
+        except OSError:
+            pass
+
+    def result(self, rec: dict, full: bool = False) -> dict | None:
+        """A finished job's result (job_result), with the other jobs' result files kept out of its file list."""
+        if rec.get("ended") is None:
+            return None
+        others = set()
+        for r in self._load():
+            if r.get("id") != rec.get("id"):
+                q = r.get("out_file") or job_redirect(str(r.get("command") or ""), self.out)
+                if q:
+                    others.add(str(q))
+        try:
+            return job_result(rec, self.out, full=full, exclude=others)
+        except Exception as e:  # noqa: BLE001  (a result that cannot be read never breaks the job's end)
+            return {"text": "", "more": False, "source": "", "rc": rec.get("rc"), "secs": None, "files": [],
+                    "error": type(e).__name__}
 
     def _reap(self) -> list:
         """The registry with every job whose process is gone marked ended (2026-10-22, issue 9 in
@@ -640,17 +826,27 @@ class Jobs:
         except Exception:  # noqa: BLE001
             return None
 
-    def get(self, jid: str, tail_bytes: int = 4000) -> dict | None:
+    def get(self, jid: str, tail_bytes: int = 4000, full: bool = False) -> dict | None:
+        """One job with the tail of its log and, once it has ended, its result (stored at the end; read
+        now for a job that ended before results were kept, or with `full` for the whole text)."""
         for r in self._reap():
             if r["id"] == jid:
                 out = self._fill(dict(r))
                 try:
-                    data = Path(r["log"]).read_bytes()
-                    out["tail"] = data[-tail_bytes:].decode("utf-8", "replace")
-                    out["log_size"] = len(data)
+                    with open(r["log"], "rb") as f:
+                        f.seek(0, os.SEEK_END)
+                        out["log_size"] = f.tell()
+                        f.seek(max(0, out["log_size"] - tail_bytes))
+                        out["tail"] = f.read().decode("utf-8", "replace")
                 except OSError:
                     out["tail"] = ""
                 out["running"] = r["ended"] is None
+                if not out["running"] and full:
+                    out["result"] = self.result(out, full=True)
+                elif not out["running"] and not out.get("result"):
+                    if jid not in self.results:      # read once per bridge for a job that ended before results were kept
+                        self.results[jid] = self.result(out)
+                    out["result"] = self.results[jid]
                 return out
         return None
 
@@ -686,7 +882,7 @@ class Jobs:
         taken: each page shows them once in a strip, the owning page takes them as tiles."""
         with self.lock:
             recs = [r for r in self._unseen_records() if r.get("thread") != thread or thread is None]
-        return [{k: r.get(k) for k in ("id", "title", "ended", "rc", "log", "thread", "started")} for r in recs]
+        return [{k: r.get(k) for k in ("id", "title", "ended", "rc", "log", "thread", "started", "result")} for r in recs]
 
     def mark_seen(self, jid: str) -> bool:
         with self.lock:

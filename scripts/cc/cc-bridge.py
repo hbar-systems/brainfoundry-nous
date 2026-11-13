@@ -4925,7 +4925,8 @@ class Handler(BaseHTTPRequestHandler):
                              "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
                              "others": others})
         elif route.startswith("/jobs/"):
-            j = JOBS.get(route[len("/jobs/"):], int(self._query().get("tail") or 4000))
+            q = self._query()   # full=1: the whole result text, for the card's "more" (JOBCARD-1)
+            j = JOBS.get(route[len("/jobs/"):], int(q.get("tail") or 4000), full=q.get("full") == "1")
             self._send(200 if j else 404, j or {"error": "no such job"})
         else:
             self._send(404, {"error": "not_found"})
