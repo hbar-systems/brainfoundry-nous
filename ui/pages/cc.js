@@ -2094,7 +2094,7 @@ function CC() {
   })()
   // pressing home while on home: the Nav says so and the thread list opens (NAV-1)
   useEffect(() => {
-    const open = () => { if (paneModeRef.current) return; setShowThreads(true); loadThreads()
+    const open = () => { if (paneModeRef.current) return; openThreads(false)
       try { const u = new URL(window.location.href); if (u.searchParams.has('threads')) { u.searchParams.delete('threads'); window.history.replaceState(window.history.state, '', u.href) } } catch {} }
     window.addEventListener('bf-home', open)
     return () => window.removeEventListener('bf-home', open)
@@ -2108,7 +2108,7 @@ function CC() {
       // NAV-1 (2026-11-13): the home (the brand, the menu's Chat) arrives with ?threads=1: the thread
       // list opens over the page, and the address drops the flag so a reload is a plain home
       if (!q.get('pane') && wantsThreads(window.location.search)) {
-        setShowThreads(true)
+        openThreads(false)   // SHIP-1: since PANE-1 the list opens in the side pane, like the threads button
         const u = new URL(window.location.href); u.searchParams.delete('threads')
         window.history.replaceState(window.history.state, '', u.href)
       }
