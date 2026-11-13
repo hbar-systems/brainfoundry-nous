@@ -94,7 +94,7 @@ The guarantees it gives you today are:
   against the NodeOS authority kernel before any database write or audit
   wipe lands. Fail-closed if NodeOS is unreachable.
 - **BrainKernel is internal-only.** NodeOS binds to `127.0.0.1:8001`, has no
-  browser proxy, and requires `X-Internal-Key` on all state-mutating routes.
+  browser proxy, and requires `X-Internal-Key` on every route but `/health` and `/v1/identity`.
 - **External actions are preview-then-execute.** `git_push` and similar
   side-effects go through a strict branch allowlist and a preview step before
   anything lands.
