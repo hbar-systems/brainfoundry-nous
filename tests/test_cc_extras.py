@@ -505,3 +505,130 @@ def test_telegram_send_file_picks_the_method(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         tg.send_file(42, big, upload=up)
+
+
+# ── audit 2026-11-13, cc-bridge-writes-follow-hands-planted-links ──────────────────────────────────
+# The hands own out/ and in/ after the split; a link they plant must never carry a bridge write.
+
+def _wait_job(j, jid):
+    for _ in range(50):
+        g = j.get(jid)
+        if not g["running"]:
+            return g
+        time.sleep(0.1)
+    return g
+
+
+def test_job_log_never_follows_a_planted_link(tmp_path):
+    secret = tmp_path / "bridge-env"
+    secret.write_text("TOKEN=keep\n")
+    jobs = tmp_path / "out" / "jobs"
+    jobs.mkdir(parents=True)
+    t0 = int(time.time())
+    for t in range(t0, t0 + 4):                 # the next names the hands can predict
+        for n in range(1, 4):
+            os.symlink(secret, jobs / f"J{t}{n:03d}.log")
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"})
+    rec = j.start("echo PYTHONPATH=/evil", str(tmp_path), "x")
+    assert "error" not in rec
+    g = _wait_job(j, rec["id"])
+    assert secret.read_text() == "TOKEN=keep\n"
+    assert not os.path.islink(jobs / f"{rec['id']}.log") and "PYTHONPATH=/evil" in g["tail"]
+
+
+def test_jobs_registry_link_is_replaced_not_written_through(tmp_path):
+    secret = tmp_path / "bridge-env"
+    secret.write_text("TOKEN=keep\n")
+    jobs = tmp_path / "out" / "jobs"
+    jobs.mkdir(parents=True)
+    os.symlink(secret, jobs / "jobs.json")
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"})
+    rec = j.start("true", str(tmp_path), "x")
+    _wait_job(j, rec["id"])
+    assert secret.read_text() == "TOKEN=keep\n" and not os.path.islink(jobs / "jobs.json")
+
+
+def test_job_get_reads_its_own_log_not_the_registry_path(tmp_path):
+    secret = tmp_path / "bridge-env"
+    secret.write_text("TOKEN=secret\n")
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"})
+    (j.dir / "jobs.json").write_text(json.dumps([{"id": "J1001", "title": "x", "pid": None, "started": 1,
+                                                  "ended": 2, "rc": 0, "log": str(secret), "thread": "t"},
+                                                 {"id": "../../bridge-env", "log": str(secret), "ended": 2}]))
+    os.symlink(secret, j.dir / "J1001.log")
+    g = j.get("J1001")
+    assert "secret" not in g["tail"]
+    assert j.get("../../bridge-env") is None
+
+
+def test_jobs_folder_planted_as_a_link_is_refused(tmp_path):
+    bridge = tmp_path / "bridge-home"
+    bridge.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    j = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"})
+    os.rmdir(j.dir)
+    os.symlink(bridge, j.dir)
+    out.chmod(0o775)                             # a folder the hands' group shares: their link is not trusted
+    try:
+        rec = j.start("true", str(tmp_path), "x")
+    finally:
+        out.chmod(0o755)
+    assert "error" in rec and list(bridge.iterdir()) == []
+
+
+def test_uploads_never_create_through_a_link(tmp_path):
+    target = tmp_path / "bridge-home" / "planted"
+    target.parent.mkdir()
+    u = X.Uploads(tmp_path / "in")
+    day = tmp_path / "in" / time.strftime("%Y-%m-%d", time.gmtime())
+    day.mkdir(parents=True)
+    os.symlink(target, day / "voice.ogg")       # dangling: write_bytes used to create its target
+    p = u.save_bytes("voice.ogg", b"data")
+    assert not target.exists() and Path(p).name == "voice-1.ogg" and Path(p).read_bytes() == b"data"
+    assert not os.path.islink(p) and (os.stat(p).st_mode & 0o777) == 0o664
+
+
+def test_uploads_refuse_a_day_folder_planted_as_a_link(tmp_path):
+    bridge = tmp_path / "bridge-home"
+    bridge.mkdir()
+    inn = tmp_path / "in"
+    inn.mkdir()
+    os.symlink(bridge, inn / time.strftime("%Y-%m-%d", time.gmtime()))
+    inn.chmod(0o775)
+    try:
+        u = X.Uploads(inn)
+        try:
+            u.save_bytes("a.txt", b"x")
+            raised = False
+        except X.UnsafePath:
+            raised = True
+    finally:
+        inn.chmod(0o755)
+    assert raised and list(bridge.iterdir()) == []
+
+
+def test_files_write_replaces_and_never_writes_through_a_link(tmp_path):
+    world = tmp_path / "world"
+    world.mkdir()
+    secret = tmp_path / "bridge-env"
+    secret.write_text("TOKEN=keep\n")
+    f = X.Files({"world": world})
+    # the old fixed temp name, planted: no longer used, and never followed
+    os.symlink(secret, world / f".note.md.saving-{os.getpid()}")
+    d = f.write(str(world / "note.md"), "hello")
+    assert d["ok"] and (world / "note.md").read_text() == "hello" and secret.read_text() == "TOKEN=keep\n"
+    assert (os.stat(world / "note.md").st_mode & 0o777) == 0o664
+    assert not [p for p in world.iterdir() if ".saving-" in p.name and not p.is_symlink()]
+
+
+def test_replace_file_helper_sets_mode_and_leaves_no_temp(tmp_path):
+    fd = X.open_dir(tmp_path / "a" / "b", create=True)
+    try:
+        X.replace_file(fd, "x.json", b"{}", 0o664)
+        X.replace_file(fd, "x.json", b"[]", 0o664)
+        assert X.read_file(fd, "x.json") == b"[]"
+    finally:
+        os.close(fd)
+    assert sorted(p.name for p in (tmp_path / "a" / "b").iterdir()) == ["x.json"]
+    assert (os.stat(tmp_path / "a" / "b" / "x.json").st_mode & 0o777) == 0o664

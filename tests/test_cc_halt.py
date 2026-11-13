@@ -129,3 +129,15 @@ def test_cc_job_halt_resume_status(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / ".cc-bridge" / "HALT").exists()
     log = (tmp_path / ".cc-bridge" / "halt.log").read_text()
     assert "halt by hands: testing the switch" in log and "kill by hands: no running jobs" in log and "resume by hands: cleared" in log
+
+
+def test_halt_never_reads_a_bridge_file_through_a_planted_link(tmp_path):
+    """audit 2026-11-13: the hands own HALT; a link to the bridge's env must not show its first line."""
+    secret = tmp_path / "bridge-env"
+    secret.write_text("BRAIN_API_KEY=sk-secret\n")
+    home = tmp_path / "hands"
+    (home / ".cc-bridge").mkdir(parents=True)
+    import os
+    os.symlink(secret, H.halt_file(home))
+    why = H.halted(home)
+    assert why is not None and "sk-secret" not in why and why.startswith("HALT: (reason unreadable")

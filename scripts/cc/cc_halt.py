@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import stat
 import time
 from pathlib import Path
 
@@ -106,7 +107,15 @@ def halted(hands_home, owner_dir=None) -> str | None:
     except OSError:
         return None
     try:
-        reason = p.read_text().strip().splitlines()
+        # the hands own this file: never read through a link they planted (a bridge file's first line
+        # would come back as the reason; audit 2026-11-13), and never block on a fifo
+        fd = os.open(str(p), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("not a regular file")
+            reason = os.read(fd, 4096).decode("utf-8", "replace").strip().splitlines()
+        finally:
+            os.close(fd)
     except OSError:
         return f"HALT: (reason unreadable at {p})"
     return "HALT: " + (reason[0].strip() if reason and reason[0].strip() else "halted")
