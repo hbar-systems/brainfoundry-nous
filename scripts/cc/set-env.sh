@@ -24,10 +24,10 @@ if [ "$KEY" = "CC_TELEGRAM_TOKEN" ]; then
         unset VALUE; exit 1
     fi
 fi
-printf '%s' "$VALUE" | sudo env KEY="$KEY" ENV_FILE="$ENV_FILE" BRIDGE_USER="$BRIDGE_USER" sh -c '
-  v=$(cat); grep -v "^$KEY=" "$ENV_FILE" > "$ENV_FILE.tmp" || true
-  printf "%s=%s\n" "$KEY" "$v" >> "$ENV_FILE.tmp"; mv "$ENV_FILE.tmp" "$ENV_FILE"
-  chown "$BRIDGE_USER:$BRIDGE_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"'
+# written as the bridge user, who owns the file and its folder: root never writes by path into a folder
+# a member user owns (audit 2026-11-13); the value goes on stdin, never into a shell program
+. "$(dirname "$0")/member.sh"
+printf '%s' "$VALUE" | bridge_env_set "$KEY"
 unset VALUE
 # a member's bridge (BRIDGE_USER=<m>-cc) is cc-bridge-<m>; this restarted the owner's own cc-bridge (2026-11-08)
 UNIT=cc-bridge; [ "$BRIDGE_USER" != cc ] && [ "${BRIDGE_USER%-cc}" != "$BRIDGE_USER" ] && UNIT="cc-bridge-${BRIDGE_USER%-cc}"

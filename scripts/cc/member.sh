@@ -38,3 +38,25 @@ member_load() {  # sets the M_* names from CC_MEMBER / CC_MEMBER_N; returns 1 on
     M_BRIDGE_USER="$MEMBER-cc"; M_HANDS_USER="$MEMBER-hands"
     M_TOKEN_VAR="CC_OPERATOR_TOKEN_${MEMBER^^}"; M_CADDY_ENV="cc-$MEMBER"
 }
+
+# bridge_env_set KEY < value — one KEY=value line in the bridge's env file ($ENV_FILE), written AS the
+# bridge user ($BRIDGE_USER), who owns the file and its folder (audit 2026-11-13,
+# cc-env-rewrite-root-follows-member-owned-dir-links): root never writes by path into a folder a member
+# user owns. The value comes on stdin and is never pasted into a shell program (audit 2026-11-13,
+# cc-install-member-env-values-interpolated-into-root-shell); a key that is not UPPER_SNAKE or a value
+# with a newline is refused.
+bridge_env_set() {
+    [[ "${1:-}" =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "bridge_env_set: bad key '${1:-}'" >&2; return 1; }
+    local as=(); [ "$BRIDGE_USER" = "$(id -un)" ] || as=(sudo -u "$BRIDGE_USER")
+    "${as[@]}" env KEY="$1" sh -c '
+        umask 077; f=$1; v=$(cat)
+        case "$v" in *"
+"*) echo "bridge_env_set: a value with a newline is refused" >&2; exit 1 ;; esac
+        t=$(mktemp "$f.XXXXXXXX") || exit 1
+        { grep -v "^$KEY=" "$f" 2>/dev/null || true; printf "%s=%s\n" "$KEY" "$v"; } > "$t" && chmod 600 "$t" && mv -f "$t" "$f" \
+            || { rm -f "$t"; exit 1; }' sh "$ENV_FILE"
+}
+
+# safe_user NAME — NAME if it is a plain unix user name, else nothing (values read back from a file a
+# member user owns are never trusted into a root command)
+safe_user() { [[ "${1:-}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && printf '%s' "$1"; }

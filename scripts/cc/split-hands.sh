@@ -31,7 +31,7 @@ BRIDGE_HOME=$(eval echo "~$BRIDGE_USER")
 HANDS_HOME=/home/$HANDS_USER
 ENV_FILE="$BRIDGE_HOME/.cc-bridge/env"
 CADDYFILE=${CADDYFILE:-/etc/caddy/Caddyfile}
-setenv() { sudo sh -c "grep -v '^$1=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo '$1=$2' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"; }
+setenv() { printf '%s' "$2" | bridge_env_set "$1"; }   # as the bridge user, value never in a shell program (member.sh)
 getenv() { sudo grep -oP "^$1=\K.*" "$ENV_FILE" 2>/dev/null | tr -d '"' || true; }
 
 verify() {
