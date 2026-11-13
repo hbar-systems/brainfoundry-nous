@@ -7,6 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { wantsThreads } from '../lib/home'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
@@ -2046,12 +2047,26 @@ function CC() {
     }
     return groups
   })()
+  // pressing home while on home: the Nav says so and the thread list opens (NAV-1)
+  useEffect(() => {
+    const open = () => { if (paneModeRef.current) return; setShowThreads(true); loadThreads()
+      try { const u = new URL(window.location.href); if (u.searchParams.has('threads')) { u.searchParams.delete('threads'); window.history.replaceState(window.history.state, '', u.href) } } catch {} }
+    window.addEventListener('bf-home', open)
+    return () => window.removeEventListener('bf-home', open)
+  }, [])
   useEffect(() => {
     let pin = null
     try {
       const q = new URLSearchParams(window.location.search)
       if (q.get('pane')) { paneModeRef.current = q.get('pane'); setPaneMode(q.get('pane')) }
       pin = q.get('thread')
+      // NAV-1 (2026-11-13): the home (the brand, the menu's Chat) arrives with ?threads=1: the thread
+      // list opens over the page, and the address drops the flag so a reload is a plain home
+      if (!q.get('pane') && wantsThreads(window.location.search)) {
+        setShowThreads(true)
+        const u = new URL(window.location.href); u.searchParams.delete('threads')
+        window.history.replaceState(window.history.state, '', u.href)
+      }
     } catch {}
     fetch('/cc/health', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))

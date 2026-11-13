@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
+import { HOME_THREADS, ccHomeOf, homeHref as homeOf, menuHref } from '../lib/home'
 
 // Static fallback nav. Renders pre-fetch and on /apps/list fetch failure so
 // the brain stays usable even if the api is unreachable. Keep in sync with
@@ -56,6 +57,8 @@ function withPeople(tabs, hasPeers) {
 }
 
 function isActive(router, tab) {
+  // the home (NAV-1): "/" and its second address /talk are the same conversation page
+  if (tab.href === HOME_THREADS) return router.pathname === '/' || router.pathname === '/talk'
   if (tab.href === '/apps') {
     // The Apps hub is "active" both at /apps (the index) and inside any
     // installed-app iframe shell at /apps/<id>.
@@ -81,14 +84,22 @@ export default function Nav() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [hasPeers, setHasPeers] = useState(false)
   // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
-  const ccHome = tabs.some(t => t.id === '_cc' && t.href === '/')
-  // The brand link (2026-11-10, Paul landed on the dashboard): when the brain has CC, the symbol
-  // goes to the thread page (the CC tab's own route), never to the dashboard.
-  const ccTab = tabs.find(t => t.id === '_cc')
-  const homeHref = ccTab ? ccTab.href : '/'
+  const ccHome = ccHomeOf(tabs)
+  // The brand link (2026-11-10, Paul landed on the dashboard; NAV-1 2026-11-13): when the brain has
+  // CC, the symbol and the name go to the home, the thread page with its thread list open, never to
+  // the dashboard or /chat. The menu entry Chat goes to the same home (lib/home.js).
+  const homeHref = homeOf(tabs)
+  const withHome = (list) => list.map(t => ({ ...t, href: menuHref(t, tabs) }))
   const split = splitByMode(tabs, mode)
-  const shown = withPeople(split.shown, hasPeers)
-  const more = split.more
+  const shown = withHome(withPeople(split.shown, hasPeers))
+  const more = withHome(split.more)
+  // Pressing home while already on it: the page stays mounted, so it is told to open its thread list.
+  const goHome = (e) => {
+    if (ccHome && (router.pathname === '/' || router.pathname === '/talk')) {
+      e.preventDefault()   // stay on the page (its thread shown, the address as it is); only the list opens
+      try { window.dispatchEvent(new Event('bf-home')) } catch {}
+    }
+  }
   useEffect(() => { setDrawer(false); setMoreOpen(false) }, [router.pathname])
 
   useEffect(() => {
@@ -198,7 +209,8 @@ export default function Nav() {
       right: 0,
       zIndex: 100,
     }}>
-      <Link href={homeHref} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+      <Link href={homeHref} onClick={goHome} className="bf-brand" aria-label={ccHome ? 'Home: your conversations and threads' : 'Home'}
+        title={ccHome ? 'Home: your conversations and threads' : 'Home'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <span style={{ fontSize: '18px', color: 'var(--accent)', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
         <span className="bf-brand-name" style={{
           fontFamily: 'var(--font-display)',
