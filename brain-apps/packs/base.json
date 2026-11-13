@@ -8,42 +8,50 @@
     {
       "id": "thread-consolidator",
       "repo_url": "https://github.com/hbar-systems/brain-app-thread-consolidator",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "37e66c5d7a266744e3f1629cc96219816439dc47"
     },
     {
       "id": "daybook",
       "repo_url": "https://github.com/hbar-systems/brain-app-daybook",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "1fb9958b9d52585ed4ca51a2ab16283ed7001c77"
     },
     {
       "id": "mirror",
       "repo_url": "https://github.com/hbar-systems/hbar-mirror-app",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "6b3aea502605142c9b38da9de8d6f80ff588f2e9"
     },
     {
       "id": "toolbox",
       "repo_url": "https://github.com/hbar-systems/brain-app-toolbox",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "13790c4b6447cc4d7a272c0a6af56322697b9c36"
     },
     {
       "id": "clip",
       "repo_url": "https://github.com/hbar-systems/brain-app-clip",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "ffa8ff5bdf08ee2c1f35266d2ec5a5707811afda"
     },
     {
       "id": "today",
       "repo_url": "https://github.com/hbar-systems/brain-app-today",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "b56bfa1f6437ee875f718521c8d00796d4028d67"
     },
     {
       "id": "people",
       "repo_url": "https://github.com/hbar-systems/brain-app-people",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "81e4b1f3b775788cb17d73ac5ec615d5ff2e1d99"
     },
     {
       "id": "weekly-review",
       "repo_url": "https://github.com/hbar-systems/brain-app-weekly-review",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "5ef4f78227ab9d850ab32c9f6f9766eec494c26f"
     },
     {
       "id": "week",

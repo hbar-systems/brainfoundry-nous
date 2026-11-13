@@ -10,12 +10,14 @@
     {
       "id": "poker-journal",
       "repo_url": "https://github.com/hbar-systems/hbar-poker-journal",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "82ab74c84243754ac57fdadd14345a862ae2b794"
     },
     {
       "id": "quantum-room",
       "repo_url": "https://github.com/hbar-systems/hbar-university-quantum-room",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "1ca6a6c3d702cb0e1ffa389b4e291284ee5d049e"
     }
   ],
   "tools": [],

@@ -23,7 +23,8 @@
 // Manifest id pattern (api/schemas/brain-app.schema.json).
 const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/
 // First segments under apps/ that are the brain's own apps router (api/apps.py), never an app.
-const APPS_ROUTER_WORDS = new Set(['list', 'install', 'packs', 'shipped'])
+// Every one is also a reserved app id (api/apps.py RESERVED_APP_IDS), so no app can take one.
+const APPS_ROUTER_WORDS = new Set(['list', 'install', 'packs', 'shipped', 'installed'])
 
 // The sandbox for app documents. Same list as the iframe's sandbox attribute in ui/pages/apps/[id].js.
 // No allow-same-origin (the point), no allow-forms (apps use onClick), no popups, no top navigation.
@@ -76,6 +77,13 @@ function classify(parts, method) {
   const segs = Array.isArray(parts) ? parts.map(String) : [String(parts || '')]
   for (const s of segs) {
     if (s === '' || s === '.' || s === '..' || s.includes('/') || s.includes('\\') || s.includes('\0')) return { kind: 'bad' }
+  }
+  // apps/<id> alone (the app root; the api redirects it to the bundle's index.html) is an app file
+  // too, so it gets the sandbox CSP like any other (audit 2026-11-13).
+  if (segs[0] === 'apps' && segs.length === 2 && APP_ID_RE.test(segs[1]) && !APPS_ROUTER_WORDS.has(segs[1])) {
+    const m = String(method || 'GET').toUpperCase()
+    if (m === 'GET' || m === 'HEAD') return { kind: 'app-static', appId: segs[1] }
+    return { kind: 'core' }
   }
   if (segs[0] === 'apps' && segs.length >= 3 && APP_ID_RE.test(segs[1]) && !APPS_ROUTER_WORDS.has(segs[1])) {
     const appId = segs[1]
@@ -186,4 +194,4 @@ function injectShim(html) {
   return tag + s
 }
 
-module.exports = { APP_ID_RE, APP_SANDBOX, APP_CSP, SHIM_JS, fromForeignPage, consoleTokenMissing, classify, decide, corsHeaders, injectShim }
+module.exports = { APP_ID_RE, APPS_ROUTER_WORDS, APP_SANDBOX, APP_CSP, SHIM_JS, fromForeignPage, consoleTokenMissing, classify, decide, corsHeaders, injectShim }

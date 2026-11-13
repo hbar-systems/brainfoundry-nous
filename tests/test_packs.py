@@ -273,3 +273,60 @@ def test_compute_change_is_a_scope_change():
     assert not apps._scope_changed(same)
     widened = apps._scope_diff(installed, _manifest({"endpoint": "https://x", "permit_class": "p"}))
     assert widened["compute_changed"] and apps._scope_changed(widened)
+
+
+# ── pinned pack shas (audit 2026-11-13, default-packs-track-mutable-upstream-head) ──
+
+def _git(*args, cwd):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
+                          env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
+                               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"}).stdout.strip()
+
+
+def _upstream(tmp_path):
+    """A local repo with two commits of a valid app; returns (file url, first sha, head sha)."""
+    import yaml
+    src = tmp_path / "upstream"
+    src.mkdir()
+    _git("init", "-q", "-b", "main", cwd=src)
+    _git("config", "uploadpack.allowReachableSHA1InWant", "true", cwd=src)
+    m = {"dialect": "brain-app/v1", "id": "pinned", "name": "Pinned", "version": "0.1.0",
+         "description": "d", "license": "AGPL-3.0", "author": {"name": "t"},
+         "repo": "https://github.com/hbar-systems/pinned", "tab": {"label": "P", "route": "/pinned"},
+         "entries": {"ui_bundle": "./"}}
+    (src / "brain-app.yaml").write_text(yaml.safe_dump(m))
+    (src / "index.html").write_text("v1")
+    _git("add", "-A", cwd=src)
+    _git("commit", "-qm", "v1", cwd=src)
+    first = _git("rev-parse", "HEAD", cwd=src)
+    (src / "index.html").write_text("v2 from a later push")
+    _git("commit", "-qam", "v2", cwd=src)
+    return f"file://{src}", first, _git("rev-parse", "HEAD", cwd=src)
+
+
+def test_shipped_pack_repo_apps_are_pinned():
+    for name in ("base", "play", "writing"):
+        pack = json.load(open(os.path.join(ROOT, "brain-apps", "packs", f"{name}.json")))
+        for a in pack["apps"]:
+            if a.get("repo_url"):
+                assert len(a.get("sha", "")) == 40, (name, a["id"])
+
+
+def test_pack_app_installs_the_pinned_commit_not_head(tmp_path, monkeypatch):
+    monkeypatch.setattr(apps, "_chown_to_host_owner", lambda p: None)
+    url, first, head = _upstream(tmp_path)
+    assert first != head
+    entry = apps._install_default(url, "HEAD", set(), set(), sha=first)
+    assert entry["commit_sha"] == first
+    assert (tmp_path / "pinned" / "index.html").read_text() == "v1"
+
+
+def test_pack_app_pin_mismatch_fails_that_app(tmp_path, monkeypatch):
+    monkeypatch.setattr(apps, "_chown_to_host_owner", lambda p: None)
+    url, _first, _head = _upstream(tmp_path)
+    with pytest.raises(Exception):
+        apps._install_default(url, "HEAD", set(), set(), sha="0" * 40)
+    assert not (tmp_path / "pinned").exists()
+    with pytest.raises(RuntimeError):
+        apps._install_default(url, "HEAD", set(), set(), sha="not-a-sha")

@@ -2932,7 +2932,8 @@ def _apply_rag_budget(docs: List[Dict[str, Any]], model: str):
 
 def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int,
                       web_context: str = "", model: str = "",
-                      allow_local_only: Optional[bool] = None):
+                      allow_local_only: Optional[bool] = None,
+                      restrict_layers: Optional[List[str]] = None):
     """Run RAG retrieval and assemble the full prompt. Returns (prompt, relevant_docs).
 
     Privacy gate: `local-only` chunks are retrieved only when the prompt goes
@@ -2943,6 +2944,8 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
     Track C3: the retrieval architecture is a persisted brain setting (the
     "Mind Architecture"). The legacy `layers` argument is retained for API
     compatibility but the configured architecture governs retrieval.
+    `restrict_layers` (a brain-app turn) overrides that: retrieval runs only
+    over those layers, and an empty list retrieves nothing.
 
     `web_context` is an optional, already-safety-wrapped block of external
     search results (see api/tools/safety.py). It is injected as clearly-marked
@@ -2957,7 +2960,12 @@ def _build_rag_prompt(messages: list, user_query: str, layers, search_limit: int
         allow_local_only = _privacy.may_read_local_only(model)
     allow_local_only = bool(allow_local_only)
     arch = settings_store.get_retrieval_architecture()
-    if arch == "flat":
+    if restrict_layers is not None:
+        # A brain app's turn: only the layers the operator approved for it.
+        relevant_docs = (search_similar_documents(
+            user_query, limit=search_limit, layers=list(restrict_layers), architecture="layer_scoped",
+            allow_local_only=allow_local_only) if restrict_layers else [])
+    elif arch == "flat":
         relevant_docs = search_similar_documents(user_query, limit=search_limit, architecture="flat",
                                                  allow_local_only=allow_local_only)
     elif arch == "layer_scoped":
@@ -3111,6 +3119,18 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         messages = request.get("messages", [])
         search_limit = request.get("search_limit", 5)
         layers = request.get("layers") or None
+        # A brain app's turn (audit 2026-11-13) keeps to its manifest: retrieval
+        # only over the read layers the operator approved for it (looked up
+        # here, narrowed by the request, never widened), no web search and no
+        # agentic tools (mail, Drive, calendar, fetch, MCP, tasks), which the
+        # app reaches only through bridge intents its manifest permits.
+        _app_turn = _permit_agent.startswith("app:")
+        _app_layers = None
+        if _app_turn:
+            from api.apps import app_read_layers as _app_read_layers
+            _app_layers = _app_read_layers(_permit_agent[len("app:"):])
+            if isinstance(layers, list):
+                _app_layers = [l for l in _app_layers if l in layers]
         session_id = request.get("session_id")
         do_stream = request.get("stream", False)
         # Session mark (api/privacy.py, 2026-10-15): a session in which a model
@@ -3232,7 +3252,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # enabled web search in Settings (standing authorization) — the
         # dispatcher enforces the tier; this just avoids a pointless call.
         web_context = ""
-        web_meta = {"requested": bool(request.get("web_search")), "used": False,
+        web_meta = {"requested": bool(request.get("web_search")) and not _app_turn, "used": False,
                     "results": [], "error": None}
         if web_meta["requested"]:
             if settings_store.get_web_search_enabled():
@@ -3274,7 +3294,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
 
         prompt, relevant_docs = _build_rag_prompt(
             messages, user_query, layers, search_limit, web_context=web_context, model=model,
-            allow_local_only=_allow_local_only)
+            allow_local_only=_allow_local_only, restrict_layers=_app_layers)
         sources = [d["document_name"] for d in relevant_docs]
         # Did local-only memory reach this turn? Retrieved docs say so directly;
         # an agentic turn may also pull it in through search_memory, which the
@@ -3332,7 +3352,8 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # (capable ones tool-call; tiny ones just answer) — federation never
         # requires a cloud model.
         tool_events = []
-        agentic = (settings_store.get_agentic_tools_enabled()
+        agentic = (not _app_turn
+                   and settings_store.get_agentic_tools_enabled()
                    and _providers.supports_native_tools(model))
         import copy as _copy
         from api import tools as _agentic_tools
@@ -8145,6 +8166,11 @@ class MemoryAppendRequest(BaseModel):
     privacy: Optional[str] = None
 
 
+# Metadata keys a /memory/append caller may never set: they change who outside
+# the brain can read a chunk (api/public_scope.py).
+_APPEND_VISIBILITY_KEYS = frozenset({"scope"})
+
+
 @app.post("/memory/append")
 def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key)) -> dict:
     if req.layer not in ("episodic", "semantic", "procedural"):
@@ -8234,8 +8260,12 @@ def memory_append(req: MemoryAppendRequest, api_key: str = Depends(get_api_key))
         # appended_at) OR any provenance/gate key (mem_type, quarantined,
         # source_trust, …) — a brain app must not be able to launder its own
         # content up to `semantic` or clear a quarantine via passthrough metadata.
+        # Nor any visibility key: metadata.scope == "public" is what every
+        # outside door (public chat, federation, ask) answers from, and no app
+        # permission covers publishing. Publishing stays an owner action
+        # through the public layer (audit 2026-11-13).
         for k, v in req.metadata.items():
-            if k not in metadata_base:
+            if k not in metadata_base and k not in _APPEND_VISIBILITY_KEYS:
                 metadata_base[k] = v
 
     conn = get_db_connection()

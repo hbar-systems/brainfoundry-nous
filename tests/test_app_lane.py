@@ -166,7 +166,7 @@ PROXY_SCRIPT = r"""
 const http = require('http')
 const seen = []
 const up = http.createServer((req, res) => {
-  seen.push({ method: req.method, url: req.url, key: req.headers['x-api-key'] || null, auth: req.headers['authorization'] || null })
+  seen.push({ method: req.method, url: req.url, key: req.headers['x-api-key'] || null, auth: req.headers['authorization'] || null, lane: req.headers['x-brain-app-lane'] || null })
   if (req.url.startsWith('/apps/app1/')) {
     if (req.url.endsWith('.html')) { res.setHeader('content-type', 'text/html'); return res.end('<html><head><title>a</title></head><body>app</body></html>') }
     res.setHeader('content-type', 'text/javascript'); return res.end('console.log(1)')
@@ -200,6 +200,7 @@ up.listen(0, '127.0.0.1', async () => {
   r.file = await call(['apps', 'app1', 'index.html'], 'GET', { ...FRAME, authorization: 'Basic b3A6cHc=' })
   r.asset = await call(['apps', 'app1', 'main.js'], 'GET', FRAME)
   r.console = await call(['sessions'], 'GET', CONSOLE)
+  r.backend = await call(['apps', 'app1', 'api', 'convert'], 'POST', { ...FRAME, 'content-type': 'application/json' })
   console.log(JSON.stringify({ r, seen }))
   up.close()
 })
@@ -232,7 +233,7 @@ def test_proxy_refuses_app_frame_and_serves_app_files(tmp_path):
     for k in ("search", "sessions", "admin", "preflight"):
         assert res[k]["status"] == 403 and json.loads(res[k]["body"]) == {"error": "app_frame_refused"}, k
     # nothing from the frame reached a core route upstream
-    assert [s["url"] for s in seen] == ["/apps/app1/index.html", "/apps/app1/main.js", "/sessions"]
+    assert [s["url"] for s in seen][:3] == ["/apps/app1/index.html", "/apps/app1/main.js", "/sessions"]
     # app files went without the owner key and without the caller's login
     assert seen[0]["key"] is None and seen[0]["auth"] is None and seen[1]["key"] is None
     assert res["file"]["status"] == 200 and res["asset"]["status"] == 200
@@ -242,6 +243,12 @@ def test_proxy_refuses_app_frame_and_serves_app_files(tmp_path):
     assert res["asset"]["body"] == "console.log(1)"
     # the console's own page still has owner authority
     assert seen[2]["key"] == "OWNER-KEY" and res["console"]["status"] == 200
+    # an app frame's call to its backend goes without the owner key but with the console's lane
+    # proof (HMAC of the key), so the api can refuse anonymous callers (audit 2026-11-13)
+    import hashlib, hmac
+    assert seen[3]["url"] == "/apps/app1/api/convert" and seen[3]["key"] is None
+    assert seen[3]["lane"] == hmac.new(b"OWNER-KEY", b"brain-app-lane/v1", hashlib.sha256).hexdigest()
+    assert all(x["lane"] is None for x in seen[:3])
 
 
 HANDLER_SCRIPT = r"""
@@ -291,7 +298,7 @@ const fetch = async (url, opts) => {
 const mem = {}; const ls = { get length() { return Object.keys(mem).length }, key: i => Object.keys(mem)[i], getItem: k => k in mem ? mem[k] : null, setItem: (k, v) => { mem[k] = String(v) } }
 ls.setItem('hbar-ink-drops-v8', '[1]'); ls.setItem('cc.hidden', '{}'); ls.setItem('daybook:x', 'y')
 const llmApp = { id: 'oracle', name: 'Oracle', version: '1', permissions: ['llm.invoke'], requires_layers: [{ layer: 'semantic', mode: 'read' }] }
-const inkApp = { id: 'hbar-ink', name: 'ink', version: '1', permissions: ['memory.write'], requires_layers: [{ layer: 'episodic', mode: 'append' }] }
+const inkApp = { id: 'hbar-ink', name: 'ink', version: '1', preinstalled: true, permissions: ['memory.write'], requires_layers: [{ layer: 'episodic', mode: 'append' }] }
 ;(async () => {
   const o = b.makeBridge({ appInfo: llmApp, fetch, ls, brainName: 'hbar' })
   const r = {}
@@ -399,3 +406,73 @@ def test_console_token_enforced_when_set():
     assert _decide_env(["apps", "demo", "index.html"], "GET", {}, "T0k3n")["action"] == "forward"
     # unset: old behaviour, so a box without the Caddy line keeps working
     assert _decide_env(["documents", "search"], "POST", {}, "")["action"] == "forward"
+
+
+def test_app_root_path_is_an_app_file_with_the_sandbox():
+    # bf-proxy-app-root-path-serves-app-html-without-sandbox-csp (audit 2026-11-13)
+    for headers in (FRAME, CONSOLE, {"sec-fetch-site": "none"}):
+        for method in ("GET", "HEAD"):
+            d = _decide(["apps", "poker-journal"], method, headers)
+            assert d["action"] == "forward" and d["appFile"] is True and d["ownerKey"] is False, (headers, d)
+    # router words stay core (the console's own apps page lists them with the owner key)
+    d = _decide(["apps", "list"], "GET", CONSOLE)
+    assert d["action"] == "forward" and d["ownerKey"] is True and d["appFile"] is False
+    # a non-read of the root is core: refused from a frame
+    assert _decide(["apps", "poker-journal"], "POST", FRAME)["action"] == "refuse"
+
+
+def test_every_router_word_is_a_reserved_app_id():
+    sys.path.insert(0, str(ROOT))
+    from api import apps
+    words = _node_json("console.log(JSON.stringify([...require('./appLane.js').APPS_ROUTER_WORDS]))")
+    assert set(words) <= apps.RESERVED_APP_IDS
+    # and every first word of the apps router is a router word
+    src = (ROOT / "api" / "apps.py").read_text()
+    firsts = {m for m in re.findall(r'@router\.\w+\("/([a-z]+)', src)}
+    assert firsts <= set(words), firsts - set(words)
+
+
+STORE_SCRIPT = r"""
+const b = require('./appBridge.js')
+const mem = {}; const ls = { get length() { return Object.keys(mem).length }, key: i => Object.keys(mem)[i],
+  getItem: k => k in mem ? mem[k] : null, setItem: (k, v) => { mem[k] = String(v) }, removeItem: k => { delete mem[k] } }
+const A = { id: 'daybook', repo: 'https://github.com/hbar-systems/brain-app-daybook', installed_at: 't1', preinstalled: true }
+const B = { id: 'daybook', repo: 'https://github.com/other/not-daybook', installed_at: 't2' }
+const r = {}
+ls.setItem('daybook:2026-10-01', 'legacy')
+const a = b.makeBridge({ appInfo: A, fetch: null, ls, brainName: 'x' })
+r.aStore = a.store
+a.handleIntent({ type: 'storage.set', payload: { key: 'entry', value: 'private' } })
+// another browser kept A's store; a different install claiming the id starts empty
+r.bStore = b.loadStore('daybook', ls, B)
+r.bLegacy = 'daybook:2026-10-01' in r.bStore
+// reload of the same install keeps its data
+ls.setItem('bf.app-storage.daybook', JSON.stringify({ entry: 'kept' }))
+r.bAgain = b.loadStore('daybook', ls, B)
+// uninstall clears this browser: store, owner mark and legacy keys
+b.clearStore('daybook', ls)
+r.afterClear = Object.keys(mem).sort()
+// a store from before the owner mark existed is adopted by its installation
+mem['bf.app-storage.today'] = JSON.stringify({ x: '1' })
+r.adopted = b.loadStore('today', ls, { id: 'today', repo: 'r', installed_at: 't' })
+// a URL-installed app with a legacy id gets no legacy keys
+ls.setItem('qr-progress', '7')
+r.noLegacy = b.loadStore('quantum-room', ls, { id: 'quantum-room', repo: 'r', installed_at: 't' })
+console.log(JSON.stringify(r))
+"""
+
+
+def test_app_store_belongs_to_one_installation():
+    # app-storage-keyed-by-reusable-app-id (audit 2026-11-13)
+    r = _node_json(STORE_SCRIPT)
+    assert r["aStore"]["daybook:2026-10-01"] == "legacy"
+    assert r["bStore"] == {} and r["bLegacy"] is False
+    assert r["bAgain"] == {"entry": "kept"}
+    assert r["afterClear"] == []
+    assert r["adopted"] == {"x": "1"}
+    assert r["noLegacy"] == {}
+
+
+def test_uninstall_clears_the_app_store_in_the_console():
+    src = (ROOT / "ui" / "pages" / "apps" / "index.js").read_text()
+    assert "clearStore(id" in src

@@ -46,7 +46,8 @@
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" },
           "repo_url": { "type": "string", "format": "uri", "pattern": "^https://(github\\.com|gitlab\\.com|codeberg\\.org)/" },
           "shipped": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$", "description": "Added 2026-11-10: an app shipped in this template at brain-apps/shipped/<name>/, installed by copy instead of a clone. Exactly one of repo_url and shipped." },
-          "ref": { "type": "string", "default": "HEAD", "description": "Branch, tag, or commit SHA. Pin a tag for anything a buyer receives." }
+          "ref": { "type": "string", "default": "HEAD", "description": "Branch, tag, or commit SHA. Pin a tag for anything a buyer receives." },
+          "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Added 2026-11-13: the commit a fresh brain installs. The clone is moved to it and verified; a mismatch fails that app, never installs another commit. Bump it with the pack version when an app release is reviewed." }
         },
         "additionalProperties": false
       }
