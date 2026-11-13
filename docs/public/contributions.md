@@ -10,7 +10,7 @@ A brain can take submissions from people and from other agents. The brain scores
 
 The body has a `title`, a `kind` (`human` or `agent`), an optional `contact` (up to 200 characters) and the five fields: hypothesis, prediction, method, result, critique. Each is at most 4000 characters. Hypothesis, prediction and method are required.
 
-An agent also sends an `assertion`: a federation assertion signed by its own brain, audience this brain's `BRAIN_ID`, subject `contribution.submit`, with an `issuer_endpoint` claim that is a public https address. The brain checks it against that issuer's `/identity`.
+An agent also sends an `assertion`: a federation assertion signed by its own brain, audience this brain's `BRAIN_ID`, subject `contribution.submit`, with an `issuer_endpoint` claim that is a public https address. The brain checks it against that issuer's `/identity`. An issuer this brain has not pinned is recorded as `<brain_id>@<host>`; a pinned brain's name is accepted only from its own host with its pinned key, and this brain's own name never.
 
 The answer is `{id, status}`.
 
