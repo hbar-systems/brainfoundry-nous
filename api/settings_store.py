@@ -687,7 +687,8 @@ def get_autonomy_enabled() -> bool:
     """Standing autonomous loop: let the brain run its own agentic ticks against
     a standing goal, with no operator message. Off by default — opt-in per brain.
     The tick is a headless lane (RED stays refused); enabling it is the operator's
-    standing authorization for its YELLOW peer reads. See api/autonomy.py."""
+    standing authorization for its YELLOW peer reads (brain_call) only; any other
+    tool needs the owner's autonomy_tools list. See api/autonomy.py."""
     return bool(_load().get("autonomy_enabled", False))
 
 
@@ -710,6 +711,22 @@ def set_ask_public_enabled(enabled: bool) -> None:
     with _LOCK:
         data = _load()
         data["ask_public_enabled"] = bool(enabled)
+        _save(data)
+
+
+def get_autonomy_tools() -> list:
+    """Extra tools the owner lets the autonomous tick use, beyond its default
+    (brain_call, search_memory, task_list). Empty by default: least privilege
+    (audit 2026-11-13, autonomy-tick-authorizes-all-yellow-tools)."""
+    v = _load().get("autonomy_tools")
+    return [str(x) for x in v if isinstance(x, str)][:32] if isinstance(v, list) else []
+
+
+def set_autonomy_tools(names: list) -> None:
+    with _LOCK:
+        data = _load()
+        data["autonomy_tools"] = [str(x).strip()[:80] for x in (names or [])
+                                  if isinstance(x, str) and str(x).strip()][:32]
         _save(data)
 
 

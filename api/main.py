@@ -856,6 +856,7 @@ class SetAgenticToolsRequest(BaseModel):
 class SetAutonomyRequest(BaseModel):
     enabled: Optional[bool] = None
     goal: Optional[str] = None
+    tools: Optional[List[str]] = None   # extra tools the tick may use (owner's allow-list)
 
 
 @app.get("/settings/agentic-tools")
@@ -868,7 +869,8 @@ def settings_get_agentic_tools(api_key: str = Depends(get_api_key)):
 def settings_get_autonomy(api_key: str = Depends(get_api_key)):
     """Standing autonomous loop status + the goal each tick pursues."""
     return {"enabled": settings_store.get_autonomy_enabled(),
-            "goal": settings_store.get_autonomy_goal()}
+            "goal": settings_store.get_autonomy_goal(),
+            "tools": settings_store.get_autonomy_tools()}
 
 
 @app.post("/settings/autonomy")
@@ -877,9 +879,12 @@ def settings_set_autonomy(req: SetAutonomyRequest, api_key: str = Depends(get_ap
         settings_store.set_autonomy_enabled(req.enabled)
     if req.goal is not None:
         settings_store.set_autonomy_goal(req.goal)
+    if req.tools is not None:
+        settings_store.set_autonomy_tools(req.tools)
     return {"ok": True,
             "enabled": settings_store.get_autonomy_enabled(),
-            "goal": settings_store.get_autonomy_goal()}
+            "goal": settings_store.get_autonomy_goal(),
+            "tools": settings_store.get_autonomy_tools()}
 
 
 # ── Google integration (Gmail + Calendar, read-only) ────────────────────────

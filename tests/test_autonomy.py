@@ -119,3 +119,45 @@ def test_skips_when_model_cannot_tool_call(tmp_path, monkeypatch):
     rec = _run(autonomy.run_tick(goal="anything"))
     assert rec["ok"] is False
     assert "skipped" in rec
+
+
+def test_tick_offers_only_its_read_set_by_default(tmp_path, monkeypatch):
+    """Audit 2026-11-13 (autonomy-tick-authorizes-all-yellow-tools): the tick is offered and may
+    dispatch brain_call, search_memory and task_list only, unless the owner names more."""
+    _isolate_log(tmp_path, monkeypatch)
+    from api import settings_store
+    from api import tools as _tools
+    monkeypatch.setattr(providers, "default_model", lambda: "claude-sonnet-5")
+    monkeypatch.setattr(providers, "supports_native_tools", lambda m: True)
+    monkeypatch.setattr(settings_store, "get_autonomy_tools", lambda: [])
+    monkeypatch.setattr(settings_store, "get_web_search_enabled", lambda: False)
+    full = [{"name": n} for n in ("brain_call", "search_memory", "task_list", "task_add", "fetch_url",
+                                  "inbox_read", "drive_search", "calendar_read", "web_search",
+                                  "send_telegram_message")]
+    monkeypatch.setattr(autonomy, "_tools_spec_with_peers", lambda: (full, ["peer"]))
+    ran = []
+
+    async def _fake_dispatch(name, args, **kw):
+        ran.append(name)
+        return ToolResult(ok=True, content="x")
+    monkeypatch.setattr(_tools, "dispatch", _fake_dispatch)
+    seen = {}
+
+    async def _fake_turn(model, messages, spec, dispatch, **kw):
+        seen["offered"] = sorted(t["name"] for t in spec)
+        for n in ("fetch_url", "inbox_read", "task_add", "search_memory"):
+            seen[n] = await dispatch(n, {})
+        return {"text": "done", "tool_events": []}
+    monkeypatch.setattr(providers, "complete_with_tools", _fake_turn)
+
+    _run(autonomy.run_tick(goal="g"))
+    assert seen["offered"] == ["brain_call", "search_memory", "task_list"]
+    assert ran == ["search_memory"]
+    assert not seen["fetch_url"].ok and not seen["inbox_read"].ok and not seen["task_add"].ok
+
+    # the owner's list adds a tool; a web tool also needs the web toggle; RED never
+    monkeypatch.setattr(settings_store, "get_autonomy_tools", lambda: ["inbox_read", "fetch_url", "send_telegram_message"])
+    assert autonomy.tick_allowed_tools() == {"brain_call", "search_memory", "task_list", "inbox_read"}
+    monkeypatch.setattr(settings_store, "get_web_search_enabled", lambda: True)
+    assert "fetch_url" in autonomy.tick_allowed_tools()
+    assert "send_telegram_message" not in autonomy.tick_allowed_tools()

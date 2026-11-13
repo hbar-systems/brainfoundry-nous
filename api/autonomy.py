@@ -14,8 +14,12 @@ Safety posture (why this is not a new attack surface):
   autonomous brain can therefore ASK peers questions (YELLOW brain_call) and
   read its own memory (GREEN) — it cannot make a peer, or itself, DO anything.
 - Enabling the loop (settings toggle, off by default) IS the operator's standing
-  authorization for its YELLOW reads — the same grant the web-search toggle
-  gives web_search. Nothing runs until the operator flips it on per brain.
+  authorization for its peer reads (YELLOW brain_call) and its own memory and
+  task list reads (GREEN). Nothing else is offered or dispatched unless the
+  owner names it in the autonomy_tools setting (never RED; the web tools also
+  need the web-search toggle). Audit 2026-11-13: the tick used to be offered,
+  and authorized for, every registered tool. Nothing runs until the operator
+  flips the loop on per brain.
 - The tick is driven by an external scheduler hitting POST /v1/autonomy/tick,
   not an always-on daemon inside the container. Cadence, and the power to stop,
   stay with the operator. One tick = one bounded agentic turn.
@@ -101,6 +105,36 @@ def _tools_spec_with_peers() -> tuple[list, list]:
     return spec, peer_ids
 
 
+TICK_DEFAULT_TOOLS = ("brain_call", "search_memory", "task_list")
+_WEB_TOOLS = ("web_search", "fetch_url")
+
+
+def tick_allowed_tools() -> set:
+    """The tools a tick may use: the default read set plus the owner's
+    autonomy_tools list, minus anything unregistered or RED; the web tools
+    only while the web-search toggle is on."""
+    from api import settings_store
+    from api import tools as _tools
+    names = set(TICK_DEFAULT_TOOLS)
+    try:
+        names |= set(settings_store.get_autonomy_tools())
+    except Exception:
+        pass
+    try:
+        web_ok = bool(settings_store.get_web_search_enabled())
+    except Exception:
+        web_ok = False
+    out = set()
+    for n in names:
+        t = _tools.get(n)
+        if t is None or t.tier == _tools.RED:
+            continue
+        if n in _WEB_TOOLS and not web_ok:
+            continue
+        out.add(n)
+    return out
+
+
 def _build_prompt(goal: str, persona: str, peer_ids: List[str]) -> str:
     """The self-directed prompt that opens a tick. It tells the model plainly
     that no operator is present and that it may consult peers — but that it must
@@ -159,6 +193,8 @@ async def run_tick(goal: Optional[str] = None,
         persona = "You are a sovereign personal brain."
 
     spec, peer_ids = _tools_spec_with_peers()
+    allowed = tick_allowed_tools()
+    spec = [t for t in spec if t.get("name") in allowed]
     prompt = _build_prompt(goal, persona, peer_ids)
 
     peers_queried: List[str] = []
@@ -169,12 +205,17 @@ async def run_tick(goal: Optional[str] = None,
         # (never auto-approve without an operator). Enabling the loop is the
         # standing authorization for YELLOW, so operator_authorized=True here.
         from api import tools as _tools
-        res = await _tools.dispatch(
-            name, args,
-            operator_authorized=True,
-            approvals_available=False,
-            admin=False,
-        )
+        if name not in allowed:
+            # Not offered to this tick: refused here, whatever its tier
+            # (least privilege, audit 2026-11-13).
+            res = _tools.ToolResult(ok=False, error=f"{name}: not allowed in the autonomous tick")
+        else:
+            res = await _tools.dispatch(
+                name, args,
+                operator_authorized=True,
+                approvals_available=False,
+                admin=False,
+            )
         if name == "brain_call" and getattr(res, "ok", False):
             tgt = (args or {}).get("target")
             if tgt:
