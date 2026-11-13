@@ -111,7 +111,11 @@ do)
         asHands chmod -R g+rX "$HANDS_HOME/world"; asHands chmod -R g+w "$HANDS_HOME/world"
         asHands find -P "$HANDS_HOME/world" -type d -exec chmod g+s {} +
     fi
-    sudo -u "$BRIDGE_USER" git config --global --add safe.directory '*' 2>/dev/null || true
+    # No safe.directory '*' for the bridge (audit 2026-11-13, split-hands-bridge-git-safe-directory-star-on-hands-owned-world):
+    # the world is the hands' now, and git honours a repo's own config (core.fsmonitor, hooks, filters), so a
+    # bridge git there would run what the hands wrote. The hands pull it themselves (cc-work-pull runs as the
+    # hands); the bridge's own reads pass their overrides per call (cc_extras._git). An operator tool that
+    # still commits into the world as the bridge user should run as the hands instead.
     sudo -u "$HANDS_USER" git config --global --add safe.directory '*' 2>/dev/null || true
     # the hands' git identity and token for pushes (the bridge user had them)
     if sudo test -f "$HANDS_HOME/.work/git-credentials"; then

@@ -1783,7 +1783,11 @@ def commit_repos(world: str, extra: tuple = ()) -> list:
 
 def _git(repo, *args, timeout: int = 6) -> tuple:
     try:
-        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), *args],
+        # the repos may belong to the hands: their own config must not run anything in the bridge
+        # (audit 2026-11-13): no fsmonitor, no hooks, no external diff or textconv, no pager
+        r = subprocess.run(["git", "--no-optional-locks", "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
+                            "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.pager=cat",
+                            "-C", str(repo), *args],
                            capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout
     except Exception:
@@ -1798,11 +1802,11 @@ def commit_info(sha: str, repos: list) -> dict:
         rc, _ = _git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
         if rc != 0:
             continue
-        rc, head = _git(repo, "show", "-s", "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b", sha)
+        rc, head = _git(repo, "show", "--no-ext-diff", "--no-textconv", "-s", "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b", sha)
         if rc != 0:
             continue
         full, subject, author, date, body = (head.rstrip("\n").split("\x1f") + [""] * 5)[:5]
-        _, stat = _git(repo, "show", "--format=", "--numstat", sha)
+        _, stat = _git(repo, "show", "--no-ext-diff", "--no-textconv", "--format=", "--numstat", sha)
         files = []
         for line in stat.splitlines():
             parts = line.split("\t")

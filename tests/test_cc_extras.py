@@ -632,3 +632,22 @@ def test_replace_file_helper_sets_mode_and_leaves_no_temp(tmp_path):
         os.close(fd)
     assert sorted(p.name for p in (tmp_path / "a" / "b").iterdir()) == ["x.json"]
     assert (os.stat(tmp_path / "a" / "b" / "x.json").st_mode & 0o777) == 0o664
+
+
+def test_commit_info_runs_nothing_a_repo_config_names(tmp_path):
+    """audit 2026-11-13: the world belongs to the hands; the bridge's git reads ignore its fsmonitor, textconv, ext diff."""
+    import subprocess
+    repo = tmp_path / "world"
+    repo.mkdir()
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    g("init", "-q")
+    g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (repo / "a.txt").write_text("x\n")
+    (repo / ".gitattributes").write_text("*.txt diff=evil\n")
+    g("add", "."); g("commit", "-qm", "one")
+    marker = tmp_path / "ran"
+    for k in ("core.fsmonitor", "diff.evil.textconv", "diff.external", "core.pager"):
+        g("config", k, f"touch {marker}; cat")
+    sha = g("rev-parse", "HEAD").stdout.strip()
+    d = X.commit_info(sha, [repo])
+    assert d and not marker.exists()

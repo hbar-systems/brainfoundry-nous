@@ -340,14 +340,17 @@ UNIT
 # local changes is left alone and named in the log.
 WORK_DIR_ENV=$(sudo grep -oP '^CC_WORK_DIR=\K.*' "$ENV_FILE" 2>/dev/null || true)
 if [ -n "$WORK_DIR_ENV" ] && sudo test -d "$WORK_DIR_ENV"; then
+    # pulled as the user who owns the clones (the hands after split-hands): git runs a repo's own config and
+    # hooks, so the bridge never runs git in the hands' repos (audit 2026-11-13)
+    PULL_USER=$LOGIN_USER; PULL_HOME=$(eval echo "~$PULL_USER")
     sudo tee /etc/systemd/system/cc-work-pull$SFX.service >/dev/null <<UNIT
 [Unit]
 Description=Fast-forward the CC work clones from their remotes
 
 [Service]
 Type=oneshot
-User=$BRIDGE_USER
-Environment=HOME=$BRIDGE_HOME
+User=$PULL_USER
+Environment=HOME=$PULL_HOME
 ExecStart=/usr/bin/bash -c 'find "$WORK_DIR_ENV" -maxdepth 6 -name .git -type d -prune 2>/dev/null | while read -r g; do d=\$(dirname "\$g"); if [ -n "\$(git -C "\$d" status --porcelain)" ]; then echo "\$(basename "\$d"): local changes, not pulled"; continue; fi; git -C "\$d" pull -q --ff-only 2>/dev/null || echo "\$(basename "\$d"): pull failed"; done'
 UNIT
     sudo tee /etc/systemd/system/cc-work-pull$SFX.timer >/dev/null <<UNIT

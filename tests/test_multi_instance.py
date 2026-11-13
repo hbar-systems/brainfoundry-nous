@@ -224,6 +224,7 @@ def test_split_hands_refuses_a_planted_link_and_sets_modes_as_the_hands(tmp_path
     rec = [l for l in log if "chmod -R" in l or "chmod g+s" in l]
     assert rec and all(l.startswith("sudo -u hands -H ") for l in rec), rec
     assert not [l for l in log if "> '/home/hands/.claude.json'" in l]
+    assert "sudo -u cc git config --global --add safe.directory" not in "\n".join(log)
 
 
 def _update_trace(tmp_path, env_text: str | None, dirname: str = "brain") -> str:
