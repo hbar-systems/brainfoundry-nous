@@ -2915,8 +2915,9 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
-      <style>{LIGHT_CSS}</style>
-      <style>{CC_PHONE_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS }} />
+      {/* as raw html: a '>' in the css text is escaped by the server and not by the client, a hydration mismatch (BOARD-4) */}
+      <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
       <AgentPopup />
       <div className={paneMode ? undefined : 'cc-shell'} style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
@@ -3069,7 +3070,7 @@ function CC() {
         <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
           ...(look.accent ? { '--accent': look.accent, borderRadius: '8px', backgroundColor: look.tint ? `color-mix(in srgb, ${look.accent} ${look.tint}%, transparent)` : undefined } : {}),
           ...(lookDensity === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
-          <style>{`.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }`}</style>
+          <style dangerouslySetInnerHTML={{ __html: `.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }` }} />
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
               {[['note', 'a note in the margin on this span: keep it for your next message, or send it now', () => addNote(), true],

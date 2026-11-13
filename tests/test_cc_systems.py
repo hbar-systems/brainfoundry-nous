@@ -150,6 +150,61 @@ def test_board_tiles_numbers_lines_and_groups(tmp_path):
     assert t["world"]["lines"][0]["href"] == ""   # the job whose only link was a .json lost the link, kept the words
 
 
+def test_board_counts_live_agents_and_detail(tmp_path):
+    """BOARD-4: four numbers per tile; running and done today live from the job list; the detail behind each."""
+    w, now = _world(tmp_path)
+    (w / "ops" / "jobs" / "briefs").mkdir(parents=True)
+    (w / "ops" / "jobs" / "briefs" / "x-1.md").write_text("# X-1\nWork on hbar.blog, then brainfoundry.\n")
+    t = int(now.timestamp())
+    jobs = [{"id": "J1", "title": "MUSIC-1 hbar.music: render", "started": t - 60, "ended": None},
+            {"id": "J2", "title": "MUSIC-2 hbar.music: mix", "started": t - 600, "ended": t - 300},          # done today
+            {"id": "J3", "title": "MUSIC-0 hbar.music: old", "started": t - 3 * 86400, "ended": t - 3 * 86400 + 5},
+            {"id": "J4", "title": "X-1 Clerk: unnamed work", "started": t - 30, "ended": None,
+             "command": 'claude -p "Read /home/x/world/ops/jobs/briefs/x-1.md and carry it out"'},
+            {"id": "J5", "title": "Z-1 nothing named", "started": t - 30, "ended": None, "system": "brainfoundry"}]
+    d = cc_systems.board(w, jobs, {}, now=now)
+    tl = {x["id"]: x for x in d["tiles"]}
+    assert tl["hbar.music"]["counts"] == {"running": 1, "done_today": 1, "tasks": 1, "next": 0}
+    assert tl["hbar.blog"]["counts"]["running"] == 1        # filed by its brief
+    assert tl["hbar.blog"]["counts"]["next"] == 1
+    assert tl["brainfoundry"]["counts"]["running"] == 1     # an explicit system field wins
+    assert d["running"] == 3 and d["source"] == "world"
+    assert d["tiles"][0]["counts"]["running"] >= 1          # agents running sort first
+    det = tl["hbar.music"]["detail"]
+    assert det["running"]["lines"][0]["run"] and det["done_today"]["count"] == 1
+    assert det["tasks"]["lines"][0]["group"] == "questions"   # the open court item is his task
+    bf = tl["brainfoundry"]["detail"]["tasks"]
+    assert bf["count"] == 0                                 # ideas and questions of the chopper are not tasks
+
+
+def test_board_reads_the_static_board_as_data(tmp_path):
+    """BOARD-4: board.json (scripts/board.py) is the source of court, thoughts and next, and of job filing."""
+    w, now = _world(tmp_path)
+    static = {"built": "2026-11-12 19:50:00Z", "job_system": {"J9": "hbar.blog"},
+              "court": [{"id": "R7", "kind": "decision", "title": "pick the cover", "thread": TID, "system": "hbar.music"}],
+              "thoughts": [{"text": "call the mastering engineer", "kind": "task-for-him", "importance": 2,
+                            "ts": "2026-11-12T19:00:00Z", "thread": "", "system": "hbar.music"}],
+              "next": [{"id": "N9", "what": "write the post", "ts": "2026-11-12T09:00Z", "repo": "", "thread": None,
+                        "system": "hbar.blog"}]}
+    jobs = [{"id": "J9", "title": "Q-1 something", "started": int(now.timestamp()) - 9, "ended": None}]
+    d = cc_systems.board(w, jobs, {}, now=now, static=static)
+    tl = {x["id"]: x for x in d["tiles"]}
+    assert d["source"] == "board.json" and d["static_built"] == "2026-11-12 19:50:00Z"
+    assert tl["hbar.music"]["counts"]["tasks"] == 2          # the court item and the task thought, not the world's files
+    assert tl["hbar.blog"]["counts"] == {"running": 1, "done_today": 0, "tasks": 0, "next": 1}
+    assert tl["brainfoundry"]["counts"]["tasks"] == 0 and tl["brainfoundry"]["moving"] == 0
+    # load_static: absent -> None; re-read only when the mtime moves
+    p = tmp_path / "board.json"
+    assert cc_systems.load_static(p) is None
+    p.write_text(json.dumps(static))
+    cache = {}
+    assert cc_systems.load_static(p, cache)["built"] == static["built"]
+    cache["data"] = {"cached": True}
+    assert cc_systems.load_static(p, cache) == {"cached": True}
+    p.write_text("not json")
+    assert cc_systems.load_static(tmp_path / "nope.json", cache) is None
+
+
 def test_board_without_world_has_the_three_extra_tiles(tmp_path):
     d = cc_systems.board(None, [], {})
     assert [x["id"] for x in d["tiles"]] == ["self", "world"]   # unfiled shows only when it holds something
@@ -179,6 +234,7 @@ p({"type": "result", "result": "noted on the music line", "session_id": "s9", "i
     monkeypatch.setenv("CC_WORLD_DIR", str(w))
     monkeypatch.setenv("CC_OPERATOR_TOKEN", token)
     monkeypatch.setenv("CC_SYSTEMS_SEED", str(tmp_path / "no-seed.json"))
+    monkeypatch.setenv("CC_SYSTEMS_BOARD", str(tmp_path / "board.json"))
     monkeypatch.delenv("BRAIN_API_KEY", raising=False)
     (tmp_path / "brain").mkdir(exist_ok=True)
     spec = importlib.util.spec_from_file_location("cc_bridge_systems", ROOT / "scripts" / "cc" / "cc-bridge.py")
@@ -241,6 +297,21 @@ def test_endpoints_thread_once_then_chat_lands_in_it(monkeypatch, tmp_path):
         # unknown systems are refused
         st, d = _call(base + "/systems/thread", {"system": "no.such"})
         assert st == 400
+    finally:
+        srv.shutdown()
+
+
+def test_endpoint_takes_the_static_board_when_there(monkeypatch, tmp_path):
+    m, srv, base, made = _bridge(monkeypatch, tmp_path)
+    try:
+        st, d = _call(base + "/systems")
+        assert st == 200 and d["source"] == "world" and all("counts" in t and "detail" in t for t in d["tiles"])
+        (tmp_path / "board.json").write_text(json.dumps({"built": "b1", "court": [], "thoughts": [], "job_system": {},
+                                                         "next": [{"what": "from the static board", "system": "self"}]}))
+        st, d = _call(base + "/systems")
+        tl = {t["id"]: t for t in d["tiles"]}
+        assert d["source"] == "board.json" and d["static_built"] == "b1"
+        assert tl["self"]["counts"]["next"] == 1 and tl["hbar.music"]["counts"]["tasks"] == 0
     finally:
         srv.shutdown()
 

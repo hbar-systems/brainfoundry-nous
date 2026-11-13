@@ -30,7 +30,7 @@ Endpoints (JSON):
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
-  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread}],built} (BOARD-3, cc_systems.py)
+  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
@@ -4549,6 +4549,9 @@ def foreign_page(headers, method: str = "GET") -> bool:
 SYSTEMS_THREADS = cc_systems.ThreadMap(STATE_DIR / "systems-threads.json",
                                        seed=Path(os.environ.get("CC_SYSTEMS_SEED", "").strip() or str(OUT_DIR / "board" / "threads.json")))
 SYSTEMS_VOICE_MAX = TRANSCRIBE_MAX
+SYSTEMS_BOARD = Path(os.environ.get("CC_SYSTEMS_BOARD", "").strip() or str(OUT_DIR / "board" / "board.json"))
+SYSTEMS_JOBS_SEEN = 200     # the newest jobs the tiles count (running now, done today)
+_SYSTEMS_STATIC: dict = {}  # board.json, read again when its mtime moves
 
 
 def _systems_known() -> set:
@@ -4607,7 +4610,10 @@ def _systems_view() -> dict:
         SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
     except OSError as e:
         print(f"systems: thread map not refreshed: {type(e).__name__}", flush=True)
-    d = cc_systems.board(WORLD_DIR or None, JOBS.list(), SYSTEMS_THREADS.threads())
+    # BOARD-4: the owner's static board (scripts/board.py in the world writes out/board/board.json every 10 minutes)
+    # is the tiles' data when it is there; jobs stay live from this bridge's own list (enough of it for "done today")
+    static = cc_systems.load_static(SYSTEMS_BOARD, _SYSTEMS_STATIC)
+    d = cc_systems.board(WORLD_DIR or None, JOBS.list(SYSTEMS_JOBS_SEEN), SYSTEMS_THREADS.threads(), static=static)
     d["world"] = bool(WORLD_DIR)
     return d
 

@@ -19,6 +19,15 @@ Filing: a thought carries its own system (the chopper's); a court item, a job an
 explicit system field, then by the repo path (systems/<id>/), then by a registry id named in the text, then by an
 optional owner file (<world>/ops/board/filing.json: {"tags": {"TAG": "system"}, "keywords": [["word", "system"]]}),
 else "world". The owner's filing words stay in the owner's world, never in this template.
+
+BOARD-4 (2026-11-13, hbar: "ON SINGLE PAGE I SEE EACH SYSTEM AND I CAN DISCUSS IN THE CHAT IN A SYSTEM WHILE SEEING
+ALL THE SYSTEMS WHATS GOING ON AND FUNCTIONING"): each tile also carries four numbers, `counts` {running, done_today,
+tasks, next}, and the lines behind each, `detail` {running, done_today, tasks, next: {count, lines}}. Running and done
+today are live, from the bridge's own job list (running = started and not ended; done today = ended on today's UTC
+date). When the owner's static board has been built (out/board/board.json, scripts/board.py in the owner's world, read
+here as data), its court items, thoughts and next rows are the tiles' source and its `job_system` map files a job the
+way the static board does; without it the world's files are read as above. A job neither places is filed by the
+brief its command reads (ops/jobs/briefs/<name>.md: the first registry id the brief names), then as above.
 """
 from __future__ import annotations
 
@@ -266,27 +275,66 @@ def _line(text, href, group, importance, ts, run=False) -> dict:
     return {"text": phrase(text), "href": href, "group": group, "importance": int(importance or 0), "ts": ts or "", "run": bool(run)}
 
 
-def _jobs(jobs: list, known: set, filing: dict) -> list:
-    out = []
+def named_first(text: str, known: set) -> str | None:
+    """The registry id the text names first (by position), or None."""
+    low, best = (text or "").lower(), None
+    for sid in known:
+        if sid in ("world", "self", "unfiled"):
+            continue
+        m = re.search(r"(?<![\w.])" + re.escape(sid.lower()) + r"(?![\w])", low)
+        if m and (best is None or (m.start(), -len(sid)) < best[0]):
+            best = ((m.start(), -len(sid)), sid)
+    return best[1] if best else None
+
+
+BRIEF_RE = re.compile(r"ops/jobs/briefs/([\w.-]+\.md)")
+
+
+def _brief_system(world: Path, command: str, known: set, cache: dict) -> str | None:
+    m = BRIEF_RE.search(command or "")
+    if not m:
+        return None
+    name = m.group(1)
+    if name not in cache:
+        try:
+            cache[name] = named_first((world / "ops" / "jobs" / "briefs" / name).read_text(errors="replace")[:3000], known)
+        except OSError:
+            cache[name] = None
+    return cache[name]
+
+
+def _stamp(v) -> str:
+    try:
+        return datetime.fromtimestamp(int(v), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if v else ""
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
+def _jobs(jobs: list, known: set, filing: dict, world: Path | None = None, job_system: dict | None = None) -> list:
+    out, briefs = [], {}
     for j in jobs or []:
         title = str(j.get("title") or j.get("command") or "")
-        try:
-            started = datetime.fromtimestamp(int(j.get("started") or 0), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except (TypeError, ValueError, OverflowError):
-            started = ""
+        started, ended = _stamp(j.get("started")), _stamp(j.get("ended"))
         th = str(j.get("thread") or "")
         log = str(j.get("log") or "")
         href = _talk(th) if THREAD_RE.match(th) else (_files(log) if log else "/board")
-        out.append({"system": system_for(title, known, filing, str(j.get("system") or "")),
+        sid = str(j.get("system") or "")
+        if sid not in known:
+            sid = str((job_system or {}).get(str(j.get("id") or "")) or "")
+        if sid not in known:
+            sid = system_for(title, known, filing)
+            if sid == "world" and world is not None:
+                sid = _brief_system(world, str(j.get("command") or ""), known, briefs) or "world"
+        out.append({"system": sid, "ended": ended,
                     "line": _line(title.split(":", 1)[1] if ":" in title else title, href, "jobs",
-                                  3 if j.get("ended") is None else 1, started, j.get("ended") is None),
+                                  3 if j.get("ended") is None else 1, ended or started, j.get("ended") is None),
                     "running": j.get("ended") is None})
     return out
 
 
-def _court(world: Path, known: set, filing: dict) -> list:
+def _court(world: Path, known: set, filing: dict, rows: list | None = None) -> list:
     out = []
-    for r in read_tsv(world / "ops" / "inbox" / "rulings.tsv"):
+    for r in rows if rows is not None else read_tsv(world / "ops" / "inbox" / "rulings.tsv"):
         if r.get("state") != "open":
             continue
         ref = r.get("ref", "")
@@ -314,9 +362,9 @@ def _thoughts(world: Path, known: set, now: datetime) -> list:
     return out
 
 
-def _next(world: Path, known: set, filing: dict) -> list:
+def _next(world: Path, known: set, filing: dict, rows: list | None = None) -> list:
     out = []
-    for r in read_tsv(world / "ops" / "next.tsv"):
+    for r in rows if rows is not None else read_tsv(world / "ops" / "next.tsv"):
         if r.get("state") != "candidate":
             continue
         th = r.get("thread", "")
@@ -326,9 +374,58 @@ def _next(world: Path, known: set, filing: dict) -> list:
     return out
 
 
-def board(world: Path | str | None, jobs: list, threads: dict | None = None, now: datetime | None = None) -> dict:
-    """GET /cc/systems: tiles ordered by things moving now, then by everything known; each tile:
-    {id, description, moving, lines (<= 7), more: [{kind, count, lines}], extra, thread}."""
+def _from_static(static: dict, world: Path, known: set, now: datetime) -> tuple[list, list, list]:
+    """The static board's rows (board.json) in the shape the readers above take; each keeps its own filing."""
+    court = [{"state": "open", "ref": c.get("thread") or "", "kind": c.get("kind", ""), "title": c.get("title", ""),
+              "ask": "", "system": c.get("system", "")} for c in static.get("court") or [] if isinstance(c, dict)]
+    thoughts = []
+    for t in static.get("thoughts") or []:
+        if not isinstance(t, dict):
+            continue
+        th, ts = str(t.get("thread") or ""), str(t.get("ts") or "")
+        sid = str(t.get("system") or "")
+        href = _talk(th) if THREAD_RE.match(th) else _files(world / "ops" / "chop")
+        thoughts.append({"system": sid if sid in known else "unfiled", "fresh": _recent(ts, NOW_HOURS, now),
+                         "line": _line(t.get("text"), href, THOUGHT_GROUP.get(t.get("kind"), "notes"), t.get("importance"), ts)})
+    nxt = [{"state": "candidate", "thread": n.get("thread") or "", "what": n.get("what", ""), "ts_utc": n.get("ts", ""),
+            "repo": n.get("repo", ""), "system": n.get("system", "")} for n in static.get("next") or [] if isinstance(n, dict)]
+    return court, thoughts, nxt
+
+
+def load_static(path: Path | str | None, cache: dict | None = None) -> dict | None:
+    """The owner's static board (board.json), read again only when its mtime moves; None when absent or unreadable."""
+    if not path:
+        return None
+    p = Path(path)
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return None
+    if cache is not None and cache.get("path") == str(p) and cache.get("mtime") == mt:
+        return cache.get("data")
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    d = d if isinstance(d, dict) else None
+    if cache is not None:
+        cache.update(path=str(p), mtime=mt, data=d)
+    return d
+
+
+KEEP = 14   # lines sent per group (the poll stays light); the counts are always whole
+
+
+def _detail(lines: list) -> dict:
+    return {"count": len(lines), "lines": lines[:KEEP], "extra": max(0, len(lines) - LINES)}
+
+
+def board(world: Path | str | None, jobs: list, threads: dict | None = None, now: datetime | None = None,
+          static: dict | None = None) -> dict:
+    """GET /cc/systems: tiles ordered by agents running, things moving now, then everything known; each tile:
+    {id, description, moving, lines (<= 7), more: [{kind, count, lines}], extra, thread,
+     counts: {running, done_today, tasks, next}, detail: {<same keys>: {count, lines (<= 7), extra}}}.
+    `static`: the owner's board.json, when there is one (see the module note)."""
     now = now or datetime.now(timezone.utc)
     world = Path(world) if world else None
     if world is None or not world.is_dir():
@@ -338,18 +435,29 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
         systems = load_systems(world)
     known = {s["id"] for s in systems}
     filing = load_filing(world)
-    per = {s["id"]: {"run": [], "court": [], "fresh": [], "done": [], "old": [], "next": []} for s in systems}
+    per = {s["id"]: {"run": [], "court": [], "fresh": [], "done": [], "old": [], "next": [], "today": [], "task": []}
+           for s in systems}
 
     def put(sid, bucket, line):
         per.get(sid if sid in per else "world", per.get("world"))[bucket].append(line)
 
-    for j in _jobs(jobs, known, filing):
+    today = now.strftime("%Y-%m-%d")
+    static = static if isinstance(static, dict) and isinstance(static.get("court"), list) else None
+    for j in _jobs(jobs, known, filing, world, (static or {}).get("job_system")):
         put(j["system"], "run" if j["running"] else "done", j["line"])
-    for c in _court(world, known, filing):
+        if not j["running"] and j["ended"][:10] == today:
+            put(j["system"], "today", j["line"])
+    if static is not None:
+        court_rows, thoughts, next_rows = _from_static(static, world, known, now)
+    else:
+        court_rows, thoughts, next_rows = None, _thoughts(world, known, now), None
+    for c in _court(world, known, filing, court_rows):
         put(c["system"], "court", c["line"])
-    for t in _thoughts(world, known, now):
+    for t in thoughts:
         put(t["system"], "fresh" if t["fresh"] else "old", t["line"])
-    for n in _next(world, known, filing):
+        if t["line"]["group"] == "tasks":
+            put(t["system"], "task", t["line"])
+    for n in _next(world, known, filing, next_rows):
         put(n["system"], "next", n["line"])
 
     tiles = []
@@ -360,20 +468,26 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
             b[k].sort(key=lambda x: (x["importance"], x["ts"]), reverse=True)
         moving = len(b["run"]) + len(b["court"]) + len(b["fresh"])
         order = b["run"] + b["court"] + b["fresh"] + b["done"] + b["old"] + b["next"]
+        tasks = sorted(b["court"] + b["task"], key=lambda x: (x["importance"], x["ts"]), reverse=True)
+        detail = {"running": _detail(b["run"]), "done_today": _detail(b["today"]), "tasks": _detail(tasks),
+                  "next": _detail(b["next"])}
         lines, rest = order[:LINES], order[LINES:]
         more = []
         for g in GROUPS:
             items = sorted((x for x in rest if x["group"] == g), key=lambda x: (x["importance"], x["ts"]), reverse=True)
             if items:
-                more.append({"kind": g, "count": len(items), "lines": items})
+                more.append({"kind": g, "count": len(items), "lines": items[:LINES]})
         total = len(order)
         if s["id"] == "unfiled" and not total:
             continue
         tiles.append({"id": s["id"], "status": s.get("status", ""), "description": s.get("description", ""),
                       "moving": moving, "total": total, "lines": lines, "more": more, "extra": len(rest),
-                      "thread": threads.get(s["id"])})
-    tiles.sort(key=lambda t: (-t["moving"], -t["total"], t["id"]))
-    return {"tiles": tiles, "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "moving": sum(t["moving"] for t in tiles)}
+                      "thread": threads.get(s["id"]), "detail": detail,
+                      "counts": {k: v["count"] for k, v in detail.items()}})
+    tiles.sort(key=lambda t: (-t["counts"]["running"], -t["moving"], -t["total"], t["id"]))
+    return {"tiles": tiles, "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "moving": sum(t["moving"] for t in tiles),
+            "running": sum(t["counts"]["running"] for t in tiles), "source": "board.json" if static else "world",
+            "static_built": (static or {}).get("built") or None}
 
 
 # ---------------------------------------------------------------- voice ----
