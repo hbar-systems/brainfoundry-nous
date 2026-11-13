@@ -489,6 +489,7 @@ import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
+import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
 import cc_halt  # noqa: E402   the kill switch (2026-10-25): HALT file + budget HALT, docs/KILL_SWITCH.md
 
 # A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md): CC_MEMBER names this bridge's
@@ -2027,15 +2028,32 @@ VERDICTS_WORLD = WORLD_DIR or os.environ.get("WORLD_DIR", "").strip()
 
 
 def _threads_load() -> list:
-    try:
-        return json.loads(THREADS_FILE.read_text())
-    except Exception:
-        return []
+    # Falls back to threads.json.bak when the file is broken (cc_threads_store, 2026-11-13).
+    return cc_threads_store.load(THREADS_FILE)
 
 
 def _threads_save(items: list) -> None:
-    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    THREADS_FILE.write_text(json.dumps(items[-200:], indent=1))
+    # Temp file and rename: a full disk leaves the previous list whole instead of a short file
+    # that the next load reads as empty (the 2026-11-13 loss). A refused save is logged, not raised.
+    try:
+        cc_threads_store.save(THREADS_FILE, items)
+    except OSError as e:
+        print(f"threads.json not saved: {e}", flush=True)
+
+
+def _threads_recover() -> int:
+    """Add back the console's brain chat sessions the list lacks (2026-11-13). Idempotent."""
+    for _ in range(10):
+        got = _brain_api("GET", "/sessions?q=cc:")
+        if isinstance(got, dict) and isinstance(got.get("sessions"), list):
+            items, n = cc_threads_store.recover(_threads_load(), got["sessions"], RECENT_PROJECTS)
+            if n:
+                _threads_save(items)
+            print(f"threads recovered: {n}", flush=True)
+            return n
+        time.sleep(30)
+    print("threads recovery: brain sessions unreachable", flush=True)
+    return 0
 
 
 def _threads_view(archived: bool = False, q: str = "") -> dict:
@@ -5396,6 +5414,8 @@ def main() -> None:
     if TG is not None:
         TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
     threading.Thread(target=_restart_watch, daemon=True).start()
+    if BRAIN_API_KEY:
+        threading.Thread(target=_threads_recover, daemon=True).start()
     if TICK["cmd"]:
         threading.Thread(target=_tick_loop, daemon=True).start()
     if AGENTS_ON:
