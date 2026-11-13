@@ -374,6 +374,12 @@ export default function AppsIndex() {
           {updatePreview.scope_diff.removed_layers.length > 0 && (
             <ScopeRow label="− Memory layers removed" value={updatePreview.scope_diff.removed_layers.join(', ')} />
           )}
+          {updatePreview.scope_diff.compute_changed && (
+            <ScopeRow label="Compute" value="the app's compute block changed" />
+          )}
+          {updatePreview.scope_diff.backend_changed && (
+            <ScopeRow label="Backend" value={`${updatePreview.scope_diff.backend}: new Python code that runs inside the brain API with its full authority, not in the sandbox. Read it before approving.`} />
+          )}
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
             <button
               style={{ ...BTN, opacity: busy === `update:${updatePreview.id}` ? 0.5 : 1 }}

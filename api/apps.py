@@ -26,7 +26,7 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -327,7 +327,7 @@ def _layer_key(layer: dict) -> str:
     return f"{layer.get('layer')}:{layer.get('mode')}"
 
 
-def _scope_diff(installed: dict, manifest: dict) -> dict:
+def _scope_diff(installed: dict, manifest: dict, new_sha: Optional[str] = None) -> dict:
     """What the new manifest changes in the app's access scope vs the installed entry.
 
     Permissions and required memory layers are the security-relevant surface:
@@ -341,17 +341,29 @@ def _scope_diff(installed: dict, manifest: dict) -> dict:
     # scope change the operator re-approves, same as a new permission.
     old_compute = installed.get("compute") or None
     new_compute = manifest.get("compute") or None
+    # A backend (entries.api) is Python run inside the brain api process, with
+    # its full authority. Adding one, moving it, or new code in an existing one
+    # (any new commit of an app that has a backend) is a scope change the
+    # operator re-approves (audit 2026-11-13).
+    old_api = ((installed.get("entries") or {}).get("api")) or None
+    new_api = ((manifest.get("entries") or {}).get("api")) or None
+    backend_code_changed = bool(
+        new_api and new_sha is not None and new_sha != (installed.get("commit_sha") or "")
+    )
     return {
         "added_permissions": sorted(new_perms - old_perms),
         "removed_permissions": sorted(old_perms - new_perms),
         "added_layers": sorted(new_layers - old_layers),
         "removed_layers": sorted(old_layers - new_layers),
         "compute_changed": old_compute != new_compute,
+        "backend_changed": bool(new_api) and (old_api != new_api or backend_code_changed),
+        "backend": new_api,
     }
 
 
 def _scope_changed(diff: dict) -> bool:
-    return any(diff[k] for k in diff)
+    # "backend" is the path, shown on the card; it is not itself a change.
+    return any(diff[k] for k in diff if k != "backend")
 
 
 def _chown_to_host_owner(path: Path) -> None:
@@ -999,7 +1011,7 @@ def update_preview(app_id: str) -> UpdatePreviewResponse:
                 status_code=409,
                 detail={"error": "manifest_id_changed", "installed": app_id, "repo": manifest.get("id")},
             )
-        diff = _scope_diff(entry, manifest)
+        diff = _scope_diff(entry, manifest, sha)
         return UpdatePreviewResponse(
             id=app_id,
             manifest=manifest,
@@ -1050,7 +1062,7 @@ def update_app(app_id: str, req: UpdateRequest, request: Request) -> UpdateRespo
         others = [a for a in apps if a["id"] != app_id]
         _check_route_collision(manifest["tab"]["route"], others)
 
-        diff = _scope_diff(entry, manifest)
+        diff = _scope_diff(entry, manifest, commit_sha)
         scope_changed = _scope_changed(diff)
         if scope_changed and not req.accept_scope_change:
             raise HTTPException(
