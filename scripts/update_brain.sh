@@ -277,7 +277,16 @@ export BRAIN_GIT_COMMIT="$(git rev-parse HEAD)"
 export BRAIN_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 API_IMAGE="${PROJECT}-api"
 API_IMAGE_BEFORE=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
+# Build cache (2026-11-13): every build left about 5 GB of BuildKit cache behind and two Updates
+# in one day filled the 75 GB disk; image prune never touches that cache. Trim it to 2 GB before
+# and after the build (docker 28+ flag, older name as fallback). Cache only: no image, no volume.
+trim_build_cache() {
+    docker builder prune -f --reserved-space 2gb 2>/dev/null | tail -1 \
+        || docker builder prune -f --keep-storage 2gb 2>/dev/null | tail -1 || true
+}
+trim_build_cache
 docker compose build
+trim_build_cache
 API_IMAGE_AFTER=$(docker image inspect "$API_IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
 docker compose up -d --no-deps --no-build nodeos ui public-chat
 HELPER_LOG="$BRAIN_DIR/.update-helper.log"
@@ -293,7 +302,7 @@ else
         -v "$BRAIN_DIR":"$BRAIN_DIR" -w "$BRAIN_DIR" \
         ${COMPOSE_PROJECT_NAME:+-e COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"} \
         "$API_IMAGE" \
-        bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'; sleep 20; docker image prune -f >> '$HELPER_LOG' 2>&1"
+        bash -c "docker compose up -d --no-deps --no-build api >> '$HELPER_LOG' 2>&1; echo \"helper done rc=\$? \$(date -u +%H:%M:%SZ)\" >> '$HELPER_LOG'; sleep 20; docker image prune -f >> '$HELPER_LOG' 2>&1; docker builder prune -f --reserved-space 2gb >> '$HELPER_LOG' 2>&1 || docker builder prune -f --keep-storage 2gb >> '$HELPER_LOG' 2>&1"
     echo "    api is restarting on the new image. If you ran this from the brain's"
     echo "    Update tab, the live log stops here — that is expected; the tab polls"
     echo "    until the running commit matches."
