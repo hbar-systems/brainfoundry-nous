@@ -77,7 +77,7 @@ Nothing answers until the brain has public-scoped memory.
 
 ## Limits
 
-- **Rate.** Each caller is rate-limited with the federation limiter (Redis, fail-closed). The key is `ask:peer:<brain_id>` for pinned peers and `ask:key:<public_key>` for public askers. The limits are `FEDERATION_RATE_LIMIT_MAX` per `FEDERATION_RATE_LIMIT_WINDOW` (default 30/60 s) and `FEDERATION_DAILY_MAX` (default 1000/day). A caller over the limit gets HTTP 429 with `Retry-After`.
+- **Rate.** Each caller is rate-limited with the federation limiter (Redis, fail-closed). The key is `ask:peer:<brain_id>` for pinned peers and `ask:key:<public_key>` for public askers. The limits are `FEDERATION_RATE_LIMIT_MAX` per `FEDERATION_RATE_LIMIT_WINDOW` (default 30/60 s) and `FEDERATION_DAILY_MAX` (default 1000/day). Public askers mint their own keys, so they are also limited per client address (`ask:ip:<addr>`, the proxy's last hop when `TRUST_PROXY_HEADERS` is on) and by one brain-wide ceiling: `ASK_PUBLIC_RATE_MAX` per window (default 60) and `ASK_PUBLIC_DAILY_MAX` a day (default 1000) (audit 2026-11-13). A caller over the limit gets HTTP 429 with `Retry-After`.
 - **Size.** Questions are at most 4000 characters. Retrieval uses 3 chunks, the model is `PUBLIC_CHAT_MODEL`, and answers are at most 1024 tokens.
 - **Audit.** Every ask is written to the federation audit log (`/v1/federation/log`) with `surface: "ask"`. That includes refusals, rate-limited asks and model errors, along with the caller, the trust level, the first 200 characters of the question, the documents used and the outcome.
 - **Replay.** The replay cache is in-process and does not survive a restart. Tokens live at most 600 s.

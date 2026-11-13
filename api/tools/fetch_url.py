@@ -50,10 +50,24 @@ def _is_public_address(host: str) -> bool:
             ip = ipaddress.ip_address(addr)
         except ValueError:
             return False
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        if not ip_is_public(ip):
             return False
     return True
+
+
+def ip_is_public(ip) -> bool:
+    """A globally routable unicast address. The category flags alone admit 100.64.0.0/10
+    (shared address space: the owner's Tailscale tailnet) and other non-global ranges, so
+    is_global decides (audit 2026-11-13); an IPv4-mapped IPv6 address is judged as its IPv4."""
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        return False
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return False
+    return bool(ip.is_global)
 
 
 def _validate(url: str) -> Tuple[bool, str]:

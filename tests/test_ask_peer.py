@@ -203,3 +203,30 @@ def test_cc_job_ask_fences_a_peer_refusal(monkeypatch, capsys):
     assert job.main(["ask", "https://peer.example", "q"]) == 1
     out = capsys.readouterr().out
     assert out.startswith("refused: UNTRUSTED SOURCE DATA") and "<<<END_UNTRUSTED_SOURCE_DATA>>>" in out
+
+
+# ── audit 2026-11-13: the unsigned card cannot steer the signed ask ──────────
+
+def test_card_pointing_at_another_host_is_refused(client):
+    client.peer.card = {**CARD, "url": "https://relay.example/v1/ask"}
+    r = _ask(client)
+    assert r.status_code == 502 and "another address" in r.json()["error"]
+    assert len(client.peer.seen) == 1                       # nothing signed was sent
+
+
+def test_card_naming_a_pinned_brain_elsewhere_is_refused(client, monkeypatch):
+    monkeypatch.setattr(ask_out, "_pinned_peer",
+                        lambda bid: {"brain_id": bid, "endpoint": "https://victim.example"} if bid == PEER_ID else None)
+    r = _ask(client)
+    assert r.status_code == 502 and "pinned" in r.json()["error"]
+    assert len(client.peer.seen) == 1
+
+
+def test_signed_ask_carries_its_destination(client):
+    assert _ask(client).status_code == 200
+    token = client.peer.seen[-1].get_header("X-brain-assertion")
+    claims = verify_federation_assertion(public_key_b64=PUB, token=token, expected_audience=PEER_ID,
+                                         expected_issuer=ME)
+    assert claims["ep"] == "https://peer.example"
+    line = json.loads(client.audit.read_text().strip().splitlines()[-1])
+    assert line["verified"] is False                        # not a pinned peer: not labelled verified

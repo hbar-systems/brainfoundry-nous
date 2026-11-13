@@ -84,6 +84,9 @@ services:
       # BRAIN_PUBLIC_URL: where other brains reach this one (the ask door's Agent Card). Optional:
       # without it the card uses the proxy's forwarded scheme and host.
       - BRAIN_PUBLIC_URL=${BRAIN_PUBLIC_URL:-}
+      # PUBLIC_API_BASE: optional override for the Telegram webhook and Google OAuth callback;
+      # unset, they use BRAIN_PUBLIC_URL, and with neither set those connects are refused.
+      - PUBLIC_API_BASE=${PUBLIC_API_BASE:-}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-llama3.2:3b}
       - PUBLIC_CHAT_MODEL=${PUBLIC_CHAT_MODEL:-llama3.2:1b}
       # Public chat tuning. What strangers and other brains may read is one

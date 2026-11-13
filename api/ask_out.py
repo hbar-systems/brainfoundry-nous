@@ -107,16 +107,40 @@ def audience_from_card(card: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def origin(url: str) -> str:
+    """scheme://host[:port] of a url, lower-cased, default port dropped."""
+    u = urllib.parse.urlparse((url or "").strip())
+    host = (u.hostname or "").lower()
+    port = u.port
+    if port and not ((u.scheme == "https" and port == 443) or (u.scheme == "http" and port == 80)):
+        host = f"{host}:{port}"
+    return f"{u.scheme}://{host}" if u.scheme and host else ""
+
+
+def _pinned_peer(brain_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from api.ask import find_pinned_peer
+        return find_pinned_peer(brain_id)
+    except Exception:
+        return None
+
+
 def build_request(*, question: str, audience: str, private_key: str, my_id: str,
-                  public_key: Optional[str] = None) -> Tuple[Dict[str, str], Dict[str, Any]]:
-    """Headers and JSON-RPC body for one ask. The token is bound to this question."""
+                  public_key: Optional[str] = None,
+                  destination: Optional[str] = None) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Headers and JSON-RPC body for one ask. The token is bound to this question and,
+    when `destination` is given, to the origin it is posted to (claim `ep`), so the
+    receiving brain can refuse a token that was handed to someone else first."""
+    claims: Dict[str, Any] = {"qh": hashlib.sha256(question.encode("utf-8")).hexdigest()}
+    if destination:
+        claims["ep"] = destination
     token = issue_federation_assertion(
         private_key_b64=private_key,
         issuer_brain_id=my_id,
         audience_brain_id=audience,
         subject="ask",
         ttl_seconds=TTL_SECONDS,
-        claims={"qh": hashlib.sha256(question.encode("utf-8")).hexdigest()},
+        claims=claims,
     )
     params: Dict[str, Any] = {"message": {
         "role": "user", "messageId": str(uuid.uuid4()),
@@ -157,8 +181,19 @@ def ask_peer(peer: str, question: str, *, my_id: str, private_key: str, public_k
     if not audience:
         raise PeerError(502, "the peer's agent card names no brain_id")
     url = check_url(card.get("url") or base + "/v1/ask", is_public)
+    # The card is unsigned and served by the party being asked (audit 2026-11-13): it may not
+    # send the signed ask to another address, and it may not name a pinned brain that lives
+    # elsewhere. The token also carries the origin it is posted to (ep), which a patched
+    # receiver checks against its own public address.
+    if origin(url) != origin(base):
+        raise PeerError(502, "the peer's card points at another address; asks go only to the peer's own origin")
+    if audience == my_id:
+        raise PeerError(502, "the peer's card names this brain's own brain_id")
+    pinned = _pinned_peer(audience)
+    if pinned and origin(pinned.get("endpoint") or "") != origin(base):
+        raise PeerError(502, f"the card names {audience}, a pinned brain that lives at another address")
     headers, body = build_request(question=question, audience=audience, private_key=private_key,
-                                  my_id=my_id, public_key=public_key)
+                                  my_id=my_id, public_key=public_key, destination=origin(url))
     status, resp = http_json(url, data=json.dumps(body).encode("utf-8"), headers=headers,
                              timeout=ASK_TIMEOUT, cap=REPLY_MAX_BYTES, opener=opener)
     if not isinstance(resp, dict):
@@ -169,5 +204,5 @@ def ask_peer(peer: str, question: str, *, my_id: str, private_key: str, public_k
     if "result" not in resp:
         raise PeerError(502, f"the peer's answer has no result (HTTP {status})")
     answer, cites = answer_of(resp)
-    return {"peer": base, "brain_id": audience, "answer": answer,
+    return {"peer": base, "brain_id": audience, "answer": answer, "pinned": bool(pinned),
             "citations": [str(c)[:300] for c in cites][:50]}

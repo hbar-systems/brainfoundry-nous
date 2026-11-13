@@ -57,8 +57,10 @@ def _client() -> tuple[str, str]:
 
 
 def redirect_uri() -> str:
-    base = os.getenv("PUBLIC_API_BASE", "https://hbar.brainfoundry.ai").rstrip("/")
-    return f"{base}/integrations/google/callback"
+    """This brain's own OAuth callback: PUBLIC_API_BASE, else BRAIN_PUBLIC_URL; "" when
+    neither is set (audit 2026-11-13: no built-in host, the consent flow refuses instead)."""
+    base = (os.getenv("PUBLIC_API_BASE") or os.getenv("BRAIN_PUBLIC_URL") or "").strip().rstrip("/")
+    return f"{base}/integrations/google/callback" if base.startswith("https://") else ""
 
 
 def is_configured() -> bool:
@@ -84,6 +86,9 @@ def status() -> Dict[str, Any]:
 
 def auth_url(state: str) -> str:
     cid, _ = _client()
+    if not redirect_uri():
+        raise RuntimeError("set BRAIN_PUBLIC_URL (or PUBLIC_API_BASE) to this brain's public "
+                           "https address before connecting Google")
     params = {
         "client_id": cid,
         "redirect_uri": redirect_uri(),
@@ -100,6 +105,8 @@ def auth_url(state: str) -> str:
 async def exchange_code(code: str) -> Dict[str, Any]:
     """Exchange an auth code for tokens; persist the refresh token + email."""
     cid, cs = _client()
+    if not redirect_uri():
+        raise RuntimeError("no public https address configured for the OAuth callback")
     data = {
         "code": code,
         "client_id": cid,

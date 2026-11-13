@@ -73,6 +73,9 @@ def env(monkeypatch):
     monkeypatch.setattr(S, "_record_harmonics",
                         lambda c, r, peer: calls["events"].append((c, r, peer)) or {"id": 7, "cos": .5, "sin": .8, "score": .4})
     monkeypatch.setattr(S, "_is_public_host", lambda h: True)
+    from api import ask as _ask
+    monkeypatch.setattr(_ask, "find_pinned_peer", lambda bid: None)
+    S._score_budget.day, S._score_budget.count = "", 0
 
     class R:
         status_code = 200
@@ -136,7 +139,7 @@ def test_agent_with_valid_assertion_accepted(env):
     c, _ = env
     r = c.post("/v1/submissions", json={**GOOD, "kind": "agent", "assertion": tok()})
     assert r.status_code == 200
-    assert S.get_store().get(r.json()["id"])["issuer"] == AGENT
+    assert S.get_store().get(r.json()["id"])["issuer"] == AGENT + "@agent.example.org"   # unpinned: host-qualified
 
 
 @pytest.mark.parametrize("kw", [{"aud": "someone-else"}, {"sub": "other.thing"}, {"iss": "impostor"}])
@@ -199,7 +202,7 @@ def test_approve_agent_peer_is_issuer(env):
     c, calls = env
     sid = c.post("/v1/submissions", json={**GOOD, "kind": "agent", "assertion": tok()}).json()["id"]
     c.post(f"/v1/submissions/{sid}/decide", json={"decision": "approve"}, headers=owner())
-    assert calls["events"][0][2] == AGENT
+    assert calls["events"][0][2] == AGENT + "@agent.example.org"
 
 
 def test_reject_ingests_nothing(env):
@@ -216,3 +219,47 @@ def test_rate_limit(env):
     c, _ = env
     codes = [c.post("/v1/submissions", json=GOOD).status_code for _ in range(6)]
     assert codes == [200] * 5 + [429]
+
+
+# ── audit 2026-11-13: issuer names are not self-certified; scoring has a brain-wide ceiling ──
+
+def test_pinned_peer_name_from_another_host_refused(env, monkeypatch):
+    c, _ = env
+    from api import ask as _ask
+    monkeypatch.setattr(_ask, "find_pinned_peer",
+                        lambda bid: {"brain_id": bid, "endpoint": "https://yury.example", "public_key": AGENT_PUB})
+    r = c.post("/v1/submissions", json={**GOOD, "kind": "agent", "assertion": tok()})
+    assert r.status_code == 401 and "pinned" in r.text
+
+
+def test_pinned_peer_at_its_own_host_keeps_its_name(env, monkeypatch):
+    c, _ = env
+    from api import ask as _ask
+    monkeypatch.setattr(_ask, "find_pinned_peer",
+                        lambda bid: {"brain_id": bid, "endpoint": "https://agent.example.org", "public_key": AGENT_PUB})
+    r = c.post("/v1/submissions", json={**GOOD, "kind": "agent", "assertion": tok()})
+    assert r.status_code == 200 and S.get_store().get(r.json()["id"])["issuer"] == AGENT
+
+
+def test_issuer_claiming_this_brain_refused(env, monkeypatch):
+    c, _ = env
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"public_key": AGENT_PUB, "brain_id": THIS}
+
+    monkeypatch.setattr(S, "_http_get", lambda url: R())
+    r = c.post("/v1/submissions", json={**GOOD, "kind": "agent", "assertion": tok(iss=THIS)})
+    assert r.status_code == 401 and "own id" in r.text
+
+
+def test_brain_wide_scoring_budget(env, monkeypatch):
+    c, calls = env
+    monkeypatch.setenv("SUBMISSIONS_SCORE_DAILY_MAX", "2")
+    out = []
+    for i in range(3):
+        S._limiter.hits.clear()                         # a fresh address each time
+        out.append(c.post("/v1/submissions", json=GOOD).json()["status"])
+    assert out == ["accepted", "accepted", "awaiting_review"]
+    assert len(calls["prompts"]) == 2

@@ -46,8 +46,8 @@ Then ask: *"what's on my calendar this week?"*. Tool: `calendar_read`.
 3. Open your new bot, send any message — the **first chat becomes the owner**;
    strangers are refused. Ask it anything; it answers from your brain + reasoner.
 
-Requires the brain's public API to be reachable over HTTPS (`PUBLIC_API_BASE`,
-default `https://<your-brain>`).
+Requires the brain's public API to be reachable over HTTPS: `PUBLIC_API_BASE`, else
+`BRAIN_PUBLIC_URL`. With neither set the connect is refused (there is no built-in default).
 
 ## MCP servers — connect any tool
 

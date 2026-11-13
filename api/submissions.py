@@ -215,6 +215,30 @@ class IPLimiter:
 _limiter = IPLimiter()
 
 
+class DailyBudget:
+    """Brain-wide ceiling on reasoner scoring calls (audit 2026-11-13): the per-address limit
+    alone lets spend grow with the number of addresses a submitter controls.
+    SUBMISSIONS_SCORE_DAILY_MAX (default 50, 0 = no ceiling) per UTC day, in-process."""
+
+    def __init__(self):
+        self.day, self.count = "", 0
+        self.lock = threading.Lock()
+
+    def take(self) -> bool:
+        cap = int(os.getenv("SUBMISSIONS_SCORE_DAILY_MAX", "50"))
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        with self.lock:
+            if today != self.day:
+                self.day, self.count = today, 0
+            if cap > 0 and self.count >= cap:
+                return False
+            self.count += 1
+            return True
+
+
+_score_budget = DailyBudget()
+
+
 # ─── Agent assertion ────────────────────────────────────────────────────────
 
 def _b64_claims(token: str) -> Dict[str, Any]:
@@ -263,8 +287,19 @@ def verify_agent_assertion(token: str) -> str:
         raise ValueError(f"issuer /identity answered {r.status_code}")
     ident = r.json()
     pub, bid = ident.get("public_key"), ident.get("brain_id")
-    if not pub or not bid:
+    if not pub or not bid or not isinstance(bid, str) or not isinstance(pub, str):
         raise ValueError("issuer /identity lacks public_key or brain_id")
+    # A self-served /identity proves key possession, not a name (audit 2026-11-13): this
+    # brain's own id is never accepted, a pinned peer's id only from that peer's own host
+    # with its pinned key, and any other issuer is recorded host-qualified, never bare.
+    if bid == this_brain:
+        raise ValueError("issuer claims this brain's own id")
+    from api.ask import find_pinned_peer
+    pinned = find_pinned_peer(bid)
+    if pinned:
+        pinned_host = (urlparse(pinned.get("endpoint") or "").hostname or "").lower()
+        if pinned_host != p.hostname.lower() or pinned.get("public_key") != pub:
+            raise ValueError("brain_id belongs to a pinned peer at another endpoint or key")
     verified = verify_federation_assertion(
         public_key_b64=pub, token=token, expected_audience=this_brain, expected_issuer=bid)
     if verified.get("sub") != SUBJECT:
@@ -275,7 +310,7 @@ def verify_agent_assertion(token: str) -> str:
     if replay_cache.seen_before(jti):
         raise ValueError("replay_detected")
     replay_cache.record(jti, exp=verified["exp"])
-    return str(bid)
+    return bid if pinned else f"{bid}@{p.hostname.lower()}"
 
 
 # ─── Scoring ────────────────────────────────────────────────────────────────
@@ -470,10 +505,13 @@ def build_router(get_api_key: Callable) -> APIRouter:
                 worst = s
         sid = uuid.uuid4().hex[:12]
         status = "quarantined" if worst["risk"] == "high" else "accepted"
+        note = None
+        if status == "accepted" and not _score_budget.take():
+            status, note = "awaiting_review", "not scored: today's brain-wide scoring budget is spent"
         get_store().insert({
             "id": sid, "created_at": int(time.time()), "title": req.title.strip(), "kind": req.kind,
             "contact": (req.contact or "").strip() or None, "fields": fields, "issuer": issuer,
-            "status": status, "scan": worst, "score": None, "breakdown": None, "note": None,
+            "status": status, "scan": worst, "score": None, "breakdown": None, "note": note,
             "retrieved": None, "decision": None, "decision_note": None, "decided_at": None,
             "doc_name": None, "event_id": None,
         })

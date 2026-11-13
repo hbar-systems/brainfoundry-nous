@@ -188,7 +188,7 @@ def find_pinned_peer(brain_id: str) -> Optional[Dict[str, Any]]:
 
 def verify_caller(*, token: Optional[str], question: str, this_brain_id: str,
                   public_key: Optional[str], public_asking: bool,
-                  now: Optional[int] = None) -> Caller:
+                  now: Optional[int] = None, own_origin: Optional[str] = None) -> Caller:
     """Check the assertion and decide who is asking.
 
     A known peer is verified against its PINNED key only (a caller-supplied key
@@ -235,6 +235,14 @@ def verify_caller(*, token: Optional[str], question: str, this_brain_id: str,
         raise AskError(401, UNAUTHENTICATED, "sub must be 'ask'")
     if claims.get("qh") != question_hash(question):
         raise AskError(401, UNAUTHENTICATED, "question hash mismatch")
+    # Destination binding (audit 2026-11-13): a sender that signs the origin it posted to
+    # (claim ep) cannot have its token relayed here by whoever it was handed to. Tokens
+    # from older brains carry no ep and are judged as before.
+    ep = claims.get("ep")
+    if ep is not None and own_origin:
+        from api.ask_out import origin as _origin
+        if not isinstance(ep, str) or _origin(ep) != _origin(own_origin):
+            raise AskError(401, UNAUTHENTICATED, "assertion minted for another address")
     jti = claims.get("jti")
     if not jti:
         raise AskError(401, UNAUTHENTICATED, "missing_jti")

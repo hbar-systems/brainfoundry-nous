@@ -25,6 +25,7 @@ auth) are a later tier.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any, Dict, List, Optional
 
@@ -35,7 +36,7 @@ from api.tools import YELLOW, Tool, ToolResult, register
 _TIMEOUT = httpx.Timeout(10, read=60)
 
 
-def _sign_outbound(audience_brain_id: str) -> Optional[str]:
+def _sign_outbound(audience_brain_id: str, query: str = "") -> Optional[str]:
     """Sign a short-lived ED25519 federation assertion so the peer can identify
     this brain (and apply its per-peer cap to us, not just our IP). Best-effort:
     returns None if this brain has no federation key configured, in which case
@@ -52,6 +53,8 @@ def _sign_outbound(audience_brain_id: str) -> Optional[str]:
             audience_brain_id=audience_brain_id,
             subject="federation_query",
             ttl_seconds=120,
+            # Binds the token to this query (audit 2026-11-13); the peer checks it.
+            claims={"qh": hashlib.sha256(query.encode("utf-8")).hexdigest()} if query else None,
         )
     except Exception:
         return None
@@ -133,7 +136,7 @@ async def run(target: str, query: str) -> ToolResult:
             f"({budget.cap(budget_key)} calls) is exhausted. Raise "
             "FEDERATION_OUTBOUND_MONTHLY_CAP or wait for the month to roll over."))
 
-    assertion = _sign_outbound(target)
+    assertion = _sign_outbound(target, query)
     try:
         data = await _query_peer(match["endpoint"], query, assertion=assertion)
     except httpx.HTTPStatusError as e:

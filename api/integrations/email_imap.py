@@ -19,7 +19,7 @@ import email
 import imaplib
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from api import settings_store
 
@@ -64,6 +64,16 @@ def _decode(value: str) -> str:
         return value
 
 
+def search_term(query: Optional[str]) -> str:
+    """The query as one safe IMAP quoted string body, or "" to skip server-side search.
+    Quotes and backslashes would break the token framing; CR, LF and every other control
+    character would let a query add its own command lines (audit 2026-11-13), so all of
+    them become spaces. Non-ASCII is skipped: imaplib ASCII-encodes search arguments."""
+    q = "".join(" " if (ch in '"\\' or ord(ch) < 32 or ord(ch) == 127) else ch for ch in (query or ""))
+    q = " ".join(q.split())[:200]
+    return q if q and q.isascii() else ""
+
+
 def _sync_list(query: str, max_results: int, unread_only: bool) -> List[Dict[str, Any]]:
     c = settings_store.get_email_account()
     host = c["imap_host"]
@@ -77,8 +87,8 @@ def _sync_list(query: str, max_results: int, unread_only: bool) -> List[Dict[str
         # Server-side TEXT search only for ASCII terms — imaplib ASCII-encodes
         # search args (non-ASCII -> UnicodeEncodeError), and a raw double-quote
         # would break IMAP token framing. Strip quotes; skip search if non-ASCII.
-        q = (query or "").replace('"', " ").replace("\\", " ").strip()
-        if q and q.isascii():
+        q = search_term(query)
+        if q:
             criteria = ["TEXT", f'"{q}"'] + (["UNSEEN"] if unread_only else [])
         typ, data = M.search(None, *criteria)
         ids = (data[0].split() if data and data[0] else [])

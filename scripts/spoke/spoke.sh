@@ -55,15 +55,23 @@ join() {
     if [ -x "$TS" ]; then note "already installed"
     else
         note "not installed: download the package from Tailscale and check Apple's signature before opening it"
-        run curl -fsSL -o /tmp/brain-spoke-tailscale.pkg "$PKG_URL"
+        # A fresh private folder (mktemp -d, only this account can enter it), never a fixed
+        # shared /tmp name another account could plant or swap during the password prompt
+        # (audit 2026-11-13); a failed download stops here.
         if [ $DRY = 0 ]; then
-            pkgutil --check-signature /tmp/brain-spoke-tailscale.pkg | grep -q "Developer ID Installer: Tailscale Inc. $PKG_TEAM" \
-                || die "the package is not signed by Tailscale Inc.; not installed"
+            PKGDIR=$(mktemp -d "${TMPDIR:-/tmp}/brain-spoke.XXXXXXXX") || die "could not make a private download folder"
+            chmod 700 "$PKGDIR"
+        else PKGDIR="${TMPDIR:-/tmp}/brain-spoke.XXXXXXXX"; fi
+        PKG="$PKGDIR/tailscale.pkg"
+        run curl -fsSL -o "$PKG" "$PKG_URL" || die "the Tailscale download failed; not installed"
+        if [ $DRY = 0 ]; then
+            pkgutil --check-signature "$PKG" | grep -q "Developer ID Installer: Tailscale Inc. $PKG_TEAM" \
+                || { rm -rf "$PKGDIR"; die "the package is not signed by Tailscale Inc.; not installed"; }
             note "signature: Developer ID Installer: Tailscale Inc. $PKG_TEAM"
         else note "would check: pkgutil --check-signature names Tailscale Inc. $PKG_TEAM, else stop"; fi
         note "macOS asks for your password now (the only time)"
-        run sudo installer -pkg /tmp/brain-spoke-tailscale.pkg -target /
-        run rm -f /tmp/brain-spoke-tailscale.pkg
+        run sudo installer -pkg "$PKG" -target / || { rm -rf "$PKGDIR"; die "the Tailscale installer failed"; }
+        run rm -rf "$PKGDIR"
     fi
     note "opening Tailscale: if macOS asks to add a VPN configuration, press Allow"
     run open -a Tailscale
