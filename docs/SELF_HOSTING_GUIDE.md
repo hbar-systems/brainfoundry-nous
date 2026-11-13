@@ -229,6 +229,55 @@ How uploaded text is cut before embedding. The embedding model (bge-large) reads
 | `API_BASE` | `http://localhost:8010` | API base URL |
 | `CORS_ORIGINS` | — | Additional allowed origins (comma-separated) |
 | `BRAIN_ENV` | `dev` | Set to `prod` to enable startup secret enforcement |
+| `PUBLIC_API_BASE` | `https://hbar.brainfoundry.ai` | This brain's public API address; the Google and Telegram integrations build their callback URLs from it (`api/integrations/google.py`, `api/integrations/telegram.py`). Set it on every brain that is not hbar's |
+| `TRUST_PROXY_HEADERS` | `false` | When true, public rate limits key on the last `X-Forwarded-For` hop (set it only behind your own proxy, e.g. Caddy); when false they use the transport peer, so a caller cannot pick its own IP (`api/main.py`) |
+
+### Public chat (the stranger's door)
+
+Read by `api/main.py` and `api/kernel/rate_limiter.py`. The rate limits need `REDIS_URL`; without Redis the public chat fails closed (429, "Rate limiter unavailable").
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUBLIC_CHAT_MODEL` | `llama3.2:1b` | Model that answers `/v1/public/chat` |
+| `PUBLIC_PERSONA_PATH` | `api/brain_persona_nous.md` | Persona for the public chat; read at import, so restart the api container after a change |
+| `PUBLIC_BRAIN_NAME` | — | Name the public page shows (served by `/v1/public/info`); unset = the page's built-in name |
+| `PUBLIC_CHAT_FOOTER` | — | Line the server appends after every public reply, so the model cannot drop it (agent-run brains, D57) |
+| `PUBLIC_CHAT_LAYERS` | — | Comma list of layers that narrows public retrieval; it never widens. Only chunks with scope `public` are ever read |
+| `PUBLIC_CHAT_CITE_SOURCES` | `false` | `true` adds source citations to public replies |
+| `PUBLIC_RATE_LIMIT_MAX` | `10` | Public chat calls per caller per window |
+| `PUBLIC_RATE_LIMIT_WINDOW` | `60` | That window, in seconds |
+| `PUBLIC_CHAT_DAILY_MAX` | `2000` | Brain-wide public chat calls per UTC day (503 when hit); `0` = unlimited, for local-model brains only |
+| `TURNSTILE_SECRET_KEY` | — | Secret. When set, public chat requires a valid Cloudflare Turnstile token, checked before the rate limit and the model call |
+
+### Trial reasoner (onboarding)
+
+Read by `api/onboarding/trial_reasoner.py`. Unset key = no trial reasoner; the trial key is its own client and a normal chat turn can never reach it.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRIAL_REASONER_API_KEY` | — | Secret. Dedicated Anthropic key for the onboarding trial |
+| `TRIAL_REASONER_MODEL` | `claude-haiku-4-5` | Model the trial uses |
+| `TRIAL_SESSION_TOKEN_CAP` | `40000` | Tokens per trial session |
+| `TRIAL_IP_DAILY_TOKEN_CAP` | `150000` | Tokens per IP per UTC day |
+| `TRIAL_IP_DAILY_SESSION_CAP` | `5` | Trial sessions per IP per UTC day |
+| `TRIAL_GLOBAL_DAILY_TOKEN_CAP` | `0` | Brain-wide tokens per UTC day across all sessions; `0` = off |
+| `TRIAL_BUDGET_PATH` | `/app/runtime/trial_budget.json` | Budget counter file |
+| `TRIAL_AUDIT_DIR` | `/app/runtime/audit/trial_reasoner` | Audit log folder |
+
+### Federation limits
+
+| Variable | Default | Read by | Description |
+|----------|---------|---------|-------------|
+| `FEDERATION_RATE_LIMIT_MAX` | `30` | `api/kernel/rate_limiter.py` | Inbound federation calls per peer (or IP) per window |
+| `FEDERATION_RATE_LIMIT_WINDOW` | `60` | `api/kernel/rate_limiter.py` | That window, in seconds |
+| `FEDERATION_DAILY_MAX` | `1000` | `api/kernel/rate_limiter.py` | Inbound federation calls per UTC day |
+| `FEDERATION_OUTBOUND_MONTHLY_CAP` | `500` | `api/tools/budget.py` | Outbound calls to each peer brain per calendar month (UTC) |
+| `FEDERATION_SUBSTRATE_GATE` | `on` | `api/main.py` | `off` turns off the substrate floor on handshake verify and the ask door |
+| `FEDERATION_SUBSTRATE_MIN_ARTIFACTS` | `50` | `api/substrate.py` | Floor: artifacts a peer brain must hold |
+| `FEDERATION_SUBSTRATE_MIN_FIRST_PERSON` | `25` | `api/substrate.py` | Floor: first-person artifacts |
+| `FEDERATION_SUBSTRATE_MIN_DIVERSITY` | `2` | `api/substrate.py` | Floor: distinct source types |
+| `FEDERATION_SUBSTRATE_MIN_AGE_DAYS` | `7` | `api/substrate.py` | Floor: age of the brain, in days |
+| `FEDERATION_AUDIT_PATH` | `/app/runtime/federation_audit.jsonl` | `api/tools/federation_audit.py` | Federation audit log |
 
 ---
 
