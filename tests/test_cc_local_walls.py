@@ -68,6 +68,20 @@ def test_other_local_user_is_refused_without_a_token(monkeypatch, tmp_path):
         srv.shutdown()
 
 
+def test_no_operator_token_fails_closed_to_other_users(monkeypatch, tmp_path):
+    m, srv, base, _ = _bridge(monkeypatch, tmp_path, token="")
+    try:
+        assert _call(base + "/state")[0] == 200                      # the bridge's own user / unsplit owner
+        monkeypatch.setattr(m, "_proxy_uids", lambda: set(OTHER))
+        monkeypatch.setattr(m, "_local_uids", lambda: set(OTHER))
+        assert _call(base + "/state")[0] == 403
+        assert _call(base + "/restart/cancel", {})[0] == 403
+        assert _call(base + "/permits/approve", {"id": "x"})[0] == 403
+        assert _call(base + "/health")[0] == 200                     # health stays open
+    finally:
+        srv.shutdown()
+
+
 def test_job_tail_is_capped(monkeypatch, tmp_path):
     m, srv, base, _ = _bridge(monkeypatch, tmp_path, token="")
     seen = []
@@ -83,7 +97,7 @@ def test_job_tail_is_capped(monkeypatch, tmp_path):
 def test_local_uid_sets(monkeypatch, tmp_path):
     m, srv, base, _ = _bridge(monkeypatch, tmp_path, token="")
     srv.shutdown()
-    assert os.getuid() in m._local_uids()
+    assert os.getuid() in m._local_uids() and os.getuid() in m._proxy_uids()
     monkeypatch.setenv("CC_LOCAL_USERS", "0, no-such-user-xyz")
     assert 0 in m._local_uids()
     monkeypatch.setattr(m, "HANDS_USER", "no-such-user-xyz")

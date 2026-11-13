@@ -4018,6 +4018,18 @@ def _local_uids() -> set:
     return uids
 
 
+def _proxy_uids() -> set:
+    """Who may open page routes when no operator token is set (an unsplit single brain): this
+    bridge's own user and the console's proxy (CC_PROXY_USER, default caddy). Before 2026-11-13 an
+    empty token let any local user in (audit: cc-bridge-operator-token-fail-open). Root is admitted
+    too (a proxy run as root; root can read the token file anyway)."""
+    uids = {os.getuid(), 0}
+    u = _uid_of(os.environ.get("CC_PROXY_USER", "caddy").strip() or "caddy")
+    if u is not None:
+        uids.add(u)
+    return uids
+
+
 JOB_TAIL_MAX = 200_000      # bytes of a job log one GET /jobs/<id>?tail= may return
 
 
@@ -4733,9 +4745,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _operator_ok(self) -> bool:
         """Page routes need the operator token when one is set (the console's proxy adds it).
-        The hook's and cc-job's routes use the ask token instead and are checked there."""
+        The hook's and cc-job's routes use the ask token instead and are checked there.
+        No token set (an unsplit single brain): fail closed to everyone but the console's proxy
+        and the bridge's own user, so other local accounts cannot drive the page routes."""
         if not OPERATOR_TOKEN:
-            return True
+            return self._peer_in(_proxy_uids())
         return _hmac.compare_digest(self.headers.get("X-CC-Operator", ""), OPERATOR_TOKEN)
 
     def _peer_in(self, uids: set) -> bool:
