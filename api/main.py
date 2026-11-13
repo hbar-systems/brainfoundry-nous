@@ -1191,8 +1191,13 @@ async def google_callback(code: str = "", state: str = "", error: str = ""):
     from api.integrations import google
 
     def _page(title: str, body: str, ok: bool) -> HTMLResponse:
+        # audit 2026-11-13 (google-oauth-callback-reflected-xss): every value is escaped, and the page
+        # is sandboxed, so a crafted ?error= can never run script on the console origin.
+        from html import escape as _esc
+        title, body = _esc(str(title)), _esc(str(body))
         color = "#1f9d55" if ok else "#c0392b"
-        return HTMLResponse(
+        return HTMLResponse(headers={"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+                                     "X-Content-Type-Options": "nosniff"}, content=
             f"<!doctype html><meta charset=utf-8><title>{title}</title>"
             f"<body style='font-family:system-ui;max-width:34rem;margin:4rem auto;"
             f"padding:0 1rem;color:#222'><h2 style='color:{color}'>{title}</h2>"
