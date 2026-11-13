@@ -1491,3 +1491,44 @@ def test_stop_on_a_live_process_still_signals_it(monkeypatch, tmp_path):
     assert m._stop_run(run) is True
     assert run.proc.wait(timeout=10) is not None
     assert not run.done          # the turn's own driver closes a live turn, with what was said
+
+
+def _stt_post_fields(monkeypatch, m):
+    import urllib.request
+    seen = []
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req)
+        return _FakeResponse(b'{"text": "privet"}' if req.get_method() == "POST" else b"")
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert m._transcribe(b"OggS-fake", "note.ogg", "audio/ogg") == "privet"
+    post = [r for r in seen if r.get_method() == "POST"][0]
+    return post.full_url, post.data
+
+
+def test_transcribe_hints_the_consoles_language_to_the_spoke(monkeypatch, tmp_path):
+    # PARENTS-1 (2026-11-13): a console set to ru (hbar's parents) sends language=ru with the clip;
+    # English sends no hint, so the spoke guesses as before.
+    monkeypatch.setenv("CC_STT_URL", "http://127.0.0.1:8090/v1/audio/transcriptions")
+    for k in ("ELEVENLABS_API_KEY", "CC_VOICE_BACKEND", "CC_STT_LANGUAGE"):
+        monkeypatch.delenv(k, raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    url, body = _stt_post_fields(monkeypatch, m)
+    assert url == "http://127.0.0.1:8090/v1/audio/transcriptions"
+    assert b'name="model"' in body and b'name="language"' not in body
+    m.LAYOUT.set_lang("ru")
+    _, body = _stt_post_fields(monkeypatch, m)
+    assert b'name="language"\r\n\r\nru\r\n' in body
+
+
+def test_transcribe_language_env_wins_and_reaches_elevenlabs(monkeypatch, tmp_path):
+    monkeypatch.delenv("CC_STT_URL", raising=False)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret-a")
+    monkeypatch.setenv("CC_STT_LANGUAGE", "he")
+    monkeypatch.delenv("CC_VOICE_BACKEND", raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m.LAYOUT.set_lang("ru")
+    assert m._stt_language() == "he"
+    url, body = _stt_post_fields(monkeypatch, m)
+    assert url == "https://api.elevenlabs.io/v1/speech-to-text"
+    assert b'name="language_code"\r\n\r\nhe\r\n' in body

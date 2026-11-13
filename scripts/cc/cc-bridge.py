@@ -1607,6 +1607,21 @@ TRANSCRIBE_MAX = int(os.environ.get("CC_TRANSCRIBE_MAX", str(10 * 1024 * 1024)))
 # ElevenLabs, which has one scribe model); the ElevenLabs one is CC_ELEVEN_STT_MODEL.
 STT_MODEL = os.environ.get("CC_STT_MODEL", "Systran/faster-whisper-small").strip()
 ELEVEN_STT_MODEL = os.environ.get("CC_ELEVEN_STT_MODEL", "scribe_v1").strip()
+# The language the clips are heard in (PARENTS-1, 2026-11-13): CC_STT_LANGUAGE (a two-letter code)
+# wins; else a console set to a language other than English (layout lang, ru for hbar's parents)
+# names it; else nothing is sent and the backend guesses from the clip, which a short note can get wrong.
+STT_LANGUAGE = os.environ.get("CC_STT_LANGUAGE", "").strip().lower()
+
+
+def _stt_language() -> str:
+    """The language hint for transcription, or "" for the backend's own guess."""
+    if re.fullmatch(r"[a-z]{2}", STT_LANGUAGE):
+        return STT_LANGUAGE
+    try:
+        lang = LAYOUT.lang()
+    except Exception:  # noqa: BLE001  (no layout yet: the bridge is still starting, or a test)
+        return ""
+    return lang if lang and lang != "en" else ""
 
 
 def _multipart_encode(fields: dict, file_field: str, filename: str, data: bytes, mime: str,
@@ -1653,12 +1668,15 @@ def _transcribe(data: bytes, filename: str, mime: str) -> str:
     speech-to-text. Raises on any error, and when nothing hears."""
     import urllib.request
     b = _voice_backend("stt")
+    lang = _stt_language()
     if b == "spoke":
-        body, ctype = _multipart_encode({"model": STT_MODEL}, "file", filename, data, mime)
+        body, ctype = _multipart_encode({"model": STT_MODEL, **({"language": lang} if lang else {})},
+                                        "file", filename, data, mime)
         req = urllib.request.Request(STT_URL, data=body, method="POST",
                                      headers={"Content-Type": ctype, "Accept": "application/json"})
     elif b == "eleven":
-        body, ctype = _multipart_encode({"model_id": ELEVEN_STT_MODEL}, "file", filename, data, mime)
+        body, ctype = _multipart_encode({"model_id": ELEVEN_STT_MODEL, **({"language_code": lang} if lang else {})},
+                                        "file", filename, data, mime)
         req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=body, method="POST",
                                      headers={"xi-api-key": ELEVEN_KEY, "Content-Type": ctype, "Accept": "application/json"})
     else:

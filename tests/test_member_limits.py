@@ -287,7 +287,10 @@ def _set_env(tmp_path, bridge_user, value):
     bins = tmp_path / "fakebin"
     bins.mkdir(parents=True, exist_ok=True)
     for name, body in (("sudo", 'exec "$@"'), ("chown", "exit 0"),
-                       ("systemctl", f'echo "$@" >> {tmp_path}/systemctl.log'), ("curl", "exit 7")):
+                       ("systemctl", f'case "$1" in cat) printf "Environment=CC_PORT=8138\\n";; '
+                                     f'*) echo "$@" >> {tmp_path}/systemctl.log;; esac'),
+                       ("curl", f'echo "$@" >> {tmp_path}/curl.log; '
+                                "echo '{\"telegram\": false, \"voice\": false, \"transcribe_backend\": \"spoke\"}'")):
         (bins / name).write_text(f"#!/bin/sh\n{body}\n")
         (bins / name).chmod(0o755)
     envf = tmp_path / f"~{bridge_user}" / ".cc-bridge" / "env"
@@ -306,6 +309,9 @@ def test_set_env_takes_a_value_with_no_final_newline_and_restarts_the_members_br
     assert "CC_CODEX_WRITE=1\n" in text and "OTHER=1\n" in text
     assert log.split() == ["restart", "cc-bridge-nosuchmember"]          # the member's unit, never the owner's
     assert "cc-bridge-nosuchmember restarted" in r.stdout
+    # PARENTS-1 (2026-11-13): the member's lane is read on the port its unit sets, not the owner's 7682
+    assert "http://127.0.0.1:8138/cc/health" in (tmp_path / "curl.log").read_text()
+    assert "telegram lane: on, waiting for the first message" in r.stdout and "hearing: spoke" in r.stdout
     r, text, _ = _set_env(tmp_path / "b", "nosuchmember-cc", "")
     assert r.returncode != 0 and "nothing given" in r.stdout and "CC_CODEX_WRITE" not in text
 

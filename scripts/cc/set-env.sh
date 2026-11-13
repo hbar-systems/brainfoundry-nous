@@ -33,5 +33,11 @@ unset VALUE
 UNIT=cc-bridge; [ "$BRIDGE_USER" != cc ] && [ "${BRIDGE_USER%-cc}" != "$BRIDGE_USER" ] && UNIT="cc-bridge-${BRIDGE_USER%-cc}"
 sudo systemctl restart "$UNIT"; sleep 3
 echo "set $KEY; $UNIT restarted"
-[ "$UNIT" = cc-bridge ] || exit 0   # the lane line below reads the owner's port only
-curl -s http://127.0.0.1:7682/cc/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("telegram lane:", {None:"off (no token)",False:"on, waiting for the first message (it pins the owner)",True:"on, owner pinned"}[d.get("telegram")], "| voice:", "on" if d.get("voice") else "off")'
+# the owner's bridge answers on 7682; a member's on the CC_PORT its unit sets (PARENTS-1, 2026-11-13:
+# setting a parent's Telegram token said nothing about whether the lane came up)
+PORT=7682
+if [ "$UNIT" != cc-bridge ]; then
+    PORT=$(systemctl cat "$UNIT" 2>/dev/null | sed -n 's/^Environment=CC_PORT=\([0-9]*\).*/\1/p' | tail -1)
+    [ -n "$PORT" ] || { echo "no CC_PORT in $UNIT; check: curl -s http://127.0.0.1:<bridge port>/cc/health"; exit 0; }
+fi
+curl -s "http://127.0.0.1:$PORT/cc/health" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("telegram lane:", {None:"off (no token)",False:"on, waiting for the first message (it pins the owner)",True:"on, owner pinned"}[d.get("telegram")], "| voice:", "on" if d.get("voice") else "off", "| hearing:", d.get("transcribe_backend") or "off")'
