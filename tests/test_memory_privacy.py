@@ -513,3 +513,64 @@ def test_local_view_pins_vault_and_dedupes(m, monkeypatch, arch):
     m._test_db.statements.clear()
     m.search_similar_documents("q", limit=10, layers=layers, architecture=arch, allow_local_only=True)
     assert not _vault_queries(m._test_db)
+
+
+# ── brain-app turns keep to the manifest (audit 2026-11-13) ──────────────────
+
+def _install_app_entry(tmp_path, monkeypatch, layers, enabled=True):
+    from api import apps as _apps
+    monkeypatch.setattr(_apps, "BRAIN_APPS_DIR", tmp_path)
+    monkeypatch.setattr(_apps, "INSTALLED_JSON", tmp_path / "installed.json")
+    (tmp_path / "installed.json").write_text(json.dumps({"apps": [{
+        "id": "demo", "enabled": enabled, "permissions": ["llm.invoke"],
+        "requires_layers": [{"layer": l, "mode": md} for l, md in layers]}]}))
+
+
+def _record_search(m, monkeypatch):
+    calls = []
+    real = m.search_similar_documents
+
+    def rec(query, limit=5, layers=None, architecture=None, scope=None, allow_local_only=False):
+        calls.append({"layers": layers, "architecture": architecture, "allow_local_only": allow_local_only})
+        return real(query, limit=limit, layers=layers, architecture=architecture, scope=scope,
+                    allow_local_only=allow_local_only)
+    monkeypatch.setattr(m, "search_similar_documents", rec)
+    return calls
+
+
+def _app_chat(m, layers=None, web=False):
+    req = {"model": "claude-opus-4-8", "messages": [{"role": "user", "content": "q"}],
+           "permit_id": "p", "permit_token": "t"}
+    if layers is not None:
+        req["layers"] = layers
+    if web:
+        req["web_search"] = True
+    return _run(m.rag_chat_completion(req, http_request=None, api_key="k"))
+
+
+def test_app_turn_retrieves_only_its_approved_read_layers(m, sent, monkeypatch, tmp_path):
+    # chat-rag-app-declared-layers-ignored
+    monkeypatch.setattr(m, "_verify_loop_permit", lambda pid, tok: {"agent_id": "app:demo"})
+    _install_app_entry(tmp_path, monkeypatch, [("semantic", "read"), ("episodic", "append")])
+    calls = _record_search(m, monkeypatch)
+    _app_chat(m, layers=["semantic", "procedural"])
+    assert calls and all(c["layers"] == ["semantic"] for c in calls)
+    assert all(c["allow_local_only"] is False for c in calls)
+
+
+def test_app_turn_without_read_layer_retrieves_nothing(m, sent, monkeypatch, tmp_path):
+    monkeypatch.setattr(m, "_verify_loop_permit", lambda pid, tok: {"agent_id": "app:demo"})
+    _install_app_entry(tmp_path, monkeypatch, [("semantic", "append")])
+    calls = _record_search(m, monkeypatch)
+    out = _app_chat(m)
+    assert calls == [] and out["rag_metadata"]["sources"] == []
+    # an unknown or disabled app is the same
+    _install_app_entry(tmp_path, monkeypatch, [("semantic", "read")], enabled=False)
+    out = _app_chat(m)
+    assert calls == [] and out["rag_metadata"]["sources"] == []
+
+
+def test_operator_turn_keeps_the_configured_architecture(m, sent, monkeypatch):
+    calls = _record_search(m, monkeypatch)
+    _chat(m, "claude-opus-4-8")
+    assert calls and calls[0]["architecture"] == "flat" and calls[0]["layers"] is None

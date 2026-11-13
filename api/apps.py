@@ -184,6 +184,27 @@ def _load_installed() -> dict:
     return json.loads(INSTALLED_JSON.read_text())
 
 
+def app_read_layers(app_id: str) -> list[str]:
+    """The read-mode memory layers the operator approved for an installed, enabled app.
+
+    Server-side source for an app turn's retrieval scope (/chat/rag under an
+    app:<id> permit). Unknown or disabled app: no layers, so the turn
+    retrieves nothing (fail closed).
+    """
+    try:
+        state = _load_installed()
+    except Exception:
+        return []
+    entry = next((a for a in state.get("apps", []) if a.get("id") == app_id), None)
+    if not entry or not entry.get("enabled", True):
+        return []
+    out: list[str] = []
+    for l in entry.get("requires_layers") or []:
+        if isinstance(l, dict) and l.get("mode") == "read" and l.get("layer") and l["layer"] not in out:
+            out.append(str(l["layer"]))
+    return out
+
+
 def _save_installed(data: dict) -> None:
     INSTALLED_JSON.write_text(json.dumps(data, indent=2) + "\n")
 
