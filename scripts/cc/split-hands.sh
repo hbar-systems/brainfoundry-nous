@@ -60,6 +60,13 @@ do)
     sudo usermod -aG "$HANDS_USER" "$BRIDGE_USER"          # the bridge reads the hands' files through the group
     sudo chmod 750 "$HANDS_HOME"
     echo "== 2/7 the reasoner's things move to $HANDS_HOME"
+    # a rerun meets a home the hands have owned: a name there planted as a link would carry the root
+    # steps below out of it (audit 2026-11-13, split-hands-root-fixups-follow-hands-links); refuse
+    for d in world in out .claude .claude.json .cc-bridge .cc-bridge/mcp.json .work .ableton-systems .numa-systems; do
+        if sudo test -L "$HANDS_HOME/$d"; then
+            echo "refused: $HANDS_HOME/$d is a link; remove it (sudo rm '$HANDS_HOME/$d') and run again"; exit 1
+        fi
+    done
     for d in world in out .claude .ableton-systems .numa-systems .work; do
         if sudo test -e "$BRIDGE_HOME/$d" && ! sudo test -e "$HANDS_HOME/$d"; then
             sudo mv "$BRIDGE_HOME/$d" "$HANDS_HOME/$d"; echo "  moved $d"
@@ -75,14 +82,18 @@ do)
     fi
     HAS_WORLD=0; sudo test -d "$HANDS_HOME/world" && HAS_WORLD=1   # a box without the world (e2e) skips the world steps
     if sudo test -f "$BRIDGE_HOME/.cc-bridge/mcp.json" && ! sudo test -f "$HANDS_HOME/.cc-bridge/mcp.json"; then
-        sudo cp "$BRIDGE_HOME/.cc-bridge/mcp.json" "$HANDS_HOME/.cc-bridge/mcp.json"     # the packs' file: the hands run the packs
-        sudo sed -i "s#$BRIDGE_HOME/#$HANDS_HOME/#g" "$HANDS_HOME/.cc-bridge/mcp.json"
+        # the packs' file: the hands run the packs. Written as the hands, never root, into their own home
+        sudo chown "$HANDS_USER:$HANDS_USER" "$HANDS_HOME/.cc-bridge"
+        sudo sed "s#$BRIDGE_HOME/#$HANDS_HOME/#g" "$BRIDGE_HOME/.cc-bridge/mcp.json" \
+            | sudo -u "$HANDS_USER" sh -c 'umask 077; t="$1.new.$$"; cat > "$t" && mv -f "$t" "$1"' sh "$HANDS_HOME/.cc-bridge/mcp.json"
     fi
     # the reasoner's settings and sign-in state live in ~/.claude.json, beside .claude, not inside it
     # (hbar 2026-09-29: without it the hands started signed out and the CLI complained)
     if sudo test -f "$BRIDGE_HOME/.claude.json" && ! sudo test -f "$HANDS_HOME/.claude.json"; then
-        sudo sh -c "sed 's#$BRIDGE_HOME/#$HANDS_HOME/#g' '$BRIDGE_HOME/.claude.json' > '$HANDS_HOME/.claude.json'"
-        sudo chmod 600 "$HANDS_HOME/.claude.json"; echo "  copied .claude.json"
+        # as the hands, never root: a root redirect would follow a link they planted at the name
+        sudo sed "s#$BRIDGE_HOME/#$HANDS_HOME/#g" "$BRIDGE_HOME/.claude.json" \
+            | sudo -u "$HANDS_USER" sh -c 'umask 077; t="$1.new.$$"; cat > "$t" && chmod 600 "$t" && mv -f "$t" "$1"' sh "$HANDS_HOME/.claude.json"
+        echo "  copied .claude.json"
     fi
     sudo chown -R "$HANDS_USER:$HANDS_USER" "$HANDS_HOME"
     # the brain's secrets: the Update helper leaves .env root-owned and world-readable (hbar 2026-09-29)
@@ -90,12 +101,15 @@ do)
     sudo test -d "$BRAIN_DIR/.brain-backups" && sudo chmod 700 "$BRAIN_DIR/.brain-backups" || true
     # the bridge writes uploads into in/, reads out/ and the world, and the reconciler (as the
     # bridge user) commits into the world: group read everywhere, group write where needed
-    sudo chmod -R g+rX "$HANDS_HOME/out" "$HANDS_HOME/in"
-    sudo chmod -R g+w "$HANDS_HOME/in"
-    sudo find "$HANDS_HOME/in" -type d -exec chmod g+s {} +
+    # The modes are set AS THE HANDS (they own all of it after the chown): a link they plant at a name or
+    # inside can then only reach what they could change anyway, never the member checkout (audit 2026-11-13)
+    asHands() { sudo -u "$HANDS_USER" -H "$@" || echo "  (some modes under $HANDS_HOME not set: $*)"; }
+    asHands chmod -R g+rX "$HANDS_HOME/out" "$HANDS_HOME/in"
+    asHands chmod -R g+w "$HANDS_HOME/in"
+    asHands find -P "$HANDS_HOME/in" -type d -exec chmod g+s {} +
     if [ "$HAS_WORLD" = 1 ]; then
-        sudo chmod -R g+rX "$HANDS_HOME/world"; sudo chmod -R g+w "$HANDS_HOME/world"
-        sudo find "$HANDS_HOME/world" -type d -exec chmod g+s {} +
+        asHands chmod -R g+rX "$HANDS_HOME/world"; asHands chmod -R g+w "$HANDS_HOME/world"
+        asHands find -P "$HANDS_HOME/world" -type d -exec chmod g+s {} +
     fi
     sudo -u "$BRIDGE_USER" git config --global --add safe.directory '*' 2>/dev/null || true
     sudo -u "$HANDS_USER" git config --global --add safe.directory '*' 2>/dev/null || true
