@@ -640,7 +640,12 @@ const PANE_MARK = /\n*<!--pane:(\S+?)-->\s*$/
 function splitPane(text) {
   const m = PANE_MARK.exec(text || '')
   if (!m) return { body: text, route: null }
-  return { body: text.slice(0, m.index), route: m[1] }
+  return { body: text.slice(0, m.index), route: safePaneRoute(m[1]) }
+}
+// audit 2026-11-13 (cc-reply-pane-marker-unvalidated-iframe-src): a pane is only ever a path on this console.
+function safePaneRoute(r) {
+  const s = String(r || '')
+  return /^\/(?![\/\\])[^\s<>"']*$/.test(s) ? s : null
 }
 function VisualChip({ route }) {
   if (!route) return null
