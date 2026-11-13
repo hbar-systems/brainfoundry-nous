@@ -286,7 +286,7 @@ def _set_env(tmp_path, bridge_user, value):
     `~<bridge_user>` expands to for an unknown user (the literal path, relative to the cwd)."""
     bins = tmp_path / "fakebin"
     bins.mkdir(parents=True, exist_ok=True)
-    for name, body in (("sudo", 'exec "$@"'), ("chown", "exit 0"),
+    for name, body in (("sudo", '[ "$1" = -u ] && shift 2; exec "$@"'), ("chown", "exit 0"),
                        ("systemctl", f'echo "$@" >> {tmp_path}/systemctl.log'), ("curl", "exit 7")):
         (bins / name).write_text(f"#!/bin/sh\n{body}\n")
         (bins / name).chmod(0o755)

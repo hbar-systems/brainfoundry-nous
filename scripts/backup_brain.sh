@@ -44,6 +44,9 @@
 #   15 3 * * *  /home/hbar/brain/scripts/backup_brain.sh >> /home/hbar/brain-backups/backup.log 2>&1
 
 set -euo pipefail
+# Artifacts hold the whole DB (vault, local-only, chats): owner only, whatever
+# the caller's umask (a member update runs under 027 in a group-shared checkout).
+umask 077
 
 BRAIN_DIR="${BRAIN_DIR:-/home/hbar/brain}"
 BACKUP_DIR="${BACKUP_DIR:-/home/hbar/brain-backups}"
@@ -84,7 +87,12 @@ PGDB="$($COMPOSE exec -T postgres printenv POSTGRES_DB 2>/dev/null | tr -d '\r' 
 PGUSER="${PGUSER:-postgres}"
 PGDB="${PGDB:-llm_db}"
 
+# Close BACKUP_DIR on every run: an existing one (cron-made 755, or a member
+# checkout's 2750 .brain-backups) and any older 644 artifacts inside it.
+install -d -m 700 "$BACKUP_DIR" "${BACKUP_DIR}/${CATEGORY}"
+chmod -R go-rwx "$BACKUP_DIR"
 mkdir -p "$DEST"
+chmod 700 "$DEST"
 log "==> Brain backup [${CATEGORY}] → ${DEST}"
 [ -n "$LABEL" ] && log "    label: ${LABEL}"
 

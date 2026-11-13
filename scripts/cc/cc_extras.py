@@ -19,6 +19,7 @@ import mimetypes
 import os
 import re
 import shlex
+import stat as stat_mod
 import subprocess
 import threading
 import time
@@ -33,6 +34,102 @@ KIND_BY_SUFFIX = {
     **{s: "image" for s in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")},
     ".pdf": "pdf", ".html": "html", ".htm": "html",
 }
+
+
+# ── writes into folders another user owns (audit 2026-11-13, cc-bridge-writes-follow-hands-planted-links) ──
+# After the split the hands own out/ and in/; the bridge writes there (job logs, the jobs registry, saves,
+# uploads). Every such write goes through a directory descriptor reached with O_NOFOLLOW and creates its
+# file with O_CREAT|O_EXCL|O_NOFOLLOW, so a link the hands plant (at a file name or at a folder on the way)
+# is refused instead of followed into the bridge's own files.
+
+class UnsafePath(PermissionError):
+    """A link on the way that someone other than root or the bridge planted."""
+
+
+def _link_trusted(st_link, parent_fd: int) -> bool:
+    """A symlink is followed only when root or this user made it, in a folder nobody else may write."""
+    me = os.getuid()
+    if st_link.st_uid not in (0, me):
+        return False
+    pst = os.fstat(parent_fd)
+    return pst.st_uid in (0, me) and not (pst.st_mode & 0o022)
+
+
+def open_dir(path, create: bool = False, mode: int = 0o777) -> int:
+    """A descriptor on the folder `path`, walked from / one part at a time without following a link a
+    third party could have planted (see _link_trusted). create=True makes the missing parts (mode & ~umask).
+    Raises UnsafePath on a planted link, NotADirectoryError / FileNotFoundError as usual."""
+    parts = [x for x in os.path.abspath(str(path)).split(os.sep) if x]
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts:
+            try:
+                st = os.stat(part, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, mode, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                st = os.stat(part, dir_fd=fd, follow_symlinks=False)
+            if stat_mod.S_ISLNK(st.st_mode):
+                if not _link_trusted(st, fd):
+                    raise UnsafePath(f"refused: {part} in {path} is a link another user made")
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            else:
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+_NEW = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def create_new(dir_fd: int, name: str, mode: int = 0o664) -> int:
+    """A new file `name` in the folder; never an existing one, never through a link. Mode is set on the
+    descriptor (fchmod), so the umask does not narrow it and no path is chmodded."""
+    fd = os.open(name, _NEW, mode, dir_fd=dir_fd)
+    try:
+        os.fchmod(fd, mode)
+    except OSError:
+        pass
+    return fd
+
+
+def replace_file(dir_fd: int, name: str, data: bytes, mode: int = 0o664) -> None:
+    """Write `name` in the folder atomically: a new temp file with an unguessable name, then rename over
+    `name` (a rename replaces a planted link itself, it does not write through it)."""
+    for _ in range(20):
+        tmp = f".{name}.saving-{os.urandom(6).hex()}"
+        try:
+            fd = create_new(dir_fd, tmp, mode)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise FileExistsError(name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise
+
+
+def read_file(dir_fd: int, name: str) -> bytes:
+    """A file in the folder, never through a link."""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=dir_fd)
+    with os.fdopen(fd, "rb") as f:
+        return f.read()
 
 
 class Files:
@@ -307,19 +404,13 @@ class Files:
                     "mtime": int(p.stat().st_mtime)}
         if not p.parent.is_dir():
             return {"ok": False, "error": "the folder does not exist"}
-        tmp = p.parent / f".{p.name}.saving-{os.getpid()}"
         try:
-            tmp.write_text(text, encoding="utf-8")
+            dfd = open_dir(p.parent)
             try:
-                os.chmod(tmp, 0o664)
-            except OSError:
-                pass
-            os.replace(tmp, p)
+                replace_file(dfd, p.name, text.encode("utf-8"), 0o664)
+            finally:
+                os.close(dfd)
         except OSError as e:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
             return {"ok": False, "error": f"could not save: {e.strerror or e}"}
         st = p.stat()
         return {"ok": True, "path": str(p), "size": st.st_size, "mtime": int(st.st_mtime)}
@@ -449,12 +540,28 @@ class Jobs:
 
     def _load(self) -> list:
         try:
-            return json.loads(self.reg.read_text())
+            fd = open_dir(self.dir)
+            try:
+                items = json.loads(read_file(fd, self.reg.name))
+            finally:
+                os.close(fd)
+            return [r for r in items if isinstance(r, dict) and self.ID.match(str(r.get("id") or ""))] \
+                if isinstance(items, list) else []
         except Exception:
             return []
 
     def _save(self, items: list) -> None:
-        self.reg.write_text(json.dumps(items, indent=1))
+        fd = open_dir(self.dir, create=True)
+        try:
+            replace_file(fd, self.reg.name, json.dumps(items, indent=1).encode(), 0o664)
+        finally:
+            os.close(fd)
+
+    ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # a log name in the jobs folder, never a path
+
+    def _log_path(self, jid: str) -> Path:
+        """A job's log is named by its id in the jobs folder; never the "log" field of the hands-writable registry."""
+        return self.dir / f"{jid}.log"
 
     def _fill(self, rec: dict) -> dict:
         """The record with its thread resolved through the run, when it was unknown at start."""
@@ -498,9 +605,28 @@ class Jobs:
             if self.max_running > 0 and running >= self.max_running:
                 return {"error": f"{running} jobs are running, the most this brain may run at once "
                                  f"(CC_MAX_JOBS={self.max_running}); wait for one to end"}
-            jid = f"J{int(time.time())}{len(items) + 1:03d}"
-            log = self.dir / f"{jid}.log"
-            lf = open(log, "ab")
+            # a new log, never through a link and never an existing file (a planted name moves on to the next)
+            try:
+                dfd = open_dir(self.dir, create=True)
+            except OSError as e:
+                return {"error": f"could not open the jobs folder: {e.strerror or e}"}
+            try:
+                n, t0, lfd = len(items) + 1, int(time.time()), None
+                for k in range(50):
+                    jid = f"J{t0}{n + k:03d}"
+                    try:
+                        lfd = create_new(dfd, f"{jid}.log", 0o664)
+                        break
+                    except FileExistsError:
+                        continue
+                    except OSError as e:
+                        return {"error": f"could not create the job log: {e.strerror or e}"}
+            finally:
+                os.close(dfd)
+            if lfd is None:
+                return {"error": "could not create the job log: every next name is taken"}
+            log = self._log_path(jid)
+            lf = os.fdopen(lfd, "ab")
             lf.write(f"# {jid} {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} in {wd or os.getcwd()}\n# {command}\n".encode())
             lf.flush()
             try:
@@ -650,7 +776,11 @@ class Jobs:
             if r["id"] == jid:
                 out = self._fill(dict(r))
                 try:
-                    data = Path(r["log"]).read_bytes()
+                    fd = open_dir(self.dir)
+                    try:
+                        data = read_file(fd, f"{jid}.log")
+                    finally:
+                        os.close(fd)
                     out["tail"] = data[-tail_bytes:].decode("utf-8", "replace")
                     out["log_size"] = len(data)
                 except OSError:
@@ -814,18 +944,12 @@ class Uploads:
                 if self.recent.seen(fp) is not None and prev and Path(prev).is_file() and Path(prev).stat().st_size == len(data):
                     saved.append({"name": Path(prev).name, "path": prev, "size": len(data), "duplicate": True})
                     continue
-                dest = dest_dir / name
-                i = 1
-                while dest.exists():
-                    dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
                 try:
-                    dest.write_bytes(data)
+                    dest = self._write_new(dest_dir, name, data)
+                except UnsafePath as e:
+                    return {"error": str(e)}
                 except PermissionError:
                     return {"error": f"could not write into {dest_dir}: closed to the bridge"}
-                try:
-                    os.chmod(dest, 0o664)
-                except OSError:
-                    pass
                 self.paths = {k: v for k, v in self.paths.items() if k in self.recent.at}
                 self.paths[fp] = str(dest)
                 saved.append({"name": dest.name, "path": str(dest), "size": len(data)})
@@ -837,17 +961,29 @@ class Uploads:
         """One file from elsewhere (Telegram, 2026-09-29) into today's folder; returns its path."""
         day = time.strftime("%Y-%m-%d", time.gmtime())
         dest_dir = self.dir / day
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / self._safe_name(name)
-        i = 1
-        while dest.exists():
-            dest = dest_dir / f"{dest.stem}-{i}{dest.suffix}"; i += 1
-        dest.write_bytes(data)
+        return str(self._write_new(dest_dir, self._safe_name(name), data))
+
+    @staticmethod
+    def _write_new(dest_dir: Path, name: str, data: bytes) -> Path:
+        """`data` as a new file in dest_dir (made if missing): name, else name-1, name-2 ...; never an
+        existing file and never through a link (a dangling link planted at the name is a taken name)."""
+        dfd = open_dir(dest_dir, create=True)
         try:
-            os.chmod(dest, 0o664)
-        except OSError:
-            pass
-        return str(dest)
+            stem, suffix = Path(name).stem, Path(name).suffix
+            cand, i = name, 1
+            while True:
+                try:
+                    fd = create_new(dfd, cand, 0o664)
+                    break
+                except FileExistsError:
+                    cand = f"{stem}-{i}{suffix}"; i += 1
+                    if i > 10000:
+                        raise
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            return dest_dir / cand
+        finally:
+            os.close(dfd)
 
 
 def shell_quote(cmd: list[str]) -> str:
@@ -1652,7 +1788,11 @@ def commit_repos(world: str, extra: tuple = ()) -> list:
 
 def _git(repo, *args, timeout: int = 6) -> tuple:
     try:
-        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), *args],
+        # the repos may belong to the hands: their own config must not run anything in the bridge
+        # (audit 2026-11-13): no fsmonitor, no hooks, no external diff or textconv, no pager
+        r = subprocess.run(["git", "--no-optional-locks", "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
+                            "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.pager=cat",
+                            "-C", str(repo), *args],
                            capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout
     except Exception:
@@ -1667,11 +1807,11 @@ def commit_info(sha: str, repos: list) -> dict:
         rc, _ = _git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
         if rc != 0:
             continue
-        rc, head = _git(repo, "show", "-s", "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b", sha)
+        rc, head = _git(repo, "show", "--no-ext-diff", "--no-textconv", "-s", "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b", sha)
         if rc != 0:
             continue
         full, subject, author, date, body = (head.rstrip("\n").split("\x1f") + [""] * 5)[:5]
-        _, stat = _git(repo, "show", "--format=", "--numstat", sha)
+        _, stat = _git(repo, "show", "--no-ext-diff", "--no-textconv", "--format=", "--numstat", sha)
         files = []
         for line in stat.splitlines():
             parts = line.split("\t")

@@ -279,9 +279,16 @@ Write the numbers into hbar.world's next-brains design note; they replace the es
 - The terminal door gives the member a shell as their own bridge user, which holds the bridge's
   state (their own tokens). Good enough for the owner; a door that is only the sign-in flow would
   be tighter.
-- `split-hands.sh` writes the operator token into the bridge's env file through a `sudo sh -c`
-  command line, which other users on the box can see in the process list for that instant
-  (unchanged from the single brain; on a shared box it matters).
+- (Closed 2026-11-13.) `split-hands.sh`, `install.sh` and `set-env.sh` used to write the bridge's
+  env file as root through a `sudo sh -c` command line holding the value. They now write it as the
+  bridge user with the value on stdin (`bridge_env_set` in `scripts/cc/member.sh`).
+- A member's api is root in its container and writes into host bind mounts inside the checkout
+  (`brain-apps`, `extensions`, `prepared_docs`) and the hands' `~/in`. With rootful docker and no
+  `nosuid` on `/srv` and `/home`, a set-uid file left there by a compromised member api would make
+  that member's host user root (audit 2026-11-13). The member Update now refuses while such a file
+  sits in the checkout's api folders, but that only notices. The fix is on the box: mount `/srv`
+  and `/home` `nosuid` (or run docker with `userns-remap`). Check with `findmnt -T /srv/brains -o OPTIONS`
+  and `findmnt -T /home -o OPTIONS`.
 - The provisioner does not know about members; this is an admin step on an existing box.
 - The first brain's checkout stays as provisioned (`/home/hbar/brain`: code readable through the
   751 home, `.env` 600): a member's users can read that brain's code, not its secrets or memory.

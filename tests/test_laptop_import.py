@@ -362,3 +362,69 @@ def test_member_gets_the_caddy_opening_and_in_folder():
     sys.path.insert(0, str(ROOT / "scripts"))
     import member_env
     assert member_env.member_values("anne", 3)["LAPTOP_AUDIO_HOST_DIR"] == "/home/anne-hands/in"
+
+
+# audit 2026-11-13, laptop-import-audio-writer-follows-hands-links: ~/in belongs to the member's hands; a link
+# they plant (date folder, import folder, a folder of the path, the file name, audio.tsv) never carries a write.
+def _place_links(tmp_path):
+    root = tmp_path / "in"
+    root.mkdir()
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "app.py").write_text("keep\n")
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    return root, victim, day
+
+
+@pytest.mark.parametrize("where", ["day", "import", "sub"])
+def test_audio_refuses_a_linked_folder(tmp_path, where):
+    root, victim, day = _place_links(tmp_path)
+    if where == "day":
+        os.symlink(victim, root / day)
+    else:
+        (root / day).mkdir()
+        if where == "import":
+            os.symlink(victim, root / day / "import")
+        else:
+            (root / day / "import").mkdir()
+            os.symlink(victim, root / day / "import" / "Music")
+    with pytest.raises(OSError):
+        li.AudioPlace(root, "Music/t.wav", time.time())
+    assert sorted(p.name for p in victim.iterdir()) == ["app.py"]
+
+
+def test_audio_never_writes_through_a_linked_name_or_index(tmp_path):
+    root, victim, day = _place_links(tmp_path)
+    imp = root / day / "import" / "Music"
+    imp.mkdir(parents=True)
+    os.symlink(victim / "app.py", imp / "t.wav")              # the destination name
+    os.symlink(victim / "app.py", imp / ".t.wav.part")        # the old fixed temp name
+    os.symlink(victim / "new.py", root / day / "import" / "audio.tsv")   # dangling index
+    place = li.AudioPlace(root, "Music/t.wav", time.time())
+    try:
+        with place.open_tmp() as out:
+            out.write(b"RIFF")
+            with pytest.raises(OSError):
+                place.keep(out, 4, "x")
+    finally:
+        place.close()
+    assert (victim / "app.py").read_text() == "keep\n" and not (victim / "new.py").exists()
+    assert (imp / "t (2).wav").read_bytes() == b"RIFF"
+    assert not [p for p in imp.iterdir() if p.name.endswith(".part") and not p.is_symlink()]
+
+
+def test_audio_place_keeps_and_indexes(tmp_path):
+    root, victim, day = _place_links(tmp_path)
+    for body, want in ((b"one", "Music/t.wav"), (b"two", "Music/t (2).wav")):
+        place = li.AudioPlace(root, "Music/t.wav", time.time())
+        try:
+            with place.open_tmp() as out:
+                out.write(body)
+                assert place.keep(out, len(body), "s") == f"in/{day}/import/{want}"
+        finally:
+            place.close()
+    kept = root / day / "import"
+    assert (kept / "Music" / "t (2).wav").read_bytes() == b"two"
+    assert oct((kept / "Music" / "t.wav").stat().st_mode & 0o777) == "0o644"
+    tsv = (kept / "audio.tsv").read_text().splitlines()
+    assert tsv[0] == "file\tbytes\tsha256\tarrived" and [l.split("\t")[0] for l in tsv[1:]] == ["Music/t.wav", "Music/t (2).wav"]

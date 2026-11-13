@@ -210,6 +210,26 @@ def ssh_run(host: str, remote_cmd: str, stdin_bytes: bytes | None = None,
     return proc.stdout.decode(errors="replace")
 
 
+def safe_extract(tar: tarfile.TarFile, stage: Path) -> None:
+    """Extract only plain files and folders that stay under the stage; every member is checked before
+    anything is written (audit 2026-11-13, import-brain-tar-extractall-unfiltered-path-escape: an
+    archive handed over by someone else must not write outside the stage via '..', absolute names,
+    links or devices)."""
+    root = stage.resolve()
+    members = tar.getmembers()
+    for m in members:
+        name = m.name
+        if not (m.isfile() or m.isdir()) or name.startswith("/") or ".." in Path(name).parts:
+            raise RuntimeError(f"unsafe archive member: {name!r}")
+        dest = (root / name).resolve()
+        if dest != root and root not in dest.parents:
+            raise RuntimeError(f"unsafe archive member: {name!r}")
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(stage, members=members, filter="data")
+    else:
+        tar.extractall(stage, members=members)
+
+
 def restore(host: str, archive: Path, assume_yes: bool) -> int:
     archive = archive.expanduser().resolve()
     if not archive.is_file():
@@ -218,7 +238,7 @@ def restore(host: str, archive: Path, assume_yes: bool) -> int:
     with tempfile.TemporaryDirectory(prefix="brain-import-") as tmp:
         stage = Path(tmp)
         with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(stage)
+            safe_extract(tar, stage)
 
         manifest_path = stage / "manifest.json"
         if not manifest_path.is_file():

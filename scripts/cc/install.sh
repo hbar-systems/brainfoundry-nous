@@ -144,15 +144,18 @@ case "${1:-}" in
     exec tmux -f /dev/null new-session -A -s claude -c "${BRAIN_DIR:-$HOME/brain}" \; set -g status off ;;
 esac
 DOOR
-LOGIN_USER=$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$ENV_FILE" 2>/dev/null || true); LOGIN_USER=${LOGIN_USER:-$BRIDGE_USER}
+LOGIN_USER=$(sudo grep -oP '^CC_HANDS_USER=\K.*' "$ENV_FILE" 2>/dev/null || true)
+# the env file is the bridge user's (a member's, on a shared box): only a plain user name goes on from it
+LOGIN_USER=$(safe_user "$LOGIN_USER" || true); LOGIN_USER=${LOGIN_USER:-$BRIDGE_USER}
 CODEX_INSTALL="bash scripts/cc/install-codex.sh${MEMBER:+ $MEMBER}"   # cc_codex.install_command, the owner's one command
 sed -i "s|__LOGIN_USER__|$LOGIN_USER|g; s|__BRIDGE_USER__|$BRIDGE_USER|g; s|__CODEX_INSTALL__|$CODEX_INSTALL|g" "$DOOR_TMP"
 if [ "$TERM_USER" = "$(id -un)" ] || [ "$TERM_USER" = "$BRAIN_USER" ]; then
     mkdir -p "$DOOR_DIR"   # a fresh box has no state dir yet (found on e2e 2026-09-22)
     cat "$DOOR_TMP" > "$DOOR_DIR/door.sh"; chmod 755 "$DOOR_DIR/door.sh"; FIX_OWNER
 else   # a member's door lives in its own user's home, written as that user
-    sudo -u "$TERM_USER" mkdir -p "$DOOR_DIR"; sudo chmod 700 "$DOOR_DIR"
-    sudo install -o "$TERM_USER" -g "$TERM_USER" -m 755 "$DOOR_TMP" "$DOOR_DIR/door.sh"
+    # all as that user: the folder is theirs, so root never chmods or writes there by path (audit 2026-11-13)
+    sudo -u "$TERM_USER" mkdir -p "$DOOR_DIR"; sudo -u "$TERM_USER" chmod 700 "$DOOR_DIR"
+    sudo cat "$DOOR_TMP" | sudo -u "$TERM_USER" sh -c 'umask 077; t=$(mktemp "$1.XXXXXXXX") && cat > "$t" && chmod 755 "$t" && mv -f "$t" "$1"' sh "$DOOR_DIR/door.sh"
     mkdir -p "$HOME_DIR/.cc-bridge"; FIX_OWNER   # the installer's own log stays in the admin's home
 fi
 rm -f "$DOOR_TMP"
@@ -193,8 +196,8 @@ $SUDO_AS_BRIDGE "$BRIDGE_HOME/.cc-bridge/venv/bin/pip" install -q --upgrade perm
 if ! sudo test -s "$ENV_FILE"; then
     # The brain's api key, so the bridge can search memory. .env is root-owned on most brains.
     if sudo grep -q "^BRAIN_API_KEY=" "$BRAIN_DIR/.env" 2>/dev/null; then
-        sudo sh -c "grep '^BRAIN_API_KEY=' '$BRAIN_DIR/.env' > '$ENV_FILE'"
-        sudo chown "$BRIDGE_USER":"$BRIDGE_USER" "$ENV_FILE"; sudo chmod 600 "$ENV_FILE"
+        # written as the bridge user into its own folder; root only reads the brain's .env
+        sudo grep -m1 '^BRAIN_API_KEY=' "$BRAIN_DIR/.env" | cut -d= -f2- | bridge_env_set BRAIN_API_KEY
         echo "api key copied into $ENV_FILE (mode 600)"
     else
         echo "no BRAIN_API_KEY in .env; the bridge will run without memory until $ENV_FILE holds one"
@@ -267,7 +270,7 @@ WRAP
     # tool-pack entries such as mcp__...), each kept once. A rerun never drops an entry.
     EXISTING=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
     MERGED=$(printf '%s,%s' "$TOOLS" "$EXISTING" | tr ',' '\n' | awk 'NF && !seen[$0]++' | paste -sd, -)
-    sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=\"$MERGED\"' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+    printf '"%s"' "$MERGED" | bridge_env_set CC_TOOLS
     echo "hands configured: lookups open, reads via one-read, writes only through the permit gate"
 else
     echo "no ONE_SECRET in $ENV_FILE: hands not configured (docs/CC.md)"
@@ -339,15 +342,19 @@ UNIT
 # minutes so the reasoner never builds on a stale copy. Fast-forward only; a clone with
 # local changes is left alone and named in the log.
 WORK_DIR_ENV=$(sudo grep -oP '^CC_WORK_DIR=\K.*' "$ENV_FILE" 2>/dev/null || true)
+[[ "$WORK_DIR_ENV" =~ ^/[A-Za-z0-9._/-]+$ ]] || WORK_DIR_ENV=""   # a plain path, or no pull unit (it goes into a unit file)
 if [ -n "$WORK_DIR_ENV" ] && sudo test -d "$WORK_DIR_ENV"; then
+    # pulled as the user who owns the clones (the hands after split-hands): git runs a repo's own config and
+    # hooks, so the bridge never runs git in the hands' repos (audit 2026-11-13)
+    PULL_USER=$LOGIN_USER; PULL_HOME=$(eval echo "~$PULL_USER")
     sudo tee /etc/systemd/system/cc-work-pull$SFX.service >/dev/null <<UNIT
 [Unit]
 Description=Fast-forward the CC work clones from their remotes
 
 [Service]
 Type=oneshot
-User=$BRIDGE_USER
-Environment=HOME=$BRIDGE_HOME
+User=$PULL_USER
+Environment=HOME=$PULL_HOME
 ExecStart=/usr/bin/bash -c 'find "$WORK_DIR_ENV" -maxdepth 6 -name .git -type d -prune 2>/dev/null | while read -r g; do d=\$(dirname "\$g"); if [ -n "\$(git -C "\$d" status --porcelain)" ]; then echo "\$(basename "\$d"): local changes, not pulled"; continue; fi; git -C "\$d" pull -q --ff-only 2>/dev/null || echo "\$(basename "\$d"): pull failed"; done'
 UNIT
     sudo tee /etc/systemd/system/cc-work-pull$SFX.timer >/dev/null <<UNIT
@@ -390,7 +397,7 @@ $BRIDGE_USER ALL=(root) NOPASSWD: $VERBS
 SUDOERS
     if sudo visudo -cf /etc/sudoers.d/cc-bridge$SFX.tmp >/dev/null; then
         sudo chmod 440 /etc/sudoers.d/cc-bridge$SFX.tmp && sudo mv /etc/sudoers.d/cc-bridge$SFX.tmp /etc/sudoers.d/cc-bridge$SFX
-        sudo grep -q "^CC_BOX=" "$ENV_FILE" 2>/dev/null || echo "CC_BOX=1" | sudo tee -a "$ENV_FILE" >/dev/null
+        sudo grep -q "^CC_BOX=" "$ENV_FILE" 2>/dev/null || printf 1 | bridge_env_set CC_BOX
         # Looking around needs no card: read-only shell verbs join the allowed list (the reasoner
         # already reads files in its working directories freely; these only save clicks). No cat/head/
         # grep here: they would read outside those directories without a card. Writes and root still card.
@@ -400,7 +407,7 @@ SUDOERS
         CUR=$(sudo grep '^CC_TOOLS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
         [ -n "$CUR" ] || CUR="Read,Grep,Glob"
         if ! printf '%s' "$CUR" | grep -q 'Bash(git status'; then
-            sudo sh -c "grep -v '^CC_TOOLS=' '$ENV_FILE' > '$ENV_FILE.tmp'; echo 'CC_TOOLS=\"$CUR,$RO\"' >> '$ENV_FILE.tmp'; mv '$ENV_FILE.tmp' '$ENV_FILE'; chown $BRIDGE_USER:$BRIDGE_USER '$ENV_FILE'; chmod 600 '$ENV_FILE'"
+            printf '"%s,%s"' "$CUR" "$RO" | bridge_env_set CC_TOOLS
             echo "read-only shell verbs allowed without a card (ls, git status/log/diff, systemctl status, ...; file contents go through Read, which stays inside the working directories)"
         fi
         # cc-job: commands that outlive a turn, started through the bridge (scripts/cc/cc-job.py).

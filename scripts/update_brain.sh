@@ -40,6 +40,11 @@ if [ -z "${HEALTH_URL:-}" ]; then
     if [ -f /.dockerenv ]; then HEALTH_URL="http://127.0.0.1:8000/health"; else HEALTH_URL="http://127.0.0.1:${API_PORT:-8010}/health"; fi
 fi
 TS=$(date +%Y%m%d-%H%M%S)
+# Scratch files in a private folder of our own (mktemp -d, 0700), never fixed names in the shared /tmp:
+# this runs as root or the admin while other users share /tmp (audit 2026-11-13,
+# update-brain-predictable-tmp-paths-as-root). Removed when the script ends.
+UPD_TMP=$(mktemp -d "${TMPDIR:-/tmp}/brain-update.XXXXXXXX")
+trap 'rm -rf "$UPD_TMP"' EXIT
 
 cd "$BRAIN_DIR"
 
@@ -164,8 +169,8 @@ fi
 # aborts. Back it up explicitly; restore after pull.
 RUNTIME_BACKUPS=()
 if [ -f "$BRAIN_DIR/brain-apps/installed.json" ]; then
-    cp "$BRAIN_DIR/brain-apps/installed.json" "/tmp/installed.json.bak-$TS"
-    RUNTIME_BACKUPS+=("brain-apps/installed.json:/tmp/installed.json.bak-$TS")
+    cp "$BRAIN_DIR/brain-apps/installed.json" "$UPD_TMP/installed.json.bak"
+    RUNTIME_BACKUPS+=("brain-apps/installed.json:$UPD_TMP/installed.json.bak")
     echo "✓ Backed up brain-apps/installed.json (runtime state)"
 fi
 
@@ -175,12 +180,12 @@ fi
 # pattern for brains provisioned before the chown-fix bundle landed.
 STASH_REF=""
 if ! git diff --quiet HEAD 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-    if git stash push --include-untracked --message "auto-stash-$TS" > /tmp/stash-out-$TS 2>&1; then
+    if git stash push --include-untracked --message "auto-stash-$TS" > "$UPD_TMP/stash-out" 2>&1; then
         STASH_REF=$(git stash list --format='%gd' | head -1)
         echo "✓ Local changes stashed as $STASH_REF (will try to re-apply after pull)"
     else
         echo "✗ git stash failed:"
-        cat /tmp/stash-out-$TS
+        cat "$UPD_TMP/stash-out"
         echo "  Aborting before any state change. Your brain is unchanged."
         exit 1
     fi
@@ -223,10 +228,10 @@ done
 # Real local edits will conflict in a way the operator needs to resolve — we
 # surface the stash ref rather than abort.
 if [ -n "$STASH_REF" ]; then
-    if git stash pop "$STASH_REF" > /tmp/stash-pop-$TS 2>&1; then
+    if git stash pop "$STASH_REF" > "$UPD_TMP/stash-pop" 2>&1; then
         echo "✓ Re-applied local changes from $STASH_REF cleanly"
     else
-        if grep -q "CONFLICT" /tmp/stash-pop-$TS; then
+        if grep -q "CONFLICT" "$UPD_TMP/stash-pop"; then
             # Conflict resolution: per the no-rsync deploy rule (feedback memory
             # 2026-05-26), legitimate code lives in commits — local working-tree
             # mods on a brain are always duplicates of HEAD (rsync-applied
@@ -246,7 +251,7 @@ if [ -n "$STASH_REF" ]; then
             echo "  are GONE — commit your changes before running update_brain.sh."
         else
             echo "⚠ Stash pop failed unexpectedly:"
-            cat /tmp/stash-pop-$TS
+            cat "$UPD_TMP/stash-pop"
             echo "  Stash preserved as $STASH_REF for manual recovery."
         fi
     fi

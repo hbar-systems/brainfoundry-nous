@@ -110,7 +110,8 @@ while [ "${1:-}" = "-u" ] || [ "${1:-}" = "-n" ] || [ "${1:-}" = "-H" ]; do [ "$
 case "${1:-}" in
   tee) shift; [ "${1:-}" = -a ] && shift; mkdir -p "$FAKE/root$(dirname "$1")"; cat >> "$FAKE/root$1" ;;
   install) f="${@: -1}"; src="${@: -2:1}"; mkdir -p "$FAKE/root$(dirname "$f")"; cp "$src" "$FAKE/root$f" ;;
-  test) [ -n "${STUB_TEST_OK:-}" ] && exit 0; exit 1 ;;
+  test) [ "${2:-}" = -L ] && { case "$3" in *"${STUB_TEST_LINK:-//none//}") exit 0 ;; esac; exit 1; }
+        [ -n "${STUB_TEST_OK:-}" ] && exit 0; exit 1 ;;
   grep) exit 1 ;;
   *) exit 0 ;;
 esac
@@ -200,6 +201,30 @@ def test_split_hands_defaults_and_member(tmp_path):
     assert "127.0.0.1:8118/cc/health" in log
     tok = (root / "etc/caddy/cc-test1.env").read_text().split("=", 1)[1].strip()
     assert tok not in out                                                                 # never printed
+
+
+def test_split_hands_refuses_a_planted_link_and_sets_modes_as_the_hands(tmp_path):
+    """audit 2026-11-13, split-hands-root-fixups-follow-hands-links: a rerun meets names the hands own."""
+    fake = tmp_path / "a" / "fake"
+    (fake / "bin").mkdir(parents=True)
+    (fake / "bin" / "sudo").write_text(_SUDO)
+    for c in ("systemctl", "curl", "pstree"):
+        (fake / "bin" / c).write_text("#!/usr/bin/env bash\n")
+    for f in (fake / "bin").iterdir():
+        f.chmod(0o755)
+    e = _clean_env(FAKE=str(fake), PATH=f"{fake / 'bin'}:{os.environ['PATH']}", BRAIN_USER="fakeuser",
+                   BRAIN_DIR=str(tmp_path / "nobrain"), STUB_TEST_OK="1", STUB_TEST_LINK="/hands/in")
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "cc" / "split-hands.sh")], env=e, capture_output=True, text=True,
+                       cwd=tmp_path)
+    assert r.returncode == 1 and "refused: /home/hands/in is a link" in r.stdout
+    assert "chmod -R" not in (fake / "log").read_text()
+    # a run with no link: every recursive mode change runs as the hands, never as root
+    _run_stubbed(tmp_path / "b", "split-hands.sh", STUB_TEST_OK="1", BRAIN_DIR=str(tmp_path / "nobrain"))
+    log = (tmp_path / "b" / "fake" / "log").read_text().splitlines()
+    rec = [l for l in log if "chmod -R" in l or "chmod g+s" in l]
+    assert rec and all(l.startswith("sudo -u hands -H ") for l in rec), rec
+    assert not [l for l in log if "> '/home/hands/.claude.json'" in l]
+    assert "sudo -u cc git config --global --add safe.directory" not in "\n".join(log)
 
 
 def _update_trace(tmp_path, env_text: str | None, dirname: str = "brain") -> str:

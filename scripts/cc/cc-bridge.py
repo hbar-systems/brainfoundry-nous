@@ -4281,8 +4281,15 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
             d = OUT_DIR / ("layout-pack-" + pk["id"][len("layout-"):])
             for rel, text in pk["files"].items():
                 f = d / rel
-                f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(text, encoding="utf-8")
+                # out/ is the hands' folder: no write through a link they planted (audit 2026-11-13)
+                try:
+                    dfd = cc_extras.open_dir(f.parent, create=True)
+                    try:
+                        cc_extras.replace_file(dfd, f.name, text.encode("utf-8"), 0o664)
+                    finally:
+                        os.close(dfd)
+                except OSError as e:
+                    return 500, {"error": f"could not write {f}: {e.strerror or e}"}
             return 200, {"ok": True, "dir": str(d), "id": pk["id"], "repo_set": pk["repo_set"], "files": sorted(pk["files"])}
         else:
             return 404, {"error": "not_found"}
@@ -4632,8 +4639,11 @@ def _systems_voice(sid: str, ctype: str, raw: bytes) -> tuple[int, dict]:
             "saved": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
         sp = Path(path + ".system.json")
-        sp.write_text(json.dumps(side))
-        os.chmod(sp, 0o664)
+        dfd = cc_extras.open_dir(sp.parent)
+        try:
+            cc_extras.replace_file(dfd, sp.name, json.dumps(side).encode(), 0o664)
+        finally:
+            os.close(dfd)
     except OSError:
         pass
     print(f"systems: voice for {sid} saved {Path(path).name} ({len(data)} bytes)", flush=True)
