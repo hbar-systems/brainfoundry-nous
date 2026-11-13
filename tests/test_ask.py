@@ -105,10 +105,13 @@ def env(monkeypatch, tmp_path):
 
 
 def _signed(question, *, priv=PEER_PRIV, iss=PEER, aud=THIS, ttl=120, qh=None, sub="ask",
-            public_key=None):
+            public_key=None, ep=None):
+    extra = {"qh": qh or ask.question_hash(question)}
+    if ep is not None:
+        extra["ep"] = ep
     token = issue_federation_assertion(
         private_key_b64=priv, issuer_brain_id=iss, audience_brain_id=aud, subject=sub,
-        ttl_seconds=ttl, claims={"qh": qh or ask.question_hash(question)})
+        ttl_seconds=ttl, claims=extra)
     params = {"message": {"role": "user", "messageId": "m1",
                           "parts": [{"kind": "text", "text": question}]}}
     if public_key:
@@ -303,3 +306,50 @@ def test_card_url_follows_proxy_headers(monkeypatch):
 
     monkeypatch.delenv("BRAIN_PUBLIC_URL", raising=False)
     assert m._ask_base_url(Bare()) == "http://127.0.0.1:8000"
+
+
+# ── audit 2026-11-13: destination binding, federation query discipline, public ask floor ──
+
+def test_token_minted_for_another_address_refused(env):
+    r = _ask(env, ep="https://m.example")
+    assert r.status_code == 401 and "another address" in r.json()["error"]["message"]
+
+
+def test_token_minted_for_this_address_accepted(env):
+    assert _ask(env, ep="https://b.example").status_code == 200
+    assert _ask(env, question="old brain, no ep").status_code == 200   # older senders still work
+
+
+class _FedReq:
+    def __init__(self, token):
+        self.headers = {"X-Brain-Assertion": token} if token else {}
+
+
+def _fed_token(*, sub="federation_query", ttl=120, query=None, priv=PEER_PRIV):
+    import hashlib
+    extra = {"qh": hashlib.sha256(query.encode()).hexdigest()} if query is not None else None
+    return issue_federation_assertion(private_key_b64=priv, issuer_brain_id=PEER, audience_brain_id=THIS,
+                                      subject=sub, ttl_seconds=ttl, claims=extra)
+
+
+def test_federation_query_assertion_single_use(env):
+    tok = _fed_token()
+    assert m._identify_federation_caller(_FedReq(tok), "q") == (PEER, True)
+    assert m._identify_federation_caller(_FedReq(tok), "q") == (None, False)
+
+
+def test_federation_query_refuses_ask_tokens_long_tokens_and_question_swap(env):
+    assert m._identify_federation_caller(_FedReq(_fed_token(sub="ask")), "q") == (None, False)
+    assert m._identify_federation_caller(_FedReq(_fed_token(ttl=3600)), "q") == (None, False)
+    assert m._identify_federation_caller(_FedReq(_fed_token(query="asked")), "other") == (None, False)
+    assert m._identify_federation_caller(_FedReq(_fed_token(query="asked")), "asked") == (PEER, True)
+
+
+def test_brain_call_signs_the_query(monkeypatch):
+    from api.identity.core import verify_federation_assertion
+    from api.tools import brain_call
+    monkeypatch.setenv("BRAIN_PRIVATE_KEY", PEER_PRIV)
+    monkeypatch.setenv("BRAIN_ID", PEER)
+    tok = brain_call._sign_outbound(THIS, "what is up")
+    claims = verify_federation_assertion(public_key_b64=PEER_PUB, token=tok, expected_audience=THIS)
+    assert claims["sub"] == "federation_query" and claims["qh"] == ask.question_hash("what is up")

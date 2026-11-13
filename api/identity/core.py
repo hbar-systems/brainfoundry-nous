@@ -366,8 +366,12 @@ def verify_federation_assertion(
     if expected_issuer is not None and iss != expected_issuer:
         raise ValueError("iss_mismatch")
 
+    # exp is mandatory (audit 2026-11-13): every issuer sets it, and a token
+    # without one would never expire and never leave the replay cache's window.
     exp = payload.get("exp")
-    if exp is not None and int(time.time()) >= int(exp):
+    if not isinstance(exp, int) or isinstance(exp, bool):
+        raise ValueError("missing_exp")
+    if int(time.time()) >= exp:
         raise ValueError("expired")
 
     return payload

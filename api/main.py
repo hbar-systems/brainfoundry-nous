@@ -3625,7 +3625,7 @@ _public_rate_limiter = PublicRateLimiter()
 _federation_rate_limiter = FederationRateLimiter()
 
 
-def _identify_federation_caller(http_request: Request) -> tuple[Optional[str], bool]:
+def _identify_federation_caller(http_request: Request, query: str = "") -> tuple[Optional[str], bool]:
     """Identify the caller of an inbound federation request.
 
     If an X-Brain-Assertion header is present and verifies against the pinned
@@ -3650,12 +3650,28 @@ def _identify_federation_caller(http_request: Request) -> tuple[Optional[str], b
         peer = find_peer_by_brain_id(iss)
         if not peer:
             return None, False
-        verify_federation_assertion(
+        claims = verify_federation_assertion(
             public_key_b64=peer["public_key"],
             token=token,
             expected_audience=os.getenv("BRAIN_ID", ""),
             expected_issuer=iss,
         )
+        # The /v1/ask discipline (audit 2026-11-13): a token minted for another
+        # door (sub 'ask') never identifies a caller here, exp is capped, the jti
+        # is single-use, and a question hash, when the caller signs one, must
+        # match this query. Any failure leaves the caller anonymous (IP floor).
+        from api.identity.replay_cache import record, seen_before
+        exp, jti = claims.get("exp"), claims.get("jti")
+        if claims.get("sub") != "federation_query":
+            return None, False
+        if not isinstance(exp, int) or exp - int(time.time()) > 600:
+            return None, False
+        qh = claims.get("qh")
+        if qh is not None and qh != hashlib.sha256((query or "").encode("utf-8")).hexdigest():
+            return None, False
+        if not jti or seen_before(jti):
+            return None, False
+        record(jti, exp=exp)
         return iss, True
     except Exception:
         return None, False
@@ -4011,7 +4027,7 @@ async def federation_query(request: dict, http_request: Request):
 
     # Identify the caller: a verified peer (signed assertion) is rate-limited and
     # audited by brain_id; an anonymous public caller falls back to its IP.
-    peer_id, verified = _identify_federation_caller(http_request)
+    peer_id, verified = _identify_federation_caller(http_request, query)
     ip = _public_client_ip(http_request)
     rl_key = f"peer:{peer_id}" if verified else f"ip:{ip}"
     rl = _federation_rate_limiter.check(rl_key)
@@ -4194,7 +4210,8 @@ async def ask_door(http_request: Request):
         public_asking = settings_store.get_ask_public_enabled()
         caller = _ask.verify_caller(
             token=token, question=question, this_brain_id=this_brain_id,
-            public_key=req["public_key"], public_asking=public_asking)
+            public_key=req["public_key"], public_asking=public_asking,
+            own_origin=_ask_base_url(http_request))
     except _ask.AskError as e:
         return _refuse(e)
 
@@ -4279,7 +4296,7 @@ def ask_peer_endpoint(req: AskPeerRequest, api_key: str = Depends(get_api_key)):
         return JSONResponse(status_code=e.status, content={"ok": False, "error": e.message})
     federation_audit.record_event(direction="out", peer_brain_id=r["brain_id"], query=req.question,
                                   documents_used=len(r["citations"]), answer_len=len(r["answer"]),
-                                  verified=True, outcome="ok", surface="ask")
+                                  verified=bool(r.get("pinned")), outcome="ok", surface="ask")
     return {"ok": True, **r}
 
 
