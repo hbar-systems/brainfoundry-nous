@@ -1179,6 +1179,9 @@ def google_auth_url(api_key: str = Depends(get_api_key)):
     if not google.is_configured():
         raise HTTPException(400, "Google OAuth client is not configured "
                             "(set GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET).")
+    if not google.redirect_uri():
+        raise HTTPException(400, "Set BRAIN_PUBLIC_URL (or PUBLIC_API_BASE) to this brain's public "
+                            "https address before connecting Google.")
     state = _secrets.token_urlsafe(24)
     settings_store.set_oauth_state(state)
     return {"auth_url": google.auth_url(state)}

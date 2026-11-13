@@ -40,7 +40,13 @@ def status() -> Dict[str, Any]:
 
 
 def webhook_url() -> str:
-    base = os.getenv("PUBLIC_API_BASE", "https://hbar.brainfoundry.ai").rstrip("/")
+    """This brain's own webhook address. PUBLIC_API_BASE, else BRAIN_PUBLIC_URL; never a
+    built-in host (audit 2026-11-13: the old fallback sent every brain's bot updates and
+    webhook secret to another operator's server). Raises RuntimeError when neither is set."""
+    base = (os.getenv("PUBLIC_API_BASE") or os.getenv("BRAIN_PUBLIC_URL") or "").strip().rstrip("/")
+    if not base.startswith("https://"):
+        raise RuntimeError("set BRAIN_PUBLIC_URL (or PUBLIC_API_BASE) to this brain's public "
+                           "https address before connecting Telegram")
     return f"{base}/integrations/telegram/webhook"
 
 
@@ -60,6 +66,10 @@ async def send_message(chat_id, text: str) -> Dict[str, Any]:
 
 async def connect(token: str) -> Dict[str, Any]:
     """Store the token, validate it, register the webhook. Returns status/error."""
+    try:
+        hook_url = webhook_url()
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
     settings_store.set_telegram({"token": token.strip()})
     me = await get_me()
     if not me.get("ok"):
@@ -68,7 +78,7 @@ async def connect(token: str) -> Dict[str, Any]:
     username = (me.get("result") or {}).get("username")
     secret = _secrets.token_urlsafe(24)
     settings_store.set_telegram({"username": username, "webhook_secret": secret})
-    hook = await _call("setWebhook", url=webhook_url(), secret_token=secret,
+    hook = await _call("setWebhook", url=hook_url, secret_token=secret,
                        allowed_updates=["message"])
     if not hook.get("ok"):
         return {"ok": False, "error": f"setWebhook failed: {hook.get('description')}", "username": username}
