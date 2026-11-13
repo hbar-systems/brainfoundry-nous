@@ -46,7 +46,7 @@ function JobsLight({ jobs, size = 8, fontSize = '10px' }) {
   if (!list.length) return null
   const tip = `${list.length === 1 ? 'a job' : `${list.length} jobs`} from this conversation still running:\n` +
     list.map(j => `${j.title || 'untitled'} (${j.id})`).join('\n') + '\nclick: the board'
-  const open = (e) => { e.preventDefault(); e.stopPropagation(); window.location.href = '/board' }
+  const open = (e) => { e.preventDefault(); e.stopPropagation(); ccEmit('cc-open-route', { route: '/board', title: 'Board' }) }
   return (
     <a onClick={open} title={tip} style={{ ...mono, color: C.gold, fontSize, display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer', textDecoration: 'none', whiteSpace: 'nowrap', marginRight: '8px' }}>
       <span style={{ display: 'inline-block', width: `${size}px`, height: `${size}px`, borderRadius: '50%', boxSizing: 'border-box', border: `1.5px solid ${C.gold}`, backgroundColor: 'transparent' }} />
@@ -842,7 +842,7 @@ function AgentPopup() {
           <pre style={{ ...mono, fontSize: '12px', whiteSpace: 'pre-wrap', backgroundColor: C.codeBg, color: C.codeFg, borderRadius: '8px', padding: '8px 10px', margin: 0 }}>{a.sitrep.text}</pre>
         </div>}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '12px' }}>
-          <CardDoor accent onClick={() => { close(); window.location.href = '/agents' }} title="The agents page: pause, run now, level, retire">open on the agents page</CardDoor>
+          <CardDoor accent onClick={() => { close(); ccEmit('cc-open-route', { route: '/agents', title: 'Agents' }) }} title="The agents page beside the chat: pause, run now, level, retire">open on the agents page</CardDoor>
           <CardDoor onClick={() => { close(); ccEmit('cc-send-text', `Tell me about ${a.tag}: what it did in its last runs, its score trend, and anything it owes or proposes.`) }} title="Ask about it in this thread">ask about it</CardDoor>
         </div>
       </div>
@@ -1087,14 +1087,56 @@ function ProposalCard({ p, onDecide }) {
 // (hbar 2026-11-06), so a page is found by its name, not remembered by its place.
 const PANE_ROUTES = [
   ['/agents', 'Agents'], ['/apps', 'Apps'], ['/board', 'Board'], ['/boxes', 'Boxes'],
-  ['/dashboard', 'Dashboard'], ['/economy', 'Economy'], ['/federation', 'Federation'], ['/files', 'Files'],
+  ['/dashboard', 'Dashboard'], ['/economy', 'Economy'], ['#export', 'Export'], ['/federation', 'Federation'], ['/files', 'Files'],
   ['/future', 'Future'], ['/guide', 'Guide'], ['/integrations', 'Integrations'], ['/upload', 'Knowledge'],
   ['/layout', 'Layout'], ['/map', 'Map'], ['/graph', 'Memory graph'], ['/permits', 'Permits'], ['/persona', 'Persona'],
   ['/profile', 'Profile'], ['/research', 'Research'], ['/settings', 'Settings'], ['/systems', 'Systems'], ['/tasks', 'Tasks'],
-  ['/terminal', 'Terminal'], ['/trace', 'Trace'], ['/update', 'Update'],
+  ['/terminal', 'Terminal'], ['#threads', 'Threads'], ['/trace', 'Trace'], ['/update', 'Update'],
 ]
+// '#…' routes are the console's own panels (PANE-1, hbar 2026-11-13: "the threads, board, agents,
+// export ... like side panel"): drawn by this page in the pane, not loaded in a frame, because they
+// act on the conversation beside them (a thread pressed there switches the chat on the left).
+const isPanel = (route) => String(route || '').startsWith('#')
 
-function Pane({ pane, onClose, side, onSide, onRoute }) {
+// Export in the pane: the choices, then the file itself as it will be saved, one control per action.
+const EXPORT_KINDS = [['md', 'markdown'], ['txt', 'plain text'], ['json', 'json']]
+function exportText(turns, kind) {
+  const rows = (turns || []).filter(x => x.text)
+  if (!rows.length) return ''
+  if (kind === 'json') return JSON.stringify(rows.map(x => ({ who: x.who === 'me' ? 'me' : x.who === 'note' ? 'note' : 'brain', text: x.text })), null, 2)
+  if (kind === 'txt') return rows.map(x => `${x.who === 'me' ? 'me' : x.who === 'note' ? 'note' : 'brain'}:\n${x.text}`).join('\n\n')
+  return rows.map(x => (x.who === 'note' ? `_${x.text}_` : `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`)).join('\n\n---\n\n')
+}
+function ExportPanel({ turns, title }) {
+  const [kind, setKind] = useState('md')
+  const [said, setSaid] = useState('')
+  const text = exportText(turns, kind)
+  const name = `cc-thread-${new Date().toISOString().slice(0, 10)}.${kind}`
+  const chip = (on) => ({ ...mono, fontSize: '11px', padding: '4px 10px', borderRadius: '999px', cursor: 'pointer', border: `1px solid ${on ? C.gold : C.line}`, color: on ? C.gold : C.dim, background: 'transparent' })
+  const download = () => {
+    try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: kind === 'json' ? 'application/json' : kind === 'md' ? 'text/markdown' : 'text/plain' })); a.download = name; a.click(); setSaid('downloaded') } catch { setSaid('the browser did not save it') }
+  }
+  const copy = () => { copyText(text); setSaid('copied') }
+  if (!text) return <p style={{ color: C.dim, fontSize: '14px', padding: '16px' }}>Nothing to export yet: this conversation has no messages.</p>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', height: '100%', boxSizing: 'border-box', minHeight: 0 }}>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {EXPORT_KINDS.map(([k, label]) => <button key={k} type="button" onClick={() => { setKind(k); setSaid('') }} style={chip(kind === k)}>{label}</button>)}
+      </div>
+      <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0, display: 'flex', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span style={{ color: C.dim }}>{name}</span>
+        <span>{(turns || []).filter(x => x.text).length} messages{title ? ` · ${title}` : ''}</span>
+        <span style={{ flex: 1 }} />
+        <Btn small onClick={download} title="Save this file to your computer">download</Btn>
+        <Btn small onClick={copy} title="Copy the whole file">copy</Btn>
+        {said && <span role="status" style={{ color: C.gold }}>{said}</span>}
+      </p>
+      <pre aria-label="the exported file" style={{ ...mono, flex: 1, minHeight: 0, overflow: 'auto', margin: 0, padding: '12px', fontSize: '12px', lineHeight: 1.55, color: C.ink, background: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text}</pre>
+    </div>
+  )
+}
+
+function Pane({ pane, onClose, side, onSide, onRoute, panel }) {
   // A summoned surface (D54): an existing console page, same origin and auth, shown
   // beside the conversation and dismissed with one click. Pages hide their own nav
   // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
@@ -1157,7 +1199,9 @@ function Pane({ pane, onClose, side, onSide, onRoute }) {
           <Btn small onClick={onClose} title="Put it away">close</Btn>
         </span>
       </div>
-      <iframe src={pane.route} title={pane.title || pane.route} allowFullScreen allow="fullscreen" style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain, pointerEvents: drag ? 'none' : 'auto' }} />
+      {isPanel(pane.route)
+        ? <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', backgroundColor: C.brain }}>{panel}</div>
+        : <iframe src={pane.route} title={pane.title || pane.route} allowFullScreen allow="fullscreen" style={{ flex: 1, width: '100%', border: 0, backgroundColor: C.brain, pointerEvents: drag ? 'none' : 'auto' }} />}
     </div>
   )
 }
@@ -1628,6 +1672,7 @@ function CC() {
   const queueRef = useRef([])                      // messages typed while a NEW thread's first turn runs (it has no id to queue on yet): [{ qid, text }]
   const sendRef = useRef(null)
   const chooseRef = useRef(null)
+  const switchRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
   const activity = useActivity()                // the activity lights (2026-10-25): /cc/activity every 5 s while visible
   const lightOf = (brain) => (activity && activity.threads && activity.threads[brain]) || null
@@ -1646,10 +1691,10 @@ function CC() {
   const [threadSearching, setThreadSearching] = useState(false)
   useEffect(() => {
     threadQueryRef.current = threadQuery
-    if (!showThreads) return
+    if (!showThreads && !(pane && pane.route === '#threads')) return
     const timer = setTimeout(() => loadThreads(), 300)
     return () => clearTimeout(timer)
-  }, [threadQuery, showThreads])
+  }, [threadQuery, showThreads, pane])
   // The shape of threads (2026-09-30): pinned on top, then day groups; rename, pin, archive on
   // each row; archived ones hidden until "show". `renaming` is the brain id whose title is an
   // input right now ('header' for the line under the page title).
@@ -2128,6 +2173,19 @@ function CC() {
   // focus is on this page (inside the terminal the shell keeps every key). Hidden with the tools strip.
   const termOpen = !!(pane && pane.route === '/terminal')
   const toggleTerminal = () => setPane(p => (p && p.route === '/terminal' ? null : { route: '/terminal', title: 'Terminal' }))
+  // threads, board, agents and export open in the side pane (PANE-1, hbar 2026-11-13); the header
+  // button toggles its own pane, the pane's selector switches between them. Inside /panes (no side
+  // pane there) threads stay a pop-over and the others open the pane page.
+  const togglePaneRoute = (route, title) => setPane(p => (p && p.route === route ? null : { route, title }))
+  const openThreads = (toggle) => {
+    loadThreads()
+    if (paneModeRef.current) { setShowThreads(s => (toggle ? !s : true)); return }
+    setShowThreads(false)
+    if (toggle) togglePaneRoute('#threads', 'Threads'); else setPane({ route: '#threads', title: 'Threads' })
+  }
+  const onPaneRoute = (p) => { if (p && p.route === '#threads') loadThreads(); openPane(p) }
+  // a new or switched conversation keeps the threads pane open (pressing a thread there is how he switches)
+  const keepListPane = () => setPane(p => (p && p.route === '#threads' && !(typeof window !== 'undefined' && window.innerWidth < 960) ? p : null))
   useEffect(() => {
     if (paneMode || hidden.tools) return undefined
     const k = (e) => { if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Backquote') { e.preventDefault(); toggleTerminal() } }
@@ -2178,6 +2236,10 @@ function CC() {
         sendRef.current(e.data.text)
       }
       // A visual page (hbar.visual task sky) starts a cheap thread of its own (2026-10-13)
+      // a conversation pressed in a page in the side pane (the board's tiles): the chat on the left switches (PANE-1)
+      if (e.data && e.data.type === 'cc-open-thread' && typeof e.data.thread === 'string' && /^[\w:-]{1,80}$/.test(e.data.thread) && switchRef.current && !paneModeRef.current) {
+        switchRef.current({ brain: e.data.thread })
+      }
       if (e.data && e.data.type === 'cc-thread' && typeof e.data.text === 'string' && chooseRef.current) {
         chooseRef.current({ mode: 'agent', label: String(e.data.label || e.data.text).slice(0, 80), send: e.data.text })
       }
@@ -2200,7 +2262,7 @@ function CC() {
 
   // the whole conversation as markdown: copied, and downloaded as a file (the header's button, or the pane's menu)
   function exportThread() {
-    const md = turns.filter(x => x.text).map(x => (x.who === 'note' ? `_${x.text}_` : `**${x.who === 'me' ? 'me' : 'brain'}**\n\n${x.text}`)).join('\n\n---\n\n')
+    const md = exportText(turns, 'md')
     if (!md) return
     copyText(md)
     try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' })); a.download = `cc-thread-${new Date().toISOString().slice(0, 10)}.md`; a.click() } catch {}
@@ -2211,7 +2273,7 @@ function CC() {
     // Allowed while another thread answers: that stream keeps running on the box and detaches
     // from this page; this thread's own turn, if one is in flight, is followed through /cc/live.
     if (th.brain === curRef.current) { setShowThreads(false); return }
-    setTurns([]); setPane(null); showThread(th.brain); loadHistory(th.brain)
+    setTurns([]); keepListPane(); showThread(th.brain); loadHistory(th.brain)
     if (!paneModeRef.current) {
       try {
         await fetch('/cc/threads/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain: th.brain }) })
@@ -2753,7 +2815,7 @@ function CC() {
     }
     if (cmd === 'guide') { openPane({ route: '/guide' + (arg ? '?tab=' + encodeURIComponent(arg) : ''), title: 'Guide' }); return true }
     if (cmd === 'files') { openPane({ route: '/files' + (arg ? '?path=' + encodeURIComponent(arg) : (health && health.out ? '?path=' + encodeURIComponent(health.out) : '')), title: 'Files' }); return true }
-    if (cmd === 'threads') { setShowThreads(true); loadThreads(); return true }
+    if (cmd === 'threads') { openThreads(false); return true }
     if (cmd === 'jobs') {
       const running = jobs.filter(j => j.ended === null), done = jobs.filter(j => j.ended !== null).slice(0, 5)
       const where = (j) => (j.thread && j.thread !== 'unknown' ? (j.thread === curRef.current ? '' : ' (another conversation)') : ' (no conversation)')
@@ -2919,7 +2981,7 @@ function CC() {
   function choose(c) {
     if (c.mode !== 'agent') { send(c.send); return }
     setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one. Started by mistake? The thread list is open: press **stop** on its row.` }])
-    setShowThreads(true)
+    openThreads(false)
     fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: c.send, new: true, thread: null, stream: false }) })
       .then(r => r.json()).then(d => { if (d && d.reply && (d.error || d.waiting)) setTurns(t => [...t, { who: 'brain', text: d.reply, error: !!d.error }]) })
       .catch(() => {}).finally(() => loadThreads())
@@ -2932,7 +2994,7 @@ function CC() {
     showThread(null)
     if (!paneModeRef.current) { try { await fetch('/cc/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {} }
     setTurns([])
-    setPane(null)
+    keepListPane()
     loadHealth()
     loadThreads()
   }
@@ -2953,6 +3015,7 @@ function CC() {
 
   sendRef.current = send
   chooseRef.current = choose
+  switchRef.current = switchThread
   // Stop and interrupt (2026-10-06). Esc or "stop" ends the answer in progress; the thread keeps
   // what was said and every finished step, and the next message resumes it. "send now" (or
   // Cmd/Ctrl+Enter while it answers) queues the message and stops the turn, so the message goes
@@ -3001,6 +3064,70 @@ function CC() {
   const openWaitingCard = () => { const w = ((health && health.runs) || []).find(x => x.waiting && x.thread); if (w && w.thread !== curRef.current) { showThread(w.thread); return } const mine = ((health && health.runs) || []).some(x => x.waiting && x.thread && x.thread === curRef.current); if (!mine) { openPane({ route: '/board', title: 'Board' }); return } if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }) }
   const footQuiet = !paneMode && hidden.footer && !footOpen
   const urgent = footQuiet ? urgentLines(sysWarn, health) : []
+  // The thread list: in the side pane on the console (PANE-1), as a pop-over only inside /panes.
+  const threadList = (
+    <>
+      <input aria-label="Search threads" type="search" value={threadQuery} maxLength={120}
+        onChange={e => { threadQueryRef.current = e.target.value; ++threadRequest.current; setThreadQuery(e.target.value) }}
+        placeholder="Find a title, words in a chat, or thread ID"
+        style={{ width: '100%', boxSizing: 'border-box', background: C.surface, color: C.ink, border: `1px solid ${C.line}`, borderRadius: '6px', padding: '10px', fontFamily: 'inherit' }} />
+      <p role="status" style={{ ...mono, color: C.faint, fontSize: '10px', margin: '6px 10px' }}>
+        {threadSearching ? 'Searching… ' : `${threads.length} threads. `}Title/content: latest 500 sessions, up to 200 matches; register: latest 200. Search includes finished; use show archived below for archives. Jobs: latest 200 records.
+      </p>
+      {threadSearchError && <p role="alert" style={{ color: C.gold, fontSize: '12px', margin: '6px 10px' }}>{threadSearchError}</p>}
+      {!threadSearching && !threadGroups.length && <p style={{ color: C.dim, padding: '10px' }}>No matching threads in this scope.</p>}
+      {finishedCount > 0 && (
+        <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
+          <span>{finishedCount} finished</span>
+          <a onClick={toggleHideFinished} title="done, let go, folded or superseded threads, as ruled in ops/threads/verdicts.tsv" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{hideFinished ? 'show finished' : 'hide finished'}</a>
+        </p>
+      )}
+      {threadGroups.map(g => (
+        <div key={g.label}>
+          <p style={{ ...mono, color: C.faint, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', margin: '6px 10px 2px' }}>{g.label}</p>
+          {g.items.map(th => {
+            const act = { ...mono, color: C.faint, fontSize: '10px', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
+            return (
+              <div key={th.brain} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 10px', borderRadius: '6px' }}>
+                {renaming === th.brain
+                  ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
+                           onKeyDown={e => { if (e.key === 'Enter') finishRename(th.brain); else if (e.key === 'Escape') setRenaming(null) }}
+                           onBlur={() => setRenaming(null)} onClick={e => e.stopPropagation()}
+                           style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
+                  : <div role="button" tabIndex={0} onClick={() => switchThread(th)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); switchThread(th) } }}
+                       style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
+                      <Light a={lightOf(th.brain) || (th.running ? { state: 'working', via: 'turn' } : null)} style={{ marginRight: '8px' }} />{th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
+                      <span style={{ display: 'block', ...mono, fontSize: '10px', color: C.faint }}>
+                        {String(th.brain).slice(0, 8)} · seat: {th.seat || 'unknown'} · owner: {th.task_owner || 'unknown'} · {th.status || 'unknown'}
+                      </span>
+                      {(th.child_jobs || []).map(job => <a key={job.id} href={'/cc/jobs/' + encodeURIComponent(job.id)} target="_blank" rel="noreferrer"
+                        onClick={e => e.stopPropagation()} title="Open job record and log" style={{ display: 'block', ...mono, fontSize: '10px', color: C.dim }}>
+                        {job.title || job.id} · {job.ended ? 'ended' : 'not marked finished'} · job record ↗
+                      </a>)}
+                      {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
+                      <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
+                    </div>}
+                {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
+                {renaming !== th.brain && (
+                  <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                    {th.running && !th.waiting ? <a onClick={() => stopThread(th.brain)} title="end the answer in progress in this conversation; it keeps everything up to here" style={{ ...act, color: C.gold }}>stop</a> : null}
+                    <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
+                    <a onClick={() => updateThread(th.brain, { pinned: !th.pinned })} style={act}>{th.pinned ? 'unpin' : 'pin'}</a>
+                    <a onClick={() => updateThread(th.brain, { archived: !th.archived })} style={act}>{th.archived ? 'unarchive' : 'archive'}</a>
+                  </span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ))}
+      {(archivedCount > 0 || showArchived) && (
+        <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '8px 10px 4px', borderTop: `1px solid ${C.line}`, paddingTop: '8px' }}>
+          {archivedCount} archived · <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showArchived ? 'hide' : 'show'}</a>
+        </p>
+      )}
+    </>
+  )
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
@@ -3039,76 +3166,20 @@ function CC() {
           <div className="cc-chips cc-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
             {!paneMode && !hidden.tools && <Btn small accent={termOpen} onClick={toggleTerminal} title={termOpen ? 'Put the terminal away (Ctrl+`)' : 'A shell on your box, beside the conversation (Ctrl+`)'}>terminal</Btn>}
             {!hidden.nav && <>
-            {(threads.length > 0 || archivedCount > 0) && <Btn small onClick={() => { setShowThreads(s => !s); loadThreads() }} title="Earlier conversations the brain remembers">threads</Btn>}
+            {(threads.length > 0 || archivedCount > 0) && <Btn small accent={!!(pane && pane.route === '#threads') || showThreads} onClick={() => openThreads(true)} title="Earlier conversations the brain remembers, beside this one; press one to switch">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
             {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
-            {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/board' }} title="Mission control: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
-            {!paneMode && !hidden.board && <Btn small onClick={() => { window.location.href = '/agents' }} title="Standing agents: create one, it runs on its schedule and files a sitrep">agents</Btn>}
-            {turns.length > 0 && <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>}
+            {!paneMode && !hidden.board && <Btn small accent={!!(pane && pane.route === '/board')} onClick={() => togglePaneRoute('/board', 'Board')} title="Mission control beside the chat: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
+            {!paneMode && !hidden.board && <Btn small accent={!!(pane && pane.route === '/agents')} onClick={() => togglePaneRoute('/agents', 'Agents')} title="Standing agents beside the chat: create one, it runs on its schedule and files a sitrep">agents</Btn>}
+            {turns.length > 0 && (paneMode
+              ? <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>
+              : <Btn small accent={!!(pane && pane.route === '#export')} title="the conversation as a file, beside it: pick markdown, text or json, then download or copy" onClick={() => togglePaneRoute('#export', 'Export')}>export</Btn>)}
             </>}
             {showThreads && (
               <div className="cc-threads-pop" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 'min(420px, 90vw)', maxHeight: '60vh', overflowY: 'auto', backgroundColor: C.card,
                             border: `1px solid ${C.line}`, borderRadius: '10px', padding: '6px', zIndex: 120 }}>
-                <input aria-label="Search threads" type="search" value={threadQuery} maxLength={120}
-                  onChange={e => { threadQueryRef.current = e.target.value; ++threadRequest.current; setThreadQuery(e.target.value) }}
-                  placeholder="Find a title, words in a chat, or thread ID"
-                  style={{ width: '100%', boxSizing: 'border-box', background: C.surface, color: C.ink, border: `1px solid ${C.line}`, borderRadius: '6px', padding: '10px', fontFamily: 'inherit' }} />
-                <p role="status" style={{ ...mono, color: C.faint, fontSize: '10px', margin: '6px 10px' }}>
-                  {threadSearching ? 'Searching… ' : `${threads.length} threads. `}Title/content: latest 500 sessions, up to 200 matches; register: latest 200. Search includes finished; use show archived below for archives. Jobs: latest 200 records.
-                </p>
-                {threadSearchError && <p role="alert" style={{ color: C.gold, fontSize: '12px', margin: '6px 10px' }}>{threadSearchError}</p>}
-                {!threadSearching && !threadGroups.length && <p style={{ color: C.dim, padding: '10px' }}>No matching threads in this scope.</p>}
-                {finishedCount > 0 && (
-                  <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{finishedCount} finished</span>
-                    <a onClick={toggleHideFinished} title="done, let go, folded or superseded threads, as ruled in ops/threads/verdicts.tsv" style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{hideFinished ? 'show finished' : 'hide finished'}</a>
-                  </p>
-                )}
-                {threadGroups.map(g => (
-                  <div key={g.label}>
-                    <p style={{ ...mono, color: C.faint, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', margin: '6px 10px 2px' }}>{g.label}</p>
-                    {g.items.map(th => {
-                      const act = { ...mono, color: C.faint, fontSize: '10px', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
-                      return (
-                        <div key={th.brain} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 10px', borderRadius: '6px' }}>
-                          {renaming === th.brain
-                            ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
-                                     onKeyDown={e => { if (e.key === 'Enter') finishRename(th.brain); else if (e.key === 'Escape') setRenaming(null) }}
-                                     onBlur={() => setRenaming(null)} onClick={e => e.stopPropagation()}
-                                     style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
-                            : <div role="button" tabIndex={0} onClick={() => switchThread(th)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); switchThread(th) } }}
-                                 style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
-                                <Light a={lightOf(th.brain) || (th.running ? { state: 'working', via: 'turn' } : null)} style={{ marginRight: '8px' }} />{th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
-                                <span style={{ display: 'block', ...mono, fontSize: '10px', color: C.faint }}>
-                                  {String(th.brain).slice(0, 8)} · seat: {th.seat || 'unknown'} · owner: {th.task_owner || 'unknown'} · {th.status || 'unknown'}
-                                </span>
-                                {(th.child_jobs || []).map(job => <a key={job.id} href={'/cc/jobs/' + encodeURIComponent(job.id)} target="_blank" rel="noreferrer"
-                                  onClick={e => e.stopPropagation()} title="Open job record and log" style={{ display: 'block', ...mono, fontSize: '10px', color: C.dim }}>
-                                  {job.title || job.id} · {job.ended ? 'ended' : 'not marked finished'} · job record ↗
-                                </a>)}
-                                {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
-                                <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
-                              </div>}
-                          {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
-                          {renaming !== th.brain && (
-                            <span style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-                              {th.running && !th.waiting ? <a onClick={() => stopThread(th.brain)} title="end the answer in progress in this conversation; it keeps everything up to here" style={{ ...act, color: C.gold }}>stop</a> : null}
-                              <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
-                              <a onClick={() => updateThread(th.brain, { pinned: !th.pinned })} style={act}>{th.pinned ? 'unpin' : 'pin'}</a>
-                              <a onClick={() => updateThread(th.brain, { archived: !th.archived })} style={act}>{th.archived ? 'unarchive' : 'archive'}</a>
-                            </span>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))}
-                {(archivedCount > 0 || showArchived) && (
-                  <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '8px 10px 4px', borderTop: `1px solid ${C.line}`, paddingTop: '8px' }}>
-                    {archivedCount} archived · <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showArchived ? 'hide' : 'show'}</a>
-                  </p>
-                )}
+                {threadList}
               </div>
             )}
           </div>
@@ -3384,8 +3455,8 @@ function CC() {
           {showDetails && usage && usage.today ? <span><a onClick={() => openPane({ route: '/system', title: 'System' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>today {usage.today.turns} turn{usage.today.turns === 1 ? '' : 's'} · {kTok(usage.today.in)} in · {kTok(usage.today.out)} out{usage.today.cost !== null && usage.today.cost !== undefined ? ` · $${usage.today.cost.toFixed(2)}` : ''}</a></span> : null}
           {showDetails && health && health.hands ? <span>hands: {health.hands}{health.writes ? ' · writes need your Send' : ' · read only'}</span> : null}
           {showDetails && health && health.box ? <span>this box: {health.posture === 'auto' ? 'auto posture, sudo and app writes ask' : health.posture === 'judged' ? 'judged posture, TypeSafe scores each action' : 'edits and commands need your Allow'}</span> : null}
-          {!paneMode && stripItems(otherJobs, [], hiddenJobs).length ? (() => { const items = stripItems(otherJobs, [], hiddenJobs); const first = items[0]; return <span title="A job started by another conversation finished; its tile is there, not here. The board lists every job.">{stripLabel(items)}{first.href ? <> · <a href={first.href} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>open</a></> : null} · <a onClick={() => hideJob(first)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</a>{items.length > 1 ? <> · <a onClick={() => { window.location.href = '/board' }} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>board</a></> : null}</span> })() : null}
-          {!paneMode && health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => { setShowThreads(true); loadThreads() }} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
+          {!paneMode && stripItems(otherJobs, [], hiddenJobs).length ? (() => { const items = stripItems(otherJobs, [], hiddenJobs); const first = items[0]; return <span title="A job started by another conversation finished; its tile is there, not here. The board lists every job.">{stripLabel(items)}{first.href ? <> · <a href={first.href} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>open</a></> : null} · <a onClick={() => hideJob(first)} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>dismiss</a>{items.length > 1 ? <> · <a onClick={() => openPane({ route: '/board', title: 'Board' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>board</a></> : null}</span> })() : null}
+          {!paneMode && health && (health.runs || []).some(r => r.thread !== cur) ? <span><a onClick={() => openThreads(false)} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{(() => { const n = (health.runs || []).filter(r => r.thread !== cur).length; return n === 1 ? 'another conversation is answering' : `${n} other conversations are answering` })()}</a></span> : null}
           {health && health.cards_waiting > 0 ? <span><a onClick={openWaitingCard} title="open the card: its conversation, or the board beside the chat for a thread still starting" style={{ color: '#d4b86a', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>{health.cards_waiting === 1 ? 'a card waits for you' : `${health.cards_waiting} cards wait for you`}</a></span> : null}
           {health && health.ingest && health.ingest.pending > 0 ? <span><a onClick={() => openPane({ route: '/upload', title: 'Knowledge' })} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'underline' }}>{health.ingest.pending} document{health.ingest.pending === 1 ? '' : 's'} wait for your approval</a></span> : null}
           {health && health.out && !hidden.files ? <span><a onClick={() => openPane({ route: '/files?path=' + encodeURIComponent(health.out), title: 'Files' })} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>files</a>{jobs.some(j => j.ended === null) ? ` · ${jobs.filter(j => j.ended === null).length} job${jobs.filter(j => j.ended === null).length === 1 ? '' : 's'} running` : ''}</span> : null}
@@ -3425,7 +3496,8 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={openPane} onClose={() => { setPane(null); loadHealth(true) }} />}
+      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
+                     panel={pane.route === '#threads' ? <div style={{ padding: '6px' }}>{threadList}</div> : pane.route === '#export' ? <ExportPanel turns={turns} title={curThread && curThread.title} /> : null} />}
       </div>
     </LearnCtx.Provider>
   )

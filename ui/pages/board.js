@@ -56,7 +56,15 @@ function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
   if (t.cost !== null && t.cost !== undefined) meta.push(billing === 'api-key' ? `$${Number(t.cost).toFixed(2)} today` : `about $${Number(t.cost).toFixed(2)} at API prices today`)
   else if (t.tok) meta.push(`${kTok(t.tok)} tokens today`)
   if (t.via && t.via !== 'page') meta.push(`from ${t.via}`)
-  const open = () => { if (t.href) window.location.href = t.href }
+  // in the console's side pane (PANE-1) a conversation tile switches the chat beside it, not this frame
+  const open = () => {
+    if (!t.href) return
+    const m = /^\/talk\?thread=([\w:-]{1,80})$/.exec(t.href)
+    let framed = false
+    try { framed = window.self !== window.top } catch { framed = true }
+    if (m && framed) { try { window.parent.postMessage({ type: 'cc-open-thread', thread: m[1] }, window.location.origin); return } catch {} }
+    window.location.href = t.href
+  }
   return (
     <div onClick={open} role={t.href ? 'link' : undefined}
       style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 14px', borderRadius: '12px', backgroundColor: C.card,

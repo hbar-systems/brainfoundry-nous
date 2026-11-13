@@ -368,3 +368,48 @@ def test_js_console_words_cover_every_language():
     assert out["unknown"] == "send"
     assert out["ru"] == "Положите десять файлов (3 из 10)" and out["en"] == "Drop ten files (3 of 10)"
     assert out["app"] == "Откройте Daybook"
+
+
+def test_threads_board_agents_export_open_in_the_side_pane():
+    # PANE-1 (hbar 2026-11-13): threads, board, agents and export open in the right-hand pane the Files
+    # pane uses, the pane's selector lists them, a thread pressed there switches the chat on the left
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    for route, label in (("#threads", "Threads"), ("#export", "Export"), ("/board", "Board"), ("/agents", "Agents")):
+        assert f"['{route}', '{label}']" in src                       # listed in the pane's selector
+    assert "togglePaneRoute('/board', 'Board')" in src and "togglePaneRoute('/agents', 'Agents')" in src
+    assert "togglePaneRoute('#export', 'Export')" in src
+    assert "onClick={() => openThreads(true)}" in src
+    assert "window.location.href = '/board'" not in src and "window.location.href = '/agents'" not in src
+    # the console's own panels draw in the pane, pages stay frames
+    assert "isPanel(pane.route)" in src and "pane.route === '#threads' ? <div style={{ padding: '6px' }}>{threadList}</div>" in src
+    # switching a thread keeps the list pane (except on a phone, where the pane covers the chat)
+    assert "setTurns([]); keepListPane(); showThread(th.brain)" in src
+    assert "window.innerWidth < 960" in src
+    # one way to write the file: the header export inside /panes and the pane panel share exportText
+    assert "const md = exportText(turns, 'md')" in src
+    assert "EXPORT_KINDS = [['md', 'markdown'], ['txt', 'plain text'], ['json', 'json']]" in src
+    # a board tile in the pane hands its conversation to the console, same origin, checked id
+    board = (ROOT / "ui" / "pages" / "board.js").read_text()
+    assert "type: 'cc-open-thread', thread: m[1] }, window.location.origin" in board
+    assert "e.data.type === 'cc-open-thread'" in src and "!paneModeRef.current" in src
+
+
+def test_export_text_kinds():
+    # the three export files from the same turns (run the module-level helper through node)
+    import shutil, subprocess, json as _json
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not installed")
+    src = (ROOT / "ui" / "pages" / "cc.js").read_text()
+    start = src.index("function exportText(")
+    end = src.index("\nfunction ExportPanel(")
+    js = src[start:end] + """
+const t = [{ who: 'me', text: 'hi' }, { who: 'brain', text: 'hello' }, { who: 'note', text: 'n' }, { who: 'brain', text: '' }]
+console.log(JSON.stringify({ md: exportText(t, 'md'), txt: exportText(t, 'txt'), json: exportText(t, 'json'), none: exportText([], 'md') }))
+"""
+    out = _json.loads(subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout)
+    assert out["md"] == "**me**\n\nhi\n\n---\n\n**brain**\n\nhello\n\n---\n\n_n_"
+    assert out["txt"] == "me:\nhi\n\nbrain:\nhello\n\nnote:\nn"
+    assert _json.loads(out["json"]) == [{"who": "me", "text": "hi"}, {"who": "brain", "text": "hello"}, {"who": "note", "text": "n"}]
+    assert out["none"] == ""
