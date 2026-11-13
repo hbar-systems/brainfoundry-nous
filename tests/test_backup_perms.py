@@ -67,3 +67,11 @@ def test_existing_open_backup_dir_is_closed_again(tmp_path):
     (old / "db.sql.gz").chmod(0o644)
     _run(tmp_path, 0o022, bdir)
     _assert_private(bdir)
+
+
+def test_update_brain_has_no_fixed_names_in_shared_tmp():
+    """audit 2026-11-13, update-brain-predictable-tmp-paths-as-root: scratch files live in a mktemp -d folder."""
+    text = (ROOT / "scripts" / "update_brain.sh").read_text()
+    code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    assert 'UPD_TMP=$(mktemp -d ' in code and "trap 'rm -rf \"$UPD_TMP\"' EXIT" in code
+    assert "/tmp/" not in code.replace("${TMPDIR:-/tmp}", "")
