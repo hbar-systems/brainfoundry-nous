@@ -8672,7 +8672,8 @@ def _onboarding_active() -> bool:
     return _onb_core.is_fresh_brain() and _trial.is_available()
 
 
-def _store_onboarding_fact(text: str, category: str = "identity") -> Optional[dict]:
+def _store_onboarding_fact(text: str, category: str = "identity",
+                           privacy: Optional[str] = None) -> Optional[dict]:
     """Persist one self-stated fact about the owner via the hardened write path.
 
     Operator-direct (the owner stated it about themselves) → semantic, trust 1.0,
@@ -8703,6 +8704,9 @@ def _store_onboarding_fact(text: str, category: str = "identity") -> Optional[di
             "stored_at": datetime.utcnow().isoformat(),
             **provenance,
         }
+        # A fact derived from local-only memory stays local-only (audit 2026-11-13).
+        if privacy:
+            metadata_base["privacy"] = privacy
         conn = get_db_connection()
         cursor = conn.cursor()
         first_id = None
@@ -8828,8 +8832,14 @@ async def _maybe_extract_mind_facts(user_query: str, reply: str,
                  {"role": "assistant", "content": reply}]
         result = await _onb_core.extract_facts(convo, _providers_extraction_reasoner())
         facts_out = []
+        # Facts restating local-only memory are stored local-only, like every
+        # other derived write (audit 2026-11-13, mind-facts-local-only-derived-stored-open).
+        _fact_privacy = None
+        if used_local_only:
+            from api import privacy as _privacy
+            _fact_privacy = _privacy.LOCAL_ONLY
         for f in result.get("facts", []):
-            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"))
+            stored = _store_onboarding_fact(f["text"], f.get("category", "identity"), privacy=_fact_privacy)
             if stored:
                 facts_out.append(stored)
         if not facts_out:
