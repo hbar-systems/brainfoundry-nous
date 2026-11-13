@@ -3353,8 +3353,14 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         # GREEN tools (own memory, own task list). Every YELLOW/RED/MCP tool puts
         # its arguments on an outside wire, and the model could write the
         # local-only text into them.
+        # task_add is GREEN but persists model text to the task store, which the
+        # reminder loop sends to Telegram, task_list returns to closed turns and
+        # the app bridge serves to brain apps (audit 2026-11-13,
+        # local-only-clamp-allows-task-add-laundering): refused in this state too.
+        _LO_REFUSED = {"task_add"}
         if _lo_seen["v"]:
-            _tools_spec = [_t for _t in _tools_spec if _t.get("tier") == _agentic_tools.GREEN]
+            _tools_spec = [_t for _t in _tools_spec if _t.get("tier") == _agentic_tools.GREEN
+                           and _t.get("name") not in _LO_REFUSED]
 
         # RED proposals raised during this agentic turn. The /chat surface has a
         # live operator who can see an Approve/Reject card, so RED dispatch is
@@ -3364,7 +3370,7 @@ async def rag_chat_completion(request: dict, http_request: Request, api_key: str
         _pending_approvals: list = []
 
         def _egress_tool(name) -> bool:
-            if not isinstance(name, str) or name.startswith("mcp__"):
+            if not isinstance(name, str) or name.startswith("mcp__") or name in _LO_REFUSED:
                 return True
             _t = _agentic_tools.get(name)
             return _t is None or _t.tier != _agentic_tools.GREEN
