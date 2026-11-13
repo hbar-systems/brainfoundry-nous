@@ -175,3 +175,53 @@ def test_uninstall_removes_the_backend_router_too(env):
     apps.uninstall_app("demo", _Req(app))
     assert _routes(app) == []
     assert TestClient(app).get("/apps/demo/api/whoami").status_code == 404
+
+
+# ── app-backend-routes-mounted-without-auth ──────────────────────────────
+
+def test_backend_refuses_anonymous_callers(env, monkeypatch):
+    from api.apps_mount import APP_LANE_HEADER, app_lane_token
+    monkeypatch.setenv("BRAIN_API_KEY", "OWNER-KEY")
+    monkeypatch.setenv("BRAIN_ENV", "production")
+    app = FastAPI()
+    _install(env, app, _manifest(api="backend.py"), BACKEND)
+    c = TestClient(app)
+    assert c.get("/apps/demo/api/whoami").status_code == 401
+    assert c.get("/apps/demo/api/whoami", headers={APP_LANE_HEADER: "forged"}).status_code == 401
+    assert c.get("/apps/demo/api/whoami", headers={"x-api-key": "OWNER-KEY"}).status_code == 200
+    assert c.get("/apps/demo/api/whoami", headers={"authorization": "Bearer OWNER-KEY"}).status_code == 200
+    assert c.get("/apps/demo/api/whoami", headers={APP_LANE_HEADER: app_lane_token("OWNER-KEY")}).status_code == 200
+    # static files keep their lane (no key), the iframe loads them
+    assert c.get("/apps/demo/index.html").status_code == 200
+
+
+def test_backend_declared_public_answers_anyone(env, monkeypatch):
+    monkeypatch.setenv("BRAIN_API_KEY", "OWNER-KEY")
+    monkeypatch.setenv("BRAIN_ENV", "production")
+    app = FastAPI()
+    m = _manifest(api="backend.py")
+    m["entries"]["api_public"] = True
+    _install(env, app, m, BACKEND)
+    assert TestClient(app).get("/apps/demo/api/whoami").status_code == 200
+
+
+def test_making_a_backend_public_is_a_scope_change():
+    installed = {"permissions": [], "requires_layers": [], "compute": None,
+                 "entries": {"ui_bundle": "./", "api": "backend.py"}, "commit_sha": "a"}
+    m = _manifest(api="backend.py", perms=())
+    m["entries"]["api_public"] = True
+    assert apps._scope_changed(apps._scope_diff(installed, m, "a"))
+
+
+def test_lane_token_matches_the_proxy():
+    import shutil as _sh
+    import subprocess
+    from api.apps_mount import app_lane_token
+    node = _sh.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    src = (Path(__file__).resolve().parents[1] / "ui" / "pages" / "api" / "bf" / "[...path].js").read_text()
+    assert 'createHmac("sha256", key).update("brain-app-lane/v1")' in src
+    js = "console.log(require('crypto').createHmac('sha256','K').update('brain-app-lane/v1').digest('hex'))"
+    out = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=30).stdout.strip()
+    assert out == app_lane_token("K")

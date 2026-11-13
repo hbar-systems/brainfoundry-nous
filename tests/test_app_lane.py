@@ -166,7 +166,7 @@ PROXY_SCRIPT = r"""
 const http = require('http')
 const seen = []
 const up = http.createServer((req, res) => {
-  seen.push({ method: req.method, url: req.url, key: req.headers['x-api-key'] || null, auth: req.headers['authorization'] || null })
+  seen.push({ method: req.method, url: req.url, key: req.headers['x-api-key'] || null, auth: req.headers['authorization'] || null, lane: req.headers['x-brain-app-lane'] || null })
   if (req.url.startsWith('/apps/app1/')) {
     if (req.url.endsWith('.html')) { res.setHeader('content-type', 'text/html'); return res.end('<html><head><title>a</title></head><body>app</body></html>') }
     res.setHeader('content-type', 'text/javascript'); return res.end('console.log(1)')
@@ -200,6 +200,7 @@ up.listen(0, '127.0.0.1', async () => {
   r.file = await call(['apps', 'app1', 'index.html'], 'GET', { ...FRAME, authorization: 'Basic b3A6cHc=' })
   r.asset = await call(['apps', 'app1', 'main.js'], 'GET', FRAME)
   r.console = await call(['sessions'], 'GET', CONSOLE)
+  r.backend = await call(['apps', 'app1', 'api', 'convert'], 'POST', { ...FRAME, 'content-type': 'application/json' })
   console.log(JSON.stringify({ r, seen }))
   up.close()
 })
@@ -232,7 +233,7 @@ def test_proxy_refuses_app_frame_and_serves_app_files(tmp_path):
     for k in ("search", "sessions", "admin", "preflight"):
         assert res[k]["status"] == 403 and json.loads(res[k]["body"]) == {"error": "app_frame_refused"}, k
     # nothing from the frame reached a core route upstream
-    assert [s["url"] for s in seen] == ["/apps/app1/index.html", "/apps/app1/main.js", "/sessions"]
+    assert [s["url"] for s in seen][:3] == ["/apps/app1/index.html", "/apps/app1/main.js", "/sessions"]
     # app files went without the owner key and without the caller's login
     assert seen[0]["key"] is None and seen[0]["auth"] is None and seen[1]["key"] is None
     assert res["file"]["status"] == 200 and res["asset"]["status"] == 200
@@ -242,6 +243,12 @@ def test_proxy_refuses_app_frame_and_serves_app_files(tmp_path):
     assert res["asset"]["body"] == "console.log(1)"
     # the console's own page still has owner authority
     assert seen[2]["key"] == "OWNER-KEY" and res["console"]["status"] == 200
+    # an app frame's call to its backend goes without the owner key but with the console's lane
+    # proof (HMAC of the key), so the api can refuse anonymous callers (audit 2026-11-13)
+    import hashlib, hmac
+    assert seen[3]["url"] == "/apps/app1/api/convert" and seen[3]["key"] is None
+    assert seen[3]["lane"] == hmac.new(b"OWNER-KEY", b"brain-app-lane/v1", hashlib.sha256).hexdigest()
+    assert all(x["lane"] is None for x in seen[:3])
 
 
 HANDLER_SCRIPT = r"""

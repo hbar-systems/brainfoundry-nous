@@ -368,6 +368,8 @@ def _scope_diff(installed: dict, manifest: dict, new_sha: Optional[str] = None) 
     # operator re-approves (audit 2026-11-13).
     old_api = ((installed.get("entries") or {}).get("api")) or None
     new_api = ((manifest.get("entries") or {}).get("api")) or None
+    old_public = bool((installed.get("entries") or {}).get("api_public"))
+    new_public = bool((manifest.get("entries") or {}).get("api_public"))
     backend_code_changed = bool(
         new_api and new_sha is not None and new_sha != (installed.get("commit_sha") or "")
     )
@@ -377,7 +379,8 @@ def _scope_diff(installed: dict, manifest: dict, new_sha: Optional[str] = None) 
         "added_layers": sorted(new_layers - old_layers),
         "removed_layers": sorted(old_layers - new_layers),
         "compute_changed": old_compute != new_compute,
-        "backend_changed": bool(new_api) and (old_api != new_api or backend_code_changed),
+        "backend_changed": bool(new_api) and (old_api != new_api or backend_code_changed
+                                               or (new_public and not old_public)),
         "backend": new_api,
     }
 

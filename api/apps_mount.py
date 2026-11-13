@@ -22,12 +22,15 @@ Created: 2026-05-06
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import PlainTextResponse
 
@@ -58,6 +61,39 @@ class _AppStaticFiles(StaticFiles):
             await PlainTextResponse("Not Found", status_code=404)(scope, receive, send)
             return
         await super().__call__(scope, receive, send)
+
+
+# The console's /api/bf proxy (ui/pages/api/bf/[...path].js) stamps every call it forwards to an
+# app backend with this header: an HMAC of BRAIN_API_KEY, so it proves "came through the logged-in
+# console" without handing the owner key to app frames. Same derivation on both sides.
+APP_LANE_HEADER = "x-brain-app-lane"
+_APP_LANE_LABEL = b"brain-app-lane/v1"
+
+
+def app_lane_token(api_key: str) -> str:
+    return hmac.new(api_key.encode(), _APP_LANE_LABEL, hashlib.sha256).hexdigest()
+
+
+def require_backend_caller(request: Request) -> None:
+    """An app backend answers the owner (x-api-key / Bearer BRAIN_API_KEY) or the console proxy
+    (the app-lane header), never an anonymous caller that reaches the api vhost directly.
+    A manifest that sets entries.api_public opts its backend out (audit 2026-11-13)."""
+    key = os.getenv("BRAIN_API_KEY", "")
+    if not key:
+        if os.getenv("BRAIN_ENV", "dev").lower() == "dev":
+            return
+        raise HTTPException(status_code=500, detail="Server misconfigured: BRAIN_API_KEY not set.")
+    presented = request.headers.get("x-api-key") or ""
+    auth = request.headers.get("authorization") or ""
+    if auth.startswith("Bearer ") and not presented:
+        presented = auth[len("Bearer "):]
+    if presented and hmac.compare_digest(presented, key):
+        return
+    lane = request.headers.get(APP_LANE_HEADER) or ""
+    if lane and hmac.compare_digest(lane, app_lane_token(key)):
+        return
+    raise HTTPException(status_code=401, detail="app backend needs the owner key or the console",
+                        headers={"WWW-Authenticate": "Bearer"})
 
 
 def _enabled_dependency(app_id: str):
@@ -100,7 +136,7 @@ def mount_app(app: FastAPI, entry: dict[str, Any]) -> None:
 
     api_path = entries.get("api")
     if api_path:
-        _mount_api(app, app_id, app_dir, api_path)
+        _mount_api(app, app_id, app_dir, api_path, public=bool(entries.get("api_public")))
 
     ui_bundle = entries.get("ui_bundle")
     if ui_bundle:
@@ -126,7 +162,7 @@ def _mount_ui(app: FastAPI, app_id: str, app_dir: Path, ui_bundle: str) -> None:
         print(f"[brain-apps] ui_bundle missing or has no index.html for {app_id}: {bundle_dir}", flush=True)
 
 
-def _mount_api(app: FastAPI, app_id: str, app_dir: Path, api_path: str) -> None:
+def _mount_api(app: FastAPI, app_id: str, app_dir: Path, api_path: str, public: bool = False) -> None:
     """Load the app's API module via importlib and include its `router` at
     /apps/<id>/api. Registered BEFORE the static bundle (see mount_app). A
     failure here logs and returns without affecting the UI mount."""
@@ -150,8 +186,10 @@ def _mount_api(app: FastAPI, app_id: str, app_dir: Path, api_path: str) -> None:
         if api_router is None:
             print(f"[brain-apps] api module has no `router` attribute for {app_id}", flush=True)
             return
-        app.include_router(api_router, prefix=f"/apps/{app_id}/api",
-                           dependencies=[Depends(_enabled_dependency(app_id))])
+        deps = [Depends(_enabled_dependency(app_id))]
+        if not public:
+            deps.append(Depends(require_backend_caller))
+        app.include_router(api_router, prefix=f"/apps/{app_id}/api", dependencies=deps)
         print(f"[brain-apps] mounted api {app_id}", flush=True)
     except Exception as e:
         print(f"[brain-apps] api mount failed for {app_id}: {e}", flush=True)

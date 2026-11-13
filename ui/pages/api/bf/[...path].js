@@ -8,7 +8,16 @@
 // Sec-Fetch-Site cross-site). An app's own files and backend pass, without the owner key; app
 // files carry the sandbox CSP and, for HTML, the storage shim.
 
+import { createHmac } from "crypto";
 import { decide, corsHeaders, injectShim, APP_CSP } from "../../../lib/appLane";
+
+// Proof that a call to an app backend came through this (logged-in) console, without the owner key:
+// HMAC of BRAIN_API_KEY. api/apps_mount.py derives the same value and refuses backend calls with
+// neither it nor the owner key (audit 2026-11-13).
+const APP_LANE_HEADER = "x-brain-app-lane";
+function appLaneToken(key) {
+  return createHmac("sha256", key).update("brain-app-lane/v1").digest("hex");
+}
 
 export const config = {
   api: {
@@ -52,6 +61,9 @@ export default async function handler(req, res) {
       const apiKey = process.env.BRAIN_API_KEY || req.headers["x-api-key"] || "";
       if (apiKey) headers["x-api-key"] = apiKey;
       if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
+    }
+    if (lane.appId && !lane.appFile && process.env.BRAIN_API_KEY) {
+      headers[APP_LANE_HEADER] = appLaneToken(process.env.BRAIN_API_KEY);
     }
 
     let body;

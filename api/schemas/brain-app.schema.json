@@ -93,6 +93,10 @@
           "pattern": "^[a-zA-Z0-9_./-]+\\.py$",
           "description": "Path (relative to manifest) to a Python module exporting an APIRouter named 'router'. Mounted by the brain at /apps/<id>/api/. Inherits brain's Python deps; do NOT bundle conflicting versions."
         },
+        "api_public": {
+          "type": "boolean",
+          "description": "Serve the api router to anonymous callers. Default false: the brain answers only the owner key or the console's app lane. Setting it is a scope change the operator approves."
+        },
         "dev": {
           "type": "object",
           "properties": {
