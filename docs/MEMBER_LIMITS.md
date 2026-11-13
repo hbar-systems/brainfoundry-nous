@@ -94,3 +94,5 @@ The other subcommands also only print: `profile`, `override`, `merge <file> [--a
 The shared Ollama has no auth and listens on 127.0.0.1: any local user, every member's hands included, can pull a model into it (disk) or delete one (everyone's answers).
 Its memory ceiling stops it from taking the box, but per-member fairness inside it is first come; the api's rate limits are what stands between one member and the queue.
 Closing the port to the member users (an `iptables -m owner` rule, or an auth proxy) is a separate change.
+
+The same holds for each member's terminal door (ttyd on 127.0.0.1, port 8100+10n+7). It carries no credential, and Caddy's operator token is never checked by ttyd. So another member's users can open a member's `<m>-cc` shell, with that bridge's env, over loopback (audit 2026-11-13, open; fix and workaround in docs/CC.md, Security shape). NodeOS reads (2026-11-13) and the bridge's tokenless local routes (2026-11-13) are closed to other members.
