@@ -1133,6 +1133,55 @@ def _agents_call(args: list, body: dict | None = None) -> tuple[int, dict]:
         return 500, {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
 
 
+# Charter seals (audit 2026-11-13, cc-agents-standing-allow-python-c-escapes-ground): the charter files live in
+# the hands' ~/agents, where an agent's own turn could rewrite them. The bridge keeps a seal of each charter it
+# created or updated for the owner, in its own state folder, and tick/run refuse a charter that no longer matches.
+AGENT_SEALS = STATE_DIR / "agent-seals.json"
+AGENT_SEALS_LOCK = threading.Lock()
+
+
+def _agent_seals() -> dict | None:
+    try:
+        d = json.loads(AGENT_SEALS.read_text())
+        return d if isinstance(d, dict) else {}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+
+
+def _agent_seals_save(d: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = AGENT_SEALS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=1))
+    os.chmod(tmp, 0o600)
+    tmp.replace(AGENT_SEALS)
+
+
+def _agents_sealed_call(args: list, body: dict | None = None) -> tuple[int, dict]:
+    """_agents_call with seals: create/update record the owner's seal, delete drops it, tick/run send the
+    seals so a charter changed outside the owner's page never runs. First use with no seal file: the
+    charters on disk are sealed as they are (one-time migration, logged)."""
+    op = args[0] if args else ""
+    with AGENT_SEALS_LOCK:
+        seals = _agent_seals()
+        if seals is None:
+            code, d = _agents_call(["list"])
+            seals = {a["id"]: a["seal"] for a in (d.get("agents") or []) if a.get("id") and a.get("seal")} if code == 200 else {}
+            _agent_seals_save(seals)
+            print(f"agent seals: first use, sealed {len(seals)} charter(s) as found", flush=True)
+        if op in ("tick", "run"):
+            return _agents_call(args, {"seals": seals})
+        code, d = _agents_call(args, body)
+        if code == 200 and op in ("create", "update") and d.get("seal") and (d.get("agent") or {}).get("id"):
+            seals[d["agent"]["id"]] = d["seal"]
+            _agent_seals_save(seals)
+        elif code == 200 and op == "delete" and len(args) > 1:
+            seals.pop(args[1], None)
+            _agent_seals_save(seals)
+        return code, d
+
+
 def _agents_loop() -> None:
     print("agents on: checked every 60 s", flush=True)
     time.sleep(90)
@@ -1142,7 +1191,7 @@ def _agents_loop() -> None:
         if SPEND.over_cap() or cc_halt.halted(HANDS_HOME, STATE_DIR):
             time.sleep(60)
             continue
-        code, d = _agents_call(["tick"])
+        code, d = _agents_sealed_call(["tick"])
         started = d.get("started") or []
         if started or code != 200:
             print(f"agents tick {code}: {json.dumps(started or d)[:300]}", flush=True)
@@ -5033,15 +5082,15 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json(limit=20000) or {}
             aid = str(body.get("id") or "")
             if route == "/agents":
-                self._send(*_agents_call(["create"], body))
+                self._send(*_agents_sealed_call(["create"], body))
             elif not re.fullmatch(r"[a-z0-9-]{1,40}", aid):
                 self._send(400, {"ok": False, "error": "which agent? (id missing)"})
             elif route == "/agents/update":
-                self._send(*_agents_call(["update", aid], body))
+                self._send(*_agents_sealed_call(["update", aid], body))
             elif route == "/agents/delete":
-                self._send(*_agents_call(["delete", aid]))
+                self._send(*_agents_sealed_call(["delete", aid]))
             else:
-                self._send(*_agents_call(["run", aid]))
+                self._send(*_agents_sealed_call(["run", aid]))
             return
         if route == "/files/write":
             # The person edits a text file in the Files pane and saves (2026-09-28). No permit: their

@@ -227,3 +227,39 @@ def test_commits_name_the_agent(ag, tmp_path, monkeypatch):
     (tmp_path / "permissions.json").write_text(json.dumps({"commit_owner": "ada"}))
     cmd = ag.job_command(a, tmp_path / "p.md", tmp_path / "s.json")
     assert "GIT_AUTHOR_NAME='ada (via LAW-1)'" in cmd and "GIT_COMMITTER_NAME='ada (via LAW-1)'" in cmd
+
+
+def test_no_code_runner_is_a_standing_allow(ag):
+    """Audit 2026-11-13 (cc-agents-standing-allow-python-c-escapes-ground)."""
+    s = ag.settings(ag.create(BODY))["permissions"]
+    for bad in ("Bash(python3 -c *)", "Bash(cc-job *)", "Bash(find *)", "Bash(sed -n *)", "Bash(sort *)", "Bash(uniq *)"):
+        assert bad not in s["allow"]
+    deny = s["deny"]
+    assert any(str(ag.AGENTS_DIR).lstrip("/") + "/*.json" in d for d in deny)      # the charter is never edited
+    assert "Edit(**/.claude/**)" in deny and "Edit(**/.git/**)" in deny and "Bash(rg *--pre*)" in deny
+
+
+def test_ground_never_covers_the_charters(ag):
+    for g in (str(ag.AGENTS_DIR), str(ag.AGENTS_DIR.parent), str(ag.AGENTS_DIR / "other"), "/srv/app/.claude"):
+        with pytest.raises(ValueError):
+            ag.create({**BODY, "ground": g})
+
+
+def test_tick_and_run_refuse_a_rewritten_charter(ag):
+    a = ag.create(BODY)
+    seals = {a["id"]: ag.seal_of(a)}
+    raw = json.loads(ag._path(a["id"]).read_text())
+    raw.update({"level": 2, "ground": ["/srv/x", "/home/hands"], "budget_usd": 20})
+    ag._path(a["id"]).write_text(json.dumps(raw))
+    seen = []
+    assert ag.tick(opener=lambda a, c, w: seen.append(a) or "J1790000001", seals=seals) == [] and not seen
+    with pytest.raises(ValueError):
+        ag.run(a["id"], opener=lambda a, c, w: "J1790000001", seals=seals)
+    # a charter that fails validation never runs, sealed or not
+    raw.update({"level": 1, "ground": ["/srv/x"], "budget_usd": 1, "every_minutes": 1})
+    ag._path(a["id"]).write_text(json.dumps(raw))
+    assert ag.tick(opener=lambda a, c, w: seen.append(a) or "J1790000001") == [] and not seen
+    # the owner's own update re-seals, and then it runs
+    b = ag.update(a["id"], {"every_minutes": 60})
+    assert ag.tick(opener=lambda a, c, w: seen.append(a) or "J1790000001", seals={b["id"]: ag.seal_of(b)})
+    assert len(seen) == 1

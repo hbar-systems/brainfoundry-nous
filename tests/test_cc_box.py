@@ -302,3 +302,26 @@ def test_box_card_cut_is_marked_and_same_turn_binds_full_command(monkeypatch, tm
     card3, d3 = ask_and_answer(head, "allow")
     assert card3.get("auto") is True and d3 == {"behavior": "allow"}
     assert m._tg_card_text(card).endswith(head)
+
+
+def test_agent_seals_kept_by_the_bridge(monkeypatch, tmp_path):
+    """Audit 2026-11-13: the bridge seals charters it creates or updates and sends the seals on tick and run."""
+    m = _load(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, "AGENT_SEALS", tmp_path / "seals.json")
+    calls = []
+
+    def fake(args, body=None):
+        calls.append((list(args), body))
+        if args[0] == "list":
+            return 200, {"agents": [{"id": "old", "seal": "s-old"}]}
+        if args[0] in ("create", "update"):
+            return 200, {"ok": True, "agent": {"id": "new"}, "seal": "s-new"}
+        return 200, {"ok": True}
+    monkeypatch.setattr(m, "_agents_call", fake)
+    m._agents_sealed_call(["create"], {"name": "x"})
+    assert json.loads((tmp_path / "seals.json").read_text()) == {"old": "s-old", "new": "s-new"}
+    m._agents_sealed_call(["tick"])
+    assert calls[-1] == (["tick"], {"seals": {"old": "s-old", "new": "s-new"}})
+    m._agents_sealed_call(["delete", "old"])
+    m._agents_sealed_call(["run", "new"])
+    assert calls[-1] == (["run", "new"], {"seals": {"new": "s-new"}})

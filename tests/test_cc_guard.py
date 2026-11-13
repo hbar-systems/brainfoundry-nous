@@ -104,7 +104,7 @@ def _agents(monkeypatch, tmp_path, posture):
     spec.loader.exec_module(ag)
     monkeypatch.setattr(ag, "AGENTS_DIR", tmp_path / "agents")
     monkeypatch.setenv("CC_POSTURE", posture)
-    a = ag.create({"name": "Disk watch", "mission": "Check disk and backups, propose fixes.", "ground": str(tmp_path),
+    a = ag.create({"name": "Disk watch", "mission": "Check disk and backups, propose fixes.", "ground": str(tmp_path / "work"),
                    "every_minutes": 60, "budget_usd": 1})
     d = tmp_path / "agents" / a["id"]
     sp = d / "settings.json"
