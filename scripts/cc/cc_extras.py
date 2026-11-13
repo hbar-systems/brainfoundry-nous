@@ -467,9 +467,9 @@ def _read(p: Path, n: int, tail: bool = False) -> tuple[str, int]:
 
 def job_files(started: float, ended: float, out_dir: Path, prefer: str = "", exclude=(), n: int = RESULT_FILES,
               walk_max: int = 20000) -> list:
-    """Up to n files written under out/<date>/ between a job's start and end: the job's own folder
-    (out/<date>/<prefer>/) first, images next, then newest. `exclude`: paths not to list (its own
-    result file, other jobs' result files)."""
+    """Up to n files written under out/<date>/ between a job's start and end, images first, then newest;
+    only the job's own folder (out/<date>/<prefer>/) when it wrote there. `exclude`: paths not to list
+    (its own result file, other jobs' result files)."""
     out_dir = Path(out_dir)
     lo, hi = float(started) - 2, float(ended) + 2
     days = {time.strftime("%Y-%m-%d", time.gmtime(t)) for t in (lo, hi)}
@@ -503,7 +503,8 @@ def job_files(started: float, ended: float, out_dir: Path, prefer: str = "", exc
     def mine(path: str) -> bool:
         return bool(own) and path.startswith(own)
 
-    found.sort(key=lambda x: (not mine(x[0]), Files.kind(Path(x[0])) != "image", -x[1]))
+    found = [x for x in found if mine(x[0])] or found   # its own folder, when it wrote there; others ran beside it
+    found.sort(key=lambda x: (Files.kind(Path(x[0])) != "image", -x[1]))
     return [{"path": p, "name": os.path.basename(p), "kind": Files.kind(Path(p)), "size": s,
              "mtime": int(m)} for p, m, s in found[:n]]
 

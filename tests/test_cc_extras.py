@@ -563,8 +563,8 @@ def test_job_result_from_a_plain_log(tmp_path):
 
 
 def test_job_files_window_own_folder_images_first(tmp_path):
-    """Files the job made: written under out/<date>/ between its start and end, its own folder first,
-    images next, newest after; outside the window, dot files, the excluded and more than six stay out."""
+    """Files the job made: written under out/<date>/ between its start and end, only its own folder when it
+    wrote there, images first, newest after; outside the window, dot files, the excluded and more than six stay out."""
     out = tmp_path / "out"
     t0 = time.time()
     day = out / time.strftime("%Y-%m-%d", time.gmtime(t0))
@@ -584,7 +584,7 @@ def test_job_files_window_own_folder_images_first(tmp_path):
     for i in range(6):
         put(day / "other" / f"n{i}.txt", 40 + i)
     fs = X.job_files(t0 - 100, t0, out, prefer="tag", exclude={str(day / "else.out")})
-    names = [f["name"] for f in fs]
-    assert names[:2] == ["pic.png", "report.html"]                 # its own folder first, the image first there
-    assert names[2:4] == ["a.png", "notes.md"] and len(names) == 6
+    assert [f["name"] for f in fs] == ["pic.png", "report.html"]   # it wrote in its own folder: only that, image first
+    names = [f["name"] for f in X.job_files(t0 - 100, t0, out, prefer="none", exclude={str(day / "else.out")})]
+    assert names[:2] == ["a.png", "pic.png"] and names[2] == "notes.md" and len(names) == 6   # no folder: the window
     assert not {"old.png", ".hidden.png", "else.out"} & set(names)
