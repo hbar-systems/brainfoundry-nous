@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -572,8 +573,28 @@ def resolve_packs(names: list[str]) -> tuple[list[dict], list[dict]]:
     return ordered, failures
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _pin_to_sha(dest: Path, sha: str, got: str) -> str:
+    """Move a fresh clone to the pack's pinned commit and verify it. A pack app with `sha` is never
+    installed at whatever the branch points to now (audit 2026-11-13)."""
+    if not _SHA_RE.match(sha or ""):
+        raise RuntimeError(f"bad pinned sha: {str(sha)[:60]}")
+    if got != sha:
+        for cmd in (["git", "-C", str(dest), "fetch", "--quiet", "--depth", "1", "origin", sha],
+                    ["git", "-C", str(dest), "checkout", "--quiet", "--detach", sha]):
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+        got = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"],
+                             check=True, capture_output=True, text=True).stdout.strip()
+    if got != sha:
+        raise RuntimeError(f"pinned sha mismatch: want {sha}, got {got}")
+    return got
+
+
 def _install_default(repo_url: str | None, ref: str, installed_ids: set[str],
-                     installed_routes: set, shipped: str | None = None) -> dict | None:
+                     installed_routes: set, shipped: str | None = None,
+                     sha: str | None = None) -> dict | None:
     """Clone + validate + register one pack app. Mirrors install_app's core
     (minus the HTTP response + hot-mount; the startup mount loop mounts it).
     Returns the installed.json entry, or None if the app is already present /
@@ -583,6 +604,8 @@ def _install_default(repo_url: str | None, ref: str, installed_ids: set[str],
     staging = BRAIN_APPS_DIR / f".seed-{secrets.token_hex(8)}"
     try:
         commit_sha = _fetch_source(staging, repo_url, ref, shipped)
+        if sha and not shipped:
+            commit_sha = _pin_to_sha(staging, sha, commit_sha)
         _chown_to_host_owner(staging)
         manifest = _read_manifest(staging)
         _validate_manifest(manifest)
@@ -656,6 +679,8 @@ def _install_pack_apps(pack: dict, state: dict) -> dict:
             continue
         try:
             kw = {"shipped": d["shipped"]} if d.get("shipped") else {}
+            if d.get("sha"):
+                kw["sha"] = d["sha"]
             entry = _install_default(d.get("repo_url"), d.get("ref", "HEAD"),
                                      installed_ids, installed_routes, **kw)
         except Exception as e:

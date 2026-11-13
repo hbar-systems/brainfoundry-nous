@@ -10,7 +10,8 @@
     {
       "id": "self-portrait",
       "repo_url": "https://github.com/hbar-systems/brain-app-self-portrait",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "37afa8fb609569d0dc7e9fff24d02ba1bc5cbc87"
     },
     {
       "id": "oracle",

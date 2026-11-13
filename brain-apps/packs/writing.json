@@ -10,7 +10,8 @@
     {
       "id": "hbar-ink",
       "repo_url": "https://github.com/hbar-systems/hbar.ink",
-      "ref": "HEAD"
+      "ref": "HEAD",
+      "sha": "4ccc7320f97481624a54f74939029b79d1fa34e8"
     }
   ],
   "tools": [],
