@@ -306,6 +306,7 @@ PANE_ROUTES = {
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
     "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
     "/permits": "Permits", "/boxes": "Boxes", "/profile": "Profile",
+    "/layout?step=surfaces": "Ways of working",   # the interview's surfaces pick-list (2026-11-13)
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
 _APP_ROUTE = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -4492,10 +4493,36 @@ def _tg_loop() -> None:
 LAYOUT = cc_layout.Store(STATE_DIR, Path(CWD) / "brain-apps")
 
 
+# The pages behind three surfaces (SURFACES-PICK-1, 2026-11-13): decisions and the memo tape (talk-through
+# records on it) are desk pages a brain may or may not have. The home shows their buttons only when the page
+# exists; the address is the raw file route, the way the console opens any desk page. An env var names another
+# file; otherwise the first desk default that exists.
+_PAGE_CANDIDATES = {
+    "decisions": ("CC_PAGE_DECISIONS", (OUT_DIR / "decisions" / "index.html",)),
+    "tape": ("CC_PAGE_TAPE", (IN_DIR / "memos" / "index.html",)),
+}
+
+
+def _surface_pages() -> dict:
+    from urllib.parse import quote
+    out = {}
+    for key, (env, defaults) in _PAGE_CANDIDATES.items():
+        named = os.environ.get(env, "").strip()
+        for f in ([Path(named)] if named else list(defaults)):
+            try:
+                if f.is_absolute() and f.is_file():
+                    out[key] = "/cc/files/raw" + quote(str(f))
+                    break
+            except OSError:
+                continue
+    return out
+
+
 def _layout_view() -> dict:
     cur = LAYOUT.get()
     return {"layout": cur, "resolved": cc_layout.resolve(cur) if cur else None,
             "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(), "lang": LAYOUT.lang(),
+            "pages": _surface_pages(),
             "questions": [{**q, "options": [list(o) for o in q["options"]]} for q in cc_layout.QUESTIONS]}
 
 

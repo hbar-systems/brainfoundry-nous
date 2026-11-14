@@ -3,7 +3,12 @@
  "name": "organisation brain",
  "audience": "member",
  "mode": "newcomer",
- "answers": {},
+ "answers": {
+  "surfaces": [
+   "chat",
+   "talkthrough"
+  ]
+ },
  "items": [
   "access:console",
   "tab:_cc",

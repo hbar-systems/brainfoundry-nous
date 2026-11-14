@@ -51,6 +51,22 @@ VIEWS = ("talk", "gallery", "panes", "doors")
 # A brain app by id, or one of a few console screens; anything else is refused.
 START_SCREENS = ("/tasks", "/files", "/graph", "/guide")
 _START_APP = re.compile(r"^/apps/[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
+# Ways of working on the home (SURFACES-PICK-1, 2026-11-13): which of the console's surfaces the home page
+# and its header show. Picked in the interview (the "surfaces" question) and at /layout. A surface left out is
+# only not shown on the home: its address, its slash command and its page keep working, nothing is removed.
+# None (the default) is every surface, the console as it was. The conversation is always on: the home is it.
+# (id, label, what it is for); the labels are the template's own, generic words.
+SURFACE_LIST = (
+    ("chat", "chat", "talk one-to-one with your brain; everything else starts from here"),
+    ("decisions", "decisions", "one decision after another, each with a yes or a no; a yes starts its work"),
+    ("systems", "systems page", "every project as a tile with its own thread beside it, to see all of them at once"),
+    ("talkthrough", "talk-through", "press record and speak freely for minutes; the brain cuts it into thoughts and files them"),
+    ("thoughts", "just thoughts", "type or say a thought that is filed for later, not answered"),
+    ("phone", "voice notes from the phone", "send a voice note to your brain's messaging bot; it lands on the memo tape and is cut the same way"),
+    ("sidepane", "side pane views", "threads, board, agents and export open beside the conversation"),
+    ("terminal", "terminal", "a plain shell on your box, for the steps only your own hands should run"),
+)
+SURFACES = tuple(x[0] for x in SURFACE_LIST)
 VAR_KEYS = ("--accent", "--bg", "--surface", "--surface2", "--text", "--muted", "--border")
 PANE_MIN, PANE_MAX = 280, 1400
 NAME_MAX = 40
@@ -100,6 +116,7 @@ DEFAULT = {
     "column": "narrow", "theme": "default", "vars": {},
     "font": None, "size": "normal", "weight": "normal", "density": "compact", "text": "16px",
     "view": "talk", "start": None, "voice": {"speak": False, "handsfree": False},
+    "surfaces": None,
 }
 _TOP = set(DEFAULT)
 
@@ -178,7 +195,17 @@ def validate(obj) -> dict:
             if not isinstance(v, bool):
                 raise LayoutError(f"voice.{k} must be true or false")
             out["voice"][k] = v
+    if obj.get("surfaces") is not None:
+        out["surfaces"] = _surfaces(obj["surfaces"], "surfaces")
     return out
+
+
+def _surfaces(v, where) -> list:
+    """A list of surface ids, in the catalogue's order, the conversation always among them."""
+    if not isinstance(v, list) or any(x not in SURFACES for x in v):
+        raise LayoutError(f"{where} must be a list of: {', '.join(SURFACES)}")
+    picked = set(v) | {"chat"}
+    return [x for x in SURFACES if x in picked]
 
 
 def resolve(layout: dict) -> dict:
@@ -221,6 +248,9 @@ def summary(layout: dict) -> str:
         parts.append(f"{lay['start'].rsplit('/', 1)[-1]} beside the chat at the start")
     if lay["voice"]["speak"] or lay["voice"]["handsfree"]:
         parts.append("voice " + ("hands-free" if lay["voice"]["handsfree"] else "on"))
+    if lay["surfaces"] is not None:
+        names = dict((k, w) for k, w, _f in SURFACE_LIST)
+        parts.append("home shows " + ", ".join(names[k] for k in lay["surfaces"]))
     return "; ".join(parts) or "the stock console"
 
 
@@ -248,6 +278,9 @@ QUESTIONS = (
     {"id": "width", "ask": "Narrow column, wide, or the full width?", "options": (("narrow", "narrow"), ("wide", "wide"), ("full", "full"))},
     {"id": "voice", "ask": "Voice: off, answers read aloud, or hands-free?",
      "options": (("off", "off"), ("speak", "read aloud"), ("handsfree", "hands-free"))},
+    # after the look questions (SURFACES-PICK-1, 2026-11-13); "about" holds the one sentence per option
+    {"id": "surfaces", "ask": "Which ways of working do you want on your home?", "multi": True,
+     "options": tuple((k, w) for k, w, _f in SURFACE_LIST), "about": {k: f for k, _w, f in SURFACE_LIST}},
 )
 _FACE = {"serif": "lora", "mono": "jetbrains", "sans": "system"}
 # "first" answers that open the conversation with an app beside it (layout key start). week added
@@ -265,7 +298,7 @@ def validate_answers(answers) -> dict:
         if q.get("multi"):
             if not isinstance(v, list) or any(x not in allowed for x in v):
                 raise LayoutError(f"answers.{k} must be a list of: {', '.join(allowed)}")
-            out[k] = sorted(set(v))
+            out[k] = _surfaces(v, f"answers.{k}") if k == "surfaces" else sorted(set(v))
         else:
             out[k] = _enum(v, allowed, f"answers.{k}")
     return out
@@ -304,6 +337,8 @@ def from_answers(answers: dict, preset: str | None = None) -> dict:
         lay["column"] = a["width"]
     if "voice" in a:
         lay["voice"] = {"speak": a["voice"] in ("speak", "handsfree"), "handsfree": a["voice"] == "handsfree"}
+    if "surfaces" in a:
+        lay["surfaces"] = a["surfaces"]
     return validate(lay)
 
 

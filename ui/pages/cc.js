@@ -4,7 +4,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
-import { localPlan, capture, stamp, urgentLines } from '../lib/layout'
+import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { wantsThreads } from '../lib/home'
@@ -100,7 +100,9 @@ const IcoSend = () => <svg {...ico}><path d="M12 19V5M5 12l7-7 7 7" /></svg>
 // A phone (hbar 2026-10-30, iPhone at 390 px): the title takes its own line, the chip rows scroll sideways
 // instead of wrapping, and the column is sized to the visible viewport (dvh) so the composer stays above
 // the browser bar. Desktop is untouched: everything here sits under the 640 px query.
-const CC_PHONE_CSS = `@media (max-width: 640px) {
+// The header's buttons keep their words on one line and wrap as a row (2026-11-13: the surfaces made the row longer).
+const CC_PHONE_CSS = `.cc-chips button { white-space: nowrap; }
+@media (max-width: 640px) {
   .cc-shell { min-height: 0 !important; }
   .cc-col { height: calc(100dvh - var(--nav-h, 52px) - env(safe-area-inset-top, 0px)) !important; padding: 10px 12px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
   .cc-head { flex-direction: column; align-items: stretch !important; gap: 6px !important; position: relative; }
@@ -109,7 +111,7 @@ const CC_PHONE_CSS = `@media (max-width: 640px) {
   .cc-row { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .cc-row::-webkit-scrollbar { display: none; }
   .cc-row > * { flex: 0 0 auto; white-space: nowrap; }
-  .cc-chips { position: static !important; }
+  .cc-chips { position: static !important; justify-content: flex-start !important; }
   .cc-threads-pop { white-space: normal; }
   .cc-conv { min-height: 140px !important; }
 }`
@@ -1592,6 +1594,8 @@ function CC() {
   // set, so dragging, hiding and the font picker still work afterwards and stay in this browser until
   // "save layout" writes them back to the file. Colours, zoom and weight are applied in _app.js.
   const [layoutBase, setLayoutBase] = useState(null)
+  // the pages behind the decisions and tape surfaces, when this brain has them (GET /cc/layout pages, 2026-11-13)
+  const [surfacePages, setSurfacePages] = useState({})
   const [doors, setDoors] = useState(null)
   const doorsView = !!(layoutBase && layoutBase.view === 'doors')
   const [layoutNote, setLayoutNote] = useState('')
@@ -1602,6 +1606,7 @@ function CC() {
     let on = true
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
       if (on && d && d.lang) setLang(d.lang)
+      if (on && d && d.pages) setSurfacePages(d.pages)
       if (!on || !d || !d.layout) return
       setLayoutBase(d.layout)
       let seen = null
@@ -3153,7 +3158,7 @@ function CC() {
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
 
         <div className="cc-head" style={{ display: paneMode ? 'none' : 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', marginBottom: slimHero ? '6px' : '14px' }}>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: '240px' }}>
             {!paneMode && !hidden.hero && <>
             <p className="cc-title" style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: slimHero ? 0 : '0 0 4px 0' }}>
               cc · reasoning from inside the brain
@@ -3175,16 +3180,20 @@ function CC() {
               </p>
             )}
           </div>
-          <div className="cc-chips cc-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
-            {!paneMode && !hidden.tools && <Btn small accent={termOpen} onClick={toggleTerminal} title={termOpen ? 'Put the terminal away (Ctrl+`)' : 'A shell on your box, beside the conversation (Ctrl+`)'}>terminal</Btn>}
+          <div className="cc-chips cc-row" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '8px', alignItems: 'center', position: 'relative' }}>
+            {!paneMode && !hidden.tools && surfaceOn(layoutBase, 'terminal') && <Btn small accent={termOpen} onClick={toggleTerminal} title={termOpen ? 'Put the terminal away (Ctrl+`)' : 'A shell on your box, beside the conversation (Ctrl+`)'}>terminal</Btn>}
             {!hidden.nav && <>
-            {(threads.length > 0 || archivedCount > 0) && <Btn small accent={!!(pane && pane.route === '#threads') || showThreads} onClick={() => openThreads(true)} title="Earlier conversations the brain remembers, beside this one; press one to switch">threads</Btn>}
+            {/* the ways of working the layout picked for the home (SURFACES-PICK-1, 2026-11-13); unpicked ones keep their address */}
+            {!paneMode && homeButtons(layoutBase, surfacePages).map(b => b.route.startsWith('/cc/files/raw/')
+              ? <Btn key={b.id} small accent={!!(pane && pane.route === b.route)} onClick={() => togglePaneRoute(b.route, b.label)} title={b.label + ', beside the conversation'}>{b.label}</Btn>
+              : <Btn key={b.id} small onClick={() => { window.location.href = b.route }} title={b.label}>{b.label}</Btn>)}
+            {(surfaceOn(layoutBase, 'sidepane') || paneMode) && (threads.length > 0 || archivedCount > 0) && <Btn small accent={!!(pane && pane.route === '#threads') || showThreads} onClick={() => openThreads(true)} title="Earlier conversations the brain remembers, beside this one; press one to switch">threads</Btn>}
             <Btn small onClick={fresh} title={busy ? 'Start another conversation; this one keeps answering' : 'Start a new conversation'}>new thread</Btn>
             {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
             {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
-            {!paneMode && !hidden.board && <Btn small accent={!!(pane && pane.route === '/board')} onClick={() => togglePaneRoute('/board', 'Board')} title="Mission control beside the chat: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
-            {!paneMode && !hidden.board && <Btn small accent={!!(pane && pane.route === '/agents')} onClick={() => togglePaneRoute('/agents', 'Agents')} title="Standing agents beside the chat: create one, it runs on its schedule and files a sitrep">agents</Btn>}
-            {turns.length > 0 && (paneMode
+            {!paneMode && !hidden.board && surfaceOn(layoutBase, 'sidepane') && <Btn small accent={!!(pane && pane.route === '/board')} onClick={() => togglePaneRoute('/board', 'Board')} title="Mission control beside the chat: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
+            {!paneMode && !hidden.board && surfaceOn(layoutBase, 'sidepane') && <Btn small accent={!!(pane && pane.route === '/agents')} onClick={() => togglePaneRoute('/agents', 'Agents')} title="Standing agents beside the chat: create one, it runs on its schedule and files a sitrep">agents</Btn>}
+            {turns.length > 0 && (paneMode || surfaceOn(layoutBase, 'sidepane')) && (paneMode
               ? <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>
               : <Btn small accent={!!(pane && pane.route === '#export')} title="the conversation as a file, beside it: pick markdown, text or json, then download or copy" onClick={() => togglePaneRoute('#export', 'Export')}>export</Btn>)}
             </>}
@@ -3217,7 +3226,7 @@ function CC() {
 
         {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
 
-        {!paneMode && tgNews && (
+        {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>From Telegram, {clock(tgNews.last)}: {tgNews.title || 'untitled'}</span>
             <span style={{ color: C.faint }}>·</span>
@@ -3384,7 +3393,7 @@ function CC() {
             })()}read the threads</Btn>
             <Btn small onClick={() => send(PANEL.where)} disabled={active} title="This thread's last state in five lines">where were we?</Btn>
             <Btn small onClick={() => send(PANEL.decide)} disabled={active} title="The open tracks with a probability each, and one recommendation">help decide</Btn>
-            <Btn small accent={thoughts} onClick={() => slash(thoughts ? '/thoughts off' : '/thoughts on')} title="Speak, type or attach; filed to the memo tape, not acted on">{thoughts ? 'thoughts: on' : 'just thoughts'}</Btn>
+            {(thoughts || surfaceOn(layoutBase, 'thoughts')) && <Btn small accent={thoughts} onClick={() => slash(thoughts ? '/thoughts off' : '/thoughts on')} title="Speak, type or attach; filed to the memo tape, not acted on">{thoughts ? 'thoughts: on' : 'just thoughts'}</Btn>}
           </div>
         )}
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}

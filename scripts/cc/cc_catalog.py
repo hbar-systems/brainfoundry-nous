@@ -227,6 +227,8 @@ def layout_to_answers(layout: dict) -> dict:
          "voice": "handsfree" if lay["voice"]["handsfree"] else ("speak" if lay["voice"]["speak"] else "off")}
     if lay["font"] in face:
         a["face"] = face[lay["font"]]
+    if lay["surfaces"] is not None:
+        a["surfaces"] = lay["surfaces"]
     return L.validate_answers(a)
 
 

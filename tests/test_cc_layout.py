@@ -70,7 +70,7 @@ def test_answers_to_layout():
 
 def test_interview_doc_matches_question_list():
     doc = (ROOT / "docs" / "personalize-interview.md").read_text()
-    assert 8 <= len(L.QUESTIONS) <= 10
+    assert 8 <= len(L.QUESTIONS) <= 11
     for q in L.QUESTIONS:
         assert f"| {q['id']} |" in doc, q["id"]
         for value, _label in q["options"]:
@@ -323,7 +323,8 @@ def test_terminal_button_goes_with_the_tools_strip():
     # /terminal pane, hidden only when the owner hid the tools strip; the shortcut is in docs/CC.md
     src = (ROOT / "ui" / "pages" / "cc.js").read_text()
     assert "['/terminal', 'Terminal']" in src                          # still a pane route
-    assert "{!paneMode && !hidden.tools && <Btn small accent={termOpen} onClick={toggleTerminal}" in src
+    # and, since 2026-11-13, only when the layout's surfaces keep the terminal on the home (SURFACES-PICK-1)
+    assert "{!paneMode && !hidden.tools && surfaceOn(layoutBase, 'terminal') && <Btn small accent={termOpen} onClick={toggleTerminal}" in src
     assert "p && p.route === '/terminal' ? null : { route: '/terminal', title: 'Terminal' }" in src
     assert "if (paneMode || hidden.tools) return undefined" in src     # no shortcut when hidden
     assert "e.code === 'Backquote'" in src
