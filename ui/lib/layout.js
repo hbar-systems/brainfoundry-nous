@@ -98,4 +98,28 @@ function urgentLines(warnings, health) {
   return out
 }
 
-module.exports = { localPlan, capture, applyStyle, clearStyle, stamp, urgentLines, PANEL_KEYS, COLUMN_PX }
+// Ways of working on the home (SURFACES-PICK-1, 2026-11-13). The layout key `surfaces` is a list of ids, or
+// null for every surface (the console as it was). The box holds the same list (cc_layout.SURFACES) and
+// validates it; here an unknown id is ignored and the conversation is always on. A surface that is off is
+// only not shown on the home: its page, its address and its slash command still work.
+const SURFACE_KEYS = ['chat', 'decisions', 'systems', 'talkthrough', 'thoughts', 'phone', 'sidepane', 'terminal']
+function surfaceOn(layout, id) {
+  if (id === 'chat') return true
+  const list = layout && layout.surfaces
+  if (!Array.isArray(list)) return true
+  return list.includes(id)
+}
+
+// The header's surface buttons for a layout and the pages this brain has (GET /cc/layout `pages`):
+// [{ id, label, route }] in the catalogue's order. Decisions and talk-through/tape need their page.
+function homeButtons(layout, pages) {
+  const pg = pages || {}
+  const out = []
+  if (surfaceOn(layout, 'decisions') && pg.decisions) out.push({ id: 'decisions', label: 'decisions', route: pg.decisions })
+  if (surfaceOn(layout, 'systems')) out.push({ id: 'systems', label: 'systems', route: '/systems' })
+  if (surfaceOn(layout, 'talkthrough') && pg.tape) out.push({ id: 'talkthrough', label: 'talk through', route: pg.tape })
+  if (surfaceOn(layout, 'phone') && pg.tape && !surfaceOn(layout, 'talkthrough')) out.push({ id: 'phone', label: 'tape', route: pg.tape })
+  return out
+}
+
+module.exports = { localPlan, capture, applyStyle, clearStyle, stamp, urgentLines, surfaceOn, homeButtons, PANEL_KEYS, COLUMN_PX, SURFACE_KEYS }

@@ -3,7 +3,12 @@
  "name": "member brain (a friend)",
  "audience": "member",
  "mode": "newcomer",
- "answers": {},
+ "answers": {
+  "surfaces": [
+   "chat",
+   "talkthrough"
+  ]
+ },
  "items": [
   "access:console",
   "access:telegram",
