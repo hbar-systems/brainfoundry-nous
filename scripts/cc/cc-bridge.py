@@ -4103,8 +4103,9 @@ def _decide_permit(pid: str, action: str) -> dict:
 
 # ---- Telegram: the phone talks to the hands lane (2026-09-29) ----
 # A second bot, the bridge's own (CC_TELEGRAM_TOKEN in the bridge env), long-polled from here:
-# no webhook, no public route, nothing in the api. The first chat that writes becomes the
-# owner (or CC_TELEGRAM_OWNER pins one); everyone else is told the brain is private. A message
+# no webhook, no public route, nothing in the api. The chat that sends the console's pairing
+# code becomes the owner (2026-11-14; before, the first chat that wrote), or CC_TELEGRAM_OWNER
+# pins one; everyone else is told the brain is private. A message
 # is a turn on the "Telegram" thread (/new starts another); voice notes are transcribed; photos
 # and files land in the hands' in/ like the page's attachments; cards arrive with Allow and
 # Refuse buttons; the reply comes back in pieces under Telegram's length limit.
@@ -4165,7 +4166,24 @@ def _tg_set(token: str | None) -> dict:
 
 def _tg_status() -> dict:
     return {"on": TG is not None, "owner_pinned": (TG.owner() is not None) if TG else False,
+            "pair_pending": TG.pair_pending() if TG else False, "owner_fixed": bool(TG and TG.forced_owner),
             "username": TG_INFO.get("username"), "approve_on_telegram": TG_APPROVE, "error": TG_INFO.get("error")}
+
+
+def _tg_pair_code() -> dict:
+    """A one-time pairing code for the bridge's bot (console only, behind the operator token)."""
+    if TG is None:
+        return {"ok": False, "error": "the Telegram lane is not connected"}
+    out = TG.new_pair_code()
+    if out.get("ok") and TG_INFO.get("username"):
+        out["link"] = f"https://t.me/{TG_INFO['username']}?start={out['code']}"
+    return out
+
+
+def _tg_unpair() -> dict:
+    if TG is None:
+        return {"ok": False, "error": "the Telegram lane is not connected"}
+    return TG.unpair()
 
 
 def _tg_send(chat_id, text: str, **extra) -> dict | None:
@@ -4399,13 +4417,18 @@ def _tg_handle(update: dict) -> None:
         except Exception:
             pass
         return
+    # Pairing (2026-11-14): no chat owns the bot until it sends the code made in the console
+    # (/pair 123456, or the one-tap link t.me/<bot>?start=123456). Strangers learn nothing.
+    paired = TG.try_pair(chat_id, ev.get("text") or "")
+    if paired == "paired":
+        TG.call("sendMessage", chat_id=chat_id, text="Paired. This chat is now the owner's. Write, or send a voice note; /new starts another conversation; /status says what is running.")
+        return
     if not TG.owner_ok(chat_id):
-        if TG.owner() is None:
-            TG.pin(chat_id)
-            TG.call("sendMessage", chat_id=chat_id, text="This is your brain's hands. This chat is now the owner's. Write, or send a voice note; /new starts another conversation; /status says what is running.")
-        else:
-            TG.call("sendMessage", chat_id=chat_id, text="This brain is private.")
-            return
+        TG.call("sendMessage", chat_id=chat_id, text="This brain is private.")
+        return
+    if paired is not None:
+        TG.call("sendMessage", chat_id=chat_id, text="That code is wrong or expired; this chat is still the owner's. Make a new one in the console.")
+        return
     text = (ev.get("text") or "").strip()
     if ev.get("file_id"):
         try:
@@ -4466,7 +4489,7 @@ def _tg_handle(update: dict) -> None:
 
 
 def _tg_loop() -> None:
-    print(f"telegram lane on (owner {'pinned' if TG and TG.owner() else 'the first chat that writes'})", flush=True)
+    print(f"telegram lane on (owner {'pinned' if TG and TG.owner() else 'none yet: pair from the console'})", flush=True)
     while True:
         tg = TG
         if tg is None:
@@ -5687,6 +5710,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/telegram/disconnect":
             self._send(200, _tg_set(None))
+            return
+        if route == "/telegram/pair-code":
+            out = _tg_pair_code()
+            self._send(200 if out.get("ok") else 409, out)
+            return
+        if route == "/telegram/unpair":
+            out = _tg_unpair()
+            self._send(200 if out.get("ok") else 409, out)
             return
         if route == "/login/apikey":
             key = str(req.get("key", "")).strip()

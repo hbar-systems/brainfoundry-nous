@@ -919,6 +919,22 @@ async def telegram_disconnect(api_key: str = Depends(get_api_key)):
     return {"ok": True, "configured": False}
 
 
+@app.post("/integrations/telegram/pair-code")
+def telegram_pair_code(api_key: str = Depends(get_api_key)):
+    """A one-time 6-digit code; the chat that sends it to the bot becomes its owner."""
+    from api.integrations import telegram
+    if not telegram.is_configured():
+        raise HTTPException(409, "Telegram is not connected")
+    return telegram.new_pair_code()
+
+
+@app.post("/integrations/telegram/unpair")
+def telegram_unpair(api_key: str = Depends(get_api_key)):
+    from api.integrations import telegram
+    telegram.unpair()
+    return {"ok": True}
+
+
 @app.post("/integrations/telegram/webhook")
 async def telegram_webhook(request: Request):
     """Public — Telegram POSTs updates here. Authenticated by the per-bot secret
@@ -938,12 +954,18 @@ async def telegram_webhook(request: Request):
     text = (msg.get("text") or "").strip()
     if not chat_id or not text:
         return {"ok": True}
+    # Pairing (2026-11-14): no chat owns the bot until it sends the code made in the console;
+    # before, the first chat that wrote became the owner.
+    paired = telegram.try_pair(chat_id, text)
+    if paired == "paired":
+        await telegram.send_message(chat_id, "Paired. This chat is now the owner's.")
+        return {"ok": True}
     owner = telegram.owner_chat_id()
-    if owner is None:
-        telegram.pin_owner(chat_id)            # first chat to message becomes the owner
-        owner = chat_id
-    if chat_id != owner:
+    if owner is None or chat_id != owner:
         await telegram.send_message(chat_id, "This brain is private.")
+        return {"ok": True}
+    if paired is not None:
+        await telegram.send_message(chat_id, "That code is wrong or expired; this chat is still the owner's.")
         return {"ok": True}
     answer = await telegram.answer(text)
     await telegram.send_message(chat_id, answer)

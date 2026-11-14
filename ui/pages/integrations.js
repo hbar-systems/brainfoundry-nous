@@ -305,6 +305,45 @@ function GoogleCard() {
   )
 }
 
+// Pairing (2026-11-14): a bot belongs to the chat that sends the code made here, never to
+// whoever writes first. The code lasts 10 minutes and works once; the link opens Telegram
+// with it already typed.
+function TelegramPair({ makeCode, unpair, pinned, fixed }) {
+  const [code, setCode] = useState(null)
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const make = async () => {
+    setBusy(true); setErr(null)
+    try { const d = await makeCode(); if (d && d.ok) setCode(d); else setErr((d && (d.error || d.detail)) || 'could not make a code') }
+    catch (e) { setErr(e.message || 'could not make a code') }
+    setBusy(false)
+  }
+  const drop = async () => {
+    setBusy(true); setErr(null)
+    try { await unpair(); setCode(null) } catch (e) { setErr(e.message || 'could not unpair') }
+    setBusy(false)
+  }
+  const ghost = { background: 'transparent', color: 'var(--accent)', border: '1px solid var(--border)', padding: '7px 14px', borderRadius: 8, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit' }
+  if (fixed) return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>The owner chat is fixed on the server (CC_TELEGRAM_OWNER).</div>
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={make} disabled={busy} style={ghost}>{pinned ? 'Pair another phone' : 'Pair your phone'}</button>
+        {pinned && <button onClick={drop} disabled={busy} style={ghost}>Unpair</button>}
+      </div>
+      {code && (
+        <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.7, color: 'var(--text-dim)' }}>
+          {code.link
+            ? <span>On your phone, open <a href={code.link} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{code.link}</a> and press Start, or send </span>
+            : <span>Send your bot </span>}
+          <code style={{ color: 'var(--text)', fontSize: 14 }}>/pair {code.code}</code>. It works once, for 10 minutes.
+        </div>
+      )}
+      {err && <div style={{ marginTop: 8, color: '#c0605a', fontSize: 12 }}>{err}</div>}
+    </div>
+  )
+}
+
 function TelegramCard() {
   const [status, setStatus] = useState(null)
   const [token, setToken] = useState('')
@@ -370,17 +409,27 @@ function TelegramCard() {
         </div>
         {connected && <button onClick={disconnect} disabled={busy} style={btnGhost}>Disconnect</button>}
       </div>
+      {connected && (
+        <TelegramPair pinned={status.owner_pinned}
+          makeCode={() => api('/integrations/telegram/pair-code', { method: 'POST' })}
+          unpair={() => api('/integrations/telegram/unpair', { method: 'POST' }).then(load)} />
+      )}
 
       {lane && (
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--surface2)' }}>
           <div style={{ fontSize: 12.5, lineHeight: 1.6, color: lane.on ? '#1f9d55' : 'var(--text-dim)' }}>
             {lane.on
-              ? `The bridge's lane is on${lane.username ? ` as @${lane.username}` : ''}: your bot talks to the reasoner, with cards${lane.approve_on_telegram ? ' and their Allow and Refuse buttons' : ' answered in the console'}. ${lane.owner_pinned ? 'The owner is pinned.' : 'Waiting for your first message, which pins you as the owner.'}`
+              ? `The bridge's lane is on${lane.username ? ` as @${lane.username}` : ''}: your bot talks to the reasoner, with cards${lane.approve_on_telegram ? ' and their Allow and Refuse buttons' : ' answered in the console'}. ${lane.owner_pinned ? 'Your phone is paired.' : 'No phone is paired yet: press Pair your phone.'}`
               : 'The bridge can talk to a Telegram bot of yours: messages, voice notes, photos, and the cards that need your yes.'}
             {lane.error ? <span style={{ color: '#c0605a' }}> Last problem: {lane.error}</span> : null}
           </div>
           {lane.on ? (
-            <div style={{ marginTop: 10 }}><button onClick={laneDisconnect} disabled={laneBusy} style={btnGhost}>Disconnect the lane</button></div>
+            <div style={{ marginTop: 10 }}>
+              <TelegramPair pinned={lane.owner_pinned} fixed={lane.owner_fixed}
+                makeCode={() => fetch('/cc/telegram/pair-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(r => r.json())}
+                unpair={() => fetch('/cc/telegram/unpair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(loadLane)} />
+              <div style={{ marginTop: 10 }}><button onClick={laneDisconnect} disabled={laneBusy} style={btnGhost}>Disconnect the lane</button></div>
+            </div>
           ) : (
             <div style={{ marginTop: 10 }}>
               <div style={{ color: 'var(--accent)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Paste your bot token from @BotFather</div>
@@ -392,7 +441,7 @@ function TelegramCard() {
                     {laneBusy ? 'Connecting…' : 'Connect the lane'}
                   </button>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>In Telegram: @BotFather, /newbot, name it, copy the token. The first chat that writes to the bot becomes its owner; everyone else is told the brain is private. The token stays on your box.</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>In Telegram: @BotFather, /newbot, name it, copy the token. Then press Pair your phone: only the chat that sends that code becomes the owner; everyone else is told the brain is private. The token stays on your box.</div>
                 {laneErr && <div style={{ color: '#c0605a', fontSize: 12.5 }}>{laneErr}</div>}
               </div>
             </div>
@@ -416,7 +465,7 @@ function TelegramCard() {
           </div>
           <div style={{ marginTop: 12, color: 'var(--muted)', fontSize: 12, lineHeight: 1.6 }}>
             In Telegram, message <b>@BotFather</b> → <code style={{ color: 'var(--text-dim)' }}>/newbot</code> → name it → copy the
-            token. The first chat that messages your bot becomes its owner; strangers are refused.
+            token. Then pair your phone with the one-time code; strangers are refused.
           </div>
         </div>
       )}

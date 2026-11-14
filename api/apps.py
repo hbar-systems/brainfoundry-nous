@@ -32,7 +32,7 @@ from typing import Any, Optional
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from jsonschema import Draft7Validator
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------- paths and constants ----------
 
@@ -119,9 +119,32 @@ RESERVED_ROUTES: set[str] = {t["route"] for t in BUILTIN_TABS} | {"/api", "/cc",
 
 # ---------- pydantic models ----------
 
+# A caller-supplied install source: the same forges the manifest schema allows for `repo`, https
+# only, and a ref that cannot be read as a git option (SEC-PASS-1 2026-11-13: an unchecked repo_url
+# reached `git clone` as a file://, internal http:// or `--option` argument).
+_INSTALL_URL_RE = re.compile(r"^https://(github\.com|gitlab\.com|codeberg\.org)/[A-Za-z0-9._~/-]+$")
+_INSTALL_REF_RE = re.compile(r"^(HEAD|[A-Za-z0-9_][A-Za-z0-9._/-]{0,199})$")
+
+
 class InstallRequest(BaseModel):
     repo_url: str = Field(..., description="Public git URL of the app to install.")
     ref: str = Field("HEAD", description="Branch, tag, or commit SHA. Defaults to HEAD.")
+
+    @field_validator("repo_url")
+    @classmethod
+    def _check_repo_url(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not _INSTALL_URL_RE.match(v) or ".." in v:
+            raise ValueError("repo_url must be an https URL on github.com, gitlab.com or codeberg.org")
+        return v
+
+    @field_validator("ref")
+    @classmethod
+    def _check_ref(cls, v: str) -> str:
+        v = (v or "HEAD").strip()
+        if not _INSTALL_REF_RE.match(v) or ".." in v:
+            raise ValueError("ref must be HEAD or a plain branch, tag or commit name")
+        return v
 
 
 class PreviewResponse(BaseModel):
@@ -242,7 +265,7 @@ def _git_clone(repo_url: str, ref: str, dest: Path) -> str:
     cmd = ["git", "clone", "--depth", "1"]
     if ref and ref != "HEAD":
         cmd += ["--branch", ref]
-    cmd += [repo_url, str(dest)]
+    cmd += ["--", repo_url, str(dest)]  # "--": a repo_url can never be read as a git option
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:

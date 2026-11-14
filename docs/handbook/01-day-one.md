@@ -42,7 +42,7 @@ It is saved on your server for the reasoner to read in that conversation; it doe
 
 The console works in a phone browser, with the same address and password.
 Your brain can also have a Telegram bot, if the owner of the server sets one up.
-The first chat that writes to it becomes its owner; everyone else is told the brain is private.
+On the Integrations page press Pair your phone and open the link it shows (or send the bot `/pair` and the code): only that chat becomes the owner, and everyone else is told the brain is private. The code works once, for 10 minutes; to move to a new phone, pair again; Unpair cuts a chat off.
 Cards arrive on the phone as "May I?" with Allow and Refuse.
 Voice notes are transcribed; photos and files land on your server.
 Everything you send through Telegram passes through Telegram's servers.

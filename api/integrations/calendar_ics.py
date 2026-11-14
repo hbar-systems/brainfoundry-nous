@@ -6,7 +6,8 @@ The simple, no-OAuth path (parallels IMAP email): the operator pastes the privat
 "Secret address in iCal format"), Outlook, iCloud, Fastmail, Nextcloud all offer
 one. The brain fetches that URL and parses the VEVENTs. Read-only by nature.
 
-SSRF-guarded (operator-set, but still validated): http(s) only, public host only.
+SSRF-guarded (operator-set, but still validated): http(s) only, public host only,
+every redirect hop re-checked.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import datetime
 import ipaddress
 import socket
 from typing import Any, Dict, List
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -104,12 +105,29 @@ def _parse_events(ics: str) -> List[Dict[str, Any]]:
     return events
 
 
-def _sync_list(url: str, max_results: int) -> List[Dict[str, Any]]:
+_MAX_REDIRECTS = 3
+
+
+def _check_url(url: str) -> None:
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.hostname or not _public(p.hostname):
         raise RuntimeError("calendar URL must be a public http(s) address")
-    with httpx.Client(timeout=httpx.Timeout(10, read=20), follow_redirects=True) as http:
-        r = http.get(url, headers={"User-Agent": "brainfoundry-calendar/1.0"})
+
+
+def _sync_list(url: str, max_results: int) -> List[Dict[str, Any]]:
+    _check_url(url)
+    # Redirects are followed by hand so every hop is re-checked: a public feed URL that
+    # answers 302 -> 169.254.169.254 or a tailnet address is refused (SEC-PASS-1 2026-11-13).
+    with httpx.Client(timeout=httpx.Timeout(10, read=20), follow_redirects=False) as http:
+        for _ in range(_MAX_REDIRECTS + 1):
+            r = http.get(url, headers={"User-Agent": "brainfoundry-calendar/1.0"})
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                url = urljoin(url, r.headers["location"])
+                _check_url(url)
+                continue
+            break
+        else:
+            raise RuntimeError("calendar URL redirected too many times")
         r.raise_for_status()
         ics = r.content[:_MAX_BYTES].decode("utf-8", "replace")
     if "BEGIN:VCALENDAR" not in ics:

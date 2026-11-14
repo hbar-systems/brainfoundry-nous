@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -140,6 +141,19 @@ def _verify_with_pubkey(pubkey_b64: str, signature_b64: str, msg_bytes: bytes) -
 
 # ─── Identity discovery (T1-vulnerable for v0.5) ─────────────────────────────
 
+_HANDLE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def peer_endpoint(handle: str) -> str:
+    """https://<handle>.brainfoundry.ai for a handle that is one DNS label, else 400. A handle
+    such as "169.254.169.254/latest#" or "evil.example/?" would otherwise move the request off
+    brainfoundry.ai to any host the caller names (SEC-PASS-1 2026-11-13, SSRF class)."""
+    h = (handle or "").strip().lower()
+    if not _HANDLE_RE.match(h):
+        raise HTTPException(400, "peer handle must be one DNS label (letters, digits, hyphens)")
+    return f"https://{h}.brainfoundry.ai"
+
+
 async def _fetch_peer_pubkey(handle: str) -> tuple[str, str]:
     """Fetch peer's /identity to learn their public key.
 
@@ -147,7 +161,7 @@ async def _fetch_peer_pubkey(handle: str) -> tuple[str, str]:
     or malformed. T1: if attacker controls the endpoint, they pick the key.
     Fine for first-friend test; pinned-peers in v0.6.
     """
-    endpoint = f"https://{handle}.brainfoundry.ai"
+    endpoint = peer_endpoint(handle)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(f"{endpoint}/identity")
