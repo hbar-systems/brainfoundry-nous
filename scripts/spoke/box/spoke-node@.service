@@ -1,0 +1,27 @@
+# spoke-node@<m>: the brain's own node on its spoke network, userspace, run by the door user <m>-spoke
+# (SPOKE-2A, 2026-11-14). No tun device, no root: the door reaches the laptop through this node's SOCKS port.
+# Ports from /etc/spoke/<m>.env (spoke_config.py env). Undo: spoke-install.sh <m> --undo.
+[Unit]
+Description=The spoke node of %i's brain (userspace tailscaled)
+After=network-online.target headscale@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i-spoke
+Group=%i-spoke
+EnvironmentFile=/etc/spoke/%i.env
+ExecStart=/usr/sbin/tailscaled --tun=userspace-networking --socks5-server=127.0.0.1:${SOCKS_PORT} --statedir=/var/lib/spoke/%i/node --socket=/run/spoke/%i/tailscaled.sock --port=0
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=spoke/%i
+RuntimeDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/spoke/%i/node /run/spoke/%i
+
+[Install]
+WantedBy=multi-user.target

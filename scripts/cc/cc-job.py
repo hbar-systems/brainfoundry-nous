@@ -19,6 +19,10 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job send <path> [--caption "..."]   a file from out/, in/ or the world to the owner's Telegram (on their ask)
     cc-job orfeo-post <file> <https audio url> --kind loop|track --title T [--note N] [--bpm B] [--key K] [--station URL]
                                     post a loop or track to orfeo, signed by this brain; a card asks first, it lands pending
+    cc-job spoke <verb>       the owner's laptop through its door (docs/spoke.md, 2026-11-14):
+                              status | inventory | plan [--plan F] | apply [--plan F] | undo <id> | leave
+                              | organise on|off; a plan is "mkdir<TAB>folder" / "mv<TAB>from<TAB>to" lines
+                              (file or stdin); "organise on" and "apply" raise a card first, every time
     cc-job halt ["reason"] [--kill]   the kill switch (2026-10-25): writes ~/.cc-bridge/HALT; no new
                               job, tick or agent starts until resume; --kill also ends running jobs
     cc-job halt --status      halted or not, budget halts, running jobs
@@ -233,6 +237,29 @@ def main(argv: list[str]) -> int:
                 else:
                     print(f"refused: {path}: {d.get('error', 'no answer')}"); code = 1
             return code
+        if cmd == "spoke":
+            # The spoke door (SPOKE-2A): the bridge checks the plan, raises the card, runs spoke-door.
+            verb, words = (rest[0] if rest else ""), rest[1:]
+            plan = ""
+            if verb in ("plan", "apply"):
+                if "--plan" in words:
+                    i = words.index("--plan")
+                    if i + 1 >= len(words):
+                        print("cc-job spoke apply --plan <file>"); return 2
+                    plan = Path(words[i + 1]).read_text()
+                    words = words[:i] + words[i + 2:]
+                elif not sys.stdin.isatty():
+                    plan = sys.stdin.read()
+                if not plan.strip():
+                    print(f"cc-job spoke {verb}: the plan comes as --plan <file> or on stdin"); return 2
+            d = _call("POST", "/spoke", {"verb": verb, "args": words, "plan": plan,
+                                         "run": os.environ.get("CC_RUN_ID", "").strip() or None}, timeout=1000)
+            if not d.get("ok"):
+                print("refused:", d.get("error", "no answer"))
+                if d.get("out"):
+                    print(d["out"])
+                return 1
+            sys.stdout.write(d.get("out", "")); return 0
         if cmd == "radio":
             # Listen on a radio brain (2026-10-25): the bridge asks the api for a signed taste-note link.
             station = rest[0] if rest else "https://orfeo.music"
