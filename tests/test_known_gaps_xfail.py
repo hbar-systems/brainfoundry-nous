@@ -58,17 +58,14 @@ def test_fetch_url_pins_validated_ip():
 
 # ── SEC-1 Warden 1, poisoned input (2026-11-06) ─────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "SEC-1 gap: /integrations/telegram/webhook pins the FIRST chat that messages the bot "
-    "as the owner (trust on first use). Between connect and the owner's first message, "
-    "anyone who finds the bot's @username becomes the owner and gets answers from memory. "
-    "Fix: a one-time pairing code shown in the console, required in the first message."))
 def test_telegram_owner_pin_needs_a_pairing_code():
+    """Closed 2026-11-14 (was a strict xfail from SEC-1): the webhook no longer pins the first
+    chat; ownership comes only from the console's one-time code (tests/test_telegram_pairing.py)."""
     src = _read("api/main.py")
-    m = re.search(r"if owner is None:\n(.*?)\n\s*if chat_id != owner:", src, re.S)
-    assert m, "telegram owner-pin block not found (code moved; update this test)"
-    assert re.search(r"pair|code|nonce", m.group(1), re.I), \
-        "the first chat becomes owner with no pairing check"
+    m = re.search(r"async def telegram_webhook\(.*?\n(?=@app\.)", src, re.S)
+    assert m, "telegram_webhook not found (code moved; update this test)"
+    body = m.group(0)
+    assert "try_pair" in body and "pin_owner" not in body and "if owner is None:\n" not in body
 
 
 @pytest.mark.xfail(strict=True, reason=(

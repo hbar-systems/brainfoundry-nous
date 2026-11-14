@@ -1309,6 +1309,59 @@ class Telegram:
     def pin(self, chat_id) -> None:
         self.save(owner=chat_id)
 
+    # -- pairing (2026-11-14, hbar: "build it out"): the chat that owns the bot is the one that
+    # proved it can open the console, not whoever writes first. A 6-digit code made in the
+    # console, valid PAIR_TTL seconds, once; PAIR_TRIES wrong codes burn it. Only its hash is
+    # kept. An owner already pinned stays; a valid code from another chat moves the ownership
+    # there (a new phone). CC_TELEGRAM_OWNER, when set, cannot be moved from Telegram.
+    PAIR_TTL = 600
+    PAIR_TRIES = 5
+    PAIR_RE = re.compile(r"^/(?:pair|start)(?:@\w+)?\s+(\d{6})\s*$")
+
+    @staticmethod
+    def _pair_hash(code: str) -> str:
+        return hashlib.sha256(("tg-pair:" + code).encode()).hexdigest()
+
+    def new_pair_code(self, now: float | None = None) -> dict:
+        import secrets
+        if self.forced_owner:
+            return {"ok": False, "error": "the owner is fixed by CC_TELEGRAM_OWNER on this box"}
+        now = time.time() if now is None else now
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        self.save(pair_hash=self._pair_hash(code), pair_expires=now + self.PAIR_TTL, pair_tries=0)
+        return {"ok": True, "code": code, "expires_at": now + self.PAIR_TTL}
+
+    def pair_pending(self, now: float | None = None) -> bool:
+        st = self.state()
+        now = time.time() if now is None else now
+        return bool(st.get("pair_hash")) and float(st.get("pair_expires") or 0) > now
+
+    def try_pair(self, chat_id, text: str, now: float | None = None) -> str | None:
+        """None: the text is not a pairing message. Else 'paired', 'expired' or 'wrong'."""
+        m = self.PAIR_RE.match((text or "").strip())
+        if not m:
+            return None
+        if self.forced_owner or not self.pair_pending(now):
+            self.save(pair_hash=None, pair_expires=None, pair_tries=0)
+            return "expired"
+        import hmac
+        st = self.state()
+        if hmac.compare_digest(self._pair_hash(m.group(1)), str(st.get("pair_hash") or "")):
+            self.save(owner=chat_id, pair_hash=None, pair_expires=None, pair_tries=0)
+            return "paired"
+        tries = int(st.get("pair_tries") or 0) + 1
+        if tries >= self.PAIR_TRIES:
+            self.save(pair_hash=None, pair_expires=None, pair_tries=0)
+        else:
+            self.save(pair_tries=tries)
+        return "wrong"
+
+    def unpair(self) -> dict:
+        if self.forced_owner:
+            return {"ok": False, "error": "the owner is fixed by CC_TELEGRAM_OWNER on this box"}
+        self.save(owner=None, pair_hash=None, pair_expires=None, pair_tries=0)
+        return {"ok": True}
+
     # -- pure helpers --
     @staticmethod
     def chunks(text: str, n: int = LIMIT) -> list:

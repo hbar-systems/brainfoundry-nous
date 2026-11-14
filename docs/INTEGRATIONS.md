@@ -43,8 +43,11 @@ Then ask: *"what's on my calendar this week?"*. Tool: `calendar_read`.
 1. In Telegram, message **@BotFather** → `/newbot` → name it → copy the token.
 2. Integrations → **Telegram** → paste the token → **Connect** (the brain
    registers a secret-protected webhook).
-3. Open your new bot, send any message — the **first chat becomes the owner**;
-   strangers are refused. Ask it anything; it answers from your brain + reasoner.
+3. Press **Pair your phone** and open the link it shows (or send the bot `/pair` and the
+   6-digit code): **only that chat becomes the owner**; strangers are refused. The code works
+   once, for 10 minutes; five wrong codes burn it. Pair again to move to a new phone; Unpair
+   cuts a chat off. Ask it anything; it answers from your brain + reasoner. (Before
+   2026-11-14 the first chat that wrote became the owner; a chat already pinned stays.)
 
 Requires the brain's public API to be reachable over HTTPS: `PUBLIC_API_BASE`, else
 `BRAIN_PUBLIC_URL`. With neither set the connect is refused (there is no built-in default).
