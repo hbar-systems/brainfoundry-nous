@@ -33,6 +33,9 @@ Endpoints (JSON):
   GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
+  GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
+  GET  /cc/tape/file?path=<p>  /cc/tape/stat?path=<p>   a file in the tape folder only (byte ranges honoured)
+  POST /cc/tape/write {path,text,mtime?}   the /tape page's own files only: bits.json, replies, inbox markers, a take's slice list
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -491,6 +494,7 @@ import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
@@ -590,6 +594,11 @@ def _job_thread(run_id: str | None) -> str | None:
     r = RUNS.get(run_id or "") if "RUNS" in globals() else None
     return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
+# The memo tape (TAPE-2, 2026-11-14, scripts/cc/cc_tape.py): the console's /tape page reads and writes this one
+# folder through /cc/tape/*; a brain without one (no index.json there) answers {tape: false}. CC_TAPE_SIGNER is
+# the name a sign-off on the page records (default "owner").
+TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "memos"),
+                    signer=os.environ.get("CC_TAPE_SIGNER", "").strip() or "owner")
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
 SENT = cc_extras.RecentSends(60)
@@ -5173,6 +5182,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view())
+        elif route == "/tape":
+            _ts = TAPE.state()
+            if _ts.get("tape") and WORLD_DIR:
+                _ts["world"] = WORLD_DIR      # a job's files named relative to the world open in the Files pane
+            self._send(200, _ts)
+        elif route == "/tape/stat":
+            d = TAPE.stat(self._query().get("path"))
+            self._send(200 if d.get("ok") else 404, d)
+        elif route == "/tape/file":
+            TAPE.serve(self, self._query().get("path"))
         elif route == "/actions":
             self._send(200, _actions())
         elif route == "/agents":
@@ -5357,6 +5376,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(413 if n > SYSTEMS_VOICE_MAX else 400, {"ok": False, "error": f"the recording must be between 1 byte and {SYSTEMS_VOICE_MAX // (1024 * 1024)} MB"})
             else:
                 self._send(*_systems_voice(sid, self.headers.get("Content-Type", ""), self.rfile.read(n)))
+            return
+        if route == "/tape/write":
+            # the /tape page's own files only (cc_tape.WRITABLE): rulings, replies, markers, a take's slice list
+            body = self._json(limit=cc_tape.WRITE_MAX + 4096)
+            if not body:
+                self._send(413, {"ok": False, "error": "nothing to save, or too large to save from here"})
+                return
+            mt = body.get("mtime")
+            d = TAPE.write(body.get("path"), body.get("text"), mt if isinstance(mt, int) and not isinstance(mt, bool) else None)
+            self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
             return
         if route == "/systems/thread":
             body = self._json(limit=2000)
