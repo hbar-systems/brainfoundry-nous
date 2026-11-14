@@ -51,8 +51,7 @@ The last step, after the look. Name each way of working in one line with what it
 - Picking is by press: open the pick-list beside the conversation with `<pane>/layout?step=surfaces</pane>`, where each way of working is a chip with its sentence. Or take the answer in words.
 - Defaults by person: the `member` and `org` presets (a newcomer) carry `chat` and `talkthrough`; the `owner` preset carries no answer, which is every surface. Say the default and ask only for changes.
 - A surface left out is only not shown on the home and its header; its address and its slash command keep working. Nothing is removed.
-- Talk-through is coming, not yet working on a console (2026-11-14): its recorder lives on the memo tape page, a desk page the console serves as a raw file, and since the 2026-11-13 security audit raw pages run sandboxed and cannot send to the bridge. Until the tape becomes a console page of its own, say "coming" when you name it; picking it already puts its button on the home, and the button opens the tape.
-- The tape page's place: `CC_PAGE_TAPE` in the bridge's environment when the tape lives elsewhere than in/memos/index.html (for example inside the world's checkout).
+- Talk-through lives on the console's own tape page, `/tape` (TAPE-2, 2026-11-14): a big record button, a slice sent to the box every 10 s, the watcher cuts the take at the pauses. Its button shows on the home only when this brain keeps a memo tape (an index.json in `CC_TAPE_DIR`, default in/memos); a brain without one shows no tape button.
 
 ## How the answers become the layout
 
@@ -85,6 +84,6 @@ When you have the answers, end one message with exactly one block, using the opt
 | weight, size | thin type (font weight 300); text zoom 0.92, 1, 1.12 |
 | width | the conversation column: 860px, 1180px, or the full width |
 | voice | answers read aloud on or off; hands-free on or off |
-| surfaces | layout key `surfaces` (a list, or null for every surface). The home and its header show only the picked ones: decisions, systems page, talk-through and tape buttons in the header, the "just thoughts" button above the input, the phone strip (a new thread from the messaging bot), the threads, board, agents and export buttons, the terminal button. Decisions, talk-through and the tape show only when this brain has their page (the bridge's `pages`: `CC_PAGE_DECISIONS`, `CC_PAGE_TAPE`, or the desk defaults out/decisions/index.html and in/memos/index.html). /layout shows and edits the same list (2026-11-13) |
+| surfaces | layout key `surfaces` (a list, or null for every surface). The home and its header show only the picked ones: decisions, systems page, talk-through and tape buttons in the header, the "just thoughts" button above the input, the phone strip (a new thread from the messaging bot), the threads, board, agents and export buttons, the terminal button. Decisions shows only when this brain has its desk page (`CC_PAGE_DECISIONS`, or out/decisions/index.html); talk-through and the tape only when it keeps a memo tape (the bridge's `pages.tape` is then `/tape`, TAPE-2). /layout shows and edits the same list (2026-11-13) |
 
 Accent and the other colour variables are not asked; the owner sets them at /layout from a short list.

@@ -83,15 +83,17 @@ def test_interview_doc_names_every_surface_and_its_sentence():
 def test_bridge_view_pages_and_save(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=False)
     monkeypatch.setenv("CC_PAGE_DECISIONS", str(tmp_path / "nowhere.html"))
-    monkeypatch.setenv("CC_PAGE_TAPE", str(tmp_path / "tape dir" / "index.html"))
+    monkeypatch.setattr(m, "TAPE", m.cc_tape.Tape(tmp_path / "tape dir"))
     st, d = m._layout_api("GET", "/layout", None, {})
     assert st == 200 and d["pages"] == {}
     sq = next(q for q in d["questions"] if q["id"] == "surfaces")
     assert sq["about"]["talkthrough"] and sq["options"][0] == ["chat", "chat"]
     (tmp_path / "tape dir").mkdir()
-    (tmp_path / "tape dir" / "index.html").write_text("<p>tape</p>")
+    (tmp_path / "tape dir" / "index.html").write_text("<p>the old desk page</p>")
+    assert m._layout_api("GET", "/layout", None, {})[1]["pages"] == {}      # no tape until the watcher writes index.json
+    (tmp_path / "tape dir" / "index.json").write_text('{"memos": []}')
     d = m._layout_api("GET", "/layout", None, {})[1]
-    assert d["pages"] == {"tape": "/cc/files/raw" + str(tmp_path).replace(" ", "%20") + "/tape%20dir/index.html"}
+    assert d["pages"] == {"tape": "/tape"}                                    # the console's own page (TAPE-2)
     st, d = m._layout_api("POST", "/layout/save", {"layout": {**L.DEFAULT, "surfaces": ["systems"]}, "answers": {"surfaces": ["systems"]}}, {})
     assert st == 200 and d["layout"]["surfaces"] == ["chat", "systems"] and d["answers"]["surfaces"] == ["chat", "systems"]
     st, d = m._layout_api("POST", "/layout/save", {"layout": {"surfaces": ["court"]}}, {})
@@ -109,7 +111,7 @@ def _home(layout, pages):
                       "buttons:l.homeButtons(lay,pg)}))" % (json.dumps(layout), json.dumps(pages)))
 
 
-PAGES = {"decisions": "/cc/files/raw/x/decisions/index.html", "tape": "/cc/files/raw/x/memos/index.html"}
+PAGES = {"decisions": "/cc/files/raw/x/decisions/index.html", "tape": "/tape"}
 
 
 def test_js_list_matches_the_box():

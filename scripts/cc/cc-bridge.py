@@ -4508,7 +4508,6 @@ LAYOUT = cc_layout.Store(STATE_DIR, Path(CWD) / "brain-apps")
 # file; otherwise the first desk default that exists.
 _PAGE_CANDIDATES = {
     "decisions": ("CC_PAGE_DECISIONS", (OUT_DIR / "decisions" / "index.html",)),
-    "tape": ("CC_PAGE_TAPE", (IN_DIR / "memos" / "index.html",)),
 }
 
 
@@ -4524,6 +4523,9 @@ def _surface_pages() -> dict:
                     break
             except OSError:
                 continue
+    # the memo tape is the console's own page since TAPE-2 (2026-11-14): /tape, when this brain keeps a tape
+    if TAPE.present():
+        out["tape"] = "/tape"
     return out
 
 
