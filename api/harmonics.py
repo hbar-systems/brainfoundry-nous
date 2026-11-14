@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from fastapi import APIRouter, Depends, HTTPException, Security
 from pydantic import BaseModel, Field
 
-from api.federation_dm import _api_key_header, _operator_auth
+from api.federation_dm import _api_key_header, _operator_auth, peer_endpoint
 
 
 # ─── Constants ──────────────────────────────────────────────────────────────
@@ -387,7 +387,7 @@ def get_ledger(limit: int = 100):
 
 def _fetch_peer(handle: str) -> Tuple[str, str]:
     """Resolve a peer brain's (public_key, endpoint) from its /identity."""
-    endpoint = f"https://{handle}.brainfoundry.ai"
+    endpoint = peer_endpoint(handle)  # one DNS label only (SEC-PASS-1 2026-11-13)
     try:
         with httpx.Client(timeout=10.0) as client:
             resp = client.get(f"{endpoint}/identity")
