@@ -353,7 +353,7 @@ export default function Sing() {
       if (!r.ok || !d.ok) throw new Error(d.error || `the console answered ${r.status}`)
       setKept({ files: d.files || [], name: side.file, placed: null })
       setPhase('kept')
-      say('kept. The box puts it on the loop\'s grid as the next version, usually within two minutes.')
+      say('kept. It lands on the loop\'s grid as the next version when the box files it; this card says where.')
       watchPlaced(side.file)
     } catch (e) { setPhase('review'); say(e.message || 'the console did not answer', true) }
   }
@@ -368,7 +368,7 @@ export default function Sing() {
         const r = await fetch(url)
         if (r.ok) {
           const line = (await r.text()).split('\n').find(l => l.split('\t')[2] === file)
-          if (line) { const c = line.split('\t'); setKept(k => (k ? { ...k, placed: { version: c[1], where: c[3], verdict: c[10] } } : k)); return }
+          if (line) { const c = line.split('\t'); setKept(k => (k ? { ...k, placed: { version: c[1], where: c[3], verdict: c[10] } } : k)); say(''); return }
         }
       } catch {}
       if (Date.now() < until && document.visibilityState !== 'hidden') setTimeout(look, 5000)
