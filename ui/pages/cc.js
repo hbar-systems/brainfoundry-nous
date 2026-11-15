@@ -12,6 +12,7 @@ import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wal
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
+import Spiders from '../components/Spiders'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -1100,7 +1101,7 @@ function ProposalCard({ p, onDecide }) {
 // these windows"): the same surfaces the reasoner may open with <pane>. Alphabetical by label
 // (hbar 2026-11-06), so a page is found by its name, not remembered by its place.
 const PANE_ROUTES = [
-  ['/agents', 'Agents'], ['/apps', 'Apps'], ['/board', 'Board'], ['/boxes', 'Boxes'],
+  ['/agents', 'Agents'], ['/apps', 'Apps'], ['/board', 'Board'], ['/boxes', 'Boxes'], ['/cortex', 'Cortex'],
   ['/dashboard', 'Dashboard'], ['/economy', 'Economy'], ['#export', 'Export'], ['/federation', 'Federation'], ['/files', 'Files'],
   ['/future', 'Future'], ['/guide', 'Guide'], ['/integrations', 'Integrations'], ['/upload', 'Knowledge'],
   ['/layout', 'Layout'], ['/map', 'Map'], ['/graph', 'Memory graph'], ['/permits', 'Permits'], ['/persona', 'Persona'],
@@ -3153,6 +3154,8 @@ function CC() {
       <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
       <AgentPopup />
+      {/* AGENTS-VIS-1: while a turn answers, a spider walks the page; a small one per job still running (off on /cortex) */}
+      {!paneMode && <Spiders count={busy ? 1 : 0} small={busy ? (jobs || []).length : 0} />}
       <div className={paneMode ? undefined : 'cc-shell'} style={{ display: 'flex', flexDirection: paneSide === 'left' ? 'row-reverse' : 'row', alignItems: 'stretch', minHeight: paneMode ? '100vh' : 'calc(100vh - 60px)' }}>
       <div className={paneMode ? undefined : 'cc-col'} style={{ padding: paneMode ? '6px 10px 8px' : (slimHero ? '14px 32px 20px' : '28px 32px 20px'), maxWidth: pane || paneMode ? 'none' : width, margin: pane ? 0 : '0 auto', flex: 1, minWidth: 0,
                     fontFamily, display: 'flex', flexDirection: 'column', height: paneMode ? '100vh' : 'calc(100vh - 60px)', boxSizing: 'border-box' }}>
@@ -3192,6 +3195,7 @@ function CC() {
             {!paneMode && !hidden.sidebyside && <Btn small onClick={() => { window.location.href = '/panes?from=' + encodeURIComponent(cur && !String(cur).startsWith('new:') ? cur : 'new') }} title="This conversation beside a new one, like terminal windows">side by side</Btn>}
             {!paneMode && !hidden.gallery && <Btn small onClick={() => { window.location.href = cur && !String(cur).startsWith('new:') ? `/gallery?thread=${encodeURIComponent(cur)}` : '/gallery' }} title="Your conversations as a deck: this one in front, the neighbours blurred behind it; arrows or scroll to switch">gallery</Btn>}
             {!paneMode && !hidden.board && surfaceOn(layoutBase, 'sidepane') && <Btn small accent={!!(pane && pane.route === '/board')} onClick={() => togglePaneRoute('/board', 'Board')} title="Mission control beside the chat: one tile per run, with its state, its last line and any card that waits for you">board</Btn>}
+            {!paneMode && !hidden.board && surfaceOn(layoutBase, 'sidepane') && <Btn small accent={!!(pane && pane.route === '/cortex')} onClick={() => togglePaneRoute('/cortex', 'Cortex')} title="The agents at work drawn as a brain beside the chat: each region lit by what runs in it, the running work by tag and the event tail">cortex</Btn>}
             {!paneMode && !hidden.board && surfaceOn(layoutBase, 'sidepane') && <Btn small accent={!!(pane && pane.route === '/agents')} onClick={() => togglePaneRoute('/agents', 'Agents')} title="Standing agents beside the chat: create one, it runs on its schedule and files a sitrep">agents</Btn>}
             {turns.length > 0 && (paneMode || surfaceOn(layoutBase, 'sidepane')) && (paneMode
               ? <Btn small title="the whole conversation as markdown: copied, and downloaded as a file" onClick={exportThread}>export</Btn>
