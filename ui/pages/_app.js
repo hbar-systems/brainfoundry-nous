@@ -489,6 +489,8 @@ export default function App({ Component, pageProps }) {
           }
           @media (max-width: 480px) {
             .bf-brand-name { display: none; }
+            /* the quiet home (PARENTS-HOME-1): the owner's name stays on a phone, it is what says whose brain this is */
+            .bf-brand-name.bf-brand-owner { display: inline; }
             .bf-chat-input-bar { padding-left: 12px !important; padding-right: 12px !important; }
           }
         `}</style>

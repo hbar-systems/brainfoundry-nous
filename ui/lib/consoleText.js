@@ -18,6 +18,10 @@ const EN = {
   attach: 'attach',
   talk: 'talk',
   stop: 'stop',
+  // the quiet home (PARENTS-HOME-1, 2026-11-15): the five menu entries and the press that shows the rest
+  menu: { _chat: 'Chat', start: 'Start', _knowledge: 'Knowledge', _files: 'Files', _settings: 'Settings' },
+  menuButton: 'menu',
+  menuRest: 'everything',
 }
 
 const RU = {
@@ -32,6 +36,9 @@ const RU = {
   attach: 'файл',
   talk: 'голос',
   stop: 'стоп',
+  menu: { _chat: 'Разговор', start: 'Начало', _knowledge: 'Знания', _files: 'Файлы', _settings: 'Настройки' },
+  menuButton: 'меню',
+  menuRest: 'всё остальное',
 }
 
 const TEXT = { en: EN, ru: RU }

@@ -8,6 +8,7 @@ import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { wantsThreads } from '../lib/home'
+import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
@@ -1602,6 +1603,9 @@ function CC() {
   // the console's own words (2026-11-12): the bridge's lang key beside the layout, English when unset
   const [lang, setLang] = useState('en')
   const W = words(lang)
+  // the quiet home (PARENTS-HOME-1, 2026-11-15): the owner's first asks, from <desk>/week/asks.json
+  const quietHome = isQuiet(layoutBase)
+  const [asks, setAsks] = useState([])
   useEffect(() => {
     let on = true
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
@@ -1634,11 +1638,24 @@ function CC() {
           window.location.href = d.layout.view === 'gallery' ? '/gallery' : '/panes'
         }
       } catch {}
-      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only
+      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only.
+      // The quiet home (PARENTS-HOME-1, 2026-11-15): there it opens the first time each day (and on ?start=1,
+      // the menu's start entry), over the thread list the home address asks for; the other days the menu opens it.
       try {
         const q = new URLSearchParams(window.location.search)
         const st = d.layout.start
-        if (st && (d.layout.view === 'talk' || d.layout.view === 'doors') && !q.has('pane') && !q.has('thread')) openPane({ route: st, title: st.split('/').pop() })
+        if (st && (d.layout.view === 'talk' || d.layout.view === 'doors') && !q.has('pane') && !q.has('thread')) {
+          if (!isQuiet(d.layout)) openPane({ route: st, title: st.split('/').pop() })
+          else {
+            let last = null
+            try { last = localStorage.getItem(START_DAY_KEY) } catch {}
+            if (q.has('start') || startDue(last, dayOf())) {
+              openPane({ route: st, title: st.split('/').pop() })
+              try { localStorage.setItem(START_DAY_KEY, dayOf()) } catch {}
+            }
+            if (q.has('start')) { const u = new URL(window.location.href); u.searchParams.delete('start'); window.history.replaceState(window.history.state, '', u.href) }
+          }
+        }
       } catch {}
     }).catch(() => {})
     return () => { on = false }
@@ -2116,6 +2133,19 @@ function CC() {
     window.addEventListener('bf-home', open)
     return () => window.removeEventListener('bf-home', open)
   }, [])
+  // the quiet menu's start entry, pressed while on the home: the start page opens beside the chat in place
+  useEffect(() => {
+    const open = () => { const st = layoutBase && layoutBase.start; if (st && !paneModeRef.current) openPane({ route: st, title: st.split('/').pop() }) }
+    window.addEventListener('bf-start', open)
+    return () => window.removeEventListener('bf-start', open)
+  }, [layoutBase])
+  // the asks live on the owner's desk; read once the bridge has named the desk and the layout is quiet
+  useEffect(() => {
+    if (!quietHome || !health || !health.out) return undefined
+    let on = true
+    fetch(asksUrl(health.out), { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { const a = parseAsks(d); if (on) setAsks(a ? a.asks : []) }).catch(() => {})
+    return () => { on = false }
+  }, [quietHome, health && health.out])
   useEffect(() => {
     let pin = null
     try {
@@ -2202,7 +2232,8 @@ function CC() {
   }
   const onPaneRoute = (p) => { if (p && p.route === '#threads') loadThreads(); openPane(p) }
   // a new or switched conversation keeps the threads pane open (pressing a thread there is how he switches)
-  const keepListPane = () => setPane(p => (p && p.route === '#threads' && !(typeof window !== 'undefined' && window.innerWidth < 960) ? p : null))
+  // the quiet home's start page stays too (PARENTS-HOME-1): a first ask pressed beside it keeps it on a wide screen
+  const keepListPane = () => setPane(p => (p && (p.route === '#threads' || (quietHome && layoutBase && p.route === layoutBase.start)) && !(typeof window !== 'undefined' && window.innerWidth < 960) ? p : null))
   useEffect(() => {
     if (paneMode || hidden.tools) return undefined
     const k = (e) => { if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Backquote') { e.preventDefault(); toggleTerminal() } }
@@ -3272,7 +3303,19 @@ function CC() {
               </div>
             </div>
           ))}
-          {turns.length === 0 && loggedIn && pending.length === 0 && (
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && asks.length > 0 && !paneMode && (
+            <div className="cc-asks" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '12px', margin: '28px 0' }}>
+              {asks.map((a, i) => (
+                <button key={i} onClick={() => send(a.send)} disabled={active} title={a.send}
+                  style={{ textAlign: 'left', padding: '18px 20px', minHeight: '84px', borderRadius: '14px', backgroundColor: C.card, color: C.ink,
+                           border: `1px solid ${C.line}`, cursor: active ? 'default' : 'pointer', fontFamily: 'inherit', lineHeight: 1.35 }}>
+                  <span style={{ display: 'block', fontSize: '19px' }}>{a.label}</span>
+                  {a.sub && <span style={{ display: 'block', fontSize: '13px', color: C.dim, marginTop: '6px' }}>{a.sub}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {turns.length === 0 && loggedIn && pending.length === 0 && !(quietHome && asks.length > 0 && !paneMode) && (
             <p style={{ color: C.faint, fontSize: '14px', lineHeight: 1.7, margin: '24px 0' }}>
               {W.empty}
               {health.session ? ' The previous thread continues.' : ''}
@@ -3372,7 +3415,7 @@ function CC() {
         {notes.filter(n => n.text.trim()).length > 0 && (
           <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
-        {latest.length > 0 && (!paneMode || paneDetails) && (
+        {latest.length > 0 && (!paneMode || paneDetails) && !(quietHome && !paneMode) && (
           <p className="cc-row" style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span>latest:</span>
             {latest.map(f => (
