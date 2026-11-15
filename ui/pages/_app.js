@@ -487,8 +487,20 @@ export default function App({ Component, pageProps }) {
             .bf-nav { padding: 0 12px; gap: 12px; }
             .bf-nav-link { padding: 6px 10px !important; font-size: 12px !important; }
           }
+          /* the quiet home's asks (PARENTS-HOME-1): a press target that answers the pointer */
+          .cc-ask { transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 120ms ease-out; }
+          .cc-ask:hover:not(:disabled) { border-color: color-mix(in srgb, var(--border) 50%, var(--accent) 50%) !important; }
+          .cc-ask:active:not(:disabled) { transform: scale(0.99); }
+          .cc-ask:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+          .bf-brand-owner { font-size: 17px !important; }
+          .cc-pane-q { font: inherit; font-size: 15px; min-height: 40px; padding: 0 16px; border-radius: 10px; cursor: pointer; color: var(--text); background: transparent; border: 1px solid var(--border); transition: background-color 150ms ease-out; }
+          .cc-pane-q:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+          .cc-pane-q:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+          .bf-quiet-menu { font-family: inherit !important; font-size: 15px !important; letter-spacing: 0 !important; padding: 8px 16px !important; color: var(--text) !important; border-radius: 10px !important; }
           @media (max-width: 480px) {
             .bf-brand-name { display: none; }
+            /* the quiet home (PARENTS-HOME-1): the owner's name stays on a phone, it is what says whose brain this is */
+            .bf-brand-name.bf-brand-owner { display: inline; }
             .bf-chat-input-bar { padding-left: 12px !important; padding-right: 12px !important; }
           }
         `}</style>

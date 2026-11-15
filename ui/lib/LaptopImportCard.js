@@ -3,6 +3,7 @@
 // what arrived while the helper runs: documents wait under Pending for approval, music is kept as
 // files in the member's in/<date>/import/. The token is shown once and lives only in this page.
 import { useState, useEffect, useRef } from "react";
+import { importWords } from "./importText";
 
 const API_BASE = "/api/bf";
 const SURFACE = "#161310";
@@ -23,7 +24,8 @@ export function laptopCommands(base, token) {
 
 const fmtTime = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-export default function LaptopImportCard({ btn, onArrived }) {
+export default function LaptopImportCard({ btn, onArrived, lang = "en" }) {
+  const T = importWords(lang);
   const [mint, setMint] = useState(null); // null | {busy} | {token, expires_at} | {error}
   const [os, setOs] = useState("mac");
   const [copied, setCopied] = useState(false);
@@ -68,14 +70,14 @@ export default function LaptopImportCard({ btn, onArrived }) {
       const r = await fetch(`${API_BASE}/documents/import-laptop/token`, { method: "POST" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setMint({ error: (j.error && j.error.message) || j.detail || `Could not start (${r.status}).` });
+        setMint({ error: (j.error && j.error.message) || j.detail || T.lapCouldNot(r.status) });
         return;
       }
       seen.current = 0;
       setMint({ token: j.token, expires_at: j.expires_at });
       loadStatus();
     } catch (err) {
-      setMint({ error: `Could not start: ${err.message}` });
+      setMint({ error: T.lapCouldNot(err.message) });
     }
   };
 
@@ -100,16 +102,16 @@ export default function LaptopImportCard({ btn, onArrived }) {
 
   return (
     <section style={{ padding: 18, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
-      <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>Bring files from your computer</div>
+      <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>{T.lapTitle}</div>
       <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7 }}>
-        <div>A small program runs on your computer and asks you, folder by folder, what to bring.</div>
-        <div>It never sends passwords, keys or hidden files. Documents wait below for your yes; music is kept as files for your music tools.</div>
+        <div>{T.lapSub1}</div>
+        <div>{T.lapSub2}</div>
       </div>
 
       {!(mint && mint.token) && (
         <button type="button" onClick={start} disabled={mint && mint.busy}
           style={{ ...btn, marginTop: 12, opacity: mint && mint.busy ? 0.5 : 1 }}>
-          {mint && mint.busy ? "Starting..." : "Start"}
+          {mint && mint.busy ? T.lapStarting : T.lapStart}
         </button>
       )}
       {mint && mint.error && (
@@ -121,20 +123,20 @@ export default function LaptopImportCard({ btn, onArrived }) {
           <div>{tab("mac", "Mac")}{tab("windows", "Windows")}</div>
           <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7, marginTop: 4 }}>
             {os === "mac"
-              ? "Open Terminal (Applications, Utilities, Terminal), paste this line, press Return:"
-              : "Open PowerShell (Start menu, type PowerShell), paste this line, press Enter:"}
+              ? T.lapMacHow
+              : T.lapWinHow}
           </div>
           <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 12, color: TEXT, background: "#0e0c0b",
             border: `1px solid ${BORDER}`, borderRadius: 8, padding: 10, margin: "6px 0 0 0" }}>{cmd}</pre>
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
-            <button type="button" onClick={copy} style={btn}>{copied ? "Copied" : "Copy"}</button>
-            <button type="button" onClick={start} style={{ ...btn, background: "none", color: MUTED }}>New line</button>
+            <button type="button" onClick={copy} style={btn}>{copied ? T.lapCopied : T.lapCopy}</button>
+            <button type="button" onClick={start} style={{ ...btn, background: "none", color: MUTED }}>{T.lapNew}</button>
           </div>
           <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.7, marginTop: 8 }}>
             {os === "mac"
-              ? "If your Mac offers to install developer tools, say yes, then paste the line again."
-              : "If Windows opens the Microsoft Store for Python, install it, then paste the line again."}
-            {" "}This line works once, until {fmtTime(mint.expires_at)}. Keep it to yourself.
+              ? T.lapMacTip
+              : T.lapWinTip}
+            {" "}{T.lapOnce(fmtTime(mint.expires_at))}
           </div>
         </div>
       )}
@@ -142,25 +144,25 @@ export default function LaptopImportCard({ btn, onArrived }) {
       {arrived.length > 0 && (
         <div style={{ fontSize: 13, color: TEXT, marginTop: 14, lineHeight: 1.6 }}>
           <div style={{ color: run && run.open ? ACCENT : MUTED }}>
-            {run && run.open ? "Arriving now" : "Last time"}: {docs.length} document{docs.length === 1 ? "" : "s"}
-            {music.length ? `, ${music.length} music file${music.length === 1 ? "" : "s"}` : ""}.
+            {run && run.open ? T.lapNow : T.lapLast}: {T.lapDocs(docs.length)}
+            {music.length ? T.lapMusic(music.length) : ""}.
           </div>
           {docs.length > 0 && (
             <div style={{ marginTop: 6 }}>
-              <div style={{ color: MUTED }}>Waiting for your yes under Pending memory proposals below:</div>
+              <div style={{ color: MUTED }}>{T.lapWaiting}</div>
               {docs.slice(-12).reverse().map((a) => <div key={a.proposal_id || a.path}>{a.path}</div>)}
-              {docs.length > 12 && <div style={{ color: MUTED }}>and {docs.length - 12} more</div>}
+              {docs.length > 12 && <div style={{ color: MUTED }}>{T.lapMore(docs.length - 12)}</div>}
             </div>
           )}
           {music.length > 0 && (
             <div style={{ marginTop: 6 }}>
               <div style={{ color: MUTED }}>
                 {audioTo === "in"
-                  ? "Kept for your music tools (in your in folder, listed in audio.tsv):"
-                  : "Kept on your brain for your music tools:"}
+                  ? T.lapKeptIn
+                  : T.lapKept}
               </div>
               {music.slice(-12).reverse().map((a) => <div key={a.where || a.path} style={{ color: APPROVE }}>{a.where || a.path}</div>)}
-              {music.length > 12 && <div style={{ color: MUTED }}>and {music.length - 12} more</div>}
+              {music.length > 12 && <div style={{ color: MUTED }}>{T.lapMore(music.length - 12)}</div>}
             </div>
           )}
         </div>
