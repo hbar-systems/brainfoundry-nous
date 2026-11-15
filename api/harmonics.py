@@ -385,9 +385,39 @@ def get_ledger(limit: int = 100):
 # signed by its own brain's key, so the pair cross-verifies.
 
 
+def _pinned_peer(handle: str) -> Optional[Dict[str, Any]]:
+    """An operator-pinned peer for this handle: introduced peers (data/peers.json)
+    first, then known_peers.toml. Matched on brain_id. Never a caller-supplied key."""
+    try:
+        from api.hbar_commands import find_peer_by_brain_id
+        p = find_peer_by_brain_id(handle)
+        if p and p.get("endpoint"):
+            return p
+    except Exception:
+        pass
+    try:
+        from api.identity.peers import load_peers
+        return next((p for p in load_peers() if p["brain_id"] == handle), None)
+    except Exception:
+        return None
+
+
 def _fetch_peer(handle: str) -> Tuple[str, str]:
-    """Resolve a peer brain's (public_key, endpoint) from its /identity."""
-    endpoint = peer_endpoint(handle)  # one DNS label only (SEC-PASS-1 2026-11-13)
+    """Resolve a peer brain's (public_key, endpoint).
+
+    HARM-1 2026-11-15: a pinned peer (introduced or in known_peers.toml) is reached at
+    its pinned endpoint and must present its pinned key; before this, every peer was
+    https://<handle>.brainfoundry.ai, so none of hbar's own brains outside that zone
+    (brain.hbar.health, brain.hbar.university, api.nous.brainfoundry.ai) could receive.
+    An unpinned handle keeps the one-DNS-label rule (SEC-PASS-1 2026-11-13)."""
+    pinned = _pinned_peer((handle or "").strip())
+    if pinned:
+        endpoint = str(pinned["endpoint"]).rstrip("/")
+        if not endpoint.startswith("https://"):
+            raise HTTPException(status_code=400,
+                                detail=f"pinned peer {handle} endpoint is not https")
+    else:
+        endpoint = peer_endpoint(handle)
     try:
         with httpx.Client(timeout=10.0) as client:
             resp = client.get(f"{endpoint}/identity")
@@ -402,7 +432,18 @@ def _fetch_peer(handle: str) -> Tuple[str, str]:
     if not pubkey:
         raise HTTPException(status_code=502,
                             detail=f"peer {handle} /identity has no public_key")
+    if pinned and pinned.get("public_key") and pubkey != pinned["public_key"]:
+        raise HTTPException(status_code=502,
+                            detail=f"peer {handle} /identity key does not match its pin")
     return pubkey, endpoint
+
+
+def _receiver_payload(*, contributor_pubkey: str, cos: float, sin: float, score: float,
+                      content_hash: str, event_timestamp: int) -> Dict[str, Any]:
+    """The payload a receiver signs for its role='receiver' row (same shape as record_event)."""
+    return {"peer_pubkey": contributor_pubkey, "role": "receiver", "cos": cos, "sin": sin,
+            "score": score, "content_hash": content_hash,
+            "event_timestamp": int(event_timestamp)}
 
 
 def _receiver_context(contribution: str, conn=None) -> Optional[str]:
@@ -481,6 +522,17 @@ def harmonics_exchange(req: ExchangeRequest):
     }
     if not verify_with_pubkey(req.from_pubkey, req.signature, sig_payload):
         raise HTTPException(status_code=401, detail="signature verification failed")
+    own_pub = os.getenv("BRAIN_PUBLIC_KEY", "")
+    if own_pub and req.from_pubkey == own_pub:
+        # HARM-1: a brain contributing to itself is a ring of one.
+        raise HTTPException(status_code=400, detail="self-exchange refused")
+    # HARM-1: the same signed request replayed inside its 5-minute window minted a
+    # second receiver row. One nonce per contributor key, once.
+    from api.identity.replay_cache import record as _seen_record, seen_before
+    nonce_key = f"harmonics:{req.from_pubkey}:{req.nonce}"
+    if not req.nonce or seen_before(nonce_key):
+        raise HTTPException(status_code=409, detail="nonce already used")
+    _seen_record(nonce_key, req.ts + 600)
 
     R = _receiver_context(req.contribution)
     if R is None:
@@ -494,13 +546,20 @@ def harmonics_exchange(req: ExchangeRequest):
         cos=cos, sin=sin, score=score, content_hash=ch,
         event_timestamp=req.ts,
     )
+    # HARM-1: hand back the receiver's own signature over its row (Ed25519 is
+    # deterministic, so this equals the stored sig) so the contributor can verify
+    # the score it is about to record instead of taking it on trust.
+    receiver_sig = sign_with_brain_key(_receiver_payload(
+        contributor_pubkey=req.from_pubkey, cos=cos, sin=sin, score=score,
+        content_hash=ch, event_timestamp=req.ts))
     return {
         "recorded": True,
         "event_id": event_id,
         "cos": cos, "sin": sin, "score": score,
         "content_hash": ch,
         "event_timestamp": req.ts,
-        "receiver_pubkey": os.getenv("BRAIN_PUBLIC_KEY", ""),
+        "receiver_pubkey": own_pub,
+        "receiver_sig": receiver_sig,
     }
 
 
@@ -524,7 +583,11 @@ def harmonics_contribute(req: ContributeRequest,
         raise HTTPException(status_code=500,
                             detail="BRAIN_ID or BRAIN_PUBLIC_KEY not configured")
 
+    if req.to.strip().lower() == my_brain.lower():
+        raise HTTPException(status_code=400, detail="self-exchange refused")
     peer_pubkey, peer_endpoint = _fetch_peer(req.to)
+    if peer_pubkey == my_pubkey:
+        raise HTTPException(status_code=400, detail="self-exchange refused")
 
     payload = {
         "from_brain": my_brain,
@@ -551,15 +614,31 @@ def harmonics_contribute(req: ContributeRequest,
         return {"recorded": False,
                 "reason": result.get("reason", "peer did not record the event")}
 
+    peer_sig = peer_payload = None
+    if result.get("event_timestamp") != payload["ts"]:
+        raise HTTPException(status_code=502, detail="peer returned a different event timestamp")
+    if result.get("receiver_sig"):
+        rp = _receiver_payload(contributor_pubkey=my_pubkey, cos=result["cos"],
+                               sin=result["sin"], score=result["score"],
+                               content_hash=result["content_hash"],
+                               event_timestamp=result["event_timestamp"])
+        if not verify_with_pubkey(peer_pubkey, result["receiver_sig"], rp):
+            raise HTTPException(status_code=502,
+                                detail="peer receipt signature did not verify")
+        peer_sig = "ed25519:" + result["receiver_sig"]
+        peer_payload = _canonical(rp).decode()
+
     event_id = record_event(
         peer_pubkey=peer_pubkey, role="contributor",
         cos=result["cos"], sin=result["sin"], score=result["score"],
         content_hash=result["content_hash"],
         event_timestamp=result["event_timestamp"],
+        peer_sig=peer_sig, peer_payload=peer_payload,
     )
     return {
         "recorded": True,
         "event_id": event_id,
         "peer": req.to,
         "cos": result["cos"], "sin": result["sin"], "score": result["score"],
+        "receipt_verified": peer_sig is not None,
     }
