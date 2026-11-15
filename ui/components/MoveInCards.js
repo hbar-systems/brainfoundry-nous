@@ -146,14 +146,16 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
       const pr = await fetch('/api/permit', { method: 'POST' })
       if (!pr.ok) throw new Error('permit')
       const { permit_id } = await pr.json()
+      const failed = []
       for (let i = 0; i < files.length; i++) {
         setDocBusy({ i: i + 1, n: files.length })
         const fd = new FormData()
         fd.append('file', files[i])
         fd.append('permit_id', permit_id)
-        await fetch(`${API}/documents/upload`, { method: 'POST', body: fd }).catch(() => null)
+        const r = await fetch(`${API}/documents/upload`, { method: 'POST', body: fd }).catch(() => null)
+        if (!r || !r.ok) failed.push(files[i].name)
       }
-      setDocBusy(null)
+      setDocBusy(failed.length ? { error: W.docFailed(failed.slice(0, 3).join(', ') + (failed.length > 3 ? ` +${failed.length - 3}` : '')) } : null)
       await load()
     } catch { setDocBusy({ error: W.failed }) }
   }
