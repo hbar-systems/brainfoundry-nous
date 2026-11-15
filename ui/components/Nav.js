@@ -264,7 +264,7 @@ export default function Nav() {
       </Link>
       {ccHome ? (
         <div style={{ marginLeft: 'auto', position: 'relative' }}>
-          <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer}
+          <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer} className={quiet ? 'bf-quiet-menu' : undefined}
             style={{ background: drawer ? 'var(--surface2)' : 'transparent', color: 'var(--muted)', border: '1px solid var(--border)',
                      borderRadius: '6px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.06em' }}>
             {quiet ? QW.menuButton : 'everything'}
