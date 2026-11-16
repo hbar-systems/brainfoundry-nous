@@ -76,7 +76,9 @@ join() {
     note "opening Tailscale: if macOS asks to add a VPN configuration, press Allow"
     run open -a Tailscale
     [ $DRY = 0 ] && sleep 5
-    run "$TS" up --login-server="$LOGIN_SERVER" --auth-key="$AUTHKEY" --hostname="$HANDLE-laptop" --accept-dns=false --accept-routes=false
+    # the network name carries your short user name, so your brain's door knows whom to knock for (SPOKE-2A)
+    me=$(id -un); case "$me" in *[!a-z0-9-]*|'') die "your user name ($me) has characters the network name cannot carry; tell your brain" ;; esac
+    run "$TS" up --login-server="$LOGIN_SERVER" --auth-key="$AUTHKEY" --hostname="$HANDLE-laptop--$me" --accept-dns=false --accept-routes=false
 
     step "Remote Login, the door your brain knocks on"
     if nc -z -G 2 127.0.0.1 22 >/dev/null 2>&1; then was=on; note "already on"

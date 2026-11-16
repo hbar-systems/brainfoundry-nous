@@ -1,0 +1,29 @@
+# headscale@<m>: one Headscale per member, the member's own spoke network (SPOKE-2A, 2026-11-14).
+# Config /etc/headscale/<m>/config.yaml (scripts/spoke/box/spoke_config.py), state /var/lib/headscale/<m>,
+# socket /run/headscale/<m>/headscale.sock (group <m>-spoke, 0770: only the door user drives the CLI).
+# Install: spoke-install.sh <m> --apply. Undo: spoke-install.sh <m> --undo (stops, disables; state moved aside).
+[Unit]
+Description=Headscale, the spoke network of %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=headscale
+Group=%i-spoke
+ExecStart=/usr/bin/headscale serve --config /etc/headscale/%i/config.yaml
+Restart=on-failure
+RestartSec=5
+StateDirectory=headscale/%i
+StateDirectoryMode=0750
+RuntimeDirectory=headscale/%i
+RuntimeDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/headscale/%i /run/headscale/%i
+
+[Install]
+WantedBy=multi-user.target

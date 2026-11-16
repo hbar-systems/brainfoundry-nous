@@ -986,6 +986,9 @@ BOX_NO_FIRST_WORD = ("python", "python3", "node", "nodejs", "perl", "ruby", "php
 
 
 BOX_SUMMARY_MAX = 300
+# Tools whose card is never remembered, never judged, never reused within a turn, never auto (orfeo
+# publishes; the spoke's organise-on and apply act on a person's laptop, SPOKE-2A 2026-11-14).
+BOX_ALWAYS_ASK = ("orfeo_post", "spoke")
 
 
 def _box_cmd_summary(cmd: str) -> str:
@@ -1012,6 +1015,9 @@ def _box_key(tool: str, inp: dict) -> tuple[str, str, bool]:
     """(action_id, summary, remember_ok) for one tool call. The action id is what
     "don't ask again" remembers: a command's first word, or an edited file's directory."""
     inp = inp if isinstance(inp, dict) else {}
+    if tool == "spoke":
+        # The laptop's organise switch and every plan: a card every time, never remembered, never judged (SPOKE-2A).
+        return "spoke " + str(inp.get("verb", "")), _spoke_summary(inp), False
     if tool == "orfeo_post":
         # Posting to orfeo publishes: a card every time, never remembered, never judged (2026-11-03).
         return "orfeo_post", (f"post to {inp.get('station')}: the {inp.get('kind')} \"{str(inp.get('title'))[:120]}\" "
@@ -1237,6 +1243,8 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
             "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
+    if tool == "spoke" and isinstance(inp, dict) and inp.get("plan"):
+        card.update({"full": str(inp["plan"]), "full_length": len(str(inp["plan"]))})
     if tool == "Bash":
         _full = str((inp if isinstance(inp, dict) else {}).get("command", "")).strip()
         if len(_full) > BOX_SUMMARY_MAX:
@@ -1246,7 +1254,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
     call_fp = _box_call_fp(tool, inp)
     run = RUNS.get(run_id) if run_id else None
     run = run if run is not None and not run.done else _run_watching(session_id)
-    same_turn = run is not None and call_fp in run.allowed and tool != "orfeo_post"
+    same_turn = run is not None and call_fp in run.allowed and tool not in BOX_ALWAYS_ASK
     if (remember_ok and _auto_has(args)) or same_turn:
         # Already allowed: by the owner's standing choice, or the identical call earlier in this
         # very turn (observed 2026-09-20: the reasoner re-ran a command and got a second card).
@@ -1264,7 +1272,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
         if run is not None:
             run.emit("ask", card)
         return {"behavior": "allow"}
-    if _posture_current() == "judged" and not action_id.startswith("sudo") and tool != "orfeo_post":
+    if _posture_current() == "judged" and not action_id.startswith("sudo") and tool not in BOX_ALWAYS_ASK:
         verdict = _judge(tool, inp, summary)
         if verdict is not None:
             card["judge"] = verdict
@@ -2712,6 +2720,198 @@ def _orfeo_post(body: dict, ask=None, api=None) -> tuple[int, dict]:
     return (200 if sent.get("ok") else 502), {"ok": bool(sent.get("ok")), **sent}
 
 
+# ---- The spoke (SPOKE-2A, 2026-11-14, docs/spoke.md): the owner's laptop, reached through one door ----
+# The bridge never holds the laptop's key: the door user <h>-spoke does, and the bridge may run
+# /usr/local/sbin/spoke-door <h> <verb> as that user through one sudoers line (spoke-install.sh).
+# The reasoner's path is `cc-job spoke <verb>` (POST /spoke, the ask token); "organise on" and every
+# "apply" raise their own card first, never remembered, never judged, never auto. The console's path
+# is the /spoke page (operator token): state, Make my download, the inventory page, Disconnect.
+SPOKE_ON = os.environ.get("CC_SPOKE", "").strip() == "1"
+SPOKE_HANDLE = (os.environ.get("CC_SPOKE_HANDLE", "").strip() or MEMBER)
+SPOKE_DOOR = "/usr/local/sbin/spoke-door"
+SPOKE_VAR = Path(os.environ.get("CC_SPOKE_VAR", "").strip() or f"/var/lib/spoke/{SPOKE_HANDLE or 'none'}")
+SPOKE_VERBS = ("status", "inventory", "plan", "apply", "undo", "leave", "organise")
+SPOKE_CARDED = ("organise on", "apply")
+SPOKE_TIMEOUT = {"inventory": 900, "apply": 900, "undo": 600, "bundle": 120}
+SPOKE_PLAN_MAX = 5000
+SPOKE_UNDO_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+SPOKE_ZIP = re.compile(r"join-my-brain-[a-z][a-z0-9]{1,15}\.zip")
+SPOKE_SERVED: dict = {}          # zip name -> time it was made; one download each, within the hour
+
+
+def _spoke_ready() -> str:
+    """'' when this bridge may use the door, else why not."""
+    if not SPOKE_ON:
+        return "the spoke is not set up on this brain (CC_SPOKE=1 after spoke-install.sh on its box)"
+    if not re.fullmatch(r"[a-z][a-z0-9]{1,15}", SPOKE_HANDLE or ""):
+        return "the spoke has no handle (CC_SPOKE_HANDLE, or the member's own)"
+    return ""
+
+
+def _spoke_door(verb: str, args: list | None = None, stdin: str | None = None) -> tuple[int, str, str]:
+    """One spoke-door call as the door user. sudo -n: never a password prompt; the sudoers line names
+    every verb, so anything else is refused by sudo before spoke-door sees it."""
+    cmd = ["sudo", "-n", "-u", f"{SPOKE_HANDLE}-spoke", SPOKE_DOOR, SPOKE_HANDLE, verb] + list(args or [])
+    try:
+        p = subprocess.run(cmd, input=stdin if stdin is not None else "", capture_output=True, text=True,
+                           timeout=SPOKE_TIMEOUT.get(verb, 60))
+    except subprocess.TimeoutExpired:
+        return 124, "", f"spoke-door {verb} took too long"
+    except OSError as e:
+        return 127, "", f"spoke-door could not start ({type(e).__name__})"
+    return p.returncode, p.stdout, p.stderr.strip()
+
+
+def _spoke_plan_check(text: str) -> tuple[list, str]:
+    """(lines, '') or ([], why): the same shape spoke-door and the laptop's door.sh accept, checked here
+    first so a card never shows a plan the door would refuse."""
+    out = []
+    for n, raw in enumerate(str(text or "").splitlines(), 1):
+        if not raw.strip():
+            continue
+        f = raw.split("\t")
+        if n > SPOKE_PLAN_MAX:
+            return [], f"plan longer than {SPOKE_PLAN_MAX} lines"
+        if f[0] not in ("mkdir", "mv") or len(f) != (2 if f[0] == "mkdir" else 3):
+            return [], f"plan line {n}: only 'mkdir<TAB>folder' and 'mv<TAB>from<TAB>to' (there is no delete)"
+        for p in f[1:]:
+            low = "/" + p.lower() + "/"
+            if not p or p.startswith("/") or ".." in p or "/." in low or low.startswith("/library/") \
+                    or any(ord(c) < 32 or ord(c) == 127 for c in p):
+                return [], f"plan line {n}: path {p[:120]!r} (absolute, '..', hidden or Library)"
+        out.append(f)
+    return (out, "") if out else ([], "empty plan")
+
+
+def _spoke_card(verb: str, args: list, plan: list) -> dict:
+    """The tool input a spoke card shows; _box_key turns it into the summary."""
+    d = {"verb": verb, "args": args, "handle": SPOKE_HANDLE}
+    if plan:
+        d["plan"] = "\n".join("\t".join(f) for f in plan)
+        d["folders"] = sum(1 for f in plan if f[0] == "mkdir")
+        d["moves"] = sum(1 for f in plan if f[0] == "mv")
+    return d
+
+
+def _spoke_summary(inp: dict) -> str:
+    verb = " ".join([str(inp.get("verb", ""))] + [str(a) for a in inp.get("args") or []])
+    if verb == "organise on":
+        return ("Let your brain organise this laptop? It will see names in the folders it asks about, and read the start of "
+                "files it needs to place (64 KB). It moves nothing without a plan you approve, and never deletes. "
+                "You can turn this off at any time.")
+    if inp.get("verb") == "apply":
+        lines = str(inp.get("plan", "")).splitlines()
+        show = lambda f: ("new folder " + f[1]) if f[0] == "mkdir" else ("move " + f[1] + "  ->  " + (f[2] if len(f) > 2 else ""))
+        head = "\n".join(show(l.split("\t")) for l in lines[:12])
+        more = f"\n... and {len(lines) - 12} more lines (show the full plan)" if len(lines) > 12 else ""
+        return (f"Apply this plan on the laptop: {inp.get('folders', 0)} new folders, {inp.get('moves', 0)} moves. "
+                f"Nothing is deleted, nothing is overwritten; undo is one id, printed when it is done.\n{head}{more}")
+    return f"spoke {verb} on the laptop of {inp.get('handle')}"
+
+
+def _spoke(body: dict, ask=None, door=None) -> tuple[int, dict]:
+    """POST /spoke from cc-job spoke <verb> (the reasoner). The card comes before the door for
+    "organise on" and "apply"; the Bash call that ran cc-job already had its own card or posture."""
+    ask, door = ask or _box_ask_inner, door or _spoke_door
+    why = _spoke_ready()
+    if why:
+        return 409, {"ok": False, "error": why}
+    b = body or {}
+    verb = str(b.get("verb") or "").strip()
+    args = [str(a) for a in (b.get("args") or [])][:2]
+    if verb not in SPOKE_VERBS:
+        return 400, {"ok": False, "error": f"verbs: {', '.join(SPOKE_VERBS)}"}
+    if verb == "organise" and args not in (["on"], ["off"]):
+        return 400, {"ok": False, "error": "organise on or off"}
+    if verb == "undo" and not (len(args) == 1 and SPOKE_UNDO_ID.fullmatch(args[0])):
+        return 400, {"ok": False, "error": "undo takes the id apply printed (20261114T010203Z)"}
+    if verb not in ("organise", "undo") and args:
+        return 400, {"ok": False, "error": f"{verb} takes no words"}
+    plan = []
+    if verb in ("plan", "apply"):
+        plan, bad = _spoke_plan_check(b.get("plan", ""))
+        if bad:
+            return 400, {"ok": False, "error": bad}
+    if " ".join([verb] + args) in SPOKE_CARDED:
+        d = ask("spoke", _spoke_card(verb, args, plan), None, str(b.get("run") or "") or None)
+        if d.get("behavior") != "allow":
+            return 403, {"ok": False, "error": d.get("message") or "not allowed"}
+    rc, out, err = door(verb, args, "\n".join("\t".join(f) for f in plan) + "\n" if plan else None)
+    print(f"spoke {verb} {' '.join(args)}: rc={rc}", flush=True)
+    if rc != 0:
+        return 502, {"ok": False, "error": err or f"spoke-door {verb} answered {rc}", "out": out[-4000:]}
+    return 200, {"ok": True, "verb": verb, "out": out}
+
+
+def _spoke_status_parse(out: str) -> dict:
+    st: dict = {"laptop": None}
+    for line in out.splitlines():
+        f = line.split("\t")
+        if f[0] == "laptop" and len(f) >= 4:
+            st["laptop"] = {"name": f[1], "ip": f[2], "state": f[3], "seen": f[4] if len(f) > 4 else ""}
+        elif f[0] in ("brain", "mode", "inventory", "handle") and len(f) > 1:
+            st[f[0]] = f[1]
+    return st
+
+
+def _spoke_state(door=None) -> tuple[int, dict]:
+    """GET /spoke/state (the page): ready or why not, the laptop, the signing key's fingerprint."""
+    door = door or _spoke_door
+    why = _spoke_ready()
+    if why:
+        return 200, {"ok": False, "ready": False, "why": why}
+    rc, out, err = door("status", [], None)
+    st = _spoke_status_parse(out) if rc == 0 else {}
+    rc2, fp, _ = door("fingerprint", [], None)
+    fp = fp.split("\t", 1)[1].strip() if rc2 == 0 and "\t" in fp else ""
+    return 200, {"ok": rc == 0, "ready": True, "handle": SPOKE_HANDLE, "status": st, "fingerprint": fp,
+                 "error": "" if rc == 0 else (err or "spoke-door did not answer"),
+                 "inventory": bool(st.get("inventory"))}
+
+
+def _spoke_bundle(door=None) -> tuple[int, dict]:
+    """POST /spoke/bundle (Make my download): a one-device, one-hour key and the signed zip."""
+    door = door or _spoke_door
+    why = _spoke_ready()
+    if why:
+        return 409, {"ok": False, "error": why}
+    rc, out, err = door("bundle", [], None)
+    kv = dict(l.split("\t", 1) for l in out.splitlines() if "\t" in l)
+    name = Path(kv.get("bundle", "")).name
+    if rc != 0 or not SPOKE_ZIP.fullmatch(name):
+        return 502, {"ok": False, "error": err or "no bundle was made"}
+    SPOKE_SERVED[name] = time.time()
+    return 200, {"ok": True, "url": f"{BASE}/spoke/download/{name}", "fingerprint": kv.get("signing", ""),
+                 "expires": kv.get("expires", "")}
+
+
+def _spoke_download(name: str) -> tuple[int, bytes | None]:
+    """The zip once, within the hour; then it is gone from the served list (the file stays on the box)."""
+    made = SPOKE_SERVED.pop(name, None)
+    if not SPOKE_ZIP.fullmatch(name or "") or made is None or time.time() - made > 3600:
+        return 404, None
+    try:
+        return 200, (SPOKE_VAR / "out" / name).read_bytes()
+    except OSError:
+        return 404, None
+
+
+def _spoke_inventory_html() -> tuple[int, str]:
+    """The last inventory as its page (scripts/spoke/render_inventory.py), or a short note."""
+    tsv = SPOKE_VAR / "inventory" / "latest.tsv"
+    if not tsv.is_file():
+        return 404, ""
+    render = Path(__file__).resolve().parents[1] / "spoke" / "render_inventory.py"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            outp = Path(td) / "inventory.html"
+            subprocess.run([sys.executable, str(render), str(tsv), str(outp), "--source", "your laptop, look mode"],
+                           capture_output=True, text=True, timeout=60, check=True)
+            return 200, outp.read_text()
+    except Exception as e:  # noqa: BLE001
+        return 500, f"<p>the inventory page did not render ({type(e).__name__})</p>"
+
+
 def _task_done(body: dict) -> tuple:
     """The reasoner closes or reopens a task (cc-job task done, 2026-10-24): only on the person's word
     in the thread, which the prompt says; the bridge holds the key, the brain keeps done_at."""
@@ -3640,7 +3840,7 @@ def _codex_auto_allows(tool: str, inp: dict) -> bool:
     still asks; Codex has no such classifier, so: everything the Claude seat would run without a card
     in auto runs here too, except any command with sudo anywhere in it, and publishing (orfeo_post).
     The cards and judged postures always go to the card."""
-    if not CODEX_GATE["ok"] or _posture_current() != "auto" or tool == "orfeo_post":
+    if not CODEX_GATE["ok"] or _posture_current() != "auto" or tool in BOX_ALWAYS_ASK:
         return False
     if tool == "Bash":
         return not _SUDO_ANY.search(str((inp or {}).get("command", "")))
@@ -4997,6 +5197,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, code: int, data: bytes, ctype: str, headers: dict | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
     def _query(self) -> dict:
         from urllib.parse import parse_qs
         q = self.path.split("?", 1)[1] if "?" in self.path else ""
@@ -5223,6 +5433,20 @@ class Handler(BaseHTTPRequestHandler):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/spoke/state":
+            self._send(*_spoke_state())
+        elif route == "/spoke/inventory":
+            code, page = _spoke_inventory_html()
+            self._send_bytes(code, (page or "<p>No inventory yet.</p>").encode(), "text/html; charset=utf-8",
+                             {"Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
+                              "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:"})
+        elif route.startswith("/spoke/download/"):
+            code, data = _spoke_download(route[len("/spoke/download/"):])
+            if data is None:
+                self._send(404, {"error": "this download is gone: it works once, within the hour; press Make my download again"})
+            else:
+                self._send_bytes(200, data, "application/zip",
+                                 {"Content-Disposition": f'attachment; filename="{route.rsplit("/", 1)[1]}"'})
         elif route == "/system":
             self._send(200, _host_system())
         elif route == "/telegram/status":
@@ -5312,7 +5536,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file", "/spoke") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -5779,6 +6003,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, {"ok": False, "error": "not the reasoner"})
                 return
             self._send(*_task_done(req))
+            return
+        if route == "/spoke":
+            if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
+                self._send(403, {"ok": False, "error": "not the reasoner"})
+                return
+            self._send(*_spoke(req))
+            return
+        if route == "/spoke/bundle":
+            self._send(*_spoke_bundle())
+            return
+        if route == "/spoke/disconnect":
+            if _spoke_ready():
+                self._send(409, {"ok": False, "error": _spoke_ready()})
+                return
+            rc, out, err = _spoke_door("leave", [], None)
+            self._send(200 if rc == 0 else 502, {"ok": rc == 0, "out": out, "error": err})
             return
         if route == "/orfeo/post":
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
