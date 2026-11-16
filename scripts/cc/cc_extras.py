@@ -512,6 +512,25 @@ RESULT_FILES = 6
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 # lines the claude CLI writes to stderr before its answer (a settings rule it warns about); not the result
 _PRELUDE = re.compile(r"^(Permission (allow|deny|ask) rule \(|Warning: )")
+# JOBS-SURVIVE 2026-11-16: the Claude Code warnings a job prints before its own output; never a job's error line
+JOB_NOISE = re.compile(r"^Permission (allow|deny|ask) rule \(.*is not matched by file permission checks")
+# the cc-job header line, also when a byte-cut tail starts inside it and its "# " is gone
+_JOB_HEADER = re.compile(r"^(# )?J\d+ \d{4}-\d\d-\d\dT[\d:]+Z in ")
+_ERRORISH = re.compile(r"(error|traceback|fatal|failed|refused|denied|not found|no such|exception)", re.I)
+
+
+def job_lines(tail: str) -> list:
+    """A job's output lines worth showing: no blank lines, no cc-job header ("# ..."), no known warnings."""
+    return [l for l in str(tail or "").splitlines()
+            if l.strip() and not l.startswith("# ") and not JOB_NOISE.match(l.strip()) and not _JOB_HEADER.match(l)]
+
+
+def job_error_line(lines: list) -> str:
+    """The first line that reads as an error, else the last line, else ""."""
+    for l in lines:
+        if _ERRORISH.search(l):
+            return l
+    return lines[-1] if lines else ""
 
 
 def job_redirect(command: str, out_dir: Path) -> Path | None:
@@ -680,6 +699,8 @@ class Jobs:
         self.lock = threading.Lock()
         self.unseen: set[str] = set()
         self.results: dict = {}      # id -> result read for a record that has none stored
+        self.watching: set[str] = set()   # ids a thread of this bridge waits on (started here, or adopted)
+        self.settled: set[str] = set()    # ids whose end this bridge has handed on
 
     @classmethod
     def known(cls, thread) -> bool:
@@ -777,7 +798,7 @@ class Jobs:
             lf.write(f"# {jid} {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} in {wd or os.getcwd()}\n# {command}\n".encode())
             lf.flush()
             try:
-                proc = subprocess.Popen(self.wrap(["bash", "-lc", run_cmd]), cwd=str(wd) if wd else None, env=self.env_fn(),
+                proc = subprocess.Popen(self.wrap(self.shell(run_cmd, self._rc_path(jid))), cwd=str(wd) if wd else None, env=self.env_fn(),
                                         stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
             except Exception as e:  # noqa: BLE001
                 lf.close()
@@ -790,11 +811,12 @@ class Jobs:
                 rec["out_file"] = str(redir)
             items.append(rec)
             self._save(items)
+            self._write_pid(jid, proc.pid)
+            self.watching.add(jid)
 
         def _wait():
             rc = proc.wait()
             ended = int(time.time())
-            done = None
             with self.lock:              # the end first, so a read in between never marks it lost
                 cur = self._load()
                 for r in cur:
@@ -805,23 +827,142 @@ class Jobs:
                 self._save(cur)
             self._keep_result(lf, command)
             lf.close()
-            result = self.result(dict(rec, ended=ended, rc=rc))   # then its result, before any page is handed it
-            with self.lock:
-                cur = self._load()
-                for r in cur:
-                    if r["id"] == jid:
-                        r["result"] = result
-                        done = dict(r)
-                self._save(cur)
-                self.results.pop(jid, None)
-                self.unseen.add(jid)
-            if done and self.on_end:
-                try:
-                    self.on_end(done)
-                except Exception:  # noqa: BLE001
-                    pass
+            self._settle(jid)
         threading.Thread(target=_wait, daemon=True).start()
         return rec
+
+    # ---- jobs outlive the bridge (JOBS-SURVIVE, hbar 2026-11-16: "what are al these failures!") ----
+    # The bridge restarted at 2026-11-15 21:54:42Z; five jobs ran on, wrote full reports, and were shown FAILED
+    # because the `_wait` that would have read their exit code died with the old bridge. Now the job's own shell
+    # writes its exit code to <id>.rc beside its log (as the hands, so it survives any restart), the bridge
+    # writes <id>.pid, and a starting bridge re-adopts every job still running and watches it to its end.
+
+    @staticmethod
+    def shell(run_cmd: str, rc_path: Path) -> list:
+        """The argv a job runs: its command in a login bash, then its exit code written to rc_path (via a
+        temporary name, so a reader never sees half a number) and returned as the job's own exit code."""
+        script = ('bash -lc "$1"; rc=$?; printf \'%s\\n\' "$rc" > "$2.tmp" 2>/dev/null && mv -f "$2.tmp" "$2" 2>/dev/null; '
+                  'exit "$rc"')
+        return ["bash", "-c", script, "cc-job", run_cmd, str(rc_path)]
+
+    def _rc_path(self, jid: str) -> Path:
+        return self.dir / f"{jid}.rc"
+
+    def _write_pid(self, jid: str, pid: int) -> None:
+        try:
+            dfd = open_dir(self.dir)
+            try:
+                replace_file(dfd, f"{jid}.pid", f"{int(pid)}\n".encode(), 0o664)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+
+    def _read_small(self, name: str) -> str | None:
+        try:
+            dfd = open_dir(self.dir)
+            try:
+                return read_file(dfd, name)[:64].decode("ascii", "replace").strip()
+            finally:
+                os.close(dfd)
+        except (OSError, ValueError):
+            return None
+
+    def _exit_of(self, jid: str) -> tuple:
+        """(rc, when) from the job's <id>.rc, or (None, None) when it wrote none (it was killed, or it started
+        before JOBS-SURVIVE). `when` is the file's mtime: the job's end, not the moment a bridge noticed it."""
+        if not self.ID.match(jid or ""):
+            return None, None
+        v = self._read_small(f"{jid}.rc")
+        if v is None or not re.fullmatch(r"-?\d{1,4}", v):
+            return None, None
+        try:
+            when = int(os.stat(self._rc_path(jid)).st_mtime)
+        except OSError:
+            when = None
+        return int(v), when
+
+    def _last_output(self, rec: dict) -> int | None:
+        """When a job last wrote anything: the newest mtime of its log and its redirect file."""
+        ts = []
+        for p in (self._log_path(str(rec.get("id") or "")), rec.get("out_file")):
+            try:
+                if p:
+                    ts.append(int(os.stat(str(p)).st_mtime))
+            except OSError:
+                pass
+        return max(ts) if ts else None
+
+    def _pid_of(self, rec: dict):
+        if rec.get("pid"):
+            return rec.get("pid")
+        v = self._read_small(f"{rec.get('id')}.pid")
+        return int(v) if v and v.isdigit() else None
+
+    def _end_mark(self, r: dict, now: int) -> None:
+        """Mark a record whose process is gone ended: its exit code from <id>.rc when the job wrote one,
+        else rc None and lost=True ("ended (exit unknown)", never FAILED on that alone)."""
+        rc, when = self._exit_of(str(r.get("id") or ""))
+        if rc is not None:
+            r["ended"], r["rc"] = when or now, rc
+            r.pop("lost", None)
+        else:
+            last = self._last_output(r)
+            started = int(float(r.get("started") or 0))
+            r["ended"] = last if last and last >= started else now
+            r["rc"], r["lost"] = None, True
+
+    def _settle(self, jid: str) -> None:
+        """The end of a job that has its end marked: its result stored, the tile handed to its page once,
+        the spend meter told. Once per job per bridge."""
+        with self.lock:
+            if jid in self.settled:
+                return
+            self.settled.add(jid)
+            rec = next((dict(r) for r in self._load() if r["id"] == jid), None)
+        if rec is None or rec.get("ended") is None:
+            return
+        result = rec.get("result") or self.result(rec)
+        done = None
+        with self.lock:
+            cur = self._load()
+            for r in cur:
+                if r["id"] == jid:
+                    r["result"] = result
+                    r["thread"] = self._fill(r).get("thread") or self.UNKNOWN
+                    done = dict(r)
+            self._save(cur)
+            self.results.pop(jid, None)
+            self.unseen.add(jid)
+            self.watching.discard(jid)
+        if done and self.on_end:
+            try:
+                self.on_end(done)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def adopt(self, poll: float = 5.0) -> list:
+        """On bridge start: every record still running whose process is alive (pid from the record or
+        <id>.pid, checked in /proc) is watched by a thread of this bridge until it ends; then its end is
+        read from <id>.rc. Records whose process is already gone are ended now. Returns the adopted ids."""
+        adopted = []
+        for r in self._reap():
+            jid = str(r.get("id") or "")
+            if r.get("ended") is not None or jid in self.watching:
+                continue
+            pid = self._pid_of(r)
+            if not self._alive(pid, r.get("started")):
+                continue
+            self.watching.add(jid)
+            adopted.append(jid)
+
+            def _watch(jid=jid, pid=pid, started=r.get("started")):
+                while self._alive(pid, started):
+                    time.sleep(poll)
+                self._reap()          # marks the end from <id>.rc (or exit unknown)
+                self._settle(jid)
+            threading.Thread(target=_watch, daemon=True).start()
+        return adopted
 
     def _keep_result(self, lf, command: str) -> None:
         """Copy what the command redirected (one `> <path>` under out/) into the job's log, under RESULT_MARK,
@@ -873,8 +1014,8 @@ class Jobs:
             items = self._load()
             now, changed = int(time.time()), False
             for r in items:
-                if r.get("ended") is None and not self._alive(r.get("pid"), r.get("started")):
-                    r["ended"], r["rc"], r["lost"] = now, None, True
+                if r.get("ended") is None and not self._alive(self._pid_of(r), r.get("started")):
+                    self._end_mark(r, now)
                     changed = True
             if changed:
                 try:
@@ -1723,20 +1864,33 @@ def board_tiles(runs: list, audit_lines, jobs: list, threads: list, pending: lis
         key = f"job:{j.get('id')}"
         if key in dismissed:
             continue
-        failed = ended is not None and ((j.get("rc") or 0) != 0 or bool(j.get("lost")))   # lost: closeable
+        # JOBS-SURVIVE 2026-11-16: FAILED only with a non-zero exit code; a job whose process is gone without one
+        # (a bridge restart before <id>.rc existed, or a kill) is "ended (exit unknown)" with its last output
+        unknown = ended is not None and j.get("rc") is None
+        failed = ended is not None and not unknown and j.get("rc") != 0
         if ended is not None and not failed and now - float(ended) > horizon_s:
             continue
         if failed and now - float(ended) > 7 * 86400:
             continue
-        tail = [l for l in str(j.get("tail") or "").splitlines() if l.strip() and not l.startswith("# ")]
+        tail = job_lines(j.get("tail"))
+        if ended is None:
+            last = tail[-1][:180] if tail else "started"
+        elif failed:
+            rc = j.get("rc")
+            stopped = "stopped by a signal (exit %s)" % rc if rc in (130, 137, 143, -2, -9, -15) else "exit %s" % rc
+            last = (job_error_line(tail) or stopped)[:180]
+        elif unknown:
+            last = (tail[-1] if tail else "no output")[:180]
+        else:
+            last = tail[-1][:180] if tail else "exit %s" % j.get("rc")
         th = j.get("thread") if Jobs.known(j.get("thread")) else None
         tiles.append({"key": key, "kind": "job", "run": j.get("id"), "thread": th, "title": j.get("title") or j.get("command") or "job",
                       "agent": Jobs.is_agent(j),       # the activity lights (2026-10-25): an agent's job glows green, a job amber
-                      "state": "answering" if ended is None else ("failed" if failed else "done"), "word": "running" if ended is None else None,
+                      "state": "answering" if ended is None else ("failed" if failed else "done"),
+                      "word": "running" if ended is None else ("ended (exit unknown)" if unknown else None),
                       "started": iso(started) if started else None, "elapsed_s": int((float(ended) if ended is not None else now) - started) if started else 0,
                       "ago_s": int(now - float(ended)) if ended is not None else None, "steps": 0, "agents": 0,
-                      "last": ("its process ended with a bridge restart; no exit code" if j.get("lost") else
-                               (tail[-1][:180] if tail else ("exit %s" % j.get("rc") if ended is not None else "started"))),
+                      "last": last,
                       "cards": [], "links": [{"label": "log", "href": "/files?path=" + str(j.get("log") or ""), "kind": "file"}] if j.get("log") else [],
                       "tok": 0, "cost": None, "turns": 0, "href": "/files?path=" + str(j.get("log") or "") if j.get("log") else None})
     for pm in pending:

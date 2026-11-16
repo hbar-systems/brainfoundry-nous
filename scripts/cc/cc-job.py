@@ -155,7 +155,7 @@ def main(argv: list[str]) -> int:
             d = _call("GET", f"/jobs/{rest[0]}")
             if not d or d.get("error"):
                 print("no such job"); return 1
-            state = "running" if d.get("running") else f"finished rc={d.get('rc')}"
+            state = "running" if d.get("running") else ("ended (exit unknown)" if d.get("rc") is None else f"finished rc={d.get('rc')}")
             took = (d.get("ended") or __import__("time").time()) - d["started"]
             print(f"{d['id']} {state} · {int(took)} s · {d['title']}\n--- log tail ---\n{d.get('tail', '')}"); return 0
         if cmd == "tail" and rest:
@@ -260,7 +260,7 @@ def main(argv: list[str]) -> int:
             return 0
         if cmd == "list":
             for j in _call("GET", "/jobs").get("jobs", []):
-                state = "running" if j.get("ended") is None else f"rc={j.get('rc')}"
+                state = "running" if j.get("ended") is None else ("exit unknown" if j.get("rc") is None else f"rc={j.get('rc')}")
                 mine = os.environ.get("CC_THREAD_ID", "").strip()
                 where = "" if not mine or j.get("thread") == mine else ("  (another conversation)" if j.get("thread") not in (None, "", "unknown") else "  (no conversation)")
                 print(f"{j['id']}  {state:12} {j['title']}{where}")

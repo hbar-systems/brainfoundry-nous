@@ -5951,6 +5951,13 @@ def main() -> None:
     if TG is not None:
         TG_LOOP["thread"] = threading.Thread(target=_tg_loop, daemon=True); TG_LOOP["thread"].start()
     threading.Thread(target=_restart_watch, daemon=True).start()
+    # JOBS-SURVIVE 2026-11-16: jobs a previous bridge started and that still run are watched to their end here
+    try:
+        adopted = JOBS.adopt()
+        if adopted:
+            print(f"jobs re-adopted after restart: {' '.join(adopted)}", flush=True)
+    except Exception as e:  # noqa: BLE001  (a registry that cannot be read never stops the bridge)
+        print(f"jobs re-adoption skipped: {type(e).__name__}", flush=True)
     if BRAIN_API_KEY:
         threading.Thread(target=_threads_recover, daemon=True).start()
     if TICK["cmd"]:

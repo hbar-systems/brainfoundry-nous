@@ -30,6 +30,8 @@ def test_hook_settings_shape():
     assert s["hooks"]["PermissionRequest"][0]["hooks"][0]["command"] == "/usr/bin/python3 /x/cc-permit-hook.py"
     assert s["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"] == 960
     assert s["permissions"] == {"deny": G.DENY_ALWAYS}             # the .env rule rides with the hook (2026-11-13)
+    # JOBS-SURVIVE 2026-11-16: Edit rules only (they cover Write); a Write(...) rule printed a warning in every job
+    assert G.DENY_ALWAYS == ["Edit(**/.env)", "Edit(**/.env.*)"]
     assert json.loads(G.hook_settings("auto", "p", "h", "q", 1))["permissions"]["ask"] == G.ASK_ALWAYS
 
 
