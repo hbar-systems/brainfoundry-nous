@@ -57,12 +57,18 @@ function fmtBytes(n) {
   return i === 0 ? `${x} ${u[i]}` : `${x.toFixed(x < 10 ? 1 : 0)} ${u[i]}`
 }
 
-// The one line for the person's computer, survey on.
-function surveyCommands(base, token) {
-  const helper = `${base}/documents/import-laptop/helper.py`
+// The one line for the person's computer (SPOKE-3, 2026-11-16): the dial-out agent from the person's own
+// brain, plain bash on a Mac (no Python, no app, so no "unidentified developer" warning) and Windows
+// PowerShell as it ships. The key travels in the line, never in the address. api/laptop_agent.py renders it.
+function agentUrls(base, lang) {
+  const q = lang === 'ru' ? '?lang=ru' : ''
+  return { mac: `${base}/laptop/agent.sh${q}`, windows: `${base}/laptop/agent.ps1${q}` }
+}
+function surveyCommands(base, token, lang) {
+  const u = agentUrls(base, lang)
   return {
-    mac: `curl -fsSLo brain_import.py "${helper}" && python3 brain_import.py --survey --brain "${base}" --token ${token}`,
-    windows: `curl.exe -fsSLo brain_import.py "${helper}"; python brain_import.py --survey --brain "${base}" --token ${token}`,
+    mac: `curl -fsSL ${u.mac} | bash -s -- ${token}`,
+    windows: `$env:BRAIN_TOKEN="${token}"; irm ${u.windows} | iex`,
   }
 }
 
@@ -78,15 +84,18 @@ function vendorsOf(rows) {
 const continueHref = (name, lang) => `/?continue=${encodeURIComponent(String(name || ''))}${lang === 'ru' ? '&lang=ru' : ''}`
 
 const EN = {
-  compTitle: 'Bring your whole computer',
-  compSub: 'A small program looks through your computer and your cloud folders: names, sizes and dates only, nothing is read yet. Your brain proposes what to bring; you say yes here.',
-  compNever: 'Passwords, keys, mail and browser data are never sent.',
+  compTitle: 'Bring in this computer',
+  compSub: 'You copy one line into your computer. It looks through your files and your cloud folders, names, sizes and dates only, and shows the list here. You say yes to what comes; only that is sent.',
+  compNever: 'Passwords, keys, mail and browser data are never sent. Nothing is installed and nothing stays running: when it is done, it is gone. Your brain cannot reach into the computer; the line only calls out to your brain.',
+  compNoApp: 'There is no app to download, so the computer shows no warning about an unknown developer.',
+  compRead: 'Read what this line runs',
+  compMacAllow: 'Your Mac may ask whether Terminal may open Desktop, Documents or Downloads: press Allow. Folders you do not allow stay private and are only named here.',
   compPhone: 'From the phone: put photos and files in iCloud Drive or Google Drive; the run on the computer finds them there.',
   compStart: 'Start', compStarting: 'Starting...',
   compMacHow: 'On the Mac: open Terminal (Applications, Utilities, Terminal), paste this line, press Return.',
-  compWinHow: 'On Windows: open PowerShell (Start menu, type PowerShell), paste this line, press Enter.',
+  compWinHow: 'On Windows: open PowerShell (Start menu, type PowerShell), paste this line, press Enter. No administrator needed.',
   compCopy: 'Copy', compCopied: 'Copied', compNew: 'New line',
-  compOnce: (t) => `The line works once, until ${t}. Keep it to yourself. Nothing stays running on the computer after it.`,
+  compOnce: (t) => `The line works once, until ${t}. Keep it to yourself. Keep the window open until it says Done.`,
   compWaiting: 'Waiting for your computer...',
   compPlan: (n, f, b) => `Your computer, in ${n} groups: ${f} files, ${b}. Proposed:`,
   kind: { knowledge: 'into Knowledge', files: 'kept as files', leave: 'stays on the computer' },
@@ -116,15 +125,18 @@ const EN = {
 }
 
 const RU = {
-  compTitle: 'Перенесите сюда весь компьютер',
-  compSub: 'Маленькая программа просматривает ваш компьютер и облачные папки: только названия, размеры и даты, ничего не читает. Мозг предлагает, что перенести; вы говорите «да» здесь.',
-  compNever: 'Пароли, ключи, почта и данные браузера не отправляются никогда.',
+  compTitle: 'Перенести этот компьютер',
+  compSub: 'Вы копируете одну строку в свой компьютер. Она просматривает ваши файлы и облачные папки, только названия, размеры и даты, и показывает список здесь. Вы говорите «да» тому, что перенести; отправляется только это.',
+  compNever: 'Пароли, ключи, почта и данные браузера не отправляются никогда. Ничего не устанавливается и ничего не остаётся работать: когда всё готово, её нет. Мозг не может зайти в компьютер; строка только сама обращается к мозгу.',
+  compNoApp: 'Скачивать приложение не нужно, поэтому компьютер не предупреждает о неизвестном разработчике.',
+  compRead: 'Прочитать, что делает эта строка',
+  compMacAllow: 'Mac может спросить, можно ли Терминалу открыть Рабочий стол, Документы или Загрузки: нажмите «Разрешить». Папки, которые вы не разрешили, остаются закрытыми, здесь только их названия.',
   compPhone: 'С телефона: положите фото и файлы в iCloud Drive или Google Drive; программа на компьютере найдёт их там.',
   compStart: 'Начать', compStarting: 'Начинаю...',
   compMacHow: 'На Mac: откройте Терминал (Программы, Утилиты, Терминал), вставьте эту строку и нажмите Return.',
-  compWinHow: 'В Windows: откройте PowerShell (меню Пуск, наберите PowerShell), вставьте эту строку и нажмите Enter.',
+  compWinHow: 'В Windows: откройте PowerShell (меню Пуск, наберите PowerShell), вставьте эту строку и нажмите Enter. Права администратора не нужны.',
   compCopy: 'Скопировать', compCopied: 'Скопировано', compNew: 'Новая строка',
-  compOnce: (t) => `Строка работает один раз, до ${t}. Никому её не показывайте. После неё на компьютере ничего не остаётся работать.`,
+  compOnce: (t) => `Строка работает один раз, до ${t}. Никому её не показывайте. Не закрывайте окно, пока не появится «Готово».`,
   compWaiting: 'Ждём ваш компьютер...',
   compPlan: (n, f, b) => `Ваш компьютер: ${n} ${ruPlural(n, ['группа', 'группы', 'групп'])}, ${f} ${ruPlural(f, ['файл', 'файла', 'файлов'])}, ${b}. Предложение:`,
   kind: { knowledge: 'в Знания', files: 'хранить файлами', leave: 'остаётся на компьютере' },
@@ -156,4 +168,4 @@ const RU = {
 const PLAN_TEXT = { en: EN, ru: RU }
 const planWords = (lang) => PLAN_TEXT[lang === 'ru' ? 'ru' : 'en']
 
-module.exports = { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, vendorsOf, continueHref, PLAN_TEXT, planWords }
+module.exports = { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, agentUrls, vendorsOf, continueHref, PLAN_TEXT, planWords }

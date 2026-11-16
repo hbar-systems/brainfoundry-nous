@@ -47,11 +47,16 @@ def test_steps_and_pull():
 
 
 def test_survey_line_and_links():
-    out = _node("""const c=m.surveyCommands('https://b.example/api/bf','imp_x'); console.log(JSON.stringify([c.mac,c.windows,
+    out = _node("""const c=m.surveyCommands('https://b.example/api/bf','imp_x'); const r=m.surveyCommands('https://b.example/api/bf','imp_x','ru'); console.log(JSON.stringify([c.mac,c.windows,
       m.continueHref('chatgpt_2025-01-01_a b_1.md','ru'), m.continueHref('claude_x.md','en'), m.fmtBytes(0), m.fmtBytes(1536), m.fmtBytes(5*1024**3),
-      m.vendorsOf([{vendor:'ChatGPT'},{vendor:'Claude'},{vendor:'ChatGPT'}])]))""")
-    assert out[0] == 'curl -fsSLo brain_import.py "https://b.example/api/bf/documents/import-laptop/helper.py" && python3 brain_import.py --survey --brain "https://b.example/api/bf" --token imp_x'
-    assert out[1].startswith("curl.exe ") and "python brain_import.py --survey" in out[1]
+      m.vendorsOf([{vendor:'ChatGPT'},{vendor:'Claude'},{vendor:'ChatGPT'}]), r.mac, r.windows, m.agentUrls('https://b.example/api/bf','en')]))""")
+    # SPOKE-3: the dial-out agent, no Python on the computer
+    assert out[0] == "curl -fsSL https://b.example/api/bf/laptop/agent.sh | bash -s -- imp_x"
+    assert out[1] == '$env:BRAIN_TOKEN="imp_x"; irm https://b.example/api/bf/laptop/agent.ps1 | iex'
+    assert out[8] == "curl -fsSL https://b.example/api/bf/laptop/agent.sh?lang=ru | bash -s -- imp_x"
+    assert out[9] == '$env:BRAIN_TOKEN="imp_x"; irm https://b.example/api/bf/laptop/agent.ps1?lang=ru | iex'
+    assert out[10] == {"mac": "https://b.example/api/bf/laptop/agent.sh", "windows": "https://b.example/api/bf/laptop/agent.ps1"}
+    assert "python" not in out[0] + out[1]
     assert out[2] == "/?continue=chatgpt_2025-01-01_a%20b_1.md&lang=ru"
     assert out[3] == "/?continue=claude_x.md"
     assert out[4:7] == ["0 B", "1.5 KB", "5.0 GB"]

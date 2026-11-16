@@ -41,6 +41,9 @@ COPY api /app/api
 # The Knowledge page's chat import (api/chat_import.py) runs the same prep and select as the CLI.
 COPY scripts/import_chats.py /app/scripts/import_chats.py
 COPY scripts/import/brain_import.py /app/scripts/import/brain_import.py
+# Bring in this computer (SPOKE-3): the dial-out agents the api serves at /laptop/agent.sh and .ps1
+COPY scripts/import/agent.sh /app/scripts/import/agent.sh
+COPY scripts/import/agent.ps1 /app/scripts/import/agent.ps1
 
 # VERSION file is the single source of truth for BRAIN_VERSION (read at
 # api startup). Lives at /app/VERSION so api.main can resolve it via

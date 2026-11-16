@@ -5273,12 +5273,52 @@ def import_laptop_helper():
     return PlainTextResponse(_LAPTOP_HELPER.read_text(encoding="utf-8"), media_type="text/x-python")
 
 
+# Bring in this computer (SPOKE-3, 2026-11-16, api/laptop_agent.py): the one line's script, for bash
+# (Mac, Linux) and PowerShell (Windows). Public GETs, no state: the script is no secret and the key
+# travels in the line, never in this address. Caddy opens these two paths beside the four token paths.
+from api import laptop_agent as _laptop_agent
+
+
+def _laptop_agent_script(request: Request, kind: str, lang: str):
+    from fastapi.responses import PlainTextResponse
+    base = _laptop_agent.base_from(request.headers)
+    if base is None:
+        raise HTTPException(status_code=400, detail="unknown brain address")
+    text = _laptop_agent.render(kind, base, lang if lang in ("en", "ru") else "en")
+    return PlainTextResponse(text, media_type="text/plain; charset=utf-8",
+                             headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/laptop/agent.sh")
+def laptop_agent_sh(request: Request, lang: str = "en"):
+    """The Mac and Linux agent: curl -fsSL <brain>/api/bf/laptop/agent.sh | bash -s -- imp_..."""
+    return _laptop_agent_script(request, "sh", lang)
+
+
+@app.get("/laptop/agent.ps1")
+def laptop_agent_ps1(request: Request, lang: str = "en"):
+    """The Windows agent: $env:BRAIN_TOKEN="imp_..."; irm <brain>/api/bf/laptop/agent.ps1 | iex"""
+    return _laptop_agent_script(request, "ps1", lang)
+
+
 @app.get("/documents/import-laptop/check")
-def import_laptop_check(authorization: str = _Header("")):
+def import_laptop_check(authorization: str = _Header(""), form: str = ""):
+    """The helper's key check and, on a survey run, its wait for the owner's choice. form=lines (the
+    shell agents, which carry no JSON parser): text, 'state <none|waiting|chosen|folder>' then one
+    '<kind>\\t<path>' per chosen file. The JSON answer is unchanged."""
     try:
         rec = _LAPTOP_TOKENS.check(_laptop_import.bearer(authorization))
     except _laptop_import.TokenError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
+    if form == "lines":
+        from fastapi.responses import PlainTextResponse
+        if not rec.get("survey"):
+            return PlainTextResponse(_laptop_agent.lines_form("folder", None))
+        h = _LAPTOP_TOKENS.hash_of(_laptop_import.bearer(authorization))
+        data = _LAPTOP_SURVEYS.get(h)
+        take = _LAPTOP_SURVEYS.take(h) if data else None
+        state = "none" if data is None else ("chosen" if take is not None else "waiting")
+        return PlainTextResponse(_laptop_agent.lines_form(state, take), headers={"Cache-Control": "no-store"})
     out = {"ok": True, "expires_at": int(rec["expires"]), "files": rec["files"], "max_files": rec["max_files"],
            "bytes": rec["bytes"], "max_bytes": rec["max_bytes"], "max_file_bytes": _laptop_import.MAX_FILE_BYTES,
            "accepted": sorted(_laptop_import.ACCEPTED_EXT), "survey": bool(rec.get("survey"))}

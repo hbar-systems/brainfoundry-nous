@@ -185,12 +185,12 @@ An audio file goes to the same `POST /documents/import-laptop/file` with the sam
 The console sits behind its login; the helper carries only the token. So the console site block opens exactly the four token-gated paths, straight to the api (the console's own `/api/bf` proxy would add the owner key), and keeps the login for everything else, `/token` and `/status` included. `scripts/add-member.sh` prints it in every new member's block. The snippet, for any console block (`<api port>` is the brain's api port):
 
 ```
-    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     handle @import {
         uri strip_prefix /api/bf
         reverse_proxy localhost:<api port>
     }
-    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     basicauth @login {
 ```
 
@@ -279,3 +279,54 @@ Unverified means the parser follows third-party descriptions of the file and is 
 - Turn markers at the start of a line are detected: You, User, Me, Human (and Я, Вы, Пользователь) for the person; ChatGPT, Assistant, AI, Gemini, Claude, Copilot, Grok, DeepSeek, Perplexity, Le Chat, Mistral, Bot, Model (and Ассистент, ИИ) for the answer; also "You said:", "**User:**" and "## Me:". Both sides must appear, else the whole text is one "Me" block.
 - Source: the vendor named by the AI markers, else a vendor named in the first 3000 characters (perplexity, le chat, chat.mistral.ai, gemini.google.com, chatgpt.com, claude.ai, ...), else `pasted` (assistant shown as "AI"). Title: the `title` field, the html `<title>` or pdf title, else the first line. Date: the day of import.
 - Route form fields now: `file` (optional), `text` (optional), `title` (optional), `newest` (default 50); exactly one of `file` and `text`, else 400. The answer has the same keys as before.
+
+## Bring in this computer: the one line, Mac and Windows (SPOKE-3, 2026-11-16)
+
+hbar 2026-11-16, on SWITCH-1's eight-step Mac flow: "there has to be a standardized way: easy copy this in terminal and then gives full access for the brain to import stuff from the laptop", for members whose laptop he cannot touch (Christos) and for Windows (Elena). This is the member path. SWITCH-1 (inbound SSH over the brain's own network, branch `switch-1`) stays the advanced path for a standing spoke.
+
+### The line
+
+The home card "Bring in this computer" (Door 1 above) mints the survey token and shows one line with Copy:
+
+- Mac (Terminal) and Linux: `curl -fsSL https://<brain>/api/bf/laptop/agent.sh | bash -s -- imp_...`
+- Windows (PowerShell): `$env:BRAIN_TOKEN="imp_..."; irm https://<brain>/api/bf/laptop/agent.ps1 | iex`
+- In Russian, both addresses carry `?lang=ru` (the agent's own words, `WORDS` in `api/laptop_agent.py`).
+
+The card links "Read what this line runs" to the same address. The key travels in the line, never in the address, so the script is the same text for anyone who fetches it.
+
+### The pattern: the laptop dials out, the brain never dials in
+
+The agent is a short script that calls OUT over HTTPS to the token door of MOVE-IN-2 and nothing else: `GET /documents/import-laptop/check` (key check, then the wait for the choice with `?form=lines`, a text answer for shells that have no JSON parser), `POST /documents/import-laptop/check` (the inventory), `POST /documents/import-laptop/file`, `POST /documents/import-laptop/finish`. The plan, the yes per group and the caps are MOVE-IN-2's, unchanged. No VPN, no SSH server, no Remote Login, no router change, no inbound door: the laptop opens nothing to anyone. That is both fewer steps and a smaller surface than SWITCH-1, which opens SSH on the laptop to the brain.
+
+What one run does: check the key; walk the home folder and the cloud folders (iCloud Drive, `~/Library/CloudStorage/*` for Google Drive, Dropbox, OneDrive and Box, `~/Dropbox`, `~/OneDrive*`, `~/Google Drive`, `~/iCloudDrive`, `<letter>:\My Drive`); send the list (names, sizes, dates; gzip JSON); wait for the yes on the home; send exactly the chosen files, checking each against its own list (a name it did not list is counted and never sent); close the key; delete its temp folder and exit. Ctrl+C closes the key too. It writes no receipt and installs nothing; the home card shows what arrived.
+
+- Mac and Linux: bash 3.2 or later, curl, find, stat (BSD or GNU), awk, gzip, all part of macOS. No Python (on a fresh Mac `python3` only offers to install the developer tools). The whole script is one function called on its last line, so bash reads all of it before running any of it. The key goes to curl from a file in the temp folder (mode 600), never on curl's command line.
+- Windows: Windows PowerShell 5.1 as Windows 10 and 11 ship it, .NET HttpClient, no module, no administrator. `irm | iex` runs text, not a script file, so the execution policy does not apply; it turns on TLS 1.2 for its own calls. Links and junctions are not followed (the profile's "Application Data" style junctions); OneDrive's online-only files are listed and download when sent.
+- Never-send rules: one list, `SKIP_DIRS` and `SKIP_FILES` of `scripts/import/brain_import.py`, rendered into both scripts by `api/laptop_agent.py` at each fetch (awk regex on the Mac, `-like` on Windows). Also never listed: names with a tab, a newline or a backslash, and names over 400 characters (counted as "name too long or odd").
+
+### macOS privacy, without the Full Disk Access switch
+
+A script run from Terminal reads the home folder as the person. macOS guards Desktop, Documents, Downloads, iCloud Drive and removable volumes per app: the first time Terminal opens one, macOS asks "Terminal would like to access files in your Documents folder", and Allow is one press; the card and the agent say so. A folder refused that way, and anything else macOS keeps closed, is not looked into: the agent names it ("The computer kept these private") and the inventory carries `<folder>: kept private by the system`. Mail, Messages, Safari and the Photos library sit under `~/Library` or in a `.photoslibrary`, which the walk never enters anyway. No Remote Login and no Full Disk Access on this path.
+
+Unverified until a real Mac runs it (the hook is `ops/2026-11-16_switch-1-mac-trial.sh` in hbar.world): which of Desktop, Documents, Downloads and iCloud Drive prompt on the current macOS, whether find waits on the prompt or fails first, and the exact error text.
+
+### The Apple Developer ID is not needed here
+
+A `curl | bash` line is not a downloaded app, so Gatekeeper's "unidentified developer" check never runs (curl sets no quarantine flag). The USD 99 a year Developer ID only removes the Open Anyway step of SWITCH-1's downloaded `Join my brain.app`. On Windows likewise: no downloaded installer, so no SmartScreen prompt and no code signing certificate.
+
+### A standing connection is not built
+
+The agent runs once and is gone. A standing version (re-scan on a schedule, so agents can pick up new files) would add a LaunchAgent on the Mac or a scheduled task on Windows, a long-lived key stored on the laptop, and an auto-updating script: whoever controls the brain's address could then run new code on the laptop on every scan, without the person pasting anything. That is a separate decision with its own card; this path keeps "you pasted it, it ran once, it is gone".
+
+### The two routes and Caddy
+
+`GET /laptop/agent.sh` and `GET /laptop/agent.ps1` (api/main.py): public, no state, `Cache-Control: no-store`, text. The brain's address in the script comes from the request's Host (`https://<host>/api/bf`; validated as a plain host name; behind the console's own proxy, which sees `api:8000`, from the X-Forwarded-Host it sets). Listed in `tests/test_sec_pass_1_routes.py` `PUBLIC_SCRIPT_DOORS`, awaiting hbar's review. The Caddy snippet above opens them beside the four token paths; an existing box needs the two paths added to both `path` lines of its console block (the central thread applies it on hbar's word).
+
+### Tests
+
+`tests/test_laptop_agent.py`: the line run as the member runs it (curl piped to bash) against the api on 127.0.0.1 over a temp home with planted secrets and made-up cloud folders; its inventory equals the Python survey's name for name; the chosen files arrive, pictures and music kept as files; a brain asking for names it was not offered gets none of them; refusals (no key, unknown key, a folder-by-folder key, a non-https address); the line replaced while waiting; odd names, links and a locked folder; Russian; the routes, the address rule and the text form of the check; the awk secret regex against fnmatch. agent.ps1 is checked statically only: no PowerShell on the box (the auto-mode classifier refused fetching one on 2026-11-16).
+
+### Not verified
+
+- A real Mac: the privacy prompts above, BSD find and stat on a large home, the time it takes.
+- A real Windows laptop (Elena's): the whole of agent.ps1. What the test needs: Windows 10 or 11, a member brain with a survey token and the Caddy paths open, PowerShell from the Start menu, the line pasted; watch for TLS errors on the first `irm`, Defender or SmartScreen prompts, OneDrive online-only files, Cyrillic names, and the time for a full profile.

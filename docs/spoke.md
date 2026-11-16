@@ -94,3 +94,8 @@ What the brain says (B) and what the friend sees or does (F). One question per m
 ## 10. Not built yet
 
 The brain's side: the per-brain Headscale, the brain's userspace node, the door user and its sudoers line, the console's spoke page (Download, fingerprint, inventory page, cards for organise and apply, Disconnect), `cc-job spoke <verb>` raising the cards. Windows and Linux laptops (same door shape; Windows needs OpenSSH Server and a PowerShell door). Notarisation.
+
+## 11. The one-line path for members (SPOKE-3, 2026-11-16)
+
+For members, bringing a laptop in no longer needs a spoke: the home card "Bring in this computer" gives one line for Terminal or PowerShell that dials out to the member's own brain over HTTPS, sends a list, waits for the yes on the home, brings the chosen files and is gone (docs/IMPORT.md, "Bring in this computer"). No Tailscale, no Remote Login, no Full Disk Access, no app to open, no Developer ID, and the laptop opens no door. The spoke above stays for a standing connection where the brain looks and organises in place; that is the only thing it adds.
+

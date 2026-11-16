@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import css from 'styled-jsx/css'
 import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords } from '../lib/moveIn'
-import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
+import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
 import { AI_EXPORTS } from '../lib/aiExports'
 
 const API = '/api/bf'
@@ -92,8 +92,9 @@ function Tick({ on }) {
 
 const fmtClock = (s) => { try { return new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
 
-// Door 1: the whole computer. Start mints a survey token; the line runs the helper with --survey; the
-// plan comes back grouped; one yes per group or all proposed; the helper pulls them in the same run.
+// Door 1: bring in this computer. Start mints a survey token; the one line runs the dial-out agent from this
+// brain (SPOKE-3: bash on a Mac, PowerShell on Windows, no Python, no app); the plan comes back grouped;
+// one yes per group or all proposed; the same agent run pulls them, closes the key and is gone.
 function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }) {
   const [mint, setMint] = useState(null)        // null | { busy } | { token, expires_at } | { error }
   const [os, setOs] = useState('mac')
@@ -129,7 +130,8 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
       status()
     } catch { setMint({ error: W.failed }) }
   }
-  const cmd = mint && mint.token ? surveyCommands(base, mint.token)[os] : ''
+  const cmd = mint && mint.token ? surveyCommands(base, mint.token, lang)[os] : ''
+  const readUrl = base ? agentUrls(base, lang)[os] : ''
   const groups = (survey && survey.groups) || []
   const t = pickTotals(groups, picks || {})
   const over = overCaps(t, run)
@@ -154,6 +156,7 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
         <>
           <p className="mi-sub">{P.compSub}</p>
           <p className="mi-sub">{P.compNever}</p>
+          <p className="mi-note mi-dim">{P.compNoApp}</p>
         </>
       )}
       {step === 'line' && mint && mint.token && (
@@ -162,6 +165,8 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
           <p className="mi-sub">{os === 'mac' ? P.compMacHow : P.compWinHow}</p>
           <pre className="mi-cmd">{cmd}</pre>
           <p className="mi-note mi-dim">{P.compOnce(fmtClock(mint.expires_at))}</p>
+          {os === 'mac' && <p className="mi-note mi-dim">{P.compMacAllow}</p>}
+          <p className="mi-note mi-dim">{P.compNever}{' '}<a className="mi-link mi-read" href={readUrl} target="_blank" rel="noreferrer">{P.compRead}</a></p>
         </div>
       )}
       {step === 'line' && !(mint && mint.token) && <p className="mi-sub">{P.compWaiting}</p>}
