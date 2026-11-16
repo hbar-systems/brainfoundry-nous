@@ -82,7 +82,8 @@ class TokenStore:
         os.chmod(tmp, 0o600)
         os.replace(tmp, self.path)
 
-    def mint(self, ttl: int = TTL_SECONDS, max_files: int = MAX_FILES, max_bytes: int = MAX_BYTES) -> dict:
+    def mint(self, ttl: int = TTL_SECONDS, max_files: int = MAX_FILES, max_bytes: int = MAX_BYTES,
+             survey: bool = False) -> dict:
         raw = "imp_" + secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
@@ -92,10 +93,11 @@ class TokenStore:
             # forget records older than a day
             data = {h: r for h, r in data.items() if now - r.get("created", 0) < 86400}
             data[_hash(raw)] = {"created": now, "expires": now + ttl, "closed": None,
-                                "files": 0, "bytes": 0, "max_files": max_files, "max_bytes": max_bytes}
+                                "files": 0, "bytes": 0, "max_files": max_files, "max_bytes": max_bytes,
+                                "survey": bool(survey)}
             self._save(data)
         return {"token": raw, "expires_at": int(now + ttl), "max_files": max_files,
-                "max_bytes": max_bytes, "max_file_bytes": MAX_FILE_BYTES}
+                "max_bytes": max_bytes, "max_file_bytes": MAX_FILE_BYTES, "survey": bool(survey)}
 
     def _get(self, data: dict, raw: str) -> dict:
         if not raw or not TOKEN_RE.match(raw):
@@ -152,7 +154,22 @@ class TokenStore:
         now = time.time()
         return {"created": int(rec["created"]), "expires_at": int(rec["expires"]),
                 "open": not rec.get("closed") and now <= rec["expires"],
-                "files": rec["files"], "bytes": rec["bytes"], "arrived": rec.get("arrived", [])}
+                "files": rec["files"], "bytes": rec["bytes"], "arrived": rec.get("arrived", []),
+                "survey": bool(rec.get("survey")), "max_files": rec["max_files"], "max_bytes": rec["max_bytes"]}
+
+    def latest_hash(self) -> str | None:
+        """The newest run's key (the token's sha256), for the survey beside it. Never the token."""
+        with self._lock:
+            data = self._load()
+        if not data:
+            return None
+        return max(data.items(), key=lambda kv: kv[1].get("created", 0))[0]
+
+    def hash_of(self, raw: str) -> str:
+        """The key of an open token (checked), for the survey beside it."""
+        with self._lock:
+            self._get(self._load(), raw)
+        return _hash(raw)
 
     def close(self, raw: str) -> dict:
         with self._lock:
@@ -281,8 +298,9 @@ class AudioPlace:
                 continue
         raise FileExistsError("no temp name free")
 
-    def keep(self, out, size: int, sha: str) -> str:
-        """The received file (its open temp `out`) into place, opened to the member, listed in audio.tsv.
+    def keep(self, out, size: int, sha: str, listing: str = "audio.tsv") -> str:
+        """The received file (its open temp `out`) into place, opened to the member, listed in audio.tsv
+        (pictures kept by the whole-computer survey: media.tsv).
         Returns the path as the member sees it under ~/in."""
         out.flush()
         os.fchmod(out.fileno(), 0o644)
@@ -304,15 +322,15 @@ class AudioPlace:
         self.rel = "/".join([*self.rel.split("/")[:-1], name])
         fresh = True
         try:
-            fd = os.open("audio.tsv", _NEW_FILE, 0o644, dir_fd=self.import_fd)
+            fd = os.open(listing, _NEW_FILE, 0o644, dir_fd=self.import_fd)
         except FileExistsError:
             fresh = False
-            fd = os.open("audio.tsv", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            fd = os.open(listing, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
                          dir_fd=self.import_fd)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                raise ValueError("audio.tsv is not a plain file")
+                raise ValueError(f"{listing} is not a plain file")
             if fresh:
                 os.fchmod(fd, 0o644)
                 _chown_fd(fd, self.root_st)

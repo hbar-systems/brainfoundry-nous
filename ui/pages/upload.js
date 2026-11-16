@@ -3,6 +3,10 @@ import CustomSelect from "../lib/CustomSelect";
 import LaptopImportCard from "../lib/LaptopImportCard";
 import useConsoleLang from "../lib/useConsoleLang";
 import { importWords } from "../lib/importText";
+import { continueHref } from "../lib/moveInPlan";
+import { AI_EXPORTS } from "../lib/aiExports";
+// An imported conversation (scripts/import_chats.py names; api/chat_continue.py CHAT_DOC): "Continue here".
+const CHAT_CONT = /^(chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_/;
 
 const API_BASE = "/api/bf";
 
@@ -727,12 +731,13 @@ export default function Upload() {
       <section style={{ padding: 18, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
         <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>{IW.chatTitle}</div>
         <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7 }}>
-          <div>{IW.chatGpt}</div>
-          <div>{IW.claude}</div>
+          {AI_EXPORTS.map((x) => (
+            <div key={x.key}>{x.name}: {x.steps[lang === "ru" ? "ru" : "en"]}{x.verified ? "" : ` (${IW.unverified})`}</div>
+          ))}
         </div>
         <label style={{ ...BTN, display: "inline-block", marginTop: 12, opacity: chatImport && chatImport.busy ? 0.5 : 1, pointerEvents: chatImport && chatImport.busy ? "none" : "auto" }}>
           {chatImport && chatImport.busy ? IW.chatReading(chatImport.name) : IW.chatPick}
-          <input type="file" accept=".zip,application/zip" style={{ display: "none" }}
+          <input type="file" accept=".zip,.json,.html,.htm,.csv,.txt,.md,.pdf" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importChats(f); }} />
         </label>
         {chatImport && chatImport.result && (
@@ -1194,6 +1199,10 @@ export default function Upload() {
                                 ? "local-only: only your own hardware's models read this. Click to make it open."
                                 : "open: any reasoner may read this. Click to make it local-only."}
                             />
+                            {CHAT_CONT.test(d.name) && (
+                              <a href={continueHref(d.name, lang)} title={IW.contTitle}
+                                style={{ color: ACCENT, fontSize: 12, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "4px 8px", textDecoration: "none", lineHeight: 1 }}>{IW.cont}</a>
+                            )}
                             <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
                             <button
                               onClick={() => forgetDoc(d.name)}

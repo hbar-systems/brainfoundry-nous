@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Import a person's ChatGPT or Claude export into their brain, through the gate.
+"""Import a person's AI chat history into their brain, through the gate.
+
+ChatGPT and Claude (2026-10-13); Gemini, DeepSeek, Grok, Copilot and Le Chat
+exports, plus any pasted or dropped conversation (text, markdown, html, pdf)
+as one document, added 2026-11-16 (docs/IMPORT.md "Other AIs"). The vendor is
+detected from the file itself; FORMATS says which shapes were confirmed.
 
 Five steps, each a subcommand (docs/IMPORT.md, 2026-10-13):
 
-  prep     <export.zip | dir | conversations.json> <out_dir>
+  prep     <export.zip | dir | export file | pasted .txt/.md/.html/.pdf> <out_dir>
            one markdown document per conversation (title, date, role-labelled
            turns, main branch only, nothing cut) plus out_dir/index.tsv
   list     <out_dir> [filters]       date, size, title of every conversation
@@ -20,8 +25,11 @@ proposals the brain already holds as PENDING. BRAIN_API_KEY comes from the
 environment.
 """
 import argparse
+import csv
 import datetime as dt
 import hashlib
+import html as _html
+import io
 import json
 import os
 import pathlib
@@ -29,6 +37,7 @@ import re
 import sys
 import time
 import zipfile
+from html.parser import HTMLParser
 
 INDEX_COLS = ["id", "source", "kind", "date", "updated", "title", "turns", "chars", "file", "sha256"]
 STATE_COLS = ["id", "sha256", "proposal_id", "permit_id", "injection_risk"]
@@ -36,35 +45,106 @@ STATE_COLS = ["id", "sha256", "proposal_id", "permit_id", "injection_risk"]
 
 # ── reading the export ────────────────────────────────────────────────────
 
+# Which vendor formats were confirmed, and from where (2026-11-16). "verified" means the
+# file shape was read from the vendor's own documentation or a real sample; False means the
+# parser follows third-party descriptions (named in the note) and is written to be tolerant.
+FORMATS = {
+    "chatgpt": {"verified": True, "note": "conversations.json, mapping trees; real exports since 2026-10-13"},
+    "claude": {"verified": True, "note": "conversations.json with chat_messages; real exports since 2026-10-13"},
+    "gemini": {"verified": False, "note": "Takeout My Activity > Gemini Apps, MyActivity.json or .html. Steps from "
+               "https://support.google.com/gemini/answer/16920332 and record fields from "
+               "https://developers.google.com/data-portability/schema-reference/my_activity; the Gemini "
+               "prompt/answer fields (title 'Prompted ...', safeHtmlItem, details Request/Response, "
+               "userInteractions) are third-party descriptions, not in Google's docs"},
+    "deepseek": {"verified": False, "note": "no vendor doc found; conversations.json with mapping trees whose "
+                 "messages hold fragments (REQUEST/RESPONSE/THINK), as read by the open-source "
+                 "https://github.com/akivacp/chatgpt-json-tree-viewer"},
+    "grok": {"verified": False, "note": "no vendor doc found; prod-grok-backend.json {conversations:[{conversation, "
+             "responses:[{response:{_id, parent_response_id, sender, message, create_time}}]}]} per "
+             "https://portable-ai-memory.pages.dev/providers/grok/ and the viewer above"},
+    "copilot": {"verified": False, "note": "CSV download verified at "
+                "https://support.microsoft.com/en-us/privacy/manage-your-copilot-activity-history-in-the-privacy-dashboard "
+                "(columns not listed there); columns Conversation,Time,Author,Message / "
+                "CreatedAt,MessageContent,Author,ChatName / Timestamp,ClientApp,Prompt per "
+                "https://portable-ai-memory.pages.dev/providers/microsoft/"},
+    "lechat": {"verified": False, "note": "export at admin.mistral.ai/account/export "
+               "(https://help.mistral.ai/en/articles/347623-how-do-i-export-my-data-from-le-chat), file shape not "
+               "documented; json chat_messages with role/content as read by the viewer above; else the fallback"},
+    "perplexity": {"verified": False, "note": "no documented bulk file format (account 'Export my data' or a "
+                   "privacy request); threads come in through the fallback (Export as Markdown/PDF, or paste)"},
+    "pasted": {"verified": True, "note": "our own fallback: text, markdown, html or pdf, one conversation"},
+}
+
+# How the assistant is named in "## Assistant (<name>)". ChatGPT and Claude keep the
+# capitalize() spelling they have had since 2026-10-13 (documents already in memory).
+DISPLAY = {"chatgpt": "Chatgpt", "claude": "Claude", "gemini": "Gemini", "deepseek": "DeepSeek",
+           "grok": "Grok", "copilot": "Copilot", "perplexity": "Perplexity", "lechat": "Le Chat",
+           "pasted": "AI"}
+
+GAP_S = 30 * 60  # Gemini (and nameless Copilot rows) start a new conversation after 30 minutes quiet
+
+
+def _wanted(name):
+    base = name.rsplit("/", 1)[-1]
+    return (base in ("projects.json", "prod-grok-backend.json")
+            or re.fullmatch(r"conversations(-\d+)?\.json", base)
+            or base.lower() in ("myactivity.json", "myactivity.html")
+            or base.lower().endswith(".csv"))
+
+
 def load_export(src):
-    """Return (conversations, projects) from a zip, a directory or a json file.
-    ChatGPT may shard into conversations-000.json, ...; all shards are read."""
+    """Return (conversations, projects) from a zip, a directory or one export file.
+    ChatGPT may shard into conversations-000.json, ...; all shards are read. A zip or
+    folder with none of the known names has every .json tried (Le Chat's file name
+    is not documented); normalize() drops what it does not recognise."""
     src = pathlib.Path(src).expanduser()
     convs, projects = [], []
 
     def take(name, raw):
-        data = json.loads(raw)
         base = name.rsplit("/", 1)[-1]
-        if base == "projects.json":
+        low = base.lower()
+        if low.endswith(".csv"):
+            convs.extend(copilot_conversations(raw))
+            return
+        if low.endswith((".html", ".htm")):
+            convs.extend(gemini_html_conversations(raw))
+            return
+        data = json.loads(raw)
+        if low == "myactivity.json" or _looks_like_gemini(data):
+            convs.extend(gemini_conversations(data))
+        elif base == "projects.json":
             projects.extend(data if isinstance(data, list) else [])
         elif isinstance(data, list):
             convs.extend(data)
-        elif isinstance(data, dict):  # older or hand-made shapes
-            convs.extend(data.get("conversations") or data.get("items") or [])
+        elif isinstance(data, dict):  # older or hand-made shapes; Grok's {"conversations": [...]}
+            got = data.get("conversations") or data.get("items") or data.get("chats")
+            convs.extend(got if isinstance(got, list) else [data])
 
-    def wanted(name):
-        base = name.rsplit("/", 1)[-1]
-        return base == "projects.json" or re.fullmatch(r"conversations(-\d+)?\.json", base)
+    def prefer_json(names):
+        """Takeout may carry MyActivity.html and .json side by side: read the json only."""
+        dirs_with_json = {n.rsplit("/", 1)[0] for n in names if n.lower().endswith("myactivity.json")}
+        return [n for n in names if not (n.lower().endswith("myactivity.html")
+                                         and n.rsplit("/", 1)[0] in dirs_with_json)]
+
+    def read_all(names, read):
+        names = prefer_json([n for n in names if "__MACOSX" not in n])
+        hits = [n for n in names if _wanted(n)]
+        for n in hits:
+            take(n, read(n))
+        if not convs and not projects:
+            for n in names:
+                if n.lower().endswith(".json") and n not in hits:
+                    try:
+                        take(n, read(n))
+                    except ValueError:
+                        continue
 
     if src.is_file() and zipfile.is_zipfile(src):
         with zipfile.ZipFile(src) as z:
-            for n in sorted(z.namelist()):
-                if wanted(n) and "__MACOSX" not in n:
-                    take(n, z.read(n))
+            read_all(sorted(n for n in z.namelist() if not n.endswith("/")), z.read)
     elif src.is_dir():
-        for p in sorted(src.rglob("*.json")):
-            if wanted(p.name) and "__MACOSX" not in p.parts:
-                take(p.name, p.read_bytes())
+        paths = {str(p.relative_to(src)): p for p in sorted(src.rglob("*")) if p.is_file()}
+        read_all(sorted(paths), lambda n: paths[n].read_bytes())
     elif src.is_file():
         take(src.name, src.read_bytes())
     else:
@@ -155,17 +235,475 @@ def claude_turns(conv):
     return turns
 
 
+# ── other AIs (2026-11-16) ──────────────────────────────────────────────
+
+class _Text(HTMLParser):
+    """html -> plain text: block tags become line breaks, script and style dropped."""
+    BLOCK = {"p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "hr", "table"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.skip, self.title, self._in_title = [], 0, "", False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.skip += 1
+        elif tag == "title":
+            self._in_title = True
+        elif tag in self.BLOCK:
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.skip = max(0, self.skip - 1)
+        elif tag == "title":
+            self._in_title = False
+        elif tag in self.BLOCK:
+            self.out.append("\n")
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+        elif not self.skip:
+            self.out.append(data)
+
+
+def html_text(markup):
+    """(plain text, <title>) of an html string; whitespace tidied, paragraphs kept."""
+    p = _Text()
+    p.feed(markup)
+    p.close()
+    lines = [" ".join(l.replace("\u202f", " ").replace("\xa0", " ").split()) for l in "".join(p.out).split("\n")]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text, " ".join(p.title.split())
+
+
+def _strings(obj, keys=("text", "content", "prompt", "message", "response")):
+    """Text found in an unknown json value: strings under the usual text keys, else every string."""
+    if isinstance(obj, str):
+        try:
+            return _strings(json.loads(obj), keys) if obj[:1] in "[{" else [obj]
+        except ValueError:
+            return [obj]
+    found, every = [], []
+
+    def walk(o, under):
+        if isinstance(o, str):
+            (found if under else every).append(o)
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                walk(v, under or k in keys)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, under)
+    walk(obj, False)
+    return [x for x in (found or every) if x.strip()]
+
+
+def _looks_like_gemini(data):
+    return (isinstance(data, list) and data and isinstance(data[0], dict) and "time" in data[0]
+            and any("Gemini" in str(e.get("header", "")) or "Gemini" in " ".join(map(str, e.get("products") or []))
+                    for e in data[:50] if isinstance(e, dict)))
+
+
+_GEMINI_CID = re.compile(r"gemini\.google\.com/(?:u/\d+/)?app/(?:c/)?([0-9A-Za-z_-]{6,})")
+
+
+def _gemini_entry(e):
+    """One My Activity record -> (conversation id or '', iso time, prompt, answer), or None."""
+    if not isinstance(e, dict):
+        return None
+    tag = str(e.get("header", "")) + " " + " ".join(map(str, e.get("products") or []))
+    if "Gemini" not in tag:
+        return None  # a full My Activity export carries Search, YouTube, ...: only Gemini comes in
+    prompt, answer = [], []
+    for d in e.get("details") or []:
+        if isinstance(d, dict) and d.get("value"):
+            (prompt if str(d.get("name", "")).lower() == "request" else
+             answer if str(d.get("name", "")).lower() == "response" else []).append(str(d["value"]))
+    title = str(e.get("title") or "")
+    if not prompt and title.startswith("Prompted "):
+        prompt.append(title[len("Prompted "):])
+    for item in e.get("safeHtmlItem") or []:
+        if isinstance(item, dict) and item.get("html"):
+            answer.append(html_text(item["html"])[0])
+    for ui in e.get("userInteractions") or []:
+        u = ui.get("userInteraction", ui) if isinstance(ui, dict) else {}
+        if not prompt and u.get("request"):
+            prompt += _strings(u["request"])
+        if not answer and u.get("response"):
+            answer += _strings(u["response"])
+    prompt, answer = "\n".join(prompt).strip(), "\n\n".join(answer).strip()
+    if not prompt and not answer:
+        return None
+    m = _GEMINI_CID.search(str(e.get("titleUrl") or ""))
+    return (m.group(1) if m else "", _iso(e.get("time"))[1], prompt, answer)
+
+
+def _group_gemini(items):
+    """items: (cid, iso, prompt, answer). Same conversation id -> one conversation; without
+    an id, a new conversation after GAP_S of quiet. Returns already-normalized dicts."""
+    items = sorted((i for i in items if i), key=lambda i: i[1])
+    groups, by_cid, last_t = [], {}, None
+    for it in items:
+        cid, when = it[0], it[1]
+        if cid:
+            if cid not in by_cid:
+                by_cid[cid] = []
+                groups.append((cid, by_cid[cid]))
+            by_cid[cid].append(it)
+            continue
+        t = dt.datetime.fromisoformat(when.replace("Z", "+00:00")).timestamp() if when else None
+        if last_t is None or t is None or t - last_t > GAP_S or groups[-1][0]:
+            groups.append(("", []))
+        groups[-1][1].append(it)
+        last_t = t
+    out = []
+    for cid, its in groups:
+        turns = []
+        for _, when, prompt, answer in its:
+            if prompt:
+                turns.append(("user", when, prompt))
+            if answer:
+                turns.append(("assistant", when, answer))
+        first = next((p for _, _, p, _ in its if p), "Gemini")
+        gid = cid or "gemini-" + hashlib.sha256(f"{its[0][1]}\n{first}".encode()).hexdigest()[:12]
+        out.append({"_norm": {"id": gid, "source": "gemini", "date": its[0][1][:10],
+                              "updated": its[-1][1], "title": _one_line(first)[:80], "turns": turns}})
+    return out
+
+
+def gemini_conversations(data):
+    """MyActivity.json (a list of records) -> conversations."""
+    return _group_gemini(_gemini_entry(e) for e in (data if isinstance(data, list) else []))
+
+
+_DATE_LINE = re.compile(r"^(?:[A-Z][a-z]{2,8}\.? \d{1,2}, \d{4}|\d{1,2} [A-Z][a-z]{2,8}\.? \d{4}),? "
+                        r"\d{1,2}:\d{2}(?::\d{2})?(?: ?[AP]M)?(?: [A-Z]{2,5}|[ ]?[+-]\d{2}:?\d{2})?$")
+
+
+def _gemini_html_time(line):
+    s = re.sub(r" (?:[A-Z]{2,5}|[+-]\d{2}:?\d{2})$", "", line).replace(".", "")
+    for fmt in ("%b %d, %Y, %I:%M:%S %p", "%b %d, %Y, %I:%M %p", "%B %d, %Y, %I:%M:%S %p",
+                "%d %b %Y, %H:%M:%S", "%d %B %Y, %H:%M:%S", "%b %d, %Y, %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(s, fmt).replace(tzinfo=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+    return ""
+
+
+def gemini_html_conversations(raw):
+    """MyActivity.html: one 'outer-cell' card per record: header, 'Prompted <text>', a date
+    line, the answer, then 'Products:'. Times read as UTC (the page prints local time)."""
+    markup = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    if "outer-cell" not in markup:
+        return []
+    items = []
+    for card in markup.split('class="outer-cell')[1:]:
+        m = _GEMINI_CID.search(_html.unescape(card))
+        text, _ = html_text('<div class="outer-cell' + card)
+        lines = [l for l in text.split("\n") if l.strip()]
+        if not lines or "Gemini" not in lines[0]:  # the card's header names the product
+            continue
+        body = lines[1:]
+        cut = next((i for i, l in enumerate(body) if l.startswith("Products:")), len(body))
+        body = body[:cut]
+        di = next((i for i, l in enumerate(body) if _DATE_LINE.match(l.strip())), None)
+        if di is None:
+            continue
+        prompt = "\n".join(body[:di]).strip()
+        if prompt.startswith("Prompted "):
+            prompt = prompt[len("Prompted "):]
+        answer = "\n".join(body[di + 1:]).strip()
+        if prompt or answer:
+            items.append((m.group(1) if m else "", _gemini_html_time(body[di].strip()), prompt, answer))
+    return _group_gemini(items)
+
+
+def _main_branch(nodes, parent_of, children_of, start=None):
+    """Node ids along the kept branch: from start (the current node) up, or from the root
+    down through the last child (the latest regeneration)."""
+    if start not in nodes:
+        roots = [k for k in nodes if not parent_of(k) or parent_of(k) not in nodes]
+        node = roots[0] if roots else None
+        while node and [c for c in children_of(node) if c in nodes]:
+            node = [c for c in children_of(node) if c in nodes][-1]
+        start = node
+    chain, seen, node = [], set(), start
+    while node and node in nodes and node not in seen:
+        seen.add(node)
+        chain.append(node)
+        node = parent_of(node)
+    return list(reversed(chain))
+
+
+def deepseek_turns(conv):
+    """mapping tree like ChatGPT's; each message holds fragments typed REQUEST (the person),
+    RESPONSE (the answer), THINK or SEARCH (left out, as ChatGPT's reasoning is)."""
+    mapping = conv.get("mapping") or {}
+    ids = _main_branch(mapping, lambda k: (mapping[k] or {}).get("parent"),
+                       lambda k: (mapping[k] or {}).get("children") or [], conv.get("current_node"))
+    turns = []
+    for k in ids:
+        m = (mapping[k] or {}).get("message")
+        if not m:
+            continue
+        when = _iso(m.get("inserted_at") or m.get("create_time"))[1]
+        for f in m.get("fragments") or []:
+            if not isinstance(f, dict):
+                continue
+            kind = str(f.get("type", "")).upper()
+            role = "user" if kind == "REQUEST" else "assistant" if kind == "RESPONSE" else None
+            text = str(f.get("content") or f.get("text") or "").strip()
+            if not role or not text:
+                continue
+            if turns and turns[-1][0] == role and turns[-1][1] == when:
+                turns[-1] = (role, when, turns[-1][2] + "\n\n" + text)
+            else:
+                turns.append((role, when, text))
+    return turns
+
+
+def _grok_time(t):
+    """BSON {"$date": {"$numberLong": ms}} or {"$date": iso}, an ISO string, or epoch."""
+    if isinstance(t, dict):
+        d = t.get("$date", t)
+        if isinstance(d, dict):
+            d = d.get("$numberLong")
+            try:
+                return _iso(int(d) / 1000.0)
+            except (TypeError, ValueError):
+                return "", ""
+        return _iso(d)
+    if isinstance(t, (int, float)) and t > 1e11:
+        return _iso(t / 1000.0)
+    return _iso(t)
+
+
+def grok_turns(conv):
+    """responses: [{response: {_id, parent_response_id, sender, message, create_time}}].
+    The kept branch ends at the newest leaf; sender 'human' is the person, anything else
+    (assistant, ASSISTANT, a model name) the answer."""
+    rs = [r.get("response", r) for r in conv.get("responses") or [] if isinstance(r, dict)]
+    rs = [r for r in rs if isinstance(r, dict)]
+    if all(r.get("_id") for r in rs):
+        nodes = {r["_id"]: r for r in rs}
+        kids = {}
+        for r in rs:
+            kids.setdefault(r.get("parent_response_id"), []).append(r["_id"])
+        leaves = [k for k in nodes if k not in kids]
+        newest = max(leaves, key=lambda k: _grok_time(nodes[k].get("create_time"))[1], default=None)
+        rs = [nodes[k] for k in _main_branch(nodes, lambda k: nodes[k].get("parent_response_id"),
+                                             lambda k: kids.get(k, []), newest)]
+    else:
+        rs.sort(key=lambda r: _grok_time(r.get("create_time"))[1])
+    turns = []
+    for r in rs:
+        text = str(r.get("message") or "").strip()
+        if text:
+            role = "user" if str(r.get("sender", "")).lower() == "human" else "assistant"
+            turns.append((role, _grok_time(r.get("create_time"))[1], text))
+    return turns
+
+
+def lechat_turns(conv):
+    turns = []
+    for m in conv.get("chat_messages") or conv.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else "\n".join(
+            b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type", "text") == "text")
+        role = "user" if str(m.get("role", "")).lower() in ("user", "human") else "assistant"
+        if text.strip():
+            turns.append((role, _iso(m.get("created_at") or m.get("timestamp"))[1], text.strip()))
+    return turns
+
+
+def _copilot_time(s):
+    s = (s or "").strip()
+    if not s:
+        return ""
+    got = _iso(s)[1]
+    if got:
+        return got
+    for fmt in ("%m/%d/%Y %H:%M:%S %z", "%m/%d/%Y %I:%M:%S %p %z", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p"):
+        try:
+            d = dt.datetime.strptime(s, fmt)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=dt.timezone.utc)
+            return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+    return ""
+
+
+def copilot_conversations(raw):
+    """A Copilot privacy-dashboard CSV. Rows carry no conversation id: rows are grouped by
+    the Conversation / ChatName column; rows without one (the Windows apps file, prompts
+    only) start a new conversation after GAP_S of quiet."""
+    text = raw.decode("utf-8-sig", "replace") if isinstance(raw, bytes) else raw
+    reader = csv.DictReader(io.StringIO(text))
+    cols = {re.sub(r"[^a-z]", "", (c or "").lower()): c for c in reader.fieldnames or []}
+    msg_col = cols.get("message") or cols.get("messagecontent") or cols.get("prompt")
+    time_col = cols.get("time") or cols.get("createdat") or cols.get("timestamp")
+    if not msg_col or not time_col:
+        return []
+    name_col, author_col = cols.get("conversation") or cols.get("chatname"), cols.get("author")
+    rows = []
+    for r in reader:
+        msg = (r.get(msg_col) or "").strip()
+        if not msg:
+            continue
+        who = (r.get(author_col) or "").strip().lower() if author_col else "human"
+        role = "user" if who in ("human", "user", "you", "me") else "assistant"
+        rows.append(((r.get(name_col) or "").strip() if name_col else "", _copilot_time(r.get(time_col)), role, msg))
+    rows.sort(key=lambda x: x[1])
+    groups, named, last_t = [], {}, None
+    for name, when, role, msg in rows:
+        if name:
+            if name not in named:
+                named[name] = (name, [])
+                groups.append(named[name])
+            named[name][1].append((role, when, msg))
+            continue
+        t = dt.datetime.fromisoformat(when.replace("Z", "+00:00")).timestamp() if when else None
+        if last_t is None or t is None or t - last_t > GAP_S or not groups or groups[-1][0]:
+            groups.append(("", []))
+        groups[-1][1].append((role, when, msg))
+        last_t = t
+    out = []
+    for name, turns in groups:
+        first = next((m for r, _, m in turns if r == "user"), turns[0][2])
+        title = name or _one_line(first)[:80]
+        cid = "copilot-" + hashlib.sha256(f"{title}\n{turns[0][1]}".encode()).hexdigest()[:12]
+        out.append({"_norm": {"id": cid, "source": "copilot", "date": turns[0][1][:10],
+                              "updated": turns[-1][1], "title": title, "turns": turns}})
+    return out
+
+
 def normalize(conv):
-    """One conversation from either export -> dict(id, source, date, updated, title, turns)."""
+    """One conversation from any export -> dict(id, source, date, updated, title, turns)."""
+    if "_norm" in conv:  # Gemini and Copilot arrive grouped already
+        return conv["_norm"]
     if "mapping" in conv:
+        mp = conv.get("mapping") or {}
+        if any(isinstance(v, dict) and isinstance(v.get("message"), dict) and "fragments" in v["message"]
+               for v in mp.values()):
+            return {"id": conv.get("id") or "", "source": "deepseek",
+                    "date": _iso(conv.get("inserted_at") or conv.get("create_time"))[0],
+                    "updated": _iso(conv.get("updated_at") or conv.get("update_time"))[1],
+                    "title": conv.get("title") or "", "turns": deepseek_turns(conv)}
         return {"id": conv.get("conversation_id") or conv.get("id") or "", "source": "chatgpt",
                 "date": _iso(conv.get("create_time"))[0], "updated": _iso(conv.get("update_time"))[1],
                 "title": conv.get("title") or "", "turns": chatgpt_turns(conv)}
-    if "chat_messages" in conv:
+    msgs = conv.get("chat_messages")
+    if isinstance(msgs, list) and not (msgs and all(isinstance(m, dict) and "sender" not in m and "role" in m
+                                                    for m in msgs)):
         return {"id": conv.get("uuid") or "", "source": "claude",
                 "date": _iso(conv.get("created_at"))[0], "updated": _iso(conv.get("updated_at"))[1],
                 "title": conv.get("name") or "", "turns": claude_turns(conv)}
+    if isinstance(conv.get("conversation"), dict) and isinstance(conv.get("responses"), list):
+        c = conv["conversation"]
+        return {"id": c.get("id") or "", "source": "grok", "date": _grok_time(c.get("create_time"))[0],
+                "updated": _grok_time(c.get("modify_time"))[1], "title": c.get("title") or "",
+                "turns": grok_turns(conv)}
+    msgs = msgs if isinstance(msgs, list) else conv.get("messages")
+    if isinstance(msgs, list) and msgs and all(isinstance(m, dict) and "role" in m and "sender" not in m for m in msgs):
+        return {"id": conv.get("id") or conv.get("uuid") or "", "source": "lechat",
+                "date": _iso(conv.get("created_at"))[0], "updated": _iso(conv.get("updated_at"))[1],
+                "title": conv.get("title") or conv.get("name") or "", "turns": lechat_turns(conv)}
     return None
+
+
+# ── the fallback: one pasted or dropped conversation ─────────────────────
+
+_USER = r"you|user|me|human|я|вы|пользователь"
+_AI = (r"chatgpt|assistant|ai|gemini|claude|copilot|grok|deepseek|perplexity|le chat|mistral|bot|model|"
+       r"ассистент|ии")
+_MARK = re.compile(r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?(" + _USER + "|" + _AI + r")(?:\s+said)?(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$",
+                   re.IGNORECASE)
+_VENDOR = {"chatgpt": "chatgpt", "gemini": "gemini", "claude": "claude", "copilot": "copilot", "grok": "grok",
+           "deepseek": "deepseek", "perplexity": "perplexity", "le chat": "lechat", "mistral": "lechat"}
+
+
+def pasted_turns(text):
+    """Turns from 'You:' / 'ChatGPT:' style markers (also 'You said:', '**User:**', '## Me:');
+    without both a person and an AI marker, one 'Me' block holding everything.
+    Returns (turns, vendor named by the AI markers or '')."""
+    turns, vendors, cur = [], set(), None
+    for line in text.splitlines():
+        m = _MARK.match(line)
+        if m:
+            who = m.group(1).lower()
+            role = "user" if re.fullmatch(_USER, who) else "assistant"
+            if role == "assistant" and who in _VENDOR:
+                vendors.add(_VENDOR[who])
+            cur = [role, [m.group(2)] if m.group(2).strip() else []]
+            turns.append(cur)
+        elif cur is not None:
+            cur[1].append(line)
+        elif line.strip():
+            cur = ["user", [line]]
+            turns.append(cur)
+    roles = {r for r, _ in turns}
+    if roles != {"user", "assistant"}:
+        return [("user", "", text.strip())], ""
+    out = [(r, "", "\n".join(ls).strip()) for r, ls in turns if "\n".join(ls).strip()]
+    return out, (vendors.pop() if len(vendors) == 1 else "")
+
+
+def _vendor_named(text):
+    head = text[:3000].lower()
+    for needle, v in (("perplexity", "perplexity"), ("chat.mistral.ai", "lechat"), ("le chat", "lechat"),
+                      ("gemini.google.com", "gemini"), ("chatgpt.com", "chatgpt"), ("claude.ai", "claude"),
+                      ("copilot.microsoft.com", "copilot"), ("grok.com", "grok"), ("chat.deepseek.com", "deepseek")):
+        if needle in head:
+            return v
+    return ""
+
+
+def file_text(name, data):
+    """(text, title) of a dropped file: pdf through pypdf, html stripped, else utf-8 text.
+    Raises ValueError when it is not text."""
+    low = (name or "").lower()
+    if low.endswith(".pdf") or data[:5] == b"%PDF-":
+        try:
+            from pypdf import PdfReader
+        except ImportError as e:
+            raise ValueError("pdf needs pypdf") from e
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n\n".join((p.extract_text() or "") for p in reader.pages).strip()
+        title = ""
+        try:
+            title = str((reader.metadata or {}).get("/Title") or "")
+        except Exception:
+            pass
+        return text, title
+    try:
+        s = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise ValueError("not text") from e
+    if "\x00" in s:
+        raise ValueError("not text")
+    if low.endswith((".html", ".htm")) or re.match(r"\s*(<!doctype html|<html)", s[:200], re.IGNORECASE):
+        return html_text(s)
+    return s, ""
+
+
+def pasted_conversation(text, title=None, today=None):
+    """One normalized conversation from pasted text."""
+    text = text.replace("\r\n", "\n").strip()
+    turns, vendor = pasted_turns(text)
+    source = vendor or _vendor_named(text) or "pasted"
+    if not title:
+        first = next((l for l in text.splitlines() if l.strip()), "")
+        m = _MARK.match(first)
+        title = _one_line(m.group(2) if m else first).lstrip("# ")[:80] or "Pasted conversation"
+    date = today or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    return {"id": "pasted-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], "source": source,
+            "date": date, "updated": "", "title": _one_line(title), "turns": turns}
 
 
 def _slug(s, n=48):
@@ -187,15 +725,35 @@ def render(c):
             ""]
     body = []
     for role, when, text in c["turns"]:
-        label = ROLE_LABEL[role] + (" (" + c["source"].capitalize() + ")" if role == "assistant" else "")
+        label = ROLE_LABEL[role] + (" (" + DISPLAY.get(c["source"], c["source"].capitalize()) + ")"
+                                    if role == "assistant" else "")
         body += [f"## {label}" + (f", {when}" if when else ""), "", text, ""]
     return "\n".join(head + body)
 
 
-def prep(src, out_dir):
+def _load_or_paste(src, title=None):
+    """An export file, else (a bare text, markdown, html or pdf file) one pasted conversation."""
+    p = pathlib.Path(src).expanduser()
+    if p.is_file() and not zipfile.is_zipfile(p) and not p.name.lower().endswith(".json"):
+        data = p.read_bytes()
+        convs = []
+        if p.name.lower().endswith(".csv"):
+            convs = copilot_conversations(data)
+        elif p.name.lower().endswith((".html", ".htm")):
+            convs = gemini_html_conversations(data)
+        if convs:
+            return convs, []
+        text, html_title = file_text(p.name, data)
+        if not text.strip():
+            return [], []
+        return [{"_norm": pasted_conversation(text, title or html_title)}], []
+    return load_export(p)
+
+
+def prep(src, out_dir, title=None):
     out = pathlib.Path(out_dir)
     (out / "docs").mkdir(parents=True, exist_ok=True)
-    convs, projects = load_export(src)
+    convs, projects = _load_or_paste(src, title)
     rows = []
     for raw in convs:
         c = normalize(raw) if isinstance(raw, dict) else None

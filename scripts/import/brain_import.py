@@ -16,6 +16,12 @@ music tools, not into Knowledge: with y on a folder named Music, or when named (
 
   python3 brain_import.py --brain https://you.brainfoundry.ai --token imp_...
   python3 brain_import.py --dry-run            (only list, send nothing)
+
+Whole computer (--survey, the line from your brain's home, 2026-11-16): it walks your whole home folder
+and your cloud folders (iCloud Drive, Google Drive, Dropbox, OneDrive) with the same never-send rules,
+and sends a LIST only (path, size, type, date; no content). Your brain's home shows a plan grouped by
+your work areas; you say yes there. This window waits, then brings exactly what you chose and stops.
+Nothing stays running on this computer afterwards and the brain cannot open anything here.
 Docs: docs/IMPORT.md in brainfoundry-nous.
 """
 import argparse
@@ -32,7 +38,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 USUAL = ["Documents", "Desktop", "Downloads", "Music", "Pictures", "Movies", "Videos"]
 PROJECT_NAMES = {"projects", "code", "dev", "developer", "src", "repos", "work", "github", "git", "sites"}
@@ -44,6 +50,9 @@ SKIP_DIRS = {
     "node_modules", "__pycache__", "venv", "env", "site-packages", "bower_components", "target",
     "build", "dist", "keychains", "1password", "bitwarden", "keepass", "keepassxc", "lastpass",
     "password-store", "passwords", "secrets", "credentials", "photos library.photoslibrary",
+    # mail stores and browser profiles (2026-11-16): never listed, never sent
+    "mail", "mailboxes", "thunderbird", "outlook files", "mozilla", "firefox", "chrome", "google chrome",
+    "chromium", "brave-browser", "microsoft edge", "user data", "safari",
 }
 # Files never sent, besides every hidden file (.env, .netrc, .npmrc, .pgpass, ...).
 SKIP_FILES = [
@@ -52,6 +61,7 @@ SKIP_FILES = [
     "*.agilekeychain", "*.gpg", "*.pgp", "*.asc", "*.ovpn", "*.ppk", "*.tfstate", "*.sqlite", "*.db",
     "*.env", "env.*", "*credential*", "*password*", "*passwd*", "*secret*", "*token*", "*.wallet",
     "wallet.dat", "*seed*phrase*", "*recovery*code*", "*.cookies", "cookies*",
+    "*.pst", "*.ost", "*.mbox", "*.emlx", "*.olm",
 ]
 TEXT = {"txt", "md", "markdown", "rst", "org", "tex", "csv", "tsv", "json", "yaml", "yml", "toml",
         "xml", "html", "htm", "srt", "vtt", "log", "py", "js", "ts", "tsx", "jsx", "sh", "c", "h",
@@ -212,12 +222,19 @@ class Brain:
     def check(self):
         return self._req("GET", "/documents/import-laptop/check")
 
-    def send(self, path, name):
+    def inventory(self, inv):
+        import gzip
+        body = gzip.compress(json.dumps(inv, separators=(",", ":")).encode("utf-8"))
+        return self._req("POST", "/documents/import-laptop/check", body,
+                         {"Content-Type": "application/json", "Content-Encoding": "gzip"})
+
+    def send(self, path, name, keep=""):
         boundary = "----brainimport" + secrets.token_hex(12)
         ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = path.read_bytes()
         parts = [
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n".encode() + name.encode("utf-8") + b"\r\n",
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"keep\"\r\n\r\n{keep}\r\n".encode(),
             (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{_q(path.name)}\"\r\n"
              f"Content-Type: {ctype}\r\n\r\n").encode("utf-8") + data + b"\r\n",
             f"--{boundary}--\r\n".encode(),
@@ -242,6 +259,228 @@ def ask(prompt, answers, key):
         return "n"
 
 
+# ── Whole computer (--survey, 2026-11-16) ──
+
+MAX_ENTRIES = 300000
+
+
+def cloud_roots(home, system=None):
+    """(label, folder) for the cloud folders this computer has mounted: iCloud Drive, Google Drive,
+    Dropbox, OneDrive, Box. On a Mac most live under ~/Library (which the walk never enters)."""
+    home = Path(home)
+    system = system or sys.platform
+    out = []
+    icloud = home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+    if icloud.is_dir():
+        out.append(("iCloud Drive", icloud))
+    storage = home / "Library" / "CloudStorage"
+    try:
+        mounted = sorted(storage.iterdir()) if storage.is_dir() else []
+    except OSError:
+        mounted = []
+    for p in mounted:
+        low = p.name.lower()
+        for pre, label in (("googledrive", "Google Drive"), ("dropbox", "Dropbox"), ("onedrive", "OneDrive"), ("box", "Box")):
+            if low.startswith(pre) and p.is_dir():
+                gd = p / "My Drive"
+                out.append((label, gd if gd.is_dir() else p))
+                break
+    try:
+        top = sorted(home.iterdir())
+    except OSError:
+        top = []
+    for p in top:
+        low = p.name.lower()
+        if not p.is_dir() or p.is_symlink():
+            continue
+        if low in ("icloud drive", "iclouddrive"):
+            out.append(("iCloud Drive", p))
+        elif low in ("google drive", "my drive"):
+            out.append(("Google Drive", p))
+        elif low == "dropbox" or low.startswith("dropbox ("):
+            out.append(("Dropbox", p))
+        elif low == "onedrive" or low.startswith("onedrive - "):
+            out.append(("OneDrive", p))
+        elif low == "box":
+            out.append(("Box", p))
+    if system.startswith("win"):
+        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            gd = Path(f"{letter}:/My Drive")
+            try:
+                if gd.is_dir():
+                    out.append(("Google Drive", gd))
+            except OSError:
+                continue
+    # one label per root; a second account gets "(2)"
+    seen, uniq = {}, []
+    for label, p in out:
+        if any(p == q for _l, q in uniq):
+            continue
+        n = seen.get(label, 0) + 1
+        seen[label] = n
+        uniq.append((label if n == 1 else f"{label} ({n})", p))
+    return uniq
+
+
+def survey(home, extra=(), system=None, limit=MAX_ENTRIES):
+    """The inventory: (rows [[name, size, mtime]], skipped {"<folder>: <why>": n}, places {name: path},
+    roots [labels]). Names are 'Documents/x.pdf' under the home and 'iCloud Drive/x.pdf' in a cloud
+    folder. Only offerable files are listed; what is never sent is only counted, never named."""
+    home = Path(home)
+    clouds = cloud_roots(home, system) + [(Path(f).name, Path(f)) for f in extra]
+    cloud_paths = {p.resolve() for _l, p in clouds}
+    rows, skipped, places = [], {}, {}
+
+    def add(label, root, rel, p, size, why):
+        top = rel.split("/")[0] if "/" in rel else "(home)"
+        key = f"{label}/{top}" if label else top
+        if why:
+            k = f"{key}: {why}"
+            skipped[k] = skipped.get(k, 0) + 1
+            return
+        name = f"{label}/{rel}" if label else rel
+        try:
+            mtime = int(p.stat().st_mtime)
+        except OSError:
+            return
+        rows.append([name, size, mtime])
+        places[name] = p
+
+    def walk_root(label, root):
+        root = Path(root)
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dp = Path(dirpath)
+            keep = []
+            for d in sorted(dirnames):
+                if skip_dir(d):
+                    continue
+                try:
+                    if (dp / d).resolve() in cloud_paths and label == "":
+                        continue  # walked as its own root
+                except OSError:
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            for f in sorted(filenames):
+                if len(rows) >= limit:
+                    return
+                p = dp / f
+                try:
+                    if p.is_symlink() or not p.is_file():
+                        continue
+                    size = p.stat().st_size
+                except OSError:
+                    continue
+                rel = p.relative_to(root).as_posix()
+                why = skip_file(f)
+                if not why:
+                    e = ext_of(f)
+                    if e not in READABLE and e not in AUDIO:
+                        why = "not readable by Knowledge"
+                    elif size > (MAX_AUDIO_FILE_BYTES if e in AUDIO else MAX_FILE_BYTES):
+                        why = "over 200 MB" if e in AUDIO else "over 25 MB"
+                    elif size == 0:
+                        why = "empty"
+                add(label, root, rel, p, size, why)
+
+    walk_root("", home)
+    for label, root in clouds:
+        walk_root(label, root)
+    return rows, skipped, places, [label for label, _p in clouds]
+
+
+def survey_run(a, out=print):
+    home = Path(a.home)
+    brain = None
+    if not a.dry_run:
+        if not a.brain or not a.token:
+            raise SystemExit("needs --brain and --token (or --dry-run to only look)")
+        brain = Brain(a.brain, a.token)
+        st, j = brain.check()
+        if st != 200:
+            raise SystemExit(f"the brain refused the token ({st}): {j.get('detail')}")
+        if not j.get("survey"):
+            raise SystemExit("this line is for the folder-by-folder import; run it without --survey")
+        out(f"Connected to {a.brain}.")
+    out("Looking through this computer (names, sizes and dates only; nothing is read or sent yet)...")
+    t0 = time.time()
+    rows, skipped, places, clouds = survey(home, a.folder)
+    total = sum(r[1] for r in rows)
+    out(f"Found {len(rows)} files your brain can take ({human(total)}) in {time.time() - t0:.0f} s"
+        + (f"; cloud folders: {', '.join(clouds)}" if clouds else "; no cloud folders found") + ".")
+    if skipped:
+        out(f"Never sent: {sum(skipped.values())} files (keys, passwords, hidden, mail, browser, video, archives, too big).")
+    receipt = {"version": VERSION, "brain": a.brain, "mode": "survey", "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+               "dry_run": a.dry_run, "listed": len(rows), "bytes": total, "clouds": clouds, "sent": [], "refused": []}
+    if a.dry_run:
+        areas = {}
+        for name, size, _m in rows:
+            k = name.split("/")[0]
+            areas[k] = areas.get(k, 0) + 1
+        for k, n in sorted(areas.items(), key=lambda x: -x[1])[:30]:
+            out(f"  {k}: {n} files")
+        receipt["would_list"] = len(rows)
+        return _write_receipt(a, receipt, out)
+    inv = {"version": VERSION, "os": sys.platform, "files": rows, "skipped": skipped, "roots": clouds}
+    st, j = brain.inventory(inv)
+    if st != 200:
+        raise SystemExit(f"the brain did not take the list ({st}): {j.get('detail')}")
+    out(f"\nThe list is on your brain: {j.get('files')} files in {j.get('groups')} groups.")
+    out("Open your brain's home in the browser and choose what to bring. This window waits (Ctrl+C stops it).")
+    take = None
+    while take is None:
+        time.sleep(a.poll)
+        try:
+            st, j = brain.check()
+        except OSError:
+            continue
+        if st == 401:
+            out("The line expired or was closed on the brain before a choice; nothing was sent.")
+            receipt["ended"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            return _write_receipt(a, receipt, out)
+        if st == 200 and j.get("plan") == "chosen":
+            take = j.get("take") or {"paths": []}
+    asked = take.get("paths") or []
+    chosen = [(places[n], n, kind) for n, kind in asked if n in places]
+    ignored = len(asked) - len(chosen)
+    total = sum(p.stat().st_size for p, _n, _k in chosen if p.exists())
+    out(f"\nYou chose {len(chosen)} files ({human(total)}). Sending now.")
+    if ignored:
+        out(f"({ignored} names the brain asked for were not on this list and are not sent.)")
+    sent_bytes = 0
+    for i, (p, name, kind) in enumerate(chosen, 1):
+        keep = "file" if kind == "files" and ext_of(name) in IMAGES else ""
+        try:
+            size = p.stat().st_size
+            st, j = brain.send(p, name, keep)
+        except OSError as e:
+            size, st, j = 0, 0, {"detail": str(e)}
+        sent_bytes += size
+        if st == 200:
+            receipt["sent"].append({"path": name, "proposal_id": j.get("proposal_id"), "size": size, "kept_at": j.get("where")})
+            mark = f"kept in {j['where']}" if j.get("where") else "ok"
+        else:
+            receipt["refused"].append({"path": name, "status": st, "detail": j.get("detail")})
+            mark = f"refused ({st}: {j.get('detail')})"
+        out(f"[{i}/{len(chosen)}] {human(sent_bytes)}/{human(total)}  {name}  {mark}")
+        if st == 401:
+            out("The line stopped working; the rest was not sent.")
+            break
+    st, j = brain.finish()
+    receipt["finished"] = j if st == 200 else {"status": st, "detail": j.get("detail")}
+    receipt["ended"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    _write_receipt(a, receipt, out)
+    out("Done. Nothing keeps running on this computer; you can close this window.")
+    return receipt
+
+
+def _write_receipt(a, receipt, out):
+    rp = Path(a.receipt_dir) / f"brain-import-receipt-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    rp.write_text(json.dumps(receipt, indent=1), encoding="utf-8")
+    out(f"Sent {len(receipt['sent'])}, refused {len(receipt['refused'])}. Receipt: {rp}")
+    return receipt
+
+
 def run(argv=None, out=print):
     ap = argparse.ArgumentParser(description="Bring files from this computer into your brain, folder by folder.")
     ap.add_argument("--brain", help="your brain's address, https://...")
@@ -251,7 +490,12 @@ def run(argv=None, out=print):
     ap.add_argument("--answers", help="answer without asking, e.g. 'documents=y,downloads=pdf,md;music=n' (';' between folders)")
     ap.add_argument("--dry-run", action="store_true", help="list what would go, send nothing")
     ap.add_argument("--receipt-dir", default=".", help="where the receipt is written (default: here)")
+    ap.add_argument("--survey", action="store_true",
+                    help="whole computer: send a list only, choose on your brain's home, then bring what you chose")
+    ap.add_argument("--poll", type=float, default=3.0, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
+    if a.survey:
+        return survey_run(a, out)
 
     answers = None
     if a.answers:

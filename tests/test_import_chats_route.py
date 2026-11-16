@@ -129,8 +129,10 @@ def test_newest_50_by_default(env):
     assert any("chat-59_" in n for n in names)
 
 
-def test_not_a_zip_or_no_conversations_is_400(env):
-    assert _post(env, b"hello", name="notes.txt").status_code == 400
+def test_not_an_export_or_no_conversations_is_400(env):
+    # 2026-11-16: a text file is a pasted conversation now; binary that is neither is refused
+    assert _post(env, b"\x00\x01\x02\xff\xfe\x00garbage", name="blob.bin").status_code == 400
+    assert _post(env, b'{"nothing": "here"}', name="data.json").status_code == 400
     r = _post(env, _zip(**{"users.json": [{"uuid": "x"}]}))
     assert r.status_code == 400 and "No conversations" in r.text
     assert env.proposals == []
@@ -187,3 +189,47 @@ def test_approve_all_by_id_still_holds_high_unless_asked(env, monkeypatch):
     j = env.client.post("/documents/approve-all",
                         json={"proposal_ids": ["p-poison"], "include_high_risk": True}).json()
     assert j["total"] == 1 and j["held"] == []
+
+
+# ── every AI, and the pasted fallback (2026-11-16) ──
+
+def test_bare_export_file_and_takeout_zip(env):
+    from tests.test_import_ai import gemini_activity, grok_export
+    r = _post(env, json.dumps(grok_export()).encode(), name="prod-grok-backend.json")
+    assert r.status_code == 200, r.text
+    assert r.json()["sources"] == ["grok"] and r.json()["proposed"] == 1
+    r = _post(env, _zip(**{"Takeout__My Activity__Gemini Apps__MyActivity.json": gemini_activity()}),
+              name="takeout-20251116T000000Z-001.zip")
+    j = r.json()
+    assert j["sources"] == ["gemini"] and j["conversations"] == 3 and j["proposed"] == 3
+    assert sum(p["refs"]["filename"].startswith("gemini_") for p in env.proposals) == 3
+
+
+def test_pasted_text_becomes_one_pending_document(env):
+    r = env.client.post("/documents/import-chats",
+                        data={"text": "Me: what is a qubit?\nGemini: a two-state quantum system.", "title": "Qubits"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert set(j) == {"conversations", "projects", "selected", "proposed", "flagged", "sources", "newest",
+                      "manifest_id", "stopped"}
+    assert (j["conversations"], j["proposed"], j["sources"]) == (1, 1, ["gemini"])
+    name = env.proposals[0]["refs"]["filename"]
+    assert name.startswith("gemini_") and "_qubits_" in name
+    text = (env.tmp / "proposal_texts" / "prop-0001.txt").read_text()
+    assert text.startswith("# Qubits\n") and "## Assistant (Gemini)\n\na two-state quantum system." in text
+
+
+def test_dropped_markdown_file_without_markers(env):
+    r = _post(env, b"# Notes\n\nSomething I asked once.", name="thread.md")
+    assert r.status_code == 200, r.text
+    assert r.json()["sources"] == ["pasted"]
+    assert env.proposals[0]["refs"]["filename"].startswith("pasted_")
+
+
+def test_exactly_one_of_file_and_text(env):
+    assert env.client.post("/documents/import-chats", data={"newest": "5"}).status_code == 400
+    assert env.client.post("/documents/import-chats", data={"text": "   "}).status_code == 400
+    r = env.client.post("/documents/import-chats", data={"text": "Me: hi\nAI: hello"},
+                        files={"file": ("a.txt", b"hi", "text/plain")})
+    assert r.status_code == 400 and "exactly one" in r.text
+    assert env.proposals == []

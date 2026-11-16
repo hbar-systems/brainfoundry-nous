@@ -38,6 +38,7 @@ PUBLIC_DOORS = {
     "/v1/ask": "signed peer assertion; public-scoped chunks only; per-peer rate limit",
     "/documents/import-laptop/file": "one-run laptop-import bearer token minted by the owner",
     "/documents/import-laptop/finish": "one-run laptop-import bearer token minted by the owner",
+    "/documents/import-laptop/check": "POST: the survey's inventory (names, sizes, dates; no content) under a survey-only one-run token minted by the owner; 64 MB cap, paths cleaned; MOVE-IN-2 2026-11-16, awaiting hbar's review",
     "/v1/federation/dm/receive": "ED25519 signature over the payload; size and rate bounds",
     "/harmonics/exchange": "contributor signature verified; receiver records its own row",
     "/harmonics/score": "scoring open; record=true checks the owner key in the handler (SEC-1)",

@@ -5040,6 +5040,13 @@ def _propose_document_text(text: str, *, filename: str, content_type: str, size:
         scan = None
     _save_proposal_text(proposal["proposal_id"], text, filename=filename, content_type=content_type, size=size, scan=scan, privacy=privacy)
     print(f"[upload] proposed proposal_id={proposal['proposal_id']} (text persisted, injection_risk={scan.get('risk') if scan else 'n/a'})", flush=True)
+    # an imported conversation keeps its starting point for "Continue here" (MOVE-IN-2, api/chat_continue.py)
+    try:
+        from api import chat_continue as _cc
+        if _cc.is_chat(filename):
+            _cc.record(CHAT_CONTINUE_DIR, filename, text, proposal["proposal_id"], (scan or {}).get("risk") or "")
+    except Exception as _cc_err:
+        print(f"[upload] continue record skipped: {_cc_err}", flush=True)
     return {
         "filename": filename,
         "status": "PENDING",
@@ -5052,7 +5059,9 @@ def _propose_document_text(text: str, *, filename: str, content_type: str, size:
 
 @app.post("/documents/import-chats")
 def import_chat_history(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    text: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     newest: int = Form(50),
     api_key: str = Depends(get_api_key),
 ):
@@ -5060,9 +5069,17 @@ def import_chat_history(
     Claude export zip in, prep + select --newest N (default 50) in a scratch folder
     under the runtime volume, then one Path A proposal per selected conversation
     under an upload permit. Every document comes back PENDING for the person's
-    approval below the card; nothing is written to memory here."""
+    approval below the card; nothing is written to memory here.
+    2026-11-16, any AI: `file` is an export (the zip or the bare file inside it:
+    ChatGPT, Claude, Gemini, DeepSeek, Grok, Copilot, Le Chat, detected from the
+    file) or one conversation as text, markdown, html or pdf; or `text` is a pasted
+    conversation, with an optional `title`. Exactly one of file and text."""
     from api import chat_import
     import time as _time
+    pasted = text if text is not None and text.strip() else None
+    if (file is None) == (pasted is None):
+        raise HTTPException(status_code=400, detail="Send exactly one of: file (an export or a conversation "
+                                                    "file) or text (a pasted conversation).")
     permit = {"id": None, "at": 0.0}
 
     def propose(name: str, text: str) -> dict:
@@ -5081,12 +5098,83 @@ def import_chat_history(
         raise last
 
     try:
-        res = chat_import.run(file.file, RUNTIME_DIR, propose, newest=newest)
+        res = chat_import.run(file.file if file is not None else None, RUNTIME_DIR, propose, newest=newest,
+                              filename=file.filename if file is not None else None, text=pasted, title=title)
     except chat_import.NotAnExport as e:
         raise HTTPException(status_code=400, detail=str(e))
     print(f"[import-chats] {res['conversations']} found, {res['selected']} selected, {res['proposed']} proposed "
           f"({','.join(res['sources'])}) manifest={res['manifest_id']}" + (f" stopped: {res['stopped']}" if res['stopped'] else ""), flush=True)
     return res
+
+
+# ── Continue here (MOVE-IN-2, 2026-11-16, api/chat_continue.py) ──
+# Every imported conversation (ChatGPT, Claude, the other AIs) can open a new console thread seeded
+# with its title, a short summary and its last turns. Owner only; the console's home and the
+# Knowledge page list them.
+CHAT_CONTINUE_DIR = RUNTIME_DIR / "chat_continue"
+
+
+def _chat_docs_in_memory() -> set:
+    """Conversation documents already in memory (approved), by name."""
+    from api import chat_continue as _cc
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT document_name FROM document_embeddings WHERE document_name ~ %s",
+                    (_cc.CHAT_DOC.pattern,))
+        names = {r[0] for r in cur.fetchall()}
+        cur.close()
+        conn.close()
+        return names
+    except Exception as e:
+        print(f"[chats] memory names unavailable: {e}", flush=True)
+        return set()
+
+
+def _chat_backfill(name: str):
+    """A conversation approved before the store existed: its text again from its chunks."""
+    from api import chat_continue as _cc
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT content FROM document_embeddings WHERE document_name = %s "
+                    "ORDER BY COALESCE((metadata->>'chunk_index')::int, 0), id", (name,))
+        chunks = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[chats] backfill of {name} failed: {e}", flush=True)
+        return None
+    return _cc.record(CHAT_CONTINUE_DIR, name, _cc.from_chunks(chunks)) if chunks else None
+
+
+@app.get("/documents/chats")
+def list_imported_chats(api_key: str = Depends(get_api_key)):
+    """Owner only. Every imported conversation with its source, title, dates, summary and whether it
+    is in memory yet ("in") or waits for the person's yes ("waiting")."""
+    from api import chat_continue as _cc
+    rows = _cc.listing(CHAT_CONTINUE_DIR)
+    mem = _chat_docs_in_memory()
+    have = {r["name"] for r in rows}
+    for name in sorted(mem - have):
+        rows.append({"name": name, "source": _cc.source_of(name), "vendor": _cc.SOURCES.get(_cc.source_of(name), ""),
+                     "title": name, "started": "", "last_at": "", "turns": None, "summary": "", "backfill": True})
+    for r in rows:
+        r["state"] = "in" if r["name"] in mem else "waiting"
+    return {"chats": rows}
+
+
+@app.get("/documents/chats/continue")
+def continue_imported_chat(name: str, lang: str = "en", api_key: str = Depends(get_api_key)):
+    """Owner only. The first message of a new thread seeded with one imported conversation."""
+    from api import chat_continue as _cc
+    if not _cc.is_chat(name):
+        raise HTTPException(status_code=400, detail="not an imported conversation")
+    rec = _cc.get(CHAT_CONTINUE_DIR, name) or _chat_backfill(name)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"name": name, "title": rec.get("title"), "vendor": rec.get("vendor"), "risk": rec.get("risk") or "",
+            "seed": _cc.seed(rec, lang)}
 
 
 # ── The laptop on-ramp (2026-11-03, api/laptop_import.py, docs/IMPORT.md) ──
@@ -5097,6 +5185,10 @@ from api import laptop_import as _laptop_import
 from fastapi import Header as _Header
 
 _LAPTOP_TOKENS = _laptop_import.TokenStore(RUNTIME_DIR / "laptop_import_tokens.json")
+# The whole-computer survey (MOVE-IN-2, 2026-11-16, api/laptop_survey.py): an inventory under the same
+# token, a plan on the home, the owner's yes per group, the helper pulls the chosen files in the same run.
+from api import laptop_survey as _laptop_survey
+_LAPTOP_SURVEYS = _laptop_survey.SurveyStore(RUNTIME_DIR / "laptop_surveys")
 _LAPTOP_HELPER = Path(__file__).resolve().parent.parent / "scripts" / "import" / "brain_import.py"
 _laptop_permit = {"id": None, "at": 0.0}
 # Audio is kept as files, not read: in the container at LAPTOP_AUDIO_DIR, which compose mounts from
@@ -5105,18 +5197,73 @@ _LAPTOP_AUDIO_DIR = Path(os.getenv("LAPTOP_AUDIO_DIR") or "/app/laptop_audio")
 
 
 @app.post("/documents/import-laptop/token")
-def import_laptop_token(api_key: str = Depends(get_api_key)):
-    """Owner only. A fresh one-time import token; every earlier one closes."""
-    out = _LAPTOP_TOKENS.mint()
-    print(f"[import-laptop] token minted, expires {out['expires_at']}", flush=True)
+async def import_laptop_token(request: Request, api_key: str = Depends(get_api_key)):
+    """Owner only. A fresh one-time import token; every earlier one closes.
+    Body {"survey": true} (the home's whole-computer card): the survey run's larger caps and life."""
+    survey = False
+    try:
+        body = await request.body()
+        survey = bool(body and (json.loads(body) or {}).get("survey"))
+    except (ValueError, AttributeError):
+        survey = False
+    if survey:
+        import shutil as _shutil
+        try:
+            du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
+            free, total = du.free, du.total
+        except OSError:
+            free, total = None, None
+        cap = _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+        out = _LAPTOP_TOKENS.mint(ttl=_laptop_survey.SURVEY_TTL_SECONDS, max_files=_laptop_survey.SURVEY_MAX_FILES,
+                                  max_bytes=cap, survey=True)
+    else:
+        out = _LAPTOP_TOKENS.mint()
+    print(f"[import-laptop] token minted{' (survey)' if survey else ''}, expires {out['expires_at']}", flush=True)
     return out
 
 
 @app.get("/documents/import-laptop/status")
 def import_laptop_status(api_key: str = Depends(get_api_key)):
-    """Owner only. The newest run for the Knowledge card: open or not, and what arrived."""
-    return {"run": _LAPTOP_TOKENS.latest(),
+    """Owner only. The newest run for the Knowledge card: open or not, and what arrived.
+    A survey run carries its plan (groups without their path lists) and the owner's choice."""
+    run = _LAPTOP_TOKENS.latest()
+    survey = None
+    if run and run.get("survey"):
+        data = _LAPTOP_SURVEYS.get(_LAPTOP_TOKENS.latest_hash() or "")
+        if data is None:
+            survey = {"state": "waiting"}
+        else:
+            proposed = [g["id"] for g in data["groups"] if g["proposal"] != "leave"]
+            survey = {"state": "chosen" if data.get("chosen") is not None else "plan", "at": data["at"],
+                      "groups": _laptop_survey.public(data["groups"]), "skipped": data["skipped"],
+                      "roots": data["roots"], "os": data.get("os", ""), "chosen": data.get("chosen"),
+                      "proposed": _laptop_survey.totals(data["groups"], proposed)}
+    return {"run": run, "survey": survey,
             "audio_to": "in" if os.getenv("LAPTOP_AUDIO_HOST_DIR") else "brain"}
+
+
+@app.post("/documents/import-laptop/plan")
+async def import_laptop_plan(request: Request, api_key: str = Depends(get_api_key)):
+    """Owner only. The yes on the survey's plan: {"take": ["<group id>", ...]} or {"take": "proposed"}.
+    The helper, still running on the person's computer, reads the chosen paths and pulls them."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="body must be JSON")
+    take = body.get("take") if isinstance(body, dict) else None
+    if take != "proposed" and not isinstance(take, list):
+        raise HTTPException(status_code=400, detail='take must be a list of group ids or "proposed"')
+    run = _LAPTOP_TOKENS.latest()
+    if not run or not run.get("survey") or not run.get("open"):
+        raise HTTPException(status_code=409, detail="no open whole-computer run; start one on the home")
+    try:
+        t = _LAPTOP_SURVEYS.choose(_LAPTOP_TOKENS.latest_hash() or "", take, run)
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    print(f"[import-laptop] survey choice: {t['groups']} groups, {t['files']} files, {t['bytes']} bytes", flush=True)
+    return t
 
 
 @app.get("/documents/import-laptop/helper.py")
@@ -5132,18 +5279,64 @@ def import_laptop_check(authorization: str = _Header("")):
         rec = _LAPTOP_TOKENS.check(_laptop_import.bearer(authorization))
     except _laptop_import.TokenError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
-    return {"ok": True, "expires_at": int(rec["expires"]), "files": rec["files"], "max_files": rec["max_files"],
-            "bytes": rec["bytes"], "max_bytes": rec["max_bytes"], "max_file_bytes": _laptop_import.MAX_FILE_BYTES,
-            "accepted": sorted(_laptop_import.ACCEPTED_EXT)}
+    out = {"ok": True, "expires_at": int(rec["expires"]), "files": rec["files"], "max_files": rec["max_files"],
+           "bytes": rec["bytes"], "max_bytes": rec["max_bytes"], "max_file_bytes": _laptop_import.MAX_FILE_BYTES,
+           "accepted": sorted(_laptop_import.ACCEPTED_EXT), "survey": bool(rec.get("survey"))}
+    if rec.get("survey"):
+        # the helper waits here for the owner's choice; once chosen, the paths to pull (only ones it listed)
+        h = _LAPTOP_TOKENS.hash_of(_laptop_import.bearer(authorization))
+        data = _LAPTOP_SURVEYS.get(h)
+        take = _LAPTOP_SURVEYS.take(h) if data else None
+        out["plan"] = "none" if data is None else ("chosen" if take is not None else "waiting")
+        if take is not None:
+            out["take"] = take
+    return out
+
+
+@app.post("/documents/import-laptop/check")
+async def import_laptop_inventory(request: Request, authorization: str = _Header("")):
+    """The survey's inventory from the helper (paths, sizes, types, times; no content), under the
+    survey token only. Body JSON, gzip allowed (Content-Encoding: gzip). The plan is made here."""
+    import gzip as _gzip
+    raw = _laptop_import.bearer(authorization)
+    try:
+        rec = _LAPTOP_TOKENS.check(raw)
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    if not rec.get("survey"):
+        raise HTTPException(status_code=409, detail="this token is for a folder-by-folder run, not a survey")
+    cap = _laptop_survey.MAX_INVENTORY_BYTES
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > cap:
+            raise HTTPException(status_code=413, detail="inventory too large")
+    try:
+        if (request.headers.get("content-encoding") or "").lower() == "gzip":
+            with _gzip.GzipFile(fileobj=__import__("io").BytesIO(body)) as gz:
+                body = gz.read(cap + 1)
+            if len(body) > cap:
+                raise HTTPException(status_code=413, detail="inventory too large")
+        inv = _laptop_survey.validate(json.loads(body))
+    except HTTPException:
+        raise
+    except (ValueError, OSError, EOFError) as e:
+        raise HTTPException(status_code=400, detail=f"inventory not readable: {str(e)[:200]}")
+    data = _LAPTOP_SURVEYS.put(_LAPTOP_TOKENS.hash_of(raw), inv)
+    n = sum(g["files"] for g in data["groups"])
+    print(f"[import-laptop] survey inventory: {n} files in {len(data['groups'])} groups", flush=True)
+    return {"groups": len(data["groups"]), "files": n}
 
 
 @app.post("/documents/import-laptop/file")
 async def import_laptop_file(
     file: UploadFile = File(...),
     path: str = Form(...),
+    keep: str = Form(""),
     authorization: str = _Header(""),
 ):
-    """One file from the helper: token checked and charged, text extracted, proposed (Path A)."""
+    """One file from the helper: token checked and charged, text extracted, proposed (Path A).
+    keep=file (the survey's pictures): an image is kept as a file in in/<date>/import/, not read."""
     import time as _time
     raw = _laptop_import.bearer(authorization)
     try:
@@ -5156,6 +5349,8 @@ async def import_laptop_file(
     ext = _laptop_import.extension(rel)
     if ext in _laptop_import.AUDIO_EXT:
         return await _import_laptop_audio(file, rel, raw)
+    if keep == "file" and ext in _laptop_import.IMAGE_EXT:
+        return await _import_laptop_audio(file, rel, raw, listing="media.tsv")
     if ext not in _laptop_import.ACCEPTED_EXT:
         raise HTTPException(status_code=415, detail=f"Knowledge does not read .{ext or '(none)'} files")
     content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
@@ -5195,11 +5390,12 @@ async def import_laptop_file(
     raise last
 
 
-async def _import_laptop_audio(file, rel: str, raw: str):
-    """One audio file: streamed to a temp file beside its place (cap checked as it comes),
-    charged to the token, then kept under ~/in/<date>/import/ and listed in audio.tsv."""
+async def _import_laptop_audio(file, rel: str, raw: str, listing: str = "audio.tsv"):
+    """One audio file (or a picture the survey keeps): streamed to a temp file beside its place (cap
+    checked as it comes), charged to the token, then kept under ~/in/<date>/import/ and listed in
+    audio.tsv (pictures: media.tsv)."""
     import hashlib as _hashlib
-    cap = _laptop_import.MAX_AUDIO_FILE_BYTES
+    cap = _laptop_import.max_file_bytes(_laptop_import.extension(rel))
     try:
         rec = _LAPTOP_TOKENS.check(raw)
         # ~/in is the member's hands' folder: every step by descriptor, no link followed (audit 2026-11-13)
@@ -5218,15 +5414,15 @@ async def _import_laptop_audio(file, rel: str, raw: str):
                 sha.update(chunk)
                 out.write(chunk)
             _LAPTOP_TOKENS.charge(raw, size, _laptop_import.extension(rel))
-            where = place.keep(out, size, sha.hexdigest())
+            where = place.keep(out, size, sha.hexdigest(), listing=listing)
     except _laptop_import.TokenError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=507, detail=f"could not keep the audio: {str(e)[:200]}")
     finally:
         place.close()
-    _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "audio", "where": where})
-    print(f"[import-laptop] audio kept: {where} ({size} bytes)", flush=True)
+    _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "audio" if listing == "audio.tsv" else "media", "where": where})
+    print(f"[import-laptop] {'audio' if listing == 'audio.tsv' else 'picture'} kept: {where} ({size} bytes)", flush=True)
     return {"path": rel, "status": "KEPT", "where": where}
 
 

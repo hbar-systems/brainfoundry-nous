@@ -1423,6 +1423,10 @@ function CC() {
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   const autoAskRef = useRef(null)                   // ?ask= from the brain's own pages: sent once the console is up (2026-11-13)
+  // ?continue=<conversation document> (MOVE-IN-2, 2026-11-16): a new thread seeded with an imported
+  // conversation (title, summary, last turns, GET /documents/chats/continue). From the brain's own pages
+  // it is sent on arrival; from anywhere else, or when the import's scan flagged it, it only prefills.
+  const [contSeed, setContSeed] = useState(null)
   // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
   // right margin anchored to that message (below it on a narrow screen), typed at leisure, kept
   // per thread in this browser, and sent with the next message as a structured block: which
@@ -2197,8 +2201,28 @@ function CC() {
       const own = (document.referrer || '').startsWith(window.location.origin + '/cc/files/raw/')
       if (q && own) autoAskRef.current = q
       else if (q) setDraft(q)
+      const cont = new URLSearchParams(window.location.search).get('continue')
+      if (cont) {
+        const same = (document.referrer || '').startsWith(window.location.origin + '/')
+        const ln = new URLSearchParams(window.location.search).get('lang') || ''
+        fetch(`/api/bf/documents/chats/continue?name=${encodeURIComponent(cont)}&lang=${ln === 'ru' ? 'ru' : 'en'}`, { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => {
+            if (!j || !j.seed) return
+            const safe = ['', 'none', 'low'].includes(String(j.risk || '').toLowerCase())
+            if (same && safe) setContSeed(j.seed); else setDraft(j.seed)
+          })
+          .catch(() => {})
+      }
     } catch {}
   }, [])
+  useEffect(() => {
+    if (!health || !contSeed) return
+    const q = contSeed; setContSeed(null)
+    try { const u = new URL(window.location.href); u.searchParams.delete('continue'); u.searchParams.delete('lang'); window.history.replaceState(null, '', u.toString()) } catch {}
+    freshRef.current = true
+    send(q)
+  }, [health, contSeed])
   useEffect(() => {
     if (!health || !autoAskRef.current) return
     const q = autoAskRef.current; autoAskRef.current = null

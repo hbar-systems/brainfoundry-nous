@@ -1,11 +1,15 @@
-// Moving in, on the quiet home (PARENTS-HOME-1 addendum 2, 2026-11-15). Two cards, first on the home
+// Moving in, on the quiet home (PARENTS-HOME-1 addendum 2, 2026-11-15; two doors since MOVE-IN-2,
+// 2026-11-16: the chats from every AI with "Continue here", and the whole computer by survey). Two cards, first on the home
 // until both are done: the ChatGPT (or Claude) export zip, and the person's documents. Each card is its
 // own drop target, shows its state (not started / waiting for the email / N waiting for your yes /
 // N moved in on <day>), and remembers through one press. The doors are the Knowledge page's own:
 // POST /documents/import-chats, /api/permit + POST /documents/upload, POST /documents/approve-all.
 // When both are in, the cards fold into one quiet line. Words and rules: ui/lib/moveIn.js.
 import { useEffect, useRef, useState } from 'react'
+import css from 'styled-jsx/css'
 import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords } from '../lib/moveIn'
+import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
+import { AI_EXPORTS } from '../lib/aiExports'
 
 const API = '/api/bf'
 const ls = {
@@ -64,8 +68,226 @@ function Card({ title, state, tone, onFiles, accept, multiple, busy, children, d
   )
 }
 
+// Custom chips (never a native select): one row of choices, the chosen one inked.
+function Chips({ items, value, onPick, label }) {
+  return (
+    <div className="mi-chips" role="radiogroup" aria-label={label}>
+      {items.map(it => (
+        <button key={it.key} type="button" role="radio" aria-checked={value === it.key}
+          className={`mi-chip${value === it.key ? ' mi-chip-on' : ''}`} onClick={() => onPick(it.key)}>{it.name}</button>
+      ))}
+    </div>
+  )
+}
+
+// A yes-or-no box drawn in the card's ink.
+function Tick({ on }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect x="1.5" y="1.5" width="19" height="19" rx="5" stroke="currentColor" strokeWidth="1.5" fill={on ? 'currentColor' : 'none'} />
+      {on && <path d="M6.5 11.2l3 3 6-6.4" stroke="var(--bg)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />}
+    </svg>
+  )
+}
+
+const fmtClock = (s) => { try { return new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
+
+// Door 1: the whole computer. Start mints a survey token; the line runs the helper with --survey; the
+// plan comes back grouped; one yes per group or all proposed; the helper pulls them in the same run.
+function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }) {
+  const [mint, setMint] = useState(null)        // null | { busy } | { token, expires_at } | { error }
+  const [os, setOs] = useState('mac')
+  const [copied, setCopied] = useState(false)
+  const [st, setSt] = useState(null)            // GET /documents/import-laptop/status
+  const [picks, setPicks] = useState(null)
+  const [all, setAll] = useState(false)
+  const [sending, setSending] = useState(null)  // null | 'busy' | { error }
+  const base = typeof window === 'undefined' ? '' : `${window.location.origin}${API}`
+  useEffect(() => { if (typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent || '')) setOs('windows') }, [])
+  const status = async () => {
+    const j = await fetch(`${API}/documents/import-laptop/status`, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
+    if (j) setSt(j)
+    return j
+  }
+  useEffect(() => { status() }, [])
+  const run = st && st.run
+  const survey = st && st.survey
+  const step = surveyStep(run, survey, !!(mint && mint.token))
+  useEffect(() => {
+    if (!(step === 'line' || step === 'plan' || step === 'pulling')) return undefined
+    const t = setInterval(status, 3000)
+    return () => clearInterval(t)
+  }, [step])
+  useEffect(() => { if (survey && survey.groups && picks === null) setPicks(defaultPicks(survey.groups)) }, [survey && survey.at])
+  const start = async () => {
+    setMint({ busy: true }); setCopied(false); setPicks(null)
+    try {
+      const r = await fetch(`${API}/documents/import-laptop/token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ survey: true }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) { setMint({ error: j.detail || W.failed }); return }
+      setMint({ token: j.token, expires_at: j.expires_at })
+      status()
+    } catch { setMint({ error: W.failed }) }
+  }
+  const cmd = mint && mint.token ? surveyCommands(base, mint.token)[os] : ''
+  const groups = (survey && survey.groups) || []
+  const t = pickTotals(groups, picks || {})
+  const over = overCaps(t, run)
+  const choose = async () => {
+    setSending('busy')
+    try {
+      const take = t.proposed ? 'proposed' : groups.filter(g => picks && picks[g.id]).map(g => g.id)
+      const r = await fetch(`${API}/documents/import-laptop/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ take }) })
+      const j = await r.json().catch(() => ({}))
+      setSending(r.ok ? null : { error: j.detail || W.failed })
+      status()
+    } catch { setSending({ error: W.failed }) }
+  }
+  const pull = pullState(run, survey)
+  const shown = all ? groups : groups.slice(0, 10)
+  const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? P.pulling(pull.done, pull.total)
+    : step === 'plan' ? P.compPlan(groups.length, groups.reduce((s, g) => s + g.files, 0), fmtBytes(groups.reduce((s, g) => s + g.bytes, 0)))
+      : step === 'line' ? P.compWaiting : W.state.new
+  return (
+    <Card title={P.compTitle} state={label} tone={step === 'pulled' ? 'done' : step === 'start' ? 'new' : 'wait'} onFiles={onFiles} multiple busy={busy} dropLabel={W.dropHere}>
+      {step === 'start' && (
+        <>
+          <p className="mi-sub">{P.compSub}</p>
+          <p className="mi-sub">{P.compNever}</p>
+        </>
+      )}
+      {step === 'line' && mint && mint.token && (
+        <div className="mi-line">
+          <Chips items={[{ key: 'mac', name: 'Mac' }, { key: 'windows', name: 'Windows' }]} value={os} onPick={(k) => { setOs(k); setCopied(false) }} label="computer" />
+          <p className="mi-sub">{os === 'mac' ? P.compMacHow : P.compWinHow}</p>
+          <pre className="mi-cmd">{cmd}</pre>
+          <p className="mi-note mi-dim">{P.compOnce(fmtClock(mint.expires_at))}</p>
+        </div>
+      )}
+      {step === 'line' && !(mint && mint.token) && <p className="mi-sub">{P.compWaiting}</p>}
+      {step === 'plan' && (
+        <ul className="mi-groups">
+          {shown.map(g => {
+            const on = !!(picks && picks[g.id])
+            return (
+              <li key={g.id}>
+                <button type="button" className={`mi-group${on ? ' mi-group-on' : ''}`} aria-pressed={on}
+                  onClick={() => setPicks(p => ({ ...(p || {}), [g.id]: !on }))}>
+                  <Tick on={on} />
+                  <span className="mi-gname">{g.folder}</span>
+                  <span className="mi-gmeta">{P.files(g.files)}, {fmtBytes(g.bytes)} · {g.proposal === 'leave' ? `${P.kind.leave}: ${P.why[g.why] || g.why}` : `${P.kind[g.kind]} (${P.why[g.why] || g.why})`}</span>
+                </button>
+              </li>
+            )
+          })}
+          {groups.length > shown.length && (
+            <li><button type="button" className="mi-link" onClick={() => setAll(true)}>{P.showAll(groups.length)}</button></li>
+          )}
+        </ul>
+      )}
+      {step === 'plan' && over && run && <p className="mi-note mi-bad" role="alert">{P.overCaps(run.max_files, fmtBytes(run.max_bytes))}</p>}
+      {sending && sending.error && <p className="mi-note mi-bad" role="alert">{sending.error}</p>}
+      {mint && mint.error && <p className="mi-note mi-bad" role="alert">{mint.error}</p>}
+      {docBusy && docBusy.error && <p className="mi-note mi-bad" role="alert">{docBusy.error}</p>}
+      <div className="mi-actions">
+        {step === 'start' && (
+          <button type="button" className="mi-btn mi-primary" disabled={!!(mint && mint.busy)} onClick={start}>{mint && mint.busy ? P.compStarting : P.compStart}</button>
+        )}
+        {step === 'line' && mint && mint.token && (
+          <>
+            <button type="button" className="mi-btn mi-primary" onClick={async () => { try { await navigator.clipboard.writeText(cmd); setCopied(true) } catch { setCopied(false) } }}>{copied ? P.compCopied : P.compCopy}</button>
+            <button type="button" className="mi-btn" onClick={start}>{P.compNew}</button>
+          </>
+        )}
+        {step === 'plan' && (
+          <button type="button" className="mi-btn mi-primary" disabled={sending === 'busy' || !t.files || over} onClick={choose}>
+            {t.proposed ? P.bringProposed(t.files, fmtBytes(t.bytes)) : P.bringChosen(t.files, fmtBytes(t.bytes))}
+          </button>
+        )}
+        {docLine}
+        {step === 'pulled' && <button type="button" className="mi-btn" onClick={start}>{P.compNew}</button>}
+      </div>
+      {(step === 'start' || step === 'pulled') && <p className="mi-note mi-dim">{P.compPhone} {P.dropOr}</p>}
+    </Card>
+  )
+}
+
+// Door 2: the chats from every AI. Pick where the export is (chips), drop the file as it came, or paste.
+function AiChats({ lang, W, P, chat, chatBusy, approving, onFile, onPaste, remember, chatIds, onAsked }) {
+  const [vendor, setVendor] = useState('chatgpt')
+  const [paste, setPaste] = useState(null)   // null | text
+  const input = useRef(null)
+  const v = AI_EXPORTS.find(x => x.key === vendor) || AI_EXPORTS[0]
+  const ap = approving && approving.which === 'chat'
+  return (
+    <Card title={P.chatsTitle} state={chat.step === 'done' ? W.state.chatDone(chat.n, day(lang, chat.at)) : chat.step === 'pending' ? W.state.pending(chat.waitingYes) : chat.step === 'waiting' ? W.state.waiting(day(lang, chat.at)) : W.state.new}
+      tone={chat.step === 'done' ? 'done' : chat.step === 'new' ? 'new' : 'wait'} onFiles={onFile} busy={!!(chatBusy && chatBusy.reading) || ap} dropLabel={W.dropHere}>
+      {chat.step !== 'pending' && (
+        <>
+          <p className="mi-sub">{P.chatsWhich}</p>
+          <Chips items={AI_EXPORTS.map(x => (x.key === 'pasted' ? { ...x, name: P.otherAI } : x))} value={vendor}
+            onPick={(k) => { setVendor(k); if (k === 'pasted' && paste === null) setPaste('') }} label={P.chatsWhich} />
+          <p className="mi-sub">{v.steps[lang === 'ru' ? 'ru' : 'en']}{v.url && <>{' '}<a href={v.url} target="_blank" rel="noreferrer">{v.url.replace(/^https:\/\//, '')}</a></>}</p>
+          {!v.verified && <p className="mi-note mi-dim">{P.chatsUnverified}</p>}
+          <p className="mi-note mi-dim">{P.chatsDrop}</p>
+        </>
+      )}
+      {chatBusy && chatBusy.found != null && <p className="mi-note">{W.chatFound(chatBusy.found, chatBusy.took)}</p>}
+      {chatBusy && chatBusy.error && <p className="mi-note mi-bad" role="alert">{chatBusy.error}</p>}
+      {paste !== null && (
+        <div className="mi-paste">
+          <textarea value={paste} onChange={e => setPaste(e.target.value)} placeholder={P.chatsPasteHint} rows={6} aria-label={P.chatsPasteHint} />
+        </div>
+      )}
+      <div className="mi-actions">
+        {chat.waitingYes > 0 ? (
+          <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('chat', chatIds())}>
+            {ap ? W.remembering(approving.done, approving.total) : W.remember(chat.waitingYes)}
+          </button>
+        ) : paste !== null ? (
+          <button type="button" className="mi-btn mi-primary" disabled={!paste.trim() || !!(chatBusy && chatBusy.reading)} onClick={async () => { await onPaste(paste); setPaste(null) }}>{P.chatsPasteGo}</button>
+        ) : (
+          <button type="button" className="mi-btn mi-primary" disabled={!!(chatBusy && chatBusy.reading)} onClick={() => input.current && input.current.click()}>
+            {chatBusy && chatBusy.reading ? W.chatReading(chatBusy.reading) : P.chatsPick}
+          </button>
+        )}
+        {chat.step === 'new' && paste === null && <button type="button" className="mi-btn" onClick={onAsked}>{W.chatAsked}</button>}
+        {paste === null && chat.waitingYes === 0 && <button type="button" className="mi-link" onClick={() => setPaste('')}>{P.chatsPaste}</button>}
+        <input ref={input} type="file" accept=".zip,.json,.html,.htm,.csv,.txt,.md,.pdf,application/zip,application/json,text/html,text/csv,text/plain,application/pdf" hidden
+          onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; onFile(f) }} />
+      </div>
+      <p className="mi-note mi-dim">{P.chatsSeat}</p>
+    </Card>
+  )
+}
+
+// "Your chats from ChatGPT and Claude": every imported conversation with Continue here.
+function ChatList({ lang, P, rows }) {
+  const [all, setAll] = useState(false)
+  if (!rows || !rows.length) return null
+  const shown = all ? rows : rows.slice(0, 6)
+  return (
+    <section className="mi-list" aria-label={P.listTitle(vendorsOf(rows))}>
+      <h2 className="mi-list-title">{P.listTitle(vendorsOf(rows))}</h2>
+      <ul>
+        {shown.map(r => (
+          <li key={r.name} className="mi-chat">
+            <div className="mi-chat-text">
+              <span className="mi-chat-title">{r.title || r.name}</span>
+              <span className="mi-chat-meta">{[r.vendor, day(lang, r.last_at || r.started), r.turns ? P.turns(r.turns) : null, r.state === 'waiting' ? P.waitingYes : null].filter(Boolean).join(' · ')}</span>
+            </div>
+            <a className="mi-btn mi-cont" href={continueHref(r.name, lang)}>{P.cont}</a>
+          </li>
+        ))}
+      </ul>
+      {rows.length > shown.length && <button type="button" className="mi-link" onClick={() => setAll(true)}>{P.showAll(rows.length)}</button>}
+    </section>
+  )
+}
+
 export default function MoveInCards({ lang = 'en', onMoved }) {
   const W = moveWords(lang)
+  const P = planWords(lang)
   const [docs, setDocs] = useState(null)        // GET /documents rows, null until read
   const [pending, setPending] = useState([])    // [{ proposal_id, filename }]
   const [asked, setAsked] = useState(null)
@@ -74,16 +296,16 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   const [docBusy, setDocBusy] = useState(null)   // null | { i, n } | { error }
   const [approving, setApproving] = useState(null) // null | { which, done, total }
   const [reopen, setReopen] = useState(false)
-  const chatInput = useRef(null)
-  const docInput = useRef(null)
+  const [chats, setChats] = useState([])        // GET /documents/chats rows
 
   const load = async () => {
     const j = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
-    const [d, p] = await Promise.all([j(`${API}/documents?limit=10000`), j(`${API}/memory/proposals?status=PENDING&limit=1000`)])
+    const [d, p, c] = await Promise.all([j(`${API}/documents?limit=10000`), j(`${API}/memory/proposals?status=PENDING&limit=1000`), j(`${API}/documents/chats`)])
     setDocs(d && Array.isArray(d.documents) ? d.documents : [])
     const items = p && Array.isArray(p.proposals) ? p.proposals : []
     setPending(items.filter(x => x.memory_type === 'document_embedding' && x.proposal_id)
       .map(x => ({ proposal_id: x.proposal_id, filename: (x.source_refs && x.source_refs.filename) || '' })))
+    setChats(c && Array.isArray(c.chats) ? c.chats : [])
   }
   useEffect(() => {
     setAsked(ls.get(MOVE_WAIT_KEY))
@@ -122,13 +344,13 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   const chatIds = () => pending.filter(p => chatState([], [p], null).step === 'pending').map(p => p.proposal_id)
   const docIds = () => pending.filter(p => docState(null, [p]).step === 'pending').map(p => p.proposal_id)
 
-  const importZip = async (files) => {
-    const f = files[0]
-    if (!f) return
-    if (!/\.zip$/i.test(f.name)) { setChatBusy({ error: W.notZip }); return }
-    setChatBusy({ reading: f.name })
+  // any AI's export as it came (zip, json, html, csv), or pasted text: the import detects which
+  const importChats = async (files, text) => {
+    const f = files && files[0]
+    if (!f && !text) return
+    setChatBusy({ reading: f ? f.name : '...' })
     const fd = new FormData()
-    fd.append('file', f)
+    if (f) fd.append('file', f); else fd.append('text', text)
     fd.append('newest', String(HOME_NEWEST))
     try {
       const r = await fetch(`${API}/documents/import-chats`, { method: 'POST', body: fd })
@@ -161,79 +383,42 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   }
 
   if (docs === null) return null
+  const list = <ChatList lang={lang} P={P} rows={chats} />
   if (folded(chat, doc) && !reopen) {
     return (
-      <p className="mi-folded" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', margin: '8px 0 24px', fontSize: '16px', color: 'var(--text-dim, var(--muted))' }}>
-        <span style={{ color: '#9cbf8a', display: 'inline-flex' }}><DoneMark /></span> <span>{W.folded(chat.n, doc.n)}</span>{' '}
-        <button type="button" onClick={() => setReopen(true)}
-          style={{ color: 'var(--accent)', background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit', textDecoration: 'underline', textUnderlineOffset: '3px' }}>{W.foldedMore}</button>
-      </p>
+      <div className="mi">
+        <p className="mi-folded" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', margin: '8px 0 8px', fontSize: '16px', color: 'var(--text-dim, var(--muted))' }}>
+          <span style={{ color: '#9cbf8a', display: 'inline-flex' }}><DoneMark /></span> <span>{W.folded(chat.n, doc.n)}</span>{' '}
+          <button type="button" onClick={() => setReopen(true)}
+            style={{ color: 'var(--accent)', background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit', textDecoration: 'underline', textUnderlineOffset: '3px' }}>{W.foldedMore}</button>
+        </p>
+        {list}
+        <style jsx>{miStyles}</style>
+      </div>
     )
   }
 
-  const tone = (s) => (s.step === 'done' ? 'done' : s.step === 'new' ? 'new' : 'wait')
-  const label = (s, kind) => (
-    s.step === 'done' ? W.state[kind === 'chat' ? 'chatDone' : 'docDone'](s.n, day(lang, s.at))
-      : s.step === 'pending' ? W.state.pending(s.waitingYes)
-        : s.step === 'waiting' ? W.state.waiting(day(lang, s.at))
-          : W.state.new
-  )
   const ap = (which) => approving && approving.which === which
+  const docLine = doc.waitingYes > 0 ? (
+    <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('doc', docIds())}>
+      {ap('doc') ? W.remembering(approving.done, approving.total) : W.remember(doc.waitingYes)}
+    </button>
+  ) : (docBusy && docBusy.n ? <span className="mi-note">{W.docSending(docBusy.i, docBusy.n)}</span> : null)
 
   return (
     <div className="mi">
-      <Card title={W.chatTitle} state={label(chat, 'chat')} tone={tone(chat)} onFiles={importZip} accept=".zip"
-        busy={!!(chatBusy && chatBusy.reading) || ap('chat')} dropLabel={W.dropHere}>
-        {chat.step !== 'done' && chat.step !== 'pending' && (
-          <ol className="mi-steps">
-            {W.chatSteps.map((s, i) => (
-              <li key={i}>{s.length === 3 ? <>{s[0]}<a href="https://chatgpt.com/#settings/DataControls" target="_blank" rel="noreferrer">{s[1]}</a>{s[2]}</> : s[0]}</li>
-            ))}
-          </ol>
-        )}
-        {chatBusy && chatBusy.found != null && <p className="mi-note">{W.chatFound(chatBusy.found, chatBusy.took)}</p>}
-        {chatBusy && chatBusy.error && <p className="mi-note mi-bad" role="alert">{chatBusy.error}</p>}
-        <div className="mi-actions">
-          {chat.waitingYes > 0 ? (
-            <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('chat', chatIds())}>
-              {ap('chat') ? W.remembering(approving.done, approving.total) : W.remember(chat.waitingYes)}
-            </button>
-          ) : chat.step !== 'done' && (
-            <>
-              <button type="button" className="mi-btn mi-primary" disabled={!!(chatBusy && chatBusy.reading)} onClick={() => chatInput.current && chatInput.current.click()}>
-                {chatBusy && chatBusy.reading ? W.chatReading(chatBusy.reading) : W.chatPick}
-              </button>
-              {chat.step === 'new' && (
-                <button type="button" className="mi-btn" onClick={() => { const d = todayIso(); ls.set(MOVE_WAIT_KEY, d); setAsked(d) }}>{W.chatAsked}</button>
-              )}
-            </>
-          )}
-          <input ref={chatInput} type="file" accept=".zip,application/zip" hidden
-            onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; importZip(f) }} />
-        </div>
-      </Card>
+      <AiChats lang={lang} W={W} P={P} chat={chat} chatBusy={chatBusy} approving={approving}
+        onFile={(fs) => importChats(fs, null)} onPaste={(t) => importChats(null, t)} remember={remember} chatIds={chatIds}
+        onAsked={() => { const d = todayIso(); ls.set(MOVE_WAIT_KEY, d); setAsked(d) }} />
+      <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
+        docBusy={docBusy} docLine={docLine} remember={remember} />
+      {list}
+      <style jsx>{miStyles}</style>
+    </div>
+  )
+}
 
-      <Card title={W.docTitle} state={label(doc, 'doc')} tone={tone(doc)} onFiles={sendDocs} multiple
-        busy={!!(docBusy && docBusy.n) || ap('doc')} dropLabel={W.dropHere}>
-        {doc.step !== 'done' && <p className="mi-sub">{W.docSub}</p>}
-        {docBusy && docBusy.error && <p className="mi-note mi-bad" role="alert">{docBusy.error}</p>}
-        <div className="mi-actions">
-          {doc.waitingYes > 0 ? (
-            <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('doc', docIds())}>
-              {ap('doc') ? W.remembering(approving.done, approving.total) : W.remember(doc.waitingYes)}
-            </button>
-          ) : (
-            <button type="button" className={doc.step === 'done' ? 'mi-btn' : 'mi-btn mi-primary'} disabled={!!(docBusy && docBusy.n)} onClick={() => docInput.current && docInput.current.click()}>
-              {docBusy && docBusy.n ? W.docSending(docBusy.i, docBusy.n) : W.docPick}
-            </button>
-          )}
-          <a className="mi-link" href="/upload#laptop">{W.docWhole}</a>
-          <input ref={docInput} type="file" multiple hidden
-            onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; sendDocs(f) }} />
-        </div>
-      </Card>
-
-      <style jsx>{`
+const miStyles = css`
         .mi { display: grid; gap: 16px; margin: 8px 0 28px; }
         .mi :global(.mi-card) {
           position: relative; padding: 26px 28px 24px; border-radius: 18px;
@@ -285,7 +470,33 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
           .mi :global(.mi-steps) { font-size: 17px; }
           .mi :global(.mi-btn) { width: 100%; }
         }
-      `}</style>
-    </div>
-  )
-}
+      
+        .mi :global(.mi-sub a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; overflow-wrap: anywhere; }
+        .mi :global(.mi-dim) { opacity: 0.72; font-size: 16px; }
+        .mi :global(.mi-chips) { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 42px; }
+        .mi :global(.mi-chip) { font: inherit; font-size: 16px; min-height: 40px; padding: 0 16px; border-radius: 999px; cursor: pointer; color: var(--text); background: transparent; border: 1px solid color-mix(in srgb, var(--border) 50%, var(--text) 25%); transition: background-color 150ms ease-out, border-color 150ms ease-out; }
+        .mi :global(.mi-chip:hover) { background: color-mix(in srgb, var(--text) 7%, transparent); }
+        .mi :global(.mi-chip-on) { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+        .mi :global(.mi-chip:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .mi :global(.mi-cmd) { margin: 12px 0 0 42px; padding: 14px 16px; border-radius: 12px; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; line-height: 1.5; color: var(--text); background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--border); }
+        .mi :global(.mi-groups) { list-style: none; margin: 16px 0 0 42px; padding: 0; display: grid; gap: 8px; }
+        .mi :global(.mi-group) { width: 100%; display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 2px; align-items: center; text-align: left; font: inherit; padding: 12px 14px; border-radius: 12px; cursor: pointer; color: var(--text-dim, var(--muted)); background: transparent; border: 1px solid var(--border); transition: border-color 150ms ease-out, background-color 150ms ease-out; }
+        .mi :global(.mi-group-on) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+        .mi :global(.mi-gname) { color: var(--text); font-size: 17px; overflow-wrap: anywhere; }
+        .mi :global(.mi-gmeta) { grid-column: 2; font-size: 15px; color: var(--text-dim, var(--muted)); }
+        .mi :global(.mi-paste textarea) { box-sizing: border-box; width: calc(100% - 42px); margin: 14px 0 0 42px; padding: 12px 14px; border-radius: 12px; font: inherit; font-size: 16px; color: var(--text); background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--border); resize: vertical; }
+        .mi :global(.mi-list) { margin: 6px 0 0; }
+        .mi :global(.mi-list-title) { margin: 0 0 10px; font-family: var(--font-display); font-weight: 400; font-size: 19px; color: var(--text); }
+        .mi :global(.mi-list ul) { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+        .mi :global(.mi-chat) { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); }
+        .mi :global(.mi-chat-text) { min-width: 0; display: grid; gap: 2px; }
+        .mi :global(.mi-chat-title) { font-size: 17px; color: var(--text); overflow-wrap: anywhere; }
+        .mi :global(.mi-chat-meta) { font-size: 14px; color: var(--text-dim, var(--muted)); }
+        .mi :global(.mi-cont) { display: inline-flex; align-items: center; flex-shrink: 0; min-height: 44px; font-size: 16px; text-decoration: none; }
+        @media (max-width: 560px) {
+          .mi :global(.mi-chips), .mi :global(.mi-cmd), .mi :global(.mi-groups) { margin-left: 0; }
+          .mi :global(.mi-paste textarea) { width: 100%; margin-left: 0; }
+          .mi :global(.mi-chat) { flex-direction: column; align-items: stretch; }
+          .mi :global(.mi-cont) { justify-content: center; width: auto; }
+        }
+`
