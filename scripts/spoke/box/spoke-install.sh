@@ -211,9 +211,14 @@ fi
 say; say "-- 8. the door: /usr/local/sbin/spoke-door, the laptop files in /usr/local/share/spoke"
 run sudo install -o root -g root -m 755 "$HERE/spoke-door.sh" /usr/local/sbin/spoke-door
 run sudo install -d -o root -g root -m 755 /usr/local/share/spoke
-for f in door.sh inventory.sh spoke.sh make-bundle.sh "Join my brain.command" WHAT-THIS-DOES.txt; do
+for f in door.sh inventory.sh spoke.sh words.sh make-bundle.sh "Join my brain.command" WHAT-THIS-DOES.txt; do
     run sudo install -o root -g root -m 755 "$REPO/scripts/spoke/$f" "/usr/local/share/spoke/$f"
 done
+# the Mac app's two files and the move-in helper (SWITCH-1, 2026-11-16): make-bundle.sh finds them here
+run sudo install -d -o root -g root -m 755 /usr/local/share/spoke/app
+run sudo install -o root -g root -m 755 "$REPO/scripts/spoke/app/join-my-brain" /usr/local/share/spoke/app/join-my-brain
+run sudo install -o root -g root -m 644 "$REPO/scripts/spoke/app/Info.plist" /usr/local/share/spoke/app/Info.plist
+run sudo install -o root -g root -m 644 "$REPO/scripts/import/brain_import.py" /usr/local/share/spoke/brain_import.py
 rec "door /usr/local/sbin/spoke-door"
 
 say; say "-- 9. sudoers: $SUDOERS"

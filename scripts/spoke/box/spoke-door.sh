@@ -11,8 +11,11 @@
 #   spoke-door <m> undo <id>           the laptop's door.sh undo <id>
 #   spoke-door <m> organise on|off     the laptop's mode (on only after the card)
 #   spoke-door <m> leave               the laptop's key line goes, the laptop's node leaves the network
+#   spoke-door <m> move-in < token     the laptop's door.sh move-in: starts the home's whole-computer helper there with
+#                                      this one-time import token (stdin only, never argv); organise mode (SWITCH-1)
+#   spoke-door <m> move-in-status      whether it runs there, and the last lines of its log
 #   spoke-door <m> fingerprint         the signing key's fingerprint (the console shows it by Download)
-#   spoke-door <m> bundle              a one-device, one-hour network key and the signed "Join my brain" zip
+#   spoke-door <m> bundle [en|ru]      a one-device, one-hour network key and the signed "Join my brain" app, zipped
 #
 # No shell, no delete verb on the laptop, no path the laptop's door.sh would refuse. Every call is one line
 # in /var/lib/spoke/<m>/door.log (readable by the member's group) before it runs, refused ones too.
@@ -152,6 +155,15 @@ case "$VERB" in
     organise)
         [ $# -eq 1 ] && { [ "$1" = on ] || [ "$1" = off ]; } || refuse "organise on or off"
         on_laptop organise "$1" ;;
+    move-in)
+        [ $# -eq 0 ] || refuse "move-in reads the token on stdin, no words"
+        tok=""; IFS= read -r tok || true
+        [[ "$tok" =~ ^imp_[A-Za-z0-9_-]{32,64}$ ]] || refuse "move-in token"
+        log "move-in	started (token not logged)"
+        printf '%s\n' "$tok" | on_laptop move-in ;;
+    move-in-status)
+        [ $# -eq 0 ] || refuse "move-in-status takes no words"
+        on_laptop move-in status ;;
     leave)
         [ $# -eq 0 ] || refuse "leave takes no words"
         if on_laptop leave 2>/dev/null; then printf 'laptop\tkey line removed\n'
@@ -177,7 +189,8 @@ for n in nodes:
         [ $# -eq 0 ] || refuse "fingerprint takes no words"
         ssh-keygen -lf "$SIGN.pub" | awk '{print "signing\t" $2}' ;;
     bundle)
-        [ $# -eq 0 ] || refuse "bundle takes no words"
+        # one optional word: the language of the app's windows (the console's own, SWITCH-1)
+        lg=${1:-en}; [ $# -le 1 ] && { [ "$lg" = en ] || [ "$lg" = ru ]; } || refuse "bundle takes en or ru"
         mkdir -p "$VAR/tmp" "$VAR/out"; chmod 700 "$VAR/tmp"
         # Headscale 0.26 takes the user's id; older versions its name (unverified on friends-1 until the apply)
         uid=$(hs users list -o json 2>/dev/null | python3 -c '
@@ -196,7 +209,7 @@ print(next((str(u.get("id")) for u in users if u.get("name") == m), ""))
         [ -s "$ak" ] || refuse "Headscale issued an empty key"
         ip=$(ts ip -4 2>/dev/null | head -1); [ -n "$ip" ] || refuse "the brain's node has no address (spoke-node@$M down?)"
         zip=$(bash "$SHARE/make-bundle.sh" --handle "$M" --console "$CONSOLE_URL" --login-server "$LOGIN_SERVER" \
-            --authkey-file "$ak" --brain-ip "$ip" --brain-pubkey "$KEY.pub" --signing-key "$SIGN" --out "$VAR/out" | head -1)
+            --authkey-file "$ak" --brain-ip "$ip" --brain-pubkey "$KEY.pub" --signing-key "$SIGN" --out "$VAR/out" --lang "$lg" | head -1)
         [ -f "$zip" ] || refuse "make-bundle made no zip"
         chmod 640 "$zip"
         fp=$(ssh-keygen -lf "$SIGN.pub" | awk '{print $2}')

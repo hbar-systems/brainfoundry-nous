@@ -220,6 +220,10 @@ Pull only: the helper runs once at the person's command, nothing is left running
 
 Phone: the card says to put photos and files in iCloud Drive or Google Drive; the computer's run sees them there.
 
+### Door 1 without a line: over the spoke (SWITCH-1, 2026-11-16)
+
+When the brain has a spoke (`docs/spoke.md`) and the computer joined it, the home's **Connect this computer** card starts the same survey without a pasted line: the console mints the survey token, the bridge hands it to the laptop's `door.sh move-in` on stdin (organise mode), and the laptop runs this same `brain_import.py --survey` against `<console>/api/bf`, detached. The plan, the yes and the pull below are unchanged. The helper takes the token from `BRAIN_IMPORT_TOKEN` when `--token` is absent, so it is never on a command line. The pasted line stays as the fallback.
+
 ### Door 2: chats from every AI, then Continue here
 
 - The home card "Bring your chats with ChatGPT, Claude and other AIs" carries one chip per AI (`ui/lib/aiExports.js`) with that AI's export steps and link, takes the export file as it came (zip, json, html, csv) or a pasted conversation (the `text` field of `POST /documents/import-chats`), and says that signing in with Claude or ChatGPT (the seat) does not bring old chats; the export does. The Knowledge page's import card lists every AI the same way.

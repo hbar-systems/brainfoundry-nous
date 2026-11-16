@@ -494,6 +494,10 @@ def run(argv=None, out=print):
                     help="whole computer: send a list only, choose on your brain's home, then bring what you chose")
     ap.add_argument("--poll", type=float, default=3.0, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
+    # started by the spoke's door (SWITCH-1, 2026-11-16): the one-time token comes in the environment,
+    # never on the command line, so another account on this computer cannot read it in the process list
+    if not a.token and os.environ.get("BRAIN_IMPORT_TOKEN"):
+        a.token = os.environ["BRAIN_IMPORT_TOKEN"].strip()
     if a.survey:
         return survey_run(a, out)
 

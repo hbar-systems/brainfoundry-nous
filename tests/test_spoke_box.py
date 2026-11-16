@@ -63,7 +63,8 @@ def test_sudoers_line_names_every_verb_and_no_shell():
     assert all(c.startswith("/usr/local/sbin/spoke-door paul ") for c in cmds)
     verbs = {c.split(" ", 2)[2] for c in cmds}
     assert verbs == {"status", "inventory", "plan", "apply", "leave", "fingerprint", "bundle",
-                     "organise on", "organise off", "undo *"}
+                     "organise on", "organise off", "undo *",
+                     "bundle en", "bundle ru", "move-in", "move-in-status"}          # SWITCH-1, 2026-11-16
     assert SC.sudoers("hbar", "cc").startswith("# The spoke door of hbar")
     with pytest.raises(ValueError):
         SC.sudoers("paul", "bad user")
@@ -287,7 +288,7 @@ def test_door_bundle_signs_a_zip_with_a_one_hour_key(rig):
     assert not (rig["var"] / "tmp" / "authkey").exists()                  # the key file does not stay
     import zipfile
     with zipfile.ZipFile(z) as zf:
-        s = zf.read("Join my brain/spoke.sh").decode()
+        s = zf.read("Join my brain.app/Contents/Resources/spoke.sh").decode()     # the app since SWITCH-1
     assert 'AUTHKEY="hskey-auth-0123456789abcdef"' in s and 'BRAIN_IP="100.64.0.1"' in s
     assert 'LOGIN_SERVER="https://spoke.paul.brainfoundry.ai"' in s
 

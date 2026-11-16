@@ -2730,9 +2730,12 @@ SPOKE_ON = os.environ.get("CC_SPOKE", "").strip() == "1"
 SPOKE_HANDLE = (os.environ.get("CC_SPOKE_HANDLE", "").strip() or MEMBER)
 SPOKE_DOOR = "/usr/local/sbin/spoke-door"
 SPOKE_VAR = Path(os.environ.get("CC_SPOKE_VAR", "").strip() or f"/var/lib/spoke/{SPOKE_HANDLE or 'none'}")
-SPOKE_VERBS = ("status", "inventory", "plan", "apply", "undo", "leave", "organise")
-SPOKE_CARDED = ("organise on", "apply")
-SPOKE_TIMEOUT = {"inventory": 900, "apply": 900, "undo": 600, "bundle": 120}
+SPOKE_VERBS = ("status", "inventory", "plan", "apply", "undo", "leave", "organise", "move-in", "move-in-status")
+# move-in (SWITCH-1, 2026-11-16): the laptop's names go to the brain to make the home's plan, so from the
+# reasoner it is a card like organise on, never remembered, never judged
+SPOKE_CARDED = ("organise on", "apply", "move-in")
+SPOKE_TIMEOUT = {"inventory": 900, "apply": 900, "undo": 600, "bundle": 120, "move-in": 60}
+IMPORT_TOKEN = re.compile(r"imp_[A-Za-z0-9_-]{32,64}")
 SPOKE_PLAN_MAX = 5000
 SPOKE_UNDO_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 SPOKE_ZIP = re.compile(r"join-my-brain-[a-z][a-z0-9]{1,15}\.zip")
@@ -2795,6 +2798,10 @@ def _spoke_card(verb: str, args: list, plan: list) -> dict:
 
 def _spoke_summary(inp: dict) -> str:
     verb = " ".join([str(inp.get("verb", ""))] + [str(a) for a in inp.get("args") or []])
+    if verb == "move-in":
+        return ("Let your brain list what is on this laptop, to propose what to bring in? It sees file names, sizes and "
+                "dates (not what is in them); passwords, keys, mail and browsers are never listed. The plan waits on your "
+                "home for your yes; nothing is brought in or moved before that, and nothing is deleted.")
     if verb == "organise on":
         return ("Let your brain organise this laptop? It will see names in the folders it asks about, and read the start of "
                 "files it needs to place (64 KB). It moves nothing without a plan you approve, and never deletes. "
@@ -2836,11 +2843,88 @@ def _spoke(body: dict, ask=None, door=None) -> tuple[int, dict]:
         d = ask("spoke", _spoke_card(verb, args, plan), None, str(b.get("run") or "") or None)
         if d.get("behavior") != "allow":
             return 403, {"ok": False, "error": d.get("message") or "not allowed"}
+    if verb == "move-in":
+        return _spoke_move_in(None, door=door)
     rc, out, err = door(verb, args, "\n".join("\t".join(f) for f in plan) + "\n" if plan else None)
     print(f"spoke {verb} {' '.join(args)}: rc={rc}", flush=True)
     if rc != 0:
         return 502, {"ok": False, "error": err or f"spoke-door {verb} answered {rc}", "out": out[-4000:]}
     return 200, {"ok": True, "verb": verb, "out": out}
+
+
+def _spoke_move_in(token: str | None, door=None, mint=None) -> tuple[int, dict]:
+    """The home's whole-computer run, started over the spoke instead of a pasted line (SWITCH-1, 2026-11-16).
+    The console mints the survey token through the brain's own route and hands it here (the owner's press, with
+    its words in place, is the yes); from the reasoner the card came first and the bridge mints it. Then the
+    laptop goes to organise mode (names may leave) and its door.sh starts brain_import.py --survey with the
+    token on stdin. The plan, the yes and the pull are MOVE-IN-2's, unchanged: the home shows them."""
+    door = door or _spoke_door
+    why = _spoke_ready()
+    if why:
+        return 409, {"ok": False, "error": why}
+    if token is None:
+        got = (mint or (lambda: _brain_api("POST", "/documents/import-laptop/token", {"survey": True})))()
+        token = str((got or {}).get("token") or "")
+    if not IMPORT_TOKEN.fullmatch(token or ""):
+        return 400, {"ok": False, "error": "no survey token (start it on the home)"}
+    rc, out, err = door("organise", ["on"], None)
+    if rc != 0:
+        return 502, {"ok": False, "error": err or "the laptop did not switch to organise", "step": "organise"}
+    rc, out, err = door("move-in", [], token + "\n")
+    print(f"spoke move-in: rc={rc}", flush=True)
+    if rc != 0:
+        return 502, {"ok": False, "error": err or f"spoke-door move-in answered {rc}", "step": "move-in"}
+    return 200, {"ok": True, "started": True, "out": out[-2000:]}
+
+
+def _spoke_look(door=None) -> tuple[int, dict]:
+    """POST /spoke/look (the owner's press on the home): the laptop's look-mode inventory, counts only."""
+    door = door or _spoke_door
+    why = _spoke_ready()
+    if why:
+        return 409, {"ok": False, "error": why}
+    rc, out, err = door("inventory", [], None)
+    if rc != 0:
+        return 502, {"ok": False, "error": err or "the laptop did not answer"}
+    tot = next((l.split("\t") for l in out.splitlines() if l.startswith("total\t")), None)
+    return 200, {"ok": True, "files": int(tot[1]) if tot and len(tot) > 2 else None,
+                 "bytes": int(float(tot[2])) if tot and len(tot) > 2 else None}
+
+
+# ---- The first sign-in order (SWITCH-1, 2026-11-16): on a member brain, once, then never again ----
+# Four steps on the quiet home: the seat (sign in with ChatGPT or Claude), the ways of working (the surfaces
+# pick-list), moving in (connect this computer, bring AI chats), the quiet home. Each step is done or skipped;
+# the state is the owner's, kept beside the layout, so a second browser does not start over.
+FIRST_RUN_FILE = STATE_DIR / "first-run.json"
+FIRST_RUN_STEPS = ("seat", "ways", "movein", "home")
+
+
+def _first_run_get() -> dict:
+    try:
+        d = json.loads(FIRST_RUN_FILE.read_text())
+    except Exception:
+        d = {}
+    steps = {k: v for k, v in (d.get("steps") or {}).items() if k in FIRST_RUN_STEPS and v in ("done", "skipped")}
+    return {"steps": steps, "finished": d.get("finished") or None, "order": list(FIRST_RUN_STEPS), "member": bool(MEMBER)}
+
+
+def _first_run_post(body: dict) -> tuple[int, dict]:
+    """{"step": "seat", "state": "done"|"skipped"} marks one step; {"reset": true} starts it again (Settings)."""
+    cur = _first_run_get()
+    if body.get("reset") is True:
+        cur = {"steps": {}, "finished": None}
+    else:
+        step, state = str(body.get("step") or ""), str(body.get("state") or "")
+        if step not in FIRST_RUN_STEPS or state not in ("done", "skipped"):
+            return 400, {"error": f"step is one of {', '.join(FIRST_RUN_STEPS)}; state done or skipped"}
+        cur["steps"][step] = state
+        if step == "home" or all(k in cur["steps"] for k in FIRST_RUN_STEPS):
+            cur["finished"] = cur.get("finished") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = FIRST_RUN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"steps": cur["steps"], "finished": cur.get("finished")}, indent=1))
+    tmp.replace(FIRST_RUN_FILE)
+    return 200, _first_run_get()
 
 
 def _spoke_status_parse(out: str) -> dict:
@@ -2869,13 +2953,13 @@ def _spoke_state(door=None) -> tuple[int, dict]:
                  "inventory": bool(st.get("inventory"))}
 
 
-def _spoke_bundle(door=None) -> tuple[int, dict]:
+def _spoke_bundle(door=None, lang: str = "en") -> tuple[int, dict]:
     """POST /spoke/bundle (Make my download): a one-device, one-hour key and the signed zip."""
     door = door or _spoke_door
     why = _spoke_ready()
     if why:
         return 409, {"ok": False, "error": why}
-    rc, out, err = door("bundle", [], None)
+    rc, out, err = door("bundle", [lang if lang in ("en", "ru") else "en"], None)
     kv = dict(l.split("\t", 1) for l in out.splitlines() if "\t" in l)
     name = Path(kv.get("bundle", "")).name
     if rc != 0 or not SPOKE_ZIP.fullmatch(name):
@@ -5435,6 +5519,15 @@ class Handler(BaseHTTPRequestHandler):
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
         elif route == "/spoke/state":
             self._send(*_spoke_state())
+        elif route == "/spoke/move-in":
+            if _spoke_ready():
+                self._send(200, {"ok": False, "ready": False})
+            else:
+                rc, out, err = _spoke_door("move-in-status", [], None)
+                self._send(200, {"ok": rc == 0, "running": rc == 0 and out.startswith("running"),
+                                 "tail": out.splitlines()[1:][-6:] if rc == 0 else [], "error": "" if rc == 0 else err})
+        elif route == "/first-run":
+            self._send(200, _first_run_get())
         elif route == "/spoke/inventory":
             code, page = _spoke_inventory_html()
             self._send_bytes(code, (page or "<p>No inventory yet.</p>").encode(), "text/html; charset=utf-8",
@@ -6011,7 +6104,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*_spoke(req))
             return
         if route == "/spoke/bundle":
-            self._send(*_spoke_bundle())
+            self._send(*_spoke_bundle(lang=LAYOUT.lang()))
+            return
+        if route == "/spoke/look":
+            self._send(*_spoke_look())
+            return
+        if route == "/spoke/move-in":
+            # the owner's press on the home (operator token), the survey token the console just minted
+            self._send(*_spoke_move_in(str((req or {}).get("token") or "")))
+            return
+        if route == "/first-run":
+            self._send(*_first_run_post(req or {}))
             return
         if route == "/spoke/disconnect":
             if _spoke_ready():

@@ -10,6 +10,8 @@ import css from 'styled-jsx/css'
 import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords } from '../lib/moveIn'
 import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
 import { AI_EXPORTS } from '../lib/aiExports'
+import ConnectComputer from './ConnectComputer'
+import { connectWords } from '../lib/connectComputer'
 
 const API = '/api/bf'
 const ls = {
@@ -94,7 +96,9 @@ const fmtClock = (s) => { try { return new Date(s * 1000).toLocaleTimeString([],
 
 // Door 1: the whole computer. Start mints a survey token; the line runs the helper with --survey; the
 // plan comes back grouped; one yes per group or all proposed; the helper pulls them in the same run.
-function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }) {
+// spoke (SWITCH-1): the Connect this computer card's state; when the spoke is on this card is the fallback,
+// and a run the spoke started has no window on the computer to keep open.
+function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, spoke }) {
   const [mint, setMint] = useState(null)        // null | { busy } | { token, expires_at } | { error }
   const [os, setOs] = useState('mac')
   const [copied, setCopied] = useState(false)
@@ -145,11 +149,12 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
   }
   const pull = pullState(run, survey)
   const shown = all ? groups : groups.slice(0, 10)
-  const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? P.pulling(pull.done, pull.total)
+  const viaSpoke = !!(spoke && spoke.started)
+  const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? (viaSpoke ? P.pullingSpoke(pull.done, pull.total) : P.pulling(pull.done, pull.total))
     : step === 'plan' ? P.compPlan(groups.length, groups.reduce((s, g) => s + g.files, 0), fmtBytes(groups.reduce((s, g) => s + g.bytes, 0)))
       : step === 'line' ? P.compWaiting : W.state.new
   return (
-    <Card title={P.compTitle} state={label} tone={step === 'pulled' ? 'done' : step === 'start' ? 'new' : 'wait'} onFiles={onFiles} multiple busy={busy} dropLabel={W.dropHere}>
+    <Card title={spoke && spoke.ready && step === 'start' ? connectWords(lang).fallback : P.compTitle} state={label} tone={step === 'pulled' ? 'done' : step === 'start' ? 'new' : 'wait'} onFiles={onFiles} multiple busy={busy} dropLabel={W.dropHere}>
       {step === 'start' && (
         <>
           <p className="mi-sub">{P.compSub}</p>
@@ -297,6 +302,7 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   const [approving, setApproving] = useState(null) // null | { which, done, total }
   const [reopen, setReopen] = useState(false)
   const [chats, setChats] = useState([])        // GET /documents/chats rows
+  const [spoke, setSpoke] = useState(null)      // the Connect this computer card's { step, ready, started }
 
   const load = async () => {
     const j = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
@@ -407,11 +413,12 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
 
   return (
     <div className="mi">
+      <ConnectComputer lang={lang} onState={(x) => setSpoke(s => ({ ...(s || {}), ...x, started: !!((s && s.started) || x.started) }))} />
       <AiChats lang={lang} W={W} P={P} chat={chat} chatBusy={chatBusy} approving={approving}
         onFile={(fs) => importChats(fs, null)} onPaste={(t) => importChats(null, t)} remember={remember} chatIds={chatIds}
         onAsked={() => { const d = todayIso(); ls.set(MOVE_WAIT_KEY, d); setAsked(d) }} />
       <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
-        docBusy={docBusy} docLine={docLine} remember={remember} />
+        docBusy={docBusy} docLine={docLine} remember={remember} spoke={spoke} />
       {list}
       <style jsx>{miStyles}</style>
     </div>

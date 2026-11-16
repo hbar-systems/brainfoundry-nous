@@ -16,6 +16,11 @@
 #                         never overwrites, never deletes; writes an undo file and prints its id
 #   undo <id>             moves a plan's files back (organise only)
 #   leave                 removes the brain's key line (the brain can let go of the laptop itself)
+#   move-in               (organise only) the token on stdin: starts brain_import.py --survey, the same
+#                         helper as the home's pasted line, detached, its log in ~/.brain-spoke/move-in.log;
+#                         it sends a LIST to the brain over https, waits for the yes on the home, brings
+#                         exactly the chosen files and stops (SWITCH-1, 2026-11-16)
+#   move-in status        whether it runs, and the last lines of its log
 # Paths are relative to the home folder. Refused always: anything under Library, any hidden folder,
 # .brain-spoke itself, "..", links that lead outside home. There is no delete verb and no shell.
 set -u
@@ -32,6 +37,21 @@ mode() { cat "$D/mode" 2>/dev/null || echo look; }
 need_organise() { [ "$(mode)" = organise ] || refuse "$1 needs organise mode (the friend's yes)"; }
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+pyfind() {
+    # a python3 that is really there. On a Mac /usr/bin/python3 is only Apple's stub until the Command
+    # Line Tools are in (it would open Apple's install dialog instead of running), so it counts only then.
+    local p
+    for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do
+        [ -x "$p" ] && { echo "$p"; return 0; }
+    done
+    if [ "$(uname -s)" = Darwin ]; then
+        xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ] && { echo /usr/bin/python3; return 0; }
+        return 1
+    fi
+    command -v python3 2>/dev/null
+}
+running() { [ -f "$D/move-in.pid" ] && kill -0 "$(cat "$D/move-in.pid" 2>/dev/null)" 2>/dev/null; }
 
 safe() {
     # prints the absolute path for a home-relative path, or refuses. The whole path is judged,
@@ -109,6 +129,30 @@ case "$verb" in
             esac
         done < "$U.rev"
         mv "$U" "$U.undone"; rm -f "$U.rev"; say "undone $1" ;;
+    move-in)
+        need_organise move-in
+        case "${1:-}" in
+            status) if running; then say "running"; else say "not running"; fi
+                    tail -n "${2:-20}" "$D/move-in.log" 2>/dev/null | cut -c1-300; exit 0 ;;
+            '') ;;
+            *) refuse "move-in takes no words (the token comes on stdin)" ;;
+        esac
+        url=$(head -n 1 "$D/brain_url" 2>/dev/null)
+        case "$url" in https://*) ;; *) refuse "no brain address in $D/brain_url (join again)" ;; esac
+        case "$url" in *[!A-Za-z0-9.:/_-]*) refuse "brain address looks wrong" ;; esac
+        [ -f "$D/brain_import.py" ] || refuse "no helper in $D (join again)"
+        running && refuse "a move-in already runs"
+        tok=""; IFS= read -r tok || true
+        case "$tok" in imp_*) ;; *) refuse "move-in token" ;; esac
+        case "${tok#imp_}" in *[!A-Za-z0-9_-]*|'') refuse "move-in token" ;; esac
+        [ ${#tok} -le 70 ] || refuse "move-in token"
+        py=$(pyfind) || refuse "python3 is not on this computer yet (on a Mac: Apple's Command Line Tools)"
+        # detached: the run waits for the yes on the home for up to hours, and outlives this door call
+        BRAIN_IMPORT_TOKEN="$tok" nohup "$py" "$D/brain_import.py" --survey --brain "$url" --receipt-dir "$D" \
+            >> "$D/move-in.log" 2>&1 < /dev/null &
+        echo $! > "$D/move-in.pid"
+        log "move-in	started	pid $!"
+        say "move-in started" ;;
     leave)
         grep -v 'brain-spoke:' "$HOME/.ssh/authorized_keys" > "$HOME/.ssh/authorized_keys.spoke-tmp"
         mv "$HOME/.ssh/authorized_keys.spoke-tmp" "$HOME/.ssh/authorized_keys"; chmod 600 "$HOME/.ssh/authorized_keys"

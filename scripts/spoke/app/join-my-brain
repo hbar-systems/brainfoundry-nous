@@ -1,0 +1,34 @@
+#!/bin/bash
+# Join my brain.app, the program a Mac owner double-clicks (SWITCH-1, 2026-11-16). No Terminal window:
+# every question is a macOS dialog. It checks that the files beside it (Contents/Resources) are the ones
+# the brain signed, shows what joining does, and on Join runs spoke.sh join in its window mode; the steps
+# and their output go to ~/Library/Logs/join-my-brain.log. Everything it runs is text in Resources;
+# right-click the app, Show Package Contents, to read it. Design: docs/spoke.md, section 12.
+R="$(cd "$(dirname "$0")/../Resources" 2>/dev/null && pwd)" || exit 1
+cd "$R" || exit 1
+SPOKE_LANG=$(head -n 1 lang 2>/dev/null); export SPOKE_LANG
+. ./words.sh
+LOG="$HOME/Library/Logs/join-my-brain.log"
+mkdir -p "$HOME/Library/Logs"
+if ! ssh-keygen -Y verify -f allowed_signers -I brain -n brain-spoke -s SHA256SUMS.sig < SHA256SUMS >/dev/null 2>&1 \
+   || ! shasum -a 256 -c SHA256SUMS >/dev/null 2>&1; then
+    dialog "$(w bad_sig)" "$(w b_ok)" >/dev/null; exit 1
+fi
+fp=$(ssh-keygen -lf allowed_signers.pub 2>/dev/null | awk '{print $2}')
+while :; do
+    c=$(dialog "$(w intro "$fp")" "$(w b_not)" "$(w b_show)" "$(w b_join)")
+    case "$c" in
+        "$(w b_join)") break ;;
+        "$(w b_show)")
+            f="$HOME/Library/Logs/join-my-brain-steps.txt"
+            { cat WHAT-THIS-DOES.txt; echo; bash ./spoke.sh join --dry-run; } > "$f" 2>&1
+            open -e "$f" ;;
+        *) exit 0 ;;
+    esac
+done
+{ echo "== $(date -u +%Y-%m-%dT%H:%M:%SZ) join"; SPOKE_GUI=1 bash ./spoke.sh join; echo "== exit $?"; } >> "$LOG" 2>&1
+rc=$(tail -n 1 "$LOG" | awk '/^== exit/ {print $3}')
+if [ "$rc" = 0 ]; then
+    dialog "$(w done "$(sed -n 's/^CONSOLE_URL="\(.*\)".*/\1/p' spoke.sh | head -n 1)")" "$(w b_ok)" >/dev/null
+fi
+exit 0

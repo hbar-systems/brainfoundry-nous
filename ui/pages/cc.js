@@ -10,6 +10,8 @@ import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '.
 import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
+import FirstSignIn from '../components/FirstRun'
+import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
@@ -1620,6 +1622,12 @@ function CC() {
   // the quiet home (PARENTS-HOME-1, 2026-11-15): the owner's first asks, from <desk>/week/asks.json
   const quietHome = isQuiet(layoutBase)
   const [asks, setAsks] = useState([])
+  // the first sign-in order (SWITCH-1, 2026-11-16): once on a member brain's quiet home, state on the bridge
+  const [signinOrder, setSigninOrder] = useState(null)
+  useEffect(() => {
+    if (!quietHome) return
+    fetch('/cc/first-run', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => { if (j) setSigninOrder(j) })
+  }, [quietHome])
   const [startLabel, setStartLabel] = useState(null)
   useEffect(() => {
     let on = true
@@ -2590,6 +2598,8 @@ function CC() {
 
   // Any signed-in reasoner opens the chat: Claude, Codex (ChatGPT) or a configured local model (2026-11-07).
   const loggedIn = claudeIn || codexIn || localIn
+  const firstOn = showFirstRun(signinOrder, quietHome) && !paneMode && turns.length === 0
+  const firstStep = firstOn ? currentStep(signinOrder, loggedIn) : null
   // The doors view: the doors once per page, and once per browser session the bare console opens on a blank
   // thread (the doors), not on the thread left open last time; ?thread= and panes keep their thread.
   useEffect(() => {
@@ -3291,7 +3301,8 @@ function CC() {
           </div>
         )}
 
-        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
+        {firstStep && health && <FirstSignIn lang={lang} state={signinOrder} loggedIn={loggedIn} onChange={setSigninOrder} />}
+        {health && !loggedIn && (!firstStep || firstStep === 'seat') && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
 
         {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
@@ -3339,10 +3350,10 @@ function CC() {
               </div>
             </div>
           ))}
-          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && (
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
             <MoveInCards lang={lang} />
           )}
-          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && asks.length > 0 && !paneMode && (
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && asks.length > 0 && !paneMode && !firstStep && (
             <div className="cc-asks" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '12px', margin: '4px 0 28px' }}>
               {asks.map((a, i) => (
                 <button key={i} onClick={() => send(a.send)} disabled={active} title={a.send}

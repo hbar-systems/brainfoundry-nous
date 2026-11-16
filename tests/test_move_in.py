@@ -82,7 +82,8 @@ def test_no_english_left_on_the_import_cards():
 
 def test_home_shows_the_cards_on_the_quiet_home_only_and_reuses_the_doors():
     cc = (ROOT / "ui" / "pages" / "cc.js").read_text()
-    assert "quietHome && !paneMode && (\n            <MoveInCards lang={lang} />" in cc
+    # since SWITCH-1 (2026-11-16): not while the first sign-in order shows them as its step 3
+    assert "quietHome && !paneMode && !firstStep && (\n            <MoveInCards lang={lang} />" in cc
     # the grey paragraph never shows on the quiet home
     assert "!(quietHome && !paneMode) && (" in cc
     card = (ROOT / "ui" / "components" / "MoveInCards.js").read_text()

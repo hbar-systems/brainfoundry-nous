@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-VERBS = ("status", "inventory", "plan", "apply", "undo", "leave", "organise", "fingerprint", "bundle")
+VERBS = ("status", "inventory", "plan", "apply", "undo", "leave", "organise", "fingerprint", "bundle", "move-in", "move-in-status")
 
 
 def handle_ok(h: str) -> bool:
@@ -147,6 +147,8 @@ def sudoers(h: str, bridge_user: str = "") -> str:
     door = "/usr/local/sbin/spoke-door"
     cmds = [f"{door} {h} {v}" for v in ("status", "inventory", "plan", "apply", "leave", "fingerprint", "bundle")]
     cmds += [f"{door} {h} organise on", f"{door} {h} organise off"]
+    # SWITCH-1 (2026-11-16): the app in the console's language, and the move-in over the spoke (its token on stdin)
+    cmds += [f"{door} {h} bundle en", f"{door} {h} bundle ru", f"{door} {h} move-in", f"{door} {h} move-in-status"]
     # undo takes one id; spoke-door refuses anything that is not apply's own id shape
     cmds += [f"{door} {h} undo *"]
     return _fill((HERE / "sudoers-spoke.template").read_text(),
