@@ -500,6 +500,79 @@ class Files:
             pass
 
 
+# Working pages on the console origin (2026-11-16, COURT-8). The 2026-11-13 audit fix sandboxes every desk HTML
+# file under /cc/files/raw, so a page the brain's own scripts build (the court, which reads state.json every 3 s
+# and posts rulings to /cc/chat) ran in an opaque origin: its fetches carried Origin null and foreign_page refused
+# them, and its localStorage outbox threw. /cc/page/<name>/ serves only <out>/<name>/index.html for a name on a
+# fixed list, behind the console login, without the sandbox header. Nothing in the URL is a path: the name is one
+# lowercase word, the file is fixed per name. /cc/page/<name>/<file> serves a sibling from that page's own folder
+# (one segment, no dot files, read-only); a sibling html or svg keeps the sandbox, so only index.html is active
+# on the console origin. An app's files.save lands in out/<date>/, never in a page folder.
+PAGE_NAMES = ("court", "sky", "replay")
+PAGE_NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
+PAGE_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+PAGE_ACTIVE = ("text/html", "application/xhtml+xml", "image/svg+xml")
+
+
+class Pages:
+    def __init__(self, out_dir, names=None):
+        self.out = Path(out_dir)
+        env = (os.environ.get("CC_PAGES") or "").strip()
+        raw = names if names is not None else ([n.strip() for n in env.split(",")] if env else PAGE_NAMES)
+        self.names = tuple(n for n in raw if PAGE_NAME_RE.fullmatch(n or ""))
+
+    def path(self, name: str, sub: str = "") -> Path | None:
+        """The file for /cc/page/<name>[/<sub>], or None. Symlinks out of the page folder are refused."""
+        if name not in self.names or not PAGE_NAME_RE.fullmatch(name):
+            return None
+        sub = sub or "index.html"
+        if not PAGE_FILE_RE.fullmatch(sub) or ".." in sub:
+            return None
+        try:
+            real_folder = (self.out / name).resolve(strict=True)
+            real = (self.out / name / sub).resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
+        if real_folder != self.out.resolve() / name or real.parent != real_folder or not real.is_file():
+            return None
+        return real
+
+    def serve(self, handler, name: str, sub: str = "") -> None:
+        p = self.path(name, sub)
+        if p is None:
+            body = b'{"error": "no such page"}'
+            handler.send_response(404); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
+        try:
+            data = p.read_bytes()
+        except OSError:
+            body = b'{"error": "the page is closed to the bridge (chmod g+r)"}'
+            handler.send_response(403); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
+        ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ctype == "application/json":
+            ctype += "; charset=utf-8"
+        handler.send_response(200)
+        handler.send_header("Content-Type", ctype)
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        if (sub or "index.html") != "index.html" and ctype.split(";")[0] in PAGE_ACTIVE:
+            # a sibling page stays an ordinary desk page: opaque origin
+            handler.send_header("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-downloads")
+        else:
+            # the page itself: same origin, never framed by another site
+            handler.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+            handler.send_header("X-Frame-Options", "SAMEORIGIN")
+        handler.end_headers()
+        try:
+            handler.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
 # A finished job's result (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER
 # AGENTS COMPLETE"): its final text, rc, measured seconds and the files it made, so the card shows it at
 # once and nobody has to ask a reasoner to read the log. A claude job sends its answer to a file with

@@ -1,5 +1,10 @@
 # First use: one question, one document
 
+## Before the first turn: the first sign-in order (SWITCH-1, 2026-11-16)
+
+On a member brain's quiet home (`CC_MEMBER` set, the quiet layout), the console shows four steps once, then never again: **1 Sign in** (with ChatGPT or Claude; the card says plainly that without a seat the brain runs on the shared llama3.2 3B, which keeps notes and finds documents but cannot replace ChatGPT), **2 Ways of working** (the surfaces pick-list of `docs/personalize-interview.md`, saved the way /layout saves it, newcomer default chat and talk-through), **3 Move in** (Connect this computer, `docs/spoke.md` section 12, and the chats from other AIs, `docs/IMPORT.md`), **4 Your home** (the quiet home from then on). Each step has Skip; a signed-in seat counts as step 1 done. The state is the bridge's, `~/.cc-bridge/first-run.json` (`GET/POST /cc/first-run`; `{"reset": true}` starts it again), so another browser does not start over. Code: `ui/components/FirstRun.js`, `ui/lib/firstRun.js`. The rest of this file (the first turn) applies after it.
+
+
 Created: 2026-10-25. Read by the brain's reasoner (CC) when the first turn of a thread arrives with a `<first-use>` block: the `<persona>` carries no `profile:begin` marker AND the Knowledge store holds no documents yet. The bridge decides this (`_first_use` in `scripts/cc/cc-bridge.py`); if the store cannot be asked, the block is absent and `docs/profile-interview.md` applies as before.
 
 A new brain must not open with a wall of questions. It asks one, takes one document, and builds from that.

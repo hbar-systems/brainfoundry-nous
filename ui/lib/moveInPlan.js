@@ -64,6 +64,14 @@ function agentUrls(base, lang) {
   const q = lang === 'ru' ? '?lang=ru' : ''
   return { mac: `${base}/laptop/agent.sh${q}`, windows: `${base}/laptop/agent.ps1${q}` }
 }
+// The fallback under it (MOVE-IN-2): the Python helper, for a computer where the line above does not run.
+function helperCommands(base, token) {
+  const helper = `${base}/documents/import-laptop/helper.py`
+  return {
+    mac: `curl -fsSLo brain_import.py "${helper}" && python3 brain_import.py --survey --brain "${base}" --token ${token}`,
+    windows: `curl.exe -fsSLo brain_import.py "${helper}"; python brain_import.py --survey --brain "${base}" --token ${token}`,
+  }
+}
 function surveyCommands(base, token, lang) {
   const u = agentUrls(base, lang)
   return {
@@ -89,6 +97,8 @@ const EN = {
   compNever: 'Passwords, keys, mail and browser data are never sent. Nothing is installed and nothing stays running: when it is done, it is gone. Your brain cannot reach into the computer; the line only calls out to your brain.',
   compNoApp: 'There is no app to download, so the computer shows no warning about an unknown developer.',
   compRead: 'Read what this line runs',
+  compHelper: 'If this line does not run',
+  compHelperSub: 'The same with the Python helper (the computer needs Python 3). Same key, same list, same yes here.',
   compMacAllow: 'Your Mac may ask whether Terminal may open Desktop, Documents or Downloads: press Allow. Folders you do not allow stay private and are only named here.',
   compPhone: 'From the phone: put photos and files in iCloud Drive or Google Drive; the run on the computer finds them there.',
   compStart: 'Start', compStarting: 'Starting...',
@@ -106,6 +116,7 @@ const EN = {
   bringChosen: (f, b) => `Bring the chosen (${f} files, ${b})`,
   overCaps: (f, b) => `Too much for one run: at most ${f} files, ${b}. Leave out a group.`,
   pulling: (d, n) => `Arriving: ${d} of ${n}. Keep the window on the computer open.`,
+  pullingSpoke: (d, n) => `Arriving: ${d} of ${n}. Keep the computer open and awake.`,
   pulled: (d, k) => `Arrived: ${d} document${d === 1 ? '' : 's'} wait for your yes${k ? `, ${k} file${k === 1 ? '' : 's'} kept` : ''}.`,
   dropOr: 'Or drop single files on this card.',
   chatsTitle: 'Bring your chats with ChatGPT, Claude and other AIs',
@@ -130,6 +141,8 @@ const RU = {
   compNever: 'Пароли, ключи, почта и данные браузера не отправляются никогда. Ничего не устанавливается и ничего не остаётся работать: когда всё готово, её нет. Мозг не может зайти в компьютер; строка только сама обращается к мозгу.',
   compNoApp: 'Скачивать приложение не нужно, поэтому компьютер не предупреждает о неизвестном разработчике.',
   compRead: 'Прочитать, что делает эта строка',
+  compHelper: 'Если эта строка не работает',
+  compHelperSub: 'То же самое через помощник на Python (на компьютере нужен Python 3). Тот же ключ, тот же список, то же «да» здесь.',
   compMacAllow: 'Mac может спросить, можно ли Терминалу открыть Рабочий стол, Документы или Загрузки: нажмите «Разрешить». Папки, которые вы не разрешили, остаются закрытыми, здесь только их названия.',
   compPhone: 'С телефона: положите фото и файлы в iCloud Drive или Google Drive; программа на компьютере найдёт их там.',
   compStart: 'Начать', compStarting: 'Начинаю...',
@@ -147,6 +160,7 @@ const RU = {
   bringChosen: (f, b) => `Перенести выбранное (${f} ${ruPlural(f, ['файл', 'файла', 'файлов'])}, ${b})`,
   overCaps: (f, b) => `Слишком много за один раз: не больше ${f} файлов, ${b}. Уберите одну группу.`,
   pulling: (d, n) => `Приходит: ${d} из ${n}. Не закрывайте окно на компьютере.`,
+  pullingSpoke: (d, n) => `Приходит: ${d} из ${n}. Не закрывайте компьютер и не давайте ему уснуть.`,
   pulled: (d, k) => `Пришло: ${d} ${ruPlural(d, ['документ ждёт', 'документа ждут', 'документов ждут'])} вашего «да»${k ? `, ${k} ${ruPlural(k, ['файл сохранён', 'файла сохранены', 'файлов сохранено'])}` : ''}.`,
   dropOr: 'Или перетащите сюда отдельные файлы.',
   chatsTitle: 'Перенесите сюда разговоры с ChatGPT, Claude и другими ИИ',
@@ -168,4 +182,4 @@ const RU = {
 const PLAN_TEXT = { en: EN, ru: RU }
 const planWords = (lang) => PLAN_TEXT[lang === 'ru' ? 'ru' : 'en']
 
-module.exports = { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, agentUrls, vendorsOf, continueHref, PLAN_TEXT, planWords }
+module.exports = { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, PLAN_TEXT, planWords }

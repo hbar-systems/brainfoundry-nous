@@ -21,12 +21,19 @@ LOGIN_SERVER="@@LOGIN_SERVER@@"     # your brain's network (its own coordination
 AUTHKEY="@@AUTHKEY@@"               # one device, one use, expires an hour after download
 BRAIN_IP="@@BRAIN_IP@@"             # your brain's address on that network; the key works only from it
 BRAIN_KEY="@@BRAIN_KEY@@"           # your brain's public key (ssh-ed25519 ...)
+SPOKE_LANG="@@LANG@@"               # the words of the windows: en or ru (SWITCH-1)
 
 D="$HOME/.brain-spoke"
 TS="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 PKG_URL="https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg"
 PKG_TEAM="(W5364U7YZB)"             # Tailscale Inc.'s Apple team id
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Window mode (SWITCH-1, 2026-11-16): started by the "Join my brain" app, SPOKE_GUI=1, every question is a
+# macOS dialog and the password is asked by macOS's own window; without it, this prints as before.
+GUI=${SPOKE_GUI:-0}; case "$SPOKE_LANG" in ru) ;; *) SPOKE_LANG=en ;; esac; export SPOKE_LANG
+[ -f "$HERE/words.sh" ] && . "$HERE/words.sh"
+command -v w >/dev/null 2>&1 || w() { case "$1" in not_mac) echo "this installer is for a Mac" ;; old_mac) echo "macOS 13 or newer is needed (this is $2)" ;; *) echo "$1" ;; esac; }
+[ "$GUI" = 1 ] && ! command -v dialog >/dev/null 2>&1 && GUI=0
 DRY=0; CMD=${1:-status}; [ "${2:-}" = "--dry-run" ] && DRY=1
 n=0
 
@@ -36,7 +43,18 @@ run() {
     if [ $DRY = 1 ]; then printf '   would run: %s\n' "$*"; else printf '   running: %s\n' "$*"; "$@"; fi
 }
 note() { printf '   %s\n' "$*"; }
-die() { printf '\nStopped: %s\nNothing after this step was changed.\n' "$*"; exit 1; }
+die() {
+    printf '\nStopped: %s\nNothing after this step was changed.\n' "$*"
+    [ "$GUI" = 1 ] && [ $DRY = 0 ] && dialog "$(w failed "$*")" "$(w b_ok)" >/dev/null
+    exit 1
+}
+say_gui() { [ "$GUI" = 1 ] && [ $DRY = 0 ] && dialog "$1" "$(w b_ok)" >/dev/null; return 0; }
+pyok() {
+    # a python3 for the move-in helper (door.sh pyfind, the same order)
+    local p; for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do [ -x "$p" ] && return 0; done
+    is_mac && { xcode-select -p >/dev/null 2>&1; return; }
+    command -v python3 >/dev/null 2>&1
+}
 is_mac() { [ "$(uname -s)" = Darwin ]; }
 
 join() {
@@ -44,9 +62,9 @@ join() {
     step "Check this computer"
     if is_mac; then
         v=$(sw_vers -productVersion); note "macOS $v, $(uname -m)"
-        [ "${v%%.*}" -ge 13 ] || die "macOS 13 or newer is needed (this is $v)"
+        [ "${v%%.*}" -ge 13 ] || die "$(w old_mac "$v")"
     else
-        [ $DRY = 1 ] && note "not a Mac: a real run would stop here" || die "this installer is for a Mac"
+        [ $DRY = 1 ] && note "not a Mac: a real run would stop here" || die "$(w not_mac)"
     fi
     [ "$(id -u)" = 0 ] && die "run it as yourself, not as root"
     case "$AUTHKEY$BRAIN_KEY" in *@@*) [ $DRY = 1 ] && note "(template copy: no key filled in yet)" || die "this copy was not made by your brain; download it from your console" ;; esac
@@ -70,16 +88,51 @@ join() {
             note "signature: Developer ID Installer: Tailscale Inc. $PKG_TEAM"
         else note "would check: pkgutil --check-signature names Tailscale Inc. $PKG_TEAM, else stop"; fi
         note "macOS asks for your password now (the only time)"
-        run sudo installer -pkg "$PKG" -target / || { rm -rf "$PKGDIR"; die "the Tailscale installer failed"; }
+        if [ "$GUI" = 1 ]; then
+            say_gui "$(w password)"
+            # macOS's own password window (no Terminal): the package path goes in as argv, quoted by AppleScript
+            run osascript -e 'on run argv' -e 'do shell script "/usr/sbin/installer -pkg " & quoted form of (item 1 of argv) & " -target /" with administrator privileges' -e 'end run' "$PKG" \
+                || { rm -rf "$PKGDIR"; die "the Tailscale installer failed"; }
+        else
+            run sudo installer -pkg "$PKG" -target / || { rm -rf "$PKGDIR"; die "the Tailscale installer failed"; }
+        fi
         run rm -rf "$PKGDIR"
     fi
     note "opening Tailscale: if macOS asks to add a VPN configuration, press Allow"
     run open -a Tailscale
     [ $DRY = 0 ] && sleep 5
-    run "$TS" up --login-server="$LOGIN_SERVER" --auth-key="$AUTHKEY" --hostname="$HANDLE-laptop" --accept-dns=false --accept-routes=false
+    # the network name carries your short user name, so your brain's door knows whom to knock for (SPOKE-2A)
+    me=$(id -un); case "$me" in *[!a-z0-9-]*|'') die "your user name ($me) has characters the network name cannot carry; tell your brain" ;; esac
+    say_gui "$(w vpn)"
+    if [ "$GUI" = 1 ] && [ $DRY = 0 ]; then
+        # the first start waits on macOS's VPN and extension yes; try again after each OK, five times at most
+        ok=0
+        for _ in 1 2 3 4 5; do
+            "$TS" up --login-server="$LOGIN_SERVER" --auth-key="$AUTHKEY" --hostname="$HANDLE-laptop--$me" --accept-dns=false --accept-routes=false && { ok=1; break; }
+            dialog "$(w vpn)" "$(w b_done)" >/dev/null
+        done
+        [ $ok = 1 ] || die "Tailscale did not connect to your brain's network"
+    else
+        run "$TS" up --login-server="$LOGIN_SERVER" --auth-key="$AUTHKEY" --hostname="$HANDLE-laptop--$me" --accept-dns=false --accept-routes=false
+    fi
 
     step "Remote Login, the door your brain knocks on"
     if nc -z -G 2 127.0.0.1 22 >/dev/null 2>&1; then was=on; note "already on"
+        if [ "$GUI" = 1 ] && [ $DRY = 0 ]; then
+            open "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+            dialog "$(w fda_on)" "$(w b_done)" >/dev/null
+        fi
+    elif [ "$GUI" = 1 ] && [ $DRY = 0 ]; then
+        was=off
+        open "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+        msg=$(w remote)
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            dialog "$msg" "$(w b_done)" >/dev/null
+            nc -z -G 2 127.0.0.1 22 >/dev/null 2>&1 && break
+            msg=$(w remote_not)
+        done
+        nc -z -G 2 127.0.0.1 22 >/dev/null 2>&1 || die "Remote Login is still off; open this again when it is on"
+        note "Remote Login is on"
     else
         was=off
         note "System Settings opens at Sharing. Turn on Remote Login, then press the (i) beside it:"
@@ -96,6 +149,10 @@ join() {
     step "The door: one key line, one script, a log you can read"
     run mkdir -p "$D/undo" "$HOME/.ssh"
     run cp "$HERE/door.sh" "$HERE/inventory.sh" "$HERE/spoke.sh" "$D/"
+    # the move-in helper and the words (SWITCH-1): the same brain_import.py as the home's pasted line,
+    # started only by door.sh move-in, and the address it sends its list to (your brain, over https)
+    for f in brain_import.py words.sh; do [ -f "$HERE/$f" ] && run cp "$HERE/$f" "$D/"; done
+    if [ $DRY = 0 ]; then printf '%s/api/bf\n' "${CONSOLE_URL%/}" > "$D/brain_url"; else note "would write $D/brain_url: ${CONSOLE_URL%/}/api/bf"; fi
     run chmod 700 "$D" "$HOME/.ssh"
     line="from=\"$BRAIN_IP\",restrict,command=\"$D/door.sh\" $BRAIN_KEY brain-spoke:$HANDLE"
     note "the line: $line"
@@ -111,7 +168,23 @@ join() {
     if [ $DRY = 0 ]; then
         printf '#!/bin/bash\nbash "$HOME/.brain-spoke/spoke.sh" leave\nread -r -p "Press Return to close." _\n' > "$HOME/Desktop/Leave my brain.command"
         chmod 755 "$HOME/Desktop/Leave my brain.command"
-    else note "would write ~/Desktop/Leave my brain.command (runs: spoke.sh leave)"; fi
+        if [ "$GUI" = 1 ]; then
+            # the same, as a program to double-click (made here, so macOS does not hold it back): asks once, then leaves
+            L="$HOME/Desktop/Leave my brain.app/Contents"; mkdir -p "$L/MacOS"
+            sed -e 's/join-my-brain/leave-my-brain/g' -e 's/Join my brain/Leave my brain/g' "$HERE/../Info.plist" > "$L/Info.plist" 2>/dev/null \
+                || printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>leave-my-brain</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/></dict></plist>\n' > "$L/Info.plist"
+            printf '#!/bin/bash\nexport SPOKE_LANG=%s SPOKE_GUI=1\n. "$HOME/.brain-spoke/words.sh"\n[ "$(dialog "$(w leave_ask)" "$(w b_not)" "$(w b_done)")" = "$(w b_done)" ] || exit 0\nbash "$HOME/.brain-spoke/spoke.sh" leave >> "$HOME/Library/Logs/join-my-brain.log" 2>&1\n' "$SPOKE_LANG" > "$L/MacOS/leave-my-brain"
+            chmod 755 "$L/MacOS/leave-my-brain"
+            rm -f "$HOME/Desktop/Leave my brain.command"
+        fi
+    else note "would write ~/Desktop/Leave my brain.command (runs: spoke.sh leave), or Leave my brain.app from the app"; fi
+
+    step "Apple's developer tools, for bringing files in later"
+    if pyok; then note "python3 is here"
+    elif [ "$GUI" = 1 ] && [ $DRY = 0 ]; then
+        [ "$(dialog "$(w tools)" "$(w b_skip)" "$(w b_install)")" = "$(w b_install)" ] && xcode-select --install >/dev/null 2>&1
+        note "asked about the Command Line Tools"
+    else note "python3 is missing: your brain's move-in needs it (on a Mac: xcode-select --install); joining goes on without it"; fi
 
     step "Done"
     note "Go back to your brain: $CONSOLE_URL"
@@ -133,13 +206,16 @@ leave() {
     if grep -q 'remote_login_before	off' "$D/state" 2>/dev/null; then
         note "it was off before you joined: System Settings opens at Sharing, turn Remote Login off"
         run open "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+        say_gui "$(w leave_remote)"
     else note "it was on before you joined (or unknown): left as it is"; fi
     step "Remove the door"
     note "your door log is kept at ~/brain-spoke-door.log"
     run cp "$D/door.log" "$HOME/brain-spoke-door.log"
     run rm -rf "$D"
     run rm -f "$HOME/Desktop/Leave my brain.command"
+    run rm -rf "$HOME/Desktop/Leave my brain.app"
     step "Done: your brain can no longer reach this laptop."
+    say_gui "$(w left)"
 }
 
 status() {

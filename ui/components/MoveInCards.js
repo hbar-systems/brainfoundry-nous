@@ -8,8 +8,9 @@
 import { useEffect, useRef, useState } from 'react'
 import css from 'styled-jsx/css'
 import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords } from '../lib/moveIn'
-import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
+import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
 import { AI_EXPORTS } from '../lib/aiExports'
+import ConnectComputer from './ConnectComputer'
 
 const API = '/api/bf'
 const ls = {
@@ -92,10 +93,12 @@ function Tick({ on }) {
 
 const fmtClock = (s) => { try { return new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
 
-// Door 1: bring in this computer. Start mints a survey token; the one line runs the dial-out agent from this
-// brain (SPOKE-3: bash on a Mac, PowerShell on Windows, no Python, no app); the plan comes back grouped;
-// one yes per group or all proposed; the same agent run pulls them, closes the key and is gone.
-function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }) {
+// Door 1: bring in this computer, the member's main path (SPOKE-3). Start mints a survey token; the one line runs
+// the dial-out agent from this brain (bash on a Mac, PowerShell on Windows, no Python, no app); the plan comes
+// back grouped; one yes per group or all proposed; the same agent run pulls them, closes the key and is gone.
+// Below the line, folded: the Python helper line (MOVE-IN-2) as the fallback. spoke (SWITCH-1): the Connect this
+// computer card below this one is the advanced path; a run the spoke started has no window on the computer.
+function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, spoke }) {
   const [mint, setMint] = useState(null)        // null | { busy } | { token, expires_at } | { error }
   const [os, setOs] = useState('mac')
   const [copied, setCopied] = useState(false)
@@ -132,6 +135,7 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
   }
   const cmd = mint && mint.token ? surveyCommands(base, mint.token, lang)[os] : ''
   const readUrl = base ? agentUrls(base, lang)[os] : ''
+  const helperCmd = mint && mint.token ? helperCommands(base, mint.token)[os] : ''
   const groups = (survey && survey.groups) || []
   const t = pickTotals(groups, picks || {})
   const over = overCaps(t, run)
@@ -147,7 +151,8 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
   }
   const pull = pullState(run, survey)
   const shown = all ? groups : groups.slice(0, 10)
-  const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? P.pulling(pull.done, pull.total)
+  const viaSpoke = !!(spoke && spoke.started)
+  const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? (viaSpoke ? P.pullingSpoke(pull.done, pull.total) : P.pulling(pull.done, pull.total))
     : step === 'plan' ? P.compPlan(groups.length, groups.reduce((s, g) => s + g.files, 0), fmtBytes(groups.reduce((s, g) => s + g.bytes, 0)))
       : step === 'line' ? P.compWaiting : W.state.new
   return (
@@ -167,6 +172,11 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember }
           <p className="mi-note mi-dim">{P.compOnce(fmtClock(mint.expires_at))}</p>
           {os === 'mac' && <p className="mi-note mi-dim">{P.compMacAllow}</p>}
           <p className="mi-note mi-dim">{P.compNever}{' '}<a className="mi-link mi-read" href={readUrl} target="_blank" rel="noreferrer">{P.compRead}</a></p>
+          <details className="mi-helper">
+            <summary className="mi-link">{P.compHelper}</summary>
+            <p className="mi-note mi-dim">{P.compHelperSub}</p>
+            <pre className="mi-cmd">{helperCmd}</pre>
+          </details>
         </div>
       )}
       {step === 'line' && !(mint && mint.token) && <p className="mi-sub">{P.compWaiting}</p>}
@@ -302,6 +312,7 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   const [approving, setApproving] = useState(null) // null | { which, done, total }
   const [reopen, setReopen] = useState(false)
   const [chats, setChats] = useState([])        // GET /documents/chats rows
+  const [spoke, setSpoke] = useState(null)      // the Connect this computer card's { step, ready, started }
 
   const load = async () => {
     const j = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
@@ -412,11 +423,12 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
 
   return (
     <div className="mi">
+      <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
+        docBusy={docBusy} docLine={docLine} remember={remember} spoke={spoke} />
+      <ConnectComputer lang={lang} onState={(x) => setSpoke(s => ({ ...(s || {}), ...x, started: !!((s && s.started) || x.started) }))} />
       <AiChats lang={lang} W={W} P={P} chat={chat} chatBusy={chatBusy} approving={approving}
         onFile={(fs) => importChats(fs, null)} onPaste={(t) => importChats(null, t)} remember={remember} chatIds={chatIds}
         onAsked={() => { const d = todayIso(); ls.set(MOVE_WAIT_KEY, d); setAsked(d) }} />
-      <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
-        docBusy={docBusy} docLine={docLine} remember={remember} />
       {list}
       <style jsx>{miStyles}</style>
     </div>
@@ -483,6 +495,10 @@ const miStyles = css`
         .mi :global(.mi-chip:hover) { background: color-mix(in srgb, var(--text) 7%, transparent); }
         .mi :global(.mi-chip-on) { color: var(--bg); background: var(--accent); border-color: var(--accent); }
         .mi :global(.mi-chip:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .mi :global(.mi-helper) { margin: 12px 0 0; }
+        .mi :global(.mi-helper > summary) { list-style: none; cursor: pointer; }
+        .mi :global(.mi-helper > summary::-webkit-details-marker) { display: none; }
+        .mi :global(.mi-helper .mi-cmd), .mi :global(.mi-helper .mi-note) { margin-left: 0; }
         .mi :global(.mi-cmd) { margin: 12px 0 0 42px; padding: 14px 16px; border-radius: 12px; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; line-height: 1.5; color: var(--text); background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--border); }
         .mi :global(.mi-groups) { list-style: none; margin: 16px 0 0 42px; padding: 0; display: grid; gap: 8px; }
         .mi :global(.mi-group) { width: 100%; display: grid; grid-template-columns: auto 1fr; column-gap: 12px; row-gap: 2px; align-items: center; text-align: left; font: inherit; padding: 12px 14px; border-radius: 12px; cursor: pointer; color: var(--text-dim, var(--muted)); background: transparent; border: 1px solid var(--border); transition: border-color 150ms ease-out, background-color 150ms ease-out; }

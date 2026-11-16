@@ -91,11 +91,63 @@ What the brain says (B) and what the friend sees or does (F). One question per m
 19. B: lists Downloads, proposes: "Downloads: 23 installers into Downloads/Installers (you can delete them yourself later), 41 PDFs into Documents/PDFs by year, 12 photos into Pictures/From Downloads. 76 moves. Undo is one button." Card with the plan.
 20. F: Allow. B: "Done: 76 moved, undo id 20261112T... . Next time, photos?" The session ends; nothing else runs until the friend comes back.
 
-## 10. Not built yet
+## 10. The brain's side (SPOKE-2A, 2026-11-14)
 
-The brain's side: the per-brain Headscale, the brain's userspace node, the door user and its sudoers line, the console's spoke page (Download, fingerprint, inventory page, cards for organise and apply, Disconnect), `cc-job spoke <verb>` raising the cards. Windows and Linux laptops (same door shape; Windows needs OpenSSH Server and a PowerShell door). Notarisation.
+Written and tested on the brain box; not yet installed on any box. Files: `scripts/spoke/box/`.
+
+- `spoke_config.py`: one member's files from the handle and port block: Headscale `config.yaml` (every port on 127.0.0.1, server_url `https://spoke.<m>.brainfoundry.ai`, no MagicDNS), `policy.json` (tag:brain may reach the member's laptops on 22; the laptops reach nothing), `/etc/spoke/<m>.env`, the Caddy site block, the sudoers line. Ports: the brain node's SOCKS at the member block's spare +9 (8100+10n+9); Headscale http, metrics and grpc at 9100+10n, +1, +2 (a spoke block above every member block). hbar's rehearsal brain on friends-1 is not a member: it takes block 99 (SOCKS 9099, Headscale 10090 to 10092), bridge user and console named on the command line.
+- `headscale@.service`: one Headscale per member (user headscale, group `<m>-spoke`, socket 0770 so only the door user drives the CLI). `spoke-node@.service`: the brain's own node, userspace tailscaled run by the door user, SOCKS on 127.0.0.1.
+- `spoke-door.sh`, installed as `/usr/local/sbin/spoke-door <m> <verb>`, run as `<m>-spoke` through one sudoers line from the member's bridge user. Verbs: `status`, `inventory`, `plan`, `apply`, `undo <id>`, `leave`, `organise on|off`, and for the console `fingerprint` and `bundle`. It finds the laptop by its network name `<m>-laptop--<mac user>` (spoke.sh sets it at join), reaches it with the door key over the node's SOCKS port, and checks every plan line the way the laptop's door.sh does before anything leaves the box. Every call is a line in `/var/lib/spoke/<m>/door.log` (group `<m>-brain`), refused ones too. `bundle` issues a one-device key that expires in an hour and runs make-bundle.sh with the brain's signing key; the zip lands in `out/` for the bridge to serve once.
+- `spoke-install.sh <m> --block <n> [--bridge-user U] [--console URL] [--group G]`: `--dry-run` (the default) prints every step and file, measures the four ports with `ss -ltn` and the programs it needs, and changes nothing. `--apply` runs only on the box named by `--host` (default friends-1); it backs up the Caddyfile with a dated name before the edit and runs `caddy validate` before the reload, restoring on refusal; it never touches the member's brain stack. `--undo` stops and disables the two units, drops the Caddy block (validate, reload), and moves the configs, the state and the door folder to `/var/backups/spoke-<m>-<date>/`; it deletes nothing and leaves the door user locked.
+- The bridge: `cc-job spoke <verb>` (POST /spoke). `organise on` and every `apply` raise their own card first (tool `spoke`, in `BOX_ALWAYS_ASK` with orfeo_post: never remembered, never judged, never reused in a turn, never auto for Codex); the apply card shows the counts, the first twelve lines and the whole plan on press. The other verbs ride on the card or posture of the Bash call that ran cc-job. The bridge needs `CC_SPOKE=1` (and `CC_SPOKE_HANDLE` when it is not member `<m>`).
+- The console's `/spoke` page: the laptop (here, asleep since, or not joined), Make my download (then Download Join my brain, the signing key's fingerprint, the hour), the last inventory page beside the conversation, Disconnect laptop (asks once in place).
 
 ## 11. The one-line path for members (SPOKE-3, 2026-11-16)
 
+On the member's home this is the main path: the card **Bring in this computer** comes first. Below it, as fallbacks: the Python helper line (folded under **If this line does not run**, MOVE-IN-2's `brain_import.py --survey`) and the **Connect this computer** spoke card of section 13 (SWITCH-1), the advanced path for a standing connection.
+
 For members, bringing a laptop in no longer needs a spoke: the home card "Bring in this computer" gives one line for Terminal or PowerShell that dials out to the member's own brain over HTTPS, sends a list, waits for the yes on the home, brings the chosen files and is gone (docs/IMPORT.md, "Bring in this computer"). No Tailscale, no Remote Login, no Full Disk Access, no app to open, no Developer ID, and the laptop opens no door. The spoke above stays for a standing connection where the brain looks and organises in place; that is the only thing it adds.
 
+## 12. Not built yet (amended 2026-11-16, SWITCH-1)
+
+Still owed: installed on friends-1 (the apply, DNS for spoke.<m>.brainfoundry.ai, the first real join on hbar's Mac). `list` and `peek` through the box door. Windows and Linux laptops. A Developer ID signature and notarisation for the app (section 13). The paragraph below is the 2026-11-14 list as it stood.
+
+
+Installed on friends-1 (the apply, DNS for spoke.<m>.brainfoundry.ai, the first real join on hbar's Mac). `list` and `peek` through the box door (the laptop's door.sh has them; spoke-door adds them with the first plan). Windows and Linux laptops (same door shape; Windows needs OpenSSH Server and a PowerShell door). Notarisation.
+
+## 13. For a person who has never opened Terminal (SWITCH-1, 2026-11-16)
+
+hbar: "don't they have to give you ssh? this is too technical for people like my mother". The design above stays exactly as it is (the brain's own Headscale, a one-use key that expires in an hour inside the download, the restricted door key, look first, organise only on a yes). What changes is only what the person touches.
+
+### What the owner presses, from the link to a brain that knows their computer
+
+1. On their home, the card **Connect this computer**: **Get the file for this Mac**. One file downloads: `join-my-brain-<handle>.zip`, which Safari opens by itself into **Join my brain** in Downloads (an app, not a `.command`: no Terminal window opens at any point).
+2. Double-click **Join my brain**. macOS 15 says Apple could not verify it (it is not signed by an Apple Developer ID yet): **Done**, then System Settings, Privacy & Security, scroll down, **Open Anyway**, their password, **Open**. This is the one step a paid Apple Developer ID (USD 99 a year, hbar's account to open; not bought) removes: a signed and notarised app opens on the first double-click.
+3. The app's own window (a macOS dialog, in the console's language) says what joining does and shows the brain's key fingerprint, the same as on the card. **Join**.
+4. macOS asks for their password once (macOS's own window: the app installs Tailscale with `do shell script ... with administrator privileges`, after checking Tailscale Inc.'s signature).
+5. Tailscale's first start: macOS asks to allow its system extension and to **add VPN configurations**: **Allow** each time (if System Settings opens, they turn Tailscale on there). These stay with a Developer ID too: they are macOS asking them before a network program starts.
+6. System Settings opens at Sharing: **Remote Login** on, then the (i) beside it, **Allow full disk access for remote users** on (without it the brain cannot count Documents, Desktop and Downloads; that is the macOS privacy rule of section 5), only their own user allowed. **Done**. This also stays with a Developer ID: it is the door itself.
+7. If the Mac has no python3 yet (a fresh Mac has only Apple's stub), the app offers Apple's Command Line Tools: **Install** in Apple's own window, about 15 minutes of download in the background. Needed only for step 10.
+8. **Done. Your brain can see this computer.** They come back to their home; the card wakes up by itself (it looks every few seconds).
+9. **Look at it**: the look-mode inventory (section 4), counts and sizes only; the card shows the total and **Open the page**.
+10. **Bring what is on it**, then **Yes, list it** after the words in place (names, sizes and dates go to the brain; nothing moves; passwords, keys, mail and browsers are never listed). The console mints the home's survey token (`POST /documents/import-laptop/token {"survey": true}`, MOVE-IN-2), the bridge switches the laptop to organise and runs `door.sh move-in` with the token on stdin. On the laptop that starts the same `brain_import.py --survey` the pasted line runs, detached, its log in `~/.brain-spoke/move-in.log`; it sends the list over https to `<console>/api/bf`, waits for the yes, brings exactly the chosen files and stops.
+11. The plan appears in the card above, **Bring in this computer** (MOVE-IN-2's plan, unchanged): **Bring all proposed**, then **Remember all N** on the cards.
+
+The pasted line stays (amended 2026-11-16, SPOKE-3: it is now the main path, the card **Bring in this computer** above this one, and this card is the advanced path below it); it is the only way while the spoke is off on their brain (today, on every member brain: section 12).
+
+### The pieces
+
+- `scripts/spoke/app/` (`join-my-brain`, `Info.plist`): a shell program in an app folder (LSUIElement: no Dock icon; every question is an `osascript` dialog with its words passed as argv, never pasted into AppleScript). It checks `SHA256SUMS` and its signature before anything, as the `.command` does; on a mismatch it says so and stops. Steps and output: `~/Library/Logs/join-my-brain.log`. **Show the steps** writes the dry run to a text file and opens it.
+- `scripts/spoke/words.sh`: every sentence of the app and of `spoke.sh`'s window mode in English and Russian (`w <key>`), and `dialog`.
+- `spoke.sh join` with `SPOKE_GUI=1`: macOS's password window instead of `sudo`, a dialog after each macOS question (the Tailscale start is tried again after each OK, five times), Remote Login checked after each Done (ten times), Apple's tools offered, **Leave my brain.app** on the Desktop (made on the Mac, so macOS does not hold it back; asks once, then runs `spoke.sh leave`). Without `SPOKE_GUI` it prints exactly as before; the `.command` is in the app's Resources for a Terminal start.
+- `make-bundle.sh --lang en|ru`: the zip holds only `Join my brain.app`; `Contents/Resources` carries spoke.sh (filled in), door.sh, inventory.sh, brain_import.py, words.sh, lang, the `.command`, WHAT-THIS-DOES.txt; `SHA256SUMS` covers those, `allowed_signers`, `../Info.plist` and `../MacOS/join-my-brain`, signed by the brain's key. `spoke-door bundle en|ru` passes the console's language (the sudoers line names both).
+- `door.sh move-in` (organise only; the token on stdin, checked against the token shape, never on argv, never logged), `move-in status`. `spoke-door move-in` / `move-in-status`. Bridge: `POST /spoke/look`, `POST /spoke/move-in {token}`, `GET /spoke/move-in` (operator: the owner's own presses on the home), and `cc-job spoke move-in` for the reasoner, a card like organise on (never remembered, never judged), the bridge minting the token itself.
+- The card: `ui/components/ConnectComputer.js`, words and steps `ui/lib/connectComputer.js`; inside MoveInCards, first.
+
+### Windows
+
+Not built. It would take: OpenSSH Server switched on (Settings, Optional features; an admin yes), Tailscale for Windows (its own signed installer), a PowerShell door with the same verbs and fences as door.sh, the key line in `administrators_authorized_keys` or the user's file, and an installer the person double-clicks (an unsigned `.exe` or `.ps1` meets SmartScreen, the Windows twin of step 2; a code-signing certificate removes it, a cost like the Developer ID). About a day of work, then a test on a real Windows laptop. Until then the card says so and points at the line.
+
+### Unverified
+
+The app has run only on Linux with a fake `osascript` (the tests); no real Mac has opened it. Not seen on a real Mac: Gatekeeper's exact words and whether **Open Anyway** shows for a shell-script app; whether the dialogs come to the front from an LSUIElement app; Tailscale's CLI `up` against a Headscale login server from the standalone app on first start; the Russian names of macOS's buttons in the card's steps.
