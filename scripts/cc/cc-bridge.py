@@ -564,6 +564,7 @@ for _d in (OUT_DIR, IN_DIR):
     except OSError:
         pass   # the hands' home is not ours to create in; split-hands.sh makes these
 FILES = cc_extras.Files({"out": str(OUT_DIR), "in": str(IN_DIR), **({} if SAME_ROOT else {"work": WORK_DIR}), "world": WORLD_DIR, "brain": CWD})
+PAGES = cc_extras.Pages(OUT_DIR)   # /cc/page/<name>/: brain-built working pages on the console origin (COURT-8)
 # The spend meter (2026-10-17, new-mind standard section 4): the brain's own ledger, ~/.cc-bridge/spend.jsonl.
 # Every place here that knows a cost or a duration appends one line; Settings shows the totals and the cap.
 SPEND = cc_spend.Ledger(STATE_DIR)
@@ -5517,6 +5518,20 @@ class Handler(BaseHTTPRequestHandler):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote
             FILES.serve(self, "/" + unquote(route[len("/files/raw/"):]))
+        elif route == "/page" or route.startswith("/page/"):
+            # a brain-built working page on the console origin (COURT-8, cc_extras.Pages): /cc/page/<name>/ is
+            # <out>/<name>/index.html for a name on the list; the bare /cc/page/<name> redirects to the slash
+            # form so the page's relative fetches (state.json) stay under its own folder
+            raw = self.path.split("?", 1)[0]
+            raw = raw[len(BASE):] if raw.startswith(BASE + "/") else raw
+            parts = raw.split("/")[2:] if raw.startswith("/page/") else []
+            if len(parts) == 1 and parts[0] in PAGES.names:
+                q = self.path.split("?", 1)[1] if "?" in self.path else ""
+                self._send_bytes(301, b"", "text/plain", {"Location": f"{BASE}/page/{parts[0]}/" + (f"?{q}" if q else "")})
+            elif len(parts) == 2:
+                PAGES.serve(self, parts[0], parts[1])
+            else:
+                self._send(404, {"error": "no such page"})
         elif route == "/spoke/state":
             self._send(*_spoke_state())
         elif route == "/spoke/move-in":

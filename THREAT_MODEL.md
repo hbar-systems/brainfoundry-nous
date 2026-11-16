@@ -301,6 +301,19 @@ request reaching the API. Tests: `tests/test_app_lane.py`.
   `allow-same-origin` (`ui/pages/files.js` `VIEW_SANDBOX`, served by the CC
   bridge at `/cc/files/raw`). That is the same class of exposure for HTML
   files on the box (written by the reasoner or ingested), open as of this entry.
+- *Working pages on the console origin (2026-11-16, COURT-8).* Since the
+  2026-11-13 audit every HTML file from `/cc/files/raw` carries
+  `Content-Security-Policy: sandbox ...` (opaque origin). A page the brain's own
+  scripts build and that must read the bridge (the court reads `state.json` and
+  posts rulings to `/cc/chat`) is served instead at `/cc/page/<name>/`, without
+  the sandbox: only `<out>/<name>/index.html`, only for a name on a fixed list
+  (`cc_extras.PAGE_NAMES`: court, sky, replay; `CC_PAGES` overrides), behind
+  the console login. The URL holds no path; `/cc/page/<name>/<file>` reads one
+  sibling in that folder (no subfolders, no dot files, symlinks out refused),
+  and a sibling HTML or SVG keeps the sandbox. Residual: whoever can write
+  `out/<name>/index.html` runs script on the console origin. The reasoner and
+  the owner (Files pane save) can; an app's `files.save` writes only
+  `out/<date>/<name>`, so it cannot.
 - *`files.read` (added 2026-11-10, the Week app).* An app that declares
   `files.read` and is approved gets the text of any file on the owner's Files
   desk (`out/`) by a desk-relative name; the host refuses `..`, absolute names
