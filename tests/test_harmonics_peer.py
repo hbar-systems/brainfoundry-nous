@@ -34,7 +34,7 @@ def test_record_event_stores_peer_fields(monkeypatch):
     assert rid == 7
     sql, params = c.log[0]
     assert "peer_sig" in sql and "peer_payload" in sql
-    assert params[-2:] == ("S", "{}") and params[6].startswith("ed25519:")
+    assert params[8:10] == ("S", "{}") and params[6].startswith("ed25519:")  # HARM-2: v2 columns follow
 
 
 def test_peer_fields_default_null_and_do_not_change_signature(monkeypatch):

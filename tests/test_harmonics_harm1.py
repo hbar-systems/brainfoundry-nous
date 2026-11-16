@@ -107,6 +107,11 @@ def receiver(monkeypatch):
     monkeypatch.setattr(h, "_receiver_context", lambda c: "R")
     monkeypatch.setattr(h, "coherence", lambda c, r: (0.8, 0.6, 0.48))
     monkeypatch.setattr(h, "record_event", lambda **kw: rows.append(kw) or len(rows))
+    # HARM-2: the v2 receiver also judges, checks novelty and the pair's day count.
+    monkeypatch.setattr(h, "judge", lambda c, need, held=None: (0.48, "fits", "test-judge"))
+    monkeypatch.setattr(h, "global_overlap", lambda text, own, excl: (own, []))
+    monkeypatch.setattr(h, "_pair_events_today", lambda pub: 0)
+    h._day_counts.clear()
     return rpriv, rpub, rows
 
 
@@ -132,7 +137,8 @@ def test_exchange_receipt_verifies_against_receiver_key(receiver):
     cpriv, cpub = _keys()
     out = h.harmonics_exchange(_signed_request(cpriv, cpub))
     rp = h._receiver_payload(contributor_pubkey=cpub, cos=0.8, sin=0.6, score=0.48,
-                             content_hash=out["content_hash"], event_timestamp=out["event_timestamp"])
+                             content_hash=out["content_hash"], event_timestamp=out["event_timestamp"],
+                             judge_reason="fits", judge_model="test-judge", novelty=1.0)
     assert h.verify_with_pubkey(rpub, out["receiver_sig"], rp)
 
 
@@ -147,7 +153,8 @@ def _contributor_env(monkeypatch):
 def _fake_receiver(rpriv, cpub, tamper=False):
     def ex(body):
         rp = h._receiver_payload(contributor_pubkey=cpub, cos=0.8, sin=0.6, score=0.48,
-                                 content_hash="sha256:x", event_timestamp=body["ts"])
+                                 content_hash="sha256:x", event_timestamp=body["ts"],
+                                 judge_reason="fits", judge_model="test-judge", novelty=1.0)
         os.environ["_K"] = os.environ["BRAIN_PRIVATE_KEY"]
         os.environ["BRAIN_PRIVATE_KEY"] = rpriv
         try:
@@ -156,7 +163,8 @@ def _fake_receiver(rpriv, cpub, tamper=False):
             os.environ["BRAIN_PRIVATE_KEY"] = os.environ.pop("_K")
         return {"recorded": True, "event_id": 1, "cos": 0.8, "sin": 0.6,
                 "score": 0.5 if tamper else 0.48, "content_hash": "sha256:x",
-                "event_timestamp": body["ts"], "receiver_sig": sig}
+                "event_timestamp": body["ts"], "receiver_sig": sig,
+                "v": 2, "judge_reason": "fits", "judge_model": "test-judge", "novelty": 1.0}
     return ex
 
 
@@ -215,9 +223,14 @@ class _RowsConn:
 
 
 def _standing(per_day, score, days=90, now=None):
+    """v0 standing as it ran on 2026-11-15 (every contributor row summed, decayed).
+    HARM-2 replaced standing(); the v0 formula is kept here so this test still
+    records what HARM-1 found."""
+    import math
     now = now or days * 86400.0
     rows = [(score, d * 86400.0) for d in range(days) for _ in range(per_day)]
-    return h.standing(now=now, conn=_RowsConn(rows))
+    return sum(s * math.exp(-math.log(2) * (now - ts) / 86400.0 / h.HALF_LIFE_DAYS)
+               for s, ts in rows)
 
 
 def test_ring_still_farms_standing_under_v0():
