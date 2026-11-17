@@ -207,7 +207,10 @@ def coherence(text_c: str, text_r: str) -> Tuple[float, float, float]:
 # scored junk 1.0 and obeyed a prompt injection (1.0), so it cannot price; claude-haiku-5-5
 # separated them (useful 0.76, best control 0.13, injection 0.0). A judge on this list is
 # refused: no judge, no credit.
-JUDGE_REFUSED_MODELS = {"llama3.2:1b", "llama3.2:3b"}
+# ECON-2 2026-11-17 added the open models measured on the box CPU that obeyed planted lines or
+# priced junk, a restated need or a wrong correction like real help (ops/2026-11-17_econ-2/).
+JUDGE_REFUSED_MODELS = {"llama3.2:1b", "llama3.2:3b", "qwen2.5:1.5b", "qwen3:4b", "phi4-mini",
+                        "granite3.3:2b", "qwen2.5:7b"}
 
 
 def judge_model() -> str:

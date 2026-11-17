@@ -119,3 +119,10 @@ def test_ordinary_text_about_scores_still_goes_to_the_judge(monkeypatch):
                  "The Brier score of the call was 0.18; the benchmark scored 0.25."):
         assert h.judge(text, "need", model="qwen2.5:7b")[0] == 0.8
     assert seen["payload"]["model"] == "qwen2.5:7b"
+
+
+def test_open_models_measured_unfit_are_refused(monkeypatch):
+    seen = _capture(monkeypatch)
+    for m in ("qwen2.5:1.5b", "qwen3:4b", "phi4-mini", "granite3.3:2b", "qwen2.5:7b"):
+        assert h.judge("a real correction", "need", model=m) is None
+    assert seen == {}
