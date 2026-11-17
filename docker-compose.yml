@@ -50,6 +50,11 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-llm_db}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
+      # harmonics judge (ECON-2 2026-11-17): unset = the brain's own reasoner (fail closed if refused)
+      - HARMONICS_JUDGE_MODEL=${HARMONICS_JUDGE_MODEL:-}
+      - HARMONICS_JUDGE_TIMEOUT=${HARMONICS_JUDGE_TIMEOUT:-240}
+      - HARMONICS_JUDGE_KEEP_ALIVE=${HARMONICS_JUDGE_KEEP_ALIVE:-1m}
+      - HARMONICS_NEED=${HARMONICS_NEED:-}
       - SEMANTIC_DB_PATH=/app/extensions/brain/semantic.db
       - NODEOS_URL=http://nodeos:8001
       - NODEOS_INTERNAL_KEY=${NODEOS_INTERNAL_KEY}

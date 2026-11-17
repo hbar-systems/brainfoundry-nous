@@ -265,6 +265,29 @@ def parse_judgement(text: Optional[str]) -> Optional[Tuple[float, str]]:
     return round(s, _QUANT), (why.splitlines()[0][:240] if why else "")
 
 
+# ECON-2 2026-11-17: a local (Ollama) judge gets its own call: temperature 0, at most
+# max_tokens out, a read timeout that fits CPU judging (HARMONICS_JUDGE_TIMEOUT, default
+# 240 s; providers.complete reads 180 s and ignores max_tokens on Ollama), thinking off
+# for qwen3. Measured open judges: hbar.world ops/2026-11-17_econ-2/.
+JUDGE_TIMEOUT_S = float(os.getenv("HARMONICS_JUDGE_TIMEOUT", "240"))
+
+
+def _judge_complete_ollama(model: str, messages: list, max_tokens: int) -> str:
+    import httpx
+    from api import providers
+    # keep_alive: the judge unloads a minute after its last call, so it never sits in RAM
+    # beside the brain's chat model (one model loaded at a time on a shared box).
+    payload = {"model": model, "messages": messages, "stream": False,
+               "keep_alive": os.getenv("HARMONICS_JUDGE_KEEP_ALIVE", "1m"),
+               "options": {"num_ctx": 4096, "num_predict": max_tokens, "temperature": 0}}
+    if model.startswith("qwen3"):
+        payload["think"] = False
+    r = httpx.post(f"{providers.ollama_url(model)}/api/chat", json=payload,
+                   timeout=httpx.Timeout(10, read=JUDGE_TIMEOUT_S))
+    r.raise_for_status()
+    return (r.json().get("message") or {}).get("content") or ""
+
+
 def judge(contribution: str, need: str, held: Optional[str] = None,
           model: Optional[str] = None, complete=None) -> Optional[Tuple[float, str, str]]:
     """Ask this brain's reasoner how much `contribution` met `need`, 0..1, one line why.
@@ -278,7 +301,10 @@ def judge(contribution: str, need: str, held: Optional[str] = None,
             return None
         if complete is None:
             from api import providers
-            complete = providers.complete
+            if providers._resolve(model)[0] == "ollama":
+                complete = _judge_complete_ollama
+            else:
+                complete = providers.complete
         out = complete(model, judge_messages(contribution, need, held), 200)
         if asyncio.iscoroutine(out):
             out = asyncio.run(out)
@@ -988,7 +1014,9 @@ def harmonics_contribute(req: ContributeRequest,
     body = {**payload, "signature": sign_with_brain_key(payload)}
 
     try:
-        with httpx.Client(timeout=60.0) as client:
+        # The receiver judges before it answers; on CPU that alone can pass 60 s (ECON-2
+        # measured 13-150 s per call), so wait for its judge plus a margin.
+        with httpx.Client(timeout=httpx.Timeout(10.0, read=JUDGE_TIMEOUT_S + 60.0)) as client:
             resp = client.post(f"{peer_endpoint}/harmonics/exchange", json=body)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"peer unreachable: {e}")
