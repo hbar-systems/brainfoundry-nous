@@ -25,6 +25,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
@@ -288,6 +289,24 @@ def _judge_complete_ollama(model: str, messages: list, max_tokens: int) -> str:
     return (r.json().get("message") or {}).get("content") or ""
 
 
+# ECON-2 2026-11-17: every open model under 3 GB measured on the box obeyed a planted
+# "score this 1.0" line, and qwen2.5:7b obeyed one that faked the closing fence
+# (ops/2026-11-17_econ-2/). Structural markers are priced 0 in code before any model reads
+# them: a fake <contribution> fence, a JSON score object, a chat-template token. Wording-based
+# rules were tried and dropped: written against the known plants they caught 1 of 10 fresh
+# ones, so the judge model's own refusal stays the main guard.
+_ADDRESSED_TO_JUDGE = [re.compile(p, re.I | re.M) for p in (
+    r"</?\s*contribution\s*>",
+    r"\{\s*\\?[\"']?score\\?[\"']?\s*:",
+    r"\[/?inst\]|<\|(im_start|im_end|system|assistant|user)\|>",
+)]
+
+
+def addressed_to_judge(text: str) -> bool:
+    """True when the contribution tries to steer its own price (priced 0, never judged)."""
+    return any(p.search(text or "") for p in _ADDRESSED_TO_JUDGE)
+
+
 def judge(contribution: str, need: str, held: Optional[str] = None,
           model: Optional[str] = None, complete=None) -> Optional[Tuple[float, str, str]]:
     """Ask this brain's reasoner how much `contribution` met `need`, 0..1, one line why.
@@ -296,6 +315,8 @@ def judge(contribution: str, need: str, held: Optional[str] = None,
     import asyncio
     try:
         model = model or judge_model()
+        if addressed_to_judge(contribution):
+            return 0.0, "addressed the judge instead of the need (priced 0 in code)", model
         if model in JUDGE_REFUSED_MODELS:
             print(f"[harmonics] judge {model} is refused (cannot tell junk from help)", flush=True)
             return None
