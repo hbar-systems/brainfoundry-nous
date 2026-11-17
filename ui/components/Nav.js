@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
 import { HOME_THREADS, ccHomeOf, homeHref as homeOf, menuHref } from '../lib/home'
+import { isQuiet, ownerTitle, quietMenu, parseAsks, asksUrl, START_HREF } from '../lib/quietHome'
+import { words } from '../lib/consoleText'
 
 // Static fallback nav. Renders pre-fetch and on /apps/list fetch failure so
 // the brain stays usable even if the api is unreachable. Keep in sync with
@@ -83,6 +85,11 @@ export default function Nav() {
   const [mode, setMode] = useState(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [hasPeers, setHasPeers] = useState(false)
+  // The quiet home (PARENTS-HOME-1, 2026-11-15): on a member brain whose layout is quiet, the brand is the
+  // owner's name in the console's language and the menu shows five entries; the rest behind one press.
+  // quiet: null, or { lang, start, title, startLabel }
+  const [quiet, setQuiet] = useState(null)
+  const [restOpen, setRestOpen] = useState(false)
   // CC-home mode (D54): "/" is the conversation; the tab bar folds into one drawer.
   const ccHome = ccHomeOf(tabs)
   // The brand link (2026-11-10, Paul landed on the dashboard; NAV-1 2026-11-13): when the brain has
@@ -91,8 +98,11 @@ export default function Nav() {
   const homeHref = homeOf(tabs)
   const withHome = (list) => list.map(t => ({ ...t, href: menuHref(t, tabs) }))
   const split = splitByMode(tabs, mode)
-  const shown = withHome(withPeople(split.shown, hasPeers))
-  const more = withHome(split.more)
+  const QW = words(quiet && quiet.lang)
+  const qm = quiet ? quietMenu(tabs, quiet.start, { ...QW.menu, ...(quiet.startLabel ? { start: quiet.startLabel } : {}) }) : null
+  const shown = qm ? withHome(qm.shown) : withHome(withPeople(split.shown, hasPeers))
+  const more = qm ? [] : withHome(split.more)
+  const rest = qm ? withHome(withPeople(qm.rest, hasPeers)) : []
   // Pressing home while already on it: the page stays mounted, so it is told to open its thread list.
   const goHome = (e) => {
     if (ccHome && (router.pathname === '/' || router.pathname === '/talk')) {
@@ -100,7 +110,37 @@ export default function Nav() {
       try { window.dispatchEvent(new Event('bf-home')) } catch {}
     }
   }
-  useEffect(() => { setDrawer(false); setMoreOpen(false) }, [router.pathname])
+  useEffect(() => { setDrawer(false); setMoreOpen(false); setRestOpen(false) }, [router.pathname])
+
+  useEffect(() => {
+    let on = true
+    const j = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
+    j('/cc/layout').then(async d => {
+      if (!on || !d || !isQuiet(d.layout)) return
+      const lang = d.lang || 'en'
+      const start = d.layout.start || null
+      setQuiet({ lang, start, title: null, startLabel: null })
+      // the desk's asks.json may name the title and the start page; else the name the brain already holds
+      const h = await j('/cc/health')
+      const a = h && h.out ? parseAsks(await j(asksUrl(h.out))) : null
+      let title = a && a.title
+      if (!title) {
+        const p = await j('/api/bf/persona')
+        const w = await j('/api/bf/onboarding/welcome')
+        title = ownerTitle(lang, p && p.persona, w && w.name)
+      }
+      if (on) setQuiet({ lang, start, title: title || null, startLabel: (a && a.startLabel) || null })
+    })
+    return () => { on = false }
+  }, [])
+  // the start page entry: on the home it opens beside the chat in place; elsewhere it goes home and opens there
+  const goStart = (e) => {
+    setDrawer(false)
+    if (router.pathname === '/' || router.pathname === '/talk') {
+      e.preventDefault()
+      try { window.dispatchEvent(new Event('bf-start')) } catch {}
+    }
+  }
 
   useEffect(() => {
     fetch('/api/bf/v1/federation/peers', { cache: 'no-store' })
@@ -212,29 +252,42 @@ export default function Nav() {
       <Link href={homeHref} onClick={goHome} className="bf-brand" aria-label={ccHome ? 'Home: your conversations and threads' : 'Home'}
         title={ccHome ? 'Home: your conversations and threads' : 'Home'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <span style={{ fontSize: '18px', color: 'var(--accent)', fontWeight: 400, lineHeight: 1 }}>{process.env.NEXT_PUBLIC_BRAIN_SYMBOL || 'ℏ'}</span>
-        <span className="bf-brand-name" style={{
+        <span className={quiet && quiet.title ? 'bf-brand-name bf-brand-owner' : 'bf-brand-name'} style={{
           fontFamily: 'var(--font-display)',
           fontWeight: 600,
           fontSize: '15px',
           color: 'var(--text)',
           letterSpacing: '0.01em',
         }}>
-          {menuTitle || process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
+          {menuTitle || (quiet && quiet.title) || process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain'}
         </span>
       </Link>
       {ccHome ? (
         <div style={{ marginLeft: 'auto', position: 'relative' }}>
-          <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer}
+          <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer} className={quiet ? 'bf-quiet-menu' : undefined}
             style={{ background: drawer ? 'var(--surface2)' : 'transparent', color: 'var(--muted)', border: '1px solid var(--border)',
                      borderRadius: '6px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.06em' }}>
-            everything
+            {quiet ? QW.menuButton : 'everything'}
           </button>
           {drawer && (
             <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', minWidth: '220px', backgroundColor: 'var(--bg)',
                           border: '1px solid var(--border)', borderRadius: '10px', padding: '6px', boxShadow: '0 12px 32px rgba(0,0,0,0.45)', zIndex: 200 }}>
               {shown.filter(t => t.id !== '_cc').map(t => (
-                <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={linkStyle(isActive(router, t), true)}>{t.label}</Link>
+                t.href === START_HREF
+                  ? <Link key={t.id} href={t.href} onClick={goStart} className="bf-nav-link" style={{ ...linkStyle(false, true), ...(quiet ? { fontSize: '15px' } : {}) }}>{t.label}</Link>
+                  : <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={{ ...linkStyle(isActive(router, t), true), ...(quiet ? { fontSize: '15px' } : {}) }}>{t.label}</Link>
               ))}
+              {rest.length > 0 && (
+                <button onClick={() => setRestOpen(o => !o)} aria-expanded={restOpen} className="bf-nav-link"
+                  style={{ ...linkStyle(false, true), border: 'none', cursor: 'pointer', width: '100%', textAlign: 'left', fontFamily: 'var(--font-mono, monospace)', fontSize: '12px', marginTop: '4px' }}>
+                  {QW.menuRest} {restOpen ? '▴' : '▾'}
+                </button>
+              )}
+              {rest.length > 0 && restOpen && (
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px', paddingTop: '4px' }}>
+                  {rest.map(t => <Link key={t.id || t.href} href={t.href} className="bf-nav-link" style={linkStyle(isActive(router, t), true)}>{t.label}</Link>)}
+                </div>
+              )}
               {more.length > 0 && moreButton}
               {more.length > 0 && moreOpen && (
                 <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px', paddingTop: '4px' }}>{moreList(true)}</div>

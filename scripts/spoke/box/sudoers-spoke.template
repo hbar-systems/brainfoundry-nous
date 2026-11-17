@@ -1,0 +1,4 @@
+# The spoke door of @@HANDLE@@ (scripts/spoke/box/spoke-install.sh, SPOKE-2A 2026-11-14): the bridge user may run
+# spoke-door as the door user, with these verbs only. The door user holds the keys; the bridge never reads them.
+# Undo: spoke-install.sh @@HANDLE@@ --undo (removes this file).
+@@BRIDGE@@ ALL=(@@DOOR_USER@@) NOPASSWD: @@COMMANDS@@

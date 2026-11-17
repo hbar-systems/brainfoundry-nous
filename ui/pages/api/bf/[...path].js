@@ -53,6 +53,9 @@ export default async function handler(req, res) {
 
   try {
     const headers = {};
+    // The brain's own name for the api (it sees api:8000 here): the dial-out agent script carries the
+    // address the person reached (api/laptop_agent.py base_from, SPOKE-3).
+    if (req.headers.host) headers["x-forwarded-host"] = String(req.headers.host);
     if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"];
     if (req.headers["content-length"]) headers["content-length"] = req.headers["content-length"];
     // The owner key goes only on requests from the console's own pages (lane.ownerKey). App files

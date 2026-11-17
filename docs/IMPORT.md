@@ -1,4 +1,4 @@
-# Import: a year of ChatGPT or Claude into the brain
+# Import: a year of ChatGPT, Claude or any other AI into the brain
 
 Created: 2026-10-13.
 Tool: `scripts/import_chats.py`. Tests: `tests/test_import_chats.py` (synthetic fixtures only).
@@ -185,12 +185,12 @@ An audio file goes to the same `POST /documents/import-laptop/file` with the sam
 The console sits behind its login; the helper carries only the token. So the console site block opens exactly the four token-gated paths, straight to the api (the console's own `/api/bf` proxy would add the owner key), and keeps the login for everything else, `/token` and `/status` included. `scripts/add-member.sh` prints it in every new member's block. The snippet, for any console block (`<api port>` is the brain's api port):
 
 ```
-    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     handle @import {
         uri strip_prefix /api/bf
         reverse_proxy localhost:<api port>
     }
-    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     basicauth @login {
 ```
 
@@ -202,3 +202,135 @@ Existing boxes (one line): back up `/etc/caddy/Caddyfile`, add the snippet to ea
 
 - Resume after a broken run (the receipt lists what went; a second run needs a new token and resends).
 - Mac and Windows runs of the helper are untested here (Linux only).
+
+## Moving in, two doors on the home (2026-11-16)
+
+hbar 2026-11-16: "the main idea is for the user to switch over to the brain". A member moves in in one sitting from two cards on the console's quiet home (`ui/components/MoveInCards.js`, words in `ui/lib/moveInPlan.js`, en and ru by the console's lang key). Tests: `tests/test_move_in_survey.py`, `tests/test_move_in_plan.py`.
+
+### Door 1: the whole computer (survey)
+
+1. Home card "Bring your whole computer", Start. The console mints a survey token: `POST /documents/import-laptop/token` with body `{"survey": true}` (owner key). Caps of a survey run: 20,000 files; 20 GB on a brain's own box, 8 GB for a member on a shared box (`LAPTOP_AUDIO_HOST_DIR` set; half the 15 GB member disk quota), `LAPTOP_SURVEY_MAX_GB` overrides; never more than the free disk less a tenth of the disk. It lives 6 hours. Per file unchanged: 25 MB, audio 200 MB. A folder-by-folder token keeps 2,000 files, 2 GB, 2 hours.
+2. The person pastes the one line on the computer (Mac Terminal or Windows PowerShell; the card shows it with Copy). It is the folder-by-folder line plus `--survey`.
+3. The helper walks the whole home folder and the mounted cloud folders: iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs`), `~/Library/CloudStorage/*` (Google Drive, Dropbox, OneDrive, Box on current macOS), `~/Google Drive`, `~/Dropbox`, `~/OneDrive*`, `~/iCloudDrive` (Windows) and `<letter>:/My Drive` (Google Drive for desktop on Windows). Desktop, Documents, Downloads and Pictures are inside the home walk. The never-send rules are those of the folder-by-folder run, plus mail stores (`Mail`, `Thunderbird`, `*.pst *.ost *.mbox *.emlx *.olm`) and browser profiles (`Chrome`, `Firefox`, `Mozilla`, `Safari`, `User Data`, ...). Files never sent are only counted per folder, never named.
+4. It sends an INVENTORY only, gzip JSON to `POST /documents/import-laptop/check` under the token: `files: [[path, size, modified], ...]` (at most 300,000 rows, 64 MB decompressed), `skipped: {"<folder>: <why>": n}`, `roots`. No content. The api checks every path (`clean_relpath`), drops types it does not take, and plans (`api/laptop_survey.py`): files grouped by area (first folder; a cloud folder keeps its name in front, `Google Drive/Work`; an area with over 400 knowledge files splits one folder deeper), each group proposed as `knowledge` (documents and text into Knowledge), `files` (music and pictures kept as files in `in/<date>/import/`, listed in `audio.tsv` / `media.tsv`), or `leave` with why: code (over 150 files, mostly code: it has its own git), downloads not touched for two years, screenshots on the Desktop or in Downloads, over 2,000 pictures in one group.
+5. The home card shows the plan (`GET /documents/import-laptop/status` carries `survey`: groups without their path lists). One tick per group; "Bring all proposed" or "Bring the chosen" with the count and size; a choice over the run's caps is refused with the numbers. The yes is `POST /documents/import-laptop/plan` `{"take": [ids] | "proposed"}` (owner key, behind the console login).
+6. The helper, still running, polls `GET /documents/import-laptop/check` every 3 s; once chosen, the answer carries `take.paths` (`[path, kind]`). It sends only names that are in its own inventory (anything else is counted and ignored), through the existing `POST /documents/import-laptop/file` (pictures with `keep=file`), then `finish` closes the token. Documents wait under Pending for the one yes (the card's Remember button); music and pictures are kept, never remembered.
+
+Pull only: the helper runs once at the person's command, nothing is left running on their computer, the brain holds no door into it and cannot name a file the helper did not list. No new way in from outside: the inventory and the choice travel on `/documents/import-laptop/check`, one of the four token paths Caddy already opens; `/plan` and `/status` stay behind the console login.
+
+Phone: the card says to put photos and files in iCloud Drive or Google Drive; the computer's run sees them there.
+
+### Door 1 without a line: over the spoke (SWITCH-1, 2026-11-16)
+
+When the brain has a spoke (`docs/spoke.md`) and the computer joined it, the home's **Connect this computer** card starts the same survey without a pasted line: the console mints the survey token, the bridge hands it to the laptop's `door.sh move-in` on stdin (organise mode), and the laptop runs this same `brain_import.py --survey` against `<console>/api/bf`, detached. The plan, the yes and the pull below are unchanged. The helper takes the token from `BRAIN_IMPORT_TOKEN` when `--token` is absent, so it is never on a command line. The pasted line stays as the fallback.
+
+### Door 2: chats from every AI, then Continue here
+
+- The home card "Bring your chats with ChatGPT, Claude and other AIs" carries one chip per AI (`ui/lib/aiExports.js`) with that AI's export steps and link, takes the export file as it came (zip, json, html, csv) or a pasted conversation (the `text` field of `POST /documents/import-chats`), and says that signing in with Claude or ChatGPT (the seat) does not bring old chats; the export does. The Knowledge page's import card lists every AI the same way.
+- Continue here (`api/chat_continue.py`): whenever a conversation document is proposed (any door: home, Knowledge page, `import_chats.py propose`), `_propose_document_text` keeps its starting point in `<runtime>/chat_continue/<sha256(name)[:24]>.json` (mode 600): title, AI, dates, turns, an extractive summary (first ask, last ask; no model call) and the last 6 turns verbatim (4,000 characters each). `GET /documents/chats` lists them with `state` in (approved) or waiting; conversations approved before this existed are listed from memory and rebuilt from their chunks on first use. `GET /documents/chats/continue?name=&lang=` gives the first message of a new thread: the old turns quoted (`> `) and framed as the person's old conversation, not instructions.
+- The home lists "Your chats from ChatGPT and Claude" (the AIs found) with Continue here on each; the Knowledge page's document rows carry the same button for conversation documents. The button opens `/?continue=<name>`: the console opens a new thread and sends that first message. From another site, or when the import's injection scan flagged the conversation, it only fills the composer and waits for the person's send.
+
+Not done yet: resume after a broken survey run (a new line resends); the survey walk on a real Mac and Windows (tested on Linux with made-up cloud folders); a group chosen while the helper is gone waits until the token expires.
+
+## Other AIs (2026-11-16)
+
+Every AI comes in through the same card and the same gate: `POST /documents/import-chats`, one document per conversation, each one PENDING, one yes.
+There is no picker: the file says what it is (`normalize()` and `load_export()` in `scripts/import_chats.py`).
+Uploads may be the zip as it came or the bare file inside it (`.json`, `.csv`, `.html`).
+Documents keep the shape above: title, `Started:` line, then `## Me, <time>` and `## Assistant (<name>), <time>`; file name `<source>_<date>_<slug>_<id8>.md`.
+`FORMATS` in the script holds the same verified/unverified table as below; the console's list of export buttons (English and Russian) is `ui/lib/aiExports.js`.
+Unverified means the parser follows third-party descriptions of the file and is written to be tolerant; the first real export of each should be read by hand once.
+
+### Gemini (unverified)
+
+- Button: takeout.google.com, Deselect all, tick My Activity, "All activity data included", Deselect all, tick Gemini Apps, OK, Next step, Create export (https://support.google.com/gemini/answer/16920332). Gems are under the separate "Gemini" product and are not read.
+- File: `Takeout/My Activity/Gemini Apps/MyActivity.html` by default, `MyActivity.json` when "Multiple formats" is set to JSON. The folder name is localized, so any `MyActivity.json`/`.html` is read and only records whose header or products say Gemini are kept (a full My Activity export also holds Search, YouTube).
+- Record fields `header`, `title`, `titleUrl`, `time`, `products`, `details` are Google's own (https://developers.google.com/data-portability/schema-reference/my_activity). Where the prompt and answer sit is not in Google's docs; the parser takes the prompt from `details` name Request, else a title starting "Prompted ", else `userInteractions[].request` (a serialized json string); the answer from `details` name Response, `safeHtmlItem[].html` (stripped to text) or `userInteractions[].response` (third-party description: https://portable-ai-memory.pages.dev/providers/google/).
+- Grouping: My Activity is a flat list of prompt/answer records, not conversations. Records whose `titleUrl` carries a conversation id (`gemini.google.com/app/<id>` or `/app/c/<id>`) are one conversation per id; records without an id start a new conversation after 30 minutes without a record (`GAP_S`). The title is the first prompt.
+- The html card is: header, "Prompted <text>", a date line, the answer, "Products:". Its date line is local time without a usable zone and is read as UTC; English month names only (other Takeout languages fall through to "no conversations", then paste).
+
+### DeepSeek (unverified)
+
+- Button: chat.deepseek.com, profile, Settings, Data, Export data (menu names from third-party guides; no DeepSeek doc found).
+- File: a zip with `conversations.json`: an array; each has `id`, `title`, `inserted_at`, `updated_at` and a `mapping` tree like ChatGPT's whose messages hold `fragments` typed REQUEST (the person), RESPONSE (the answer), THINK and SEARCH (left out, as ChatGPT's reasoning is). Shape as read by the open-source viewer https://github.com/akivacp/chatgpt-json-tree-viewer.
+- Parse: told apart from ChatGPT by `fragments`; main branch from `current_node` if present, else the last child at each step (the latest regeneration).
+
+### Grok (unverified)
+
+- Button: accounts.x.ai/data, Download account data (or grok.com, Settings); the zip comes by email.
+- File: `ttl/30d/export_data/<user>/prod-grok-backend.json`: `{"conversations": [{"conversation": {id, title, create_time, modify_time}, "responses": [{"response": {_id, parent_response_id, sender, message, create_time: {"$date": {"$numberLong": ms}}}}]}]}` (https://portable-ai-memory.pages.dev/providers/grok/, and the viewer above). Other files in the zip are ignored.
+- Parse: the kept branch ends at the newest leaf of the `parent_response_id` tree; `sender` "human" is the person, anything else (assistant, ASSISTANT, a model name) the answer. Thinking traces, search results and images are left out.
+
+### Copilot (unverified columns)
+
+- Button: account.microsoft.com/privacy, Privacy, Empower your productivity, Copilot, Copilot apps, Export all activity history (personal Microsoft accounts only). Verified: https://support.microsoft.com/en-us/privacy/manage-your-copilot-activity-history-in-the-privacy-dashboard says it downloads a CSV, but not its columns.
+- File: a CSV. Columns per https://portable-ai-memory.pages.dev/providers/microsoft/: `Conversation, Time, Author, Message` (Copilot apps), `CreatedAt, MessageContent, Author, ChatName` (Copilot Chat and Microsoft 365 apps; `M/D/YYYY H:MM:SS +HH:MM`), `Timestamp, ClientApp, Prompt` (Windows apps, prompts only). No json export is documented.
+- Parse: rows carry no conversation id, so rows are grouped by the Conversation / ChatName value; rows without one start a new conversation after 30 minutes. Author Human/User is the person, anything else the answer.
+
+### Le Chat (unverified)
+
+- Button: admin.mistral.ai/account/export, Export (https://help.mistral.ai/en/articles/347623-how-do-i-export-my-data-from-le-chat; read 2026-11-16 the article names the product "Vibe" and does not describe the file).
+- File: not documented. The parser reads json conversations with `chat_messages` (or `messages`) whose items have `role` and `content` (a string or text blocks) and no `sender`, as the viewer above describes Mistral's export; the file name is unknown, so a zip with no known file has every `.json` tried. If nothing is recognised, the person pastes the conversation (the fallback).
+
+### Perplexity (no readable export: fallback)
+
+- No documented bulk file format: the account page (https://www.perplexity.ai/account/details) offers "Export my data" to some accounts, otherwise a privacy request by email; neither documents the file (community thread https://community.perplexity.ai/t/feature-request-bulk-export-of-all-threaded-conversations/371).
+- Route: per thread, the ... menu, Export, Markdown or PDF, dropped on the card; or copy and paste. A text naming Perplexity is stored with source `perplexity`.
+
+### Anything else: the pasted fallback (verified, ours)
+
+- The card's `text` field (pasted) or a dropped `.txt`, `.md`, `.html` or `.pdf` (pdf through pypdf, in api/requirements.txt) becomes ONE conversation document through the same gate.
+- Turn markers at the start of a line are detected: You, User, Me, Human (and Я, Вы, Пользователь) for the person; ChatGPT, Assistant, AI, Gemini, Claude, Copilot, Grok, DeepSeek, Perplexity, Le Chat, Mistral, Bot, Model (and Ассистент, ИИ) for the answer; also "You said:", "**User:**" and "## Me:". Both sides must appear, else the whole text is one "Me" block.
+- Source: the vendor named by the AI markers, else a vendor named in the first 3000 characters (perplexity, le chat, chat.mistral.ai, gemini.google.com, chatgpt.com, claude.ai, ...), else `pasted` (assistant shown as "AI"). Title: the `title` field, the html `<title>` or pdf title, else the first line. Date: the day of import.
+- Route form fields now: `file` (optional), `text` (optional), `title` (optional), `newest` (default 50); exactly one of `file` and `text`, else 400. The answer has the same keys as before.
+
+## Bring in this computer: the one line, Mac and Windows (SPOKE-3, 2026-11-16)
+
+hbar 2026-11-16, on SWITCH-1's eight-step Mac flow: "there has to be a standardized way: easy copy this in terminal and then gives full access for the brain to import stuff from the laptop", for members whose laptop he cannot touch (Christos) and for Windows (Elena). This is the member path. SWITCH-1 (inbound SSH over the brain's own network, branch `switch-1`) stays the advanced path for a standing spoke.
+
+### The line
+
+The home card "Bring in this computer" (Door 1 above) mints the survey token and shows one line with Copy:
+
+- Mac (Terminal) and Linux: `curl -fsSL https://<brain>/api/bf/laptop/agent.sh | bash -s -- imp_...`
+- Windows (PowerShell): `$env:BRAIN_TOKEN="imp_..."; irm https://<brain>/api/bf/laptop/agent.ps1 | iex`
+- In Russian, both addresses carry `?lang=ru` (the agent's own words, `WORDS` in `api/laptop_agent.py`).
+
+The card links "Read what this line runs" to the same address. The key travels in the line, never in the address, so the script is the same text for anyone who fetches it.
+
+### The pattern: the laptop dials out, the brain never dials in
+
+The agent is a short script that calls OUT over HTTPS to the token door of MOVE-IN-2 and nothing else: `GET /documents/import-laptop/check` (key check, then the wait for the choice with `?form=lines`, a text answer for shells that have no JSON parser), `POST /documents/import-laptop/check` (the inventory), `POST /documents/import-laptop/file`, `POST /documents/import-laptop/finish`. The plan, the yes per group and the caps are MOVE-IN-2's, unchanged. No VPN, no SSH server, no Remote Login, no router change, no inbound door: the laptop opens nothing to anyone. That is both fewer steps and a smaller surface than SWITCH-1, which opens SSH on the laptop to the brain.
+
+What one run does: check the key; walk the home folder and the cloud folders (iCloud Drive, `~/Library/CloudStorage/*` for Google Drive, Dropbox, OneDrive and Box, `~/Dropbox`, `~/OneDrive*`, `~/Google Drive`, `~/iCloudDrive`, `<letter>:\My Drive`); send the list (names, sizes, dates; gzip JSON); wait for the yes on the home; send exactly the chosen files, checking each against its own list (a name it did not list is counted and never sent); close the key; delete its temp folder and exit. Ctrl+C closes the key too. It writes no receipt and installs nothing; the home card shows what arrived.
+
+- Mac and Linux: bash 3.2 or later, curl, find, stat (BSD or GNU), awk, gzip, all part of macOS. No Python (on a fresh Mac `python3` only offers to install the developer tools). The whole script is one function called on its last line, so bash reads all of it before running any of it. The key goes to curl from a file in the temp folder (mode 600), never on curl's command line.
+- Windows: Windows PowerShell 5.1 as Windows 10 and 11 ship it, .NET HttpClient, no module, no administrator. `irm | iex` runs text, not a script file, so the execution policy does not apply; it turns on TLS 1.2 for its own calls. Links and junctions are not followed (the profile's "Application Data" style junctions); OneDrive's online-only files are listed and download when sent.
+- Never-send rules: one list, `SKIP_DIRS` and `SKIP_FILES` of `scripts/import/brain_import.py`, rendered into both scripts by `api/laptop_agent.py` at each fetch (awk regex on the Mac, `-like` on Windows). Also never listed: names with a tab, a newline or a backslash, and names over 400 characters (counted as "name too long or odd").
+
+### macOS privacy, without the Full Disk Access switch
+
+A script run from Terminal reads the home folder as the person. macOS guards Desktop, Documents, Downloads, iCloud Drive and removable volumes per app: the first time Terminal opens one, macOS asks "Terminal would like to access files in your Documents folder", and Allow is one press; the card and the agent say so. A folder refused that way, and anything else macOS keeps closed, is not looked into: the agent names it ("The computer kept these private") and the inventory carries `<folder>: kept private by the system`. Mail, Messages, Safari and the Photos library sit under `~/Library` or in a `.photoslibrary`, which the walk never enters anyway. No Remote Login and no Full Disk Access on this path.
+
+Unverified until a real Mac runs it (the hook is `ops/2026-11-16_switch-1-mac-trial.sh` in hbar.world): which of Desktop, Documents, Downloads and iCloud Drive prompt on the current macOS, whether find waits on the prompt or fails first, and the exact error text.
+
+### The Apple Developer ID is not needed here
+
+A `curl | bash` line is not a downloaded app, so Gatekeeper's "unidentified developer" check never runs (curl sets no quarantine flag). The USD 99 a year Developer ID only removes the Open Anyway step of SWITCH-1's downloaded `Join my brain.app`. On Windows likewise: no downloaded installer, so no SmartScreen prompt and no code signing certificate.
+
+### A standing connection is not built
+
+The agent runs once and is gone. A standing version (re-scan on a schedule, so agents can pick up new files) would add a LaunchAgent on the Mac or a scheduled task on Windows, a long-lived key stored on the laptop, and an auto-updating script: whoever controls the brain's address could then run new code on the laptop on every scan, without the person pasting anything. That is a separate decision with its own card; this path keeps "you pasted it, it ran once, it is gone".
+
+### The two routes and Caddy
+
+`GET /laptop/agent.sh` and `GET /laptop/agent.ps1` (api/main.py): public, no state, `Cache-Control: no-store`, text. The brain's address in the script comes from the request's Host (`https://<host>/api/bf`; validated as a plain host name; behind the console's own proxy, which sees `api:8000`, from the X-Forwarded-Host it sets). Listed in `tests/test_sec_pass_1_routes.py` `PUBLIC_SCRIPT_DOORS`, awaiting hbar's review. The Caddy snippet above opens them beside the four token paths; an existing box needs the two paths added to both `path` lines of its console block (the central thread applies it on hbar's word).
+
+### Tests
+
+`tests/test_laptop_agent.py`: the line run as the member runs it (curl piped to bash) against the api on 127.0.0.1 over a temp home with planted secrets and made-up cloud folders; its inventory equals the Python survey's name for name; the chosen files arrive, pictures and music kept as files; a brain asking for names it was not offered gets none of them; refusals (no key, unknown key, a folder-by-folder key, a non-https address); the line replaced while waiting; odd names, links and a locked folder; Russian; the routes, the address rule and the text form of the check; the awk secret regex against fnmatch. agent.ps1 is checked statically only: no PowerShell on the box (the auto-mode classifier refused fetching one on 2026-11-16).
+
+### Not verified
+
+- A real Mac: the privacy prompts above, BSD find and stat on a large home, the time it takes.
+- A real Windows laptop (Elena's): the whole of agent.ps1. What the test needs: Windows 10 or 11, a member brain with a survey token and the Caddy paths open, PowerShell from the Start menu, the line pasted; watch for TLS errors on the first `irm`, Defender or SmartScreen prompts, OneDrive online-only files, Cyrillic names, and the time for a full profile.

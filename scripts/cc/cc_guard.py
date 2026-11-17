@@ -23,7 +23,9 @@ ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
 # write, and an allow, a defaultMode or disableAllHooks there could take the card hook's place. Only the user
 # layer is loaded unless the owner sets CC_SETTING_SOURCES (comma list of user, project, local; "off" = the
 # CLI's default, all three). The .env rule that used to come from a project layer is carried here instead.
-DENY_ALWAYS = ["Edit(**/.env)", "Edit(**/.env.*)", "Write(**/.env)", "Write(**/.env.*)"]
+# JOBS-SURVIVE 2026-11-16: Edit rules cover every file-editing tool (Write included); a Write(...) rule is not
+# matched by file permission checks and printed a warning into every job's output, so only the Edit rules remain.
+DENY_ALWAYS = ["Edit(**/.env)", "Edit(**/.env.*)"]
 
 
 def setting_sources() -> str:

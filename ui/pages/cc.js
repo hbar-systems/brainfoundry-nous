@@ -8,6 +8,10 @@ import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
 import { wantsThreads } from '../lib/home'
+import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
+import MoveInCards from '../components/MoveInCards'
+import FirstSignIn from '../components/FirstRun'
+import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
@@ -1150,7 +1154,7 @@ function ExportPanel({ turns, title }) {
   )
 }
 
-function Pane({ pane, onClose, side, onSide, onRoute, panel }) {
+function Pane({ pane, onClose, side, onSide, onRoute, panel, quiet }) {
   // A summoned surface (D54): an existing console page, same origin and auth, shown
   // beside the conversation and dismissed with one click. Pages hide their own nav
   // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
@@ -1198,7 +1202,9 @@ function Pane({ pane, onClose, side, onSide, onRoute, panel }) {
         <div style={{ width: '1px', height: '100%', backgroundColor: drag ? C.gold : C.line }} />
       </div>}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
-        {onRoute ? (
+        {quiet ? (
+          <span style={{ color: C.ink, fontSize: '16px', fontFamily: 'var(--font-display)' }}>{quiet.title || ''}</span>
+        ) : onRoute ? (
           <select value={pane.route} onChange={e => { const r = PANE_ROUTES.find(x => x[0] === e.target.value); onRoute({ route: e.target.value, title: r ? r[1] : e.target.value }) }}
                   title="Show another page in this pane"
                   style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', background: 'transparent', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '3px 6px', cursor: 'pointer', maxWidth: '45%' }}>
@@ -1207,10 +1213,17 @@ function Pane({ pane, onClose, side, onSide, onRoute, panel }) {
           </select>
         ) : <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>{pane.title || pane.route}</span>}
         <span style={{ display: 'flex', gap: '8px' }}>
+          {quiet ? (
+            <>
+              <button type="button" className="cc-pane-q" onClick={() => { try { document.activeElement && document.activeElement.blur() } catch {}; setFull(x => !x) }}>{full ? quiet.words.paneBack : quiet.words.paneFull}</button>
+              <button type="button" className="cc-pane-q" onClick={onClose}>{quiet.words.paneClose}</button>
+            </>
+          ) : (<>
           {inline && <Btn small onClick={onSide} title="Put it on the other side of the conversation">{side === 'left' ? 'to right' : 'to left'}</Btn>}
           <Btn small onClick={() => { try { document.activeElement && document.activeElement.blur() } catch {}; setFull(x => !x) }} title={full ? 'Back (Escape)' : 'The pane alone, the whole screen; Escape comes back'}>{full ? 'exit full' : 'full screen'}</Btn>
           {!narrow && !full && <Btn small onClick={() => setWide(x => !x)} title={wide ? 'Back beside the conversation' : 'Cover the whole console'}>{wide ? 'beside' : 'wide'}</Btn>}
           <Btn small onClick={onClose} title="Put it away">close</Btn>
+          </>)}
         </span>
       </div>
       {isPanel(pane.route)
@@ -1412,6 +1425,10 @@ function CC() {
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   const autoAskRef = useRef(null)                   // ?ask= from the brain's own pages: sent once the console is up (2026-11-13)
+  // ?continue=<conversation document> (MOVE-IN-2, 2026-11-16): a new thread seeded with an imported
+  // conversation (title, summary, last turns, GET /documents/chats/continue). From the brain's own pages
+  // it is sent on arrival; from anywhere else, or when the import's scan flagged it, it only prefills.
+  const [contSeed, setContSeed] = useState(null)
   // Margin remarks (2026-09-28): select a span in one of the brain's messages, a note opens in the
   // right margin anchored to that message (below it on a narrow screen), typed at leisure, kept
   // per thread in this browser, and sent with the next message as a structured block: which
@@ -1602,6 +1619,16 @@ function CC() {
   // the console's own words (2026-11-12): the bridge's lang key beside the layout, English when unset
   const [lang, setLang] = useState('en')
   const W = words(lang)
+  // the quiet home (PARENTS-HOME-1, 2026-11-15): the owner's first asks, from <desk>/week/asks.json
+  const quietHome = isQuiet(layoutBase)
+  const [asks, setAsks] = useState([])
+  // the first sign-in order (SWITCH-1, 2026-11-16): once on a member brain's quiet home, state on the bridge
+  const [signinOrder, setSigninOrder] = useState(null)
+  useEffect(() => {
+    if (!quietHome) return
+    fetch('/cc/first-run', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => { if (j) setSigninOrder(j) })
+  }, [quietHome])
+  const [startLabel, setStartLabel] = useState(null)
   useEffect(() => {
     let on = true
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
@@ -1634,11 +1661,25 @@ function CC() {
           window.location.href = d.layout.view === 'gallery' ? '/gallery' : '/panes'
         }
       } catch {}
-      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only
+      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only.
+      // The quiet home (PARENTS-HOME-1, 2026-11-15): there it opens the first time each day (and on ?start=1,
+      // the menu's start entry), over the thread list the home address asks for; the other days the menu opens it.
       try {
         const q = new URLSearchParams(window.location.search)
         const st = d.layout.start
-        if (st && (d.layout.view === 'talk' || d.layout.view === 'doors') && !q.has('pane') && !q.has('thread')) openPane({ route: st, title: st.split('/').pop() })
+        if (st && (d.layout.view === 'talk' || d.layout.view === 'doors') && !q.has('pane') && !q.has('thread')) {
+          if (!isQuiet(d.layout)) openPane({ route: st, title: st.split('/').pop() })
+          else {
+            let last = null
+            try { last = localStorage.getItem(START_DAY_KEY) } catch {}
+            // a phone has no room beside the chat: there the menu's start entry opens it (the home stays first)
+            if (q.has('start') || (startDue(last, dayOf()) && window.innerWidth >= 960)) {
+              openPane({ route: st, title: st.split('/').pop() })
+              try { localStorage.setItem(START_DAY_KEY, dayOf()) } catch {}
+            }
+            if (q.has('start')) { const u = new URL(window.location.href); u.searchParams.delete('start'); window.history.replaceState(window.history.state, '', u.href) }
+          }
+        }
       } catch {}
     }).catch(() => {})
     return () => { on = false }
@@ -2116,6 +2157,19 @@ function CC() {
     window.addEventListener('bf-home', open)
     return () => window.removeEventListener('bf-home', open)
   }, [])
+  // the quiet menu's start entry, pressed while on the home: the start page opens beside the chat in place
+  useEffect(() => {
+    const open = () => { const st = layoutBase && layoutBase.start; if (st && !paneModeRef.current) openPane({ route: st, title: st.split('/').pop() }) }
+    window.addEventListener('bf-start', open)
+    return () => window.removeEventListener('bf-start', open)
+  }, [layoutBase])
+  // the asks live on the owner's desk; read once the bridge has named the desk and the layout is quiet
+  useEffect(() => {
+    if (!quietHome || !health || !health.out) return undefined
+    let on = true
+    fetch(asksUrl(health.out), { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { const a = parseAsks(d); if (on) { setAsks(a ? a.asks : []); setStartLabel(a ? a.startLabel : null) } }).catch(() => {})
+    return () => { on = false }
+  }, [quietHome, health && health.out])
   useEffect(() => {
     let pin = null
     try {
@@ -2155,8 +2209,28 @@ function CC() {
       const own = (document.referrer || '').startsWith(window.location.origin + '/cc/files/raw/')
       if (q && own) autoAskRef.current = q
       else if (q) setDraft(q)
+      const cont = new URLSearchParams(window.location.search).get('continue')
+      if (cont) {
+        const same = (document.referrer || '').startsWith(window.location.origin + '/')
+        const ln = new URLSearchParams(window.location.search).get('lang') || ''
+        fetch(`/api/bf/documents/chats/continue?name=${encodeURIComponent(cont)}&lang=${ln === 'ru' ? 'ru' : 'en'}`, { cache: 'no-store' })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => {
+            if (!j || !j.seed) return
+            const safe = ['', 'none', 'low'].includes(String(j.risk || '').toLowerCase())
+            if (same && safe) setContSeed(j.seed); else setDraft(j.seed)
+          })
+          .catch(() => {})
+      }
     } catch {}
   }, [])
+  useEffect(() => {
+    if (!health || !contSeed) return
+    const q = contSeed; setContSeed(null)
+    try { const u = new URL(window.location.href); u.searchParams.delete('continue'); u.searchParams.delete('lang'); window.history.replaceState(null, '', u.toString()) } catch {}
+    freshRef.current = true
+    send(q)
+  }, [health, contSeed])
   useEffect(() => {
     if (!health || !autoAskRef.current) return
     const q = autoAskRef.current; autoAskRef.current = null
@@ -2202,7 +2276,8 @@ function CC() {
   }
   const onPaneRoute = (p) => { if (p && p.route === '#threads') loadThreads(); openPane(p) }
   // a new or switched conversation keeps the threads pane open (pressing a thread there is how he switches)
-  const keepListPane = () => setPane(p => (p && p.route === '#threads' && !(typeof window !== 'undefined' && window.innerWidth < 960) ? p : null))
+  // the quiet home's start page stays too (PARENTS-HOME-1): a first ask pressed beside it keeps it on a wide screen
+  const keepListPane = () => setPane(p => (p && (p.route === '#threads' || (quietHome && layoutBase && p.route === layoutBase.start)) && !(typeof window !== 'undefined' && window.innerWidth < 960) ? p : null))
   useEffect(() => {
     if (paneMode || hidden.tools) return undefined
     const k = (e) => { if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Backquote') { e.preventDefault(); toggleTerminal() } }
@@ -2523,6 +2598,8 @@ function CC() {
 
   // Any signed-in reasoner opens the chat: Claude, Codex (ChatGPT) or a configured local model (2026-11-07).
   const loggedIn = claudeIn || codexIn || localIn
+  const firstOn = showFirstRun(signinOrder, quietHome) && !paneMode && turns.length === 0
+  const firstStep = firstOn ? currentStep(signinOrder, loggedIn) : null
   // The doors view: the doors once per page, and once per browser session the bare console opens on a blank
   // thread (the doors), not on the thread left open last time; ?thread= and panes keep their thread.
   useEffect(() => {
@@ -3224,7 +3301,8 @@ function CC() {
           </div>
         )}
 
-        {health && !loggedIn && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
+        {firstStep && health && <FirstSignIn lang={lang} state={signinOrder} loggedIn={loggedIn} onChange={setSigninOrder} />}
+        {health && !loggedIn && (!firstStep || firstStep === 'seat') && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
 
         {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
@@ -3272,7 +3350,23 @@ function CC() {
               </div>
             </div>
           ))}
-          {turns.length === 0 && loggedIn && pending.length === 0 && (
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
+            <MoveInCards lang={lang} />
+          )}
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && asks.length > 0 && !paneMode && !firstStep && (
+            <div className="cc-asks" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '12px', margin: '4px 0 28px' }}>
+              {asks.map((a, i) => (
+                <button key={i} onClick={() => send(a.send)} disabled={active} title={a.send}
+                  className="cc-ask"
+                  style={{ textAlign: 'left', padding: '20px 22px', minHeight: '92px', borderRadius: '16px', backgroundColor: C.card, color: C.ink,
+                           border: `1px solid ${C.line}`, cursor: active ? 'default' : 'pointer', fontFamily: 'inherit', lineHeight: 1.35 }}>
+                  <span style={{ display: 'block', fontSize: '20px' }}>{a.label}</span>
+                  {a.sub && <span style={{ display: 'block', fontSize: '16px', color: 'var(--text-dim, var(--muted))', marginTop: '6px' }}>{a.sub}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {turns.length === 0 && loggedIn && pending.length === 0 && !(quietHome && !paneMode) && (
             <p style={{ color: C.faint, fontSize: '14px', lineHeight: 1.7, margin: '24px 0' }}>
               {W.empty}
               {health.session ? ' The previous thread continues.' : ''}
@@ -3372,7 +3466,7 @@ function CC() {
         {notes.filter(n => n.text.trim()).length > 0 && (
           <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
-        {latest.length > 0 && (!paneMode || paneDetails) && (
+        {latest.length > 0 && (!paneMode || paneDetails) && !(quietHome && !paneMode) && (
           <p className="cc-row" style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span>latest:</span>
             {latest.map(f => (
@@ -3517,7 +3611,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
+      {pane && <Pane pane={pane} quiet={quietHome ? { title: (layoutBase && pane.route === layoutBase.start && startLabel) || W.menu.start, words: W } : null} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
                      panel={pane.route === '#threads' ? <div style={{ padding: '6px' }}>{threadList}</div> : pane.route === '#export' ? <ExportPanel turns={turns} title={curThread && curThread.title} /> : null} />}
       </div>
     </LearnCtx.Provider>

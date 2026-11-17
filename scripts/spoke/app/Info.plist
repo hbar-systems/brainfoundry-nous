@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Join my brain.app (SWITCH-1, 2026-11-16): a shell program in an app folder, unsigned until the
+     operator holds an Apple Developer ID; LSUIElement keeps it out of the Dock, its windows are dialogs. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key><string>join-my-brain</string>
+	<key>CFBundleIdentifier</key><string>ai.brainfoundry.join-my-brain</string>
+	<key>CFBundleName</key><string>Join my brain</string>
+	<key>CFBundleDisplayName</key><string>Join my brain</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>1.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>LSMinimumSystemVersion</key><string>13.0</string>
+	<key>LSUIElement</key><true/>
+</dict>
+</plist>

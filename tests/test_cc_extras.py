@@ -440,7 +440,9 @@ def test_a_job_whose_process_died_is_ended_on_read_and_closeable(tmp_path):
         assert {r["id"]: r for r in json.loads(reg.read_text())}["Jghost"]["lost"] is True   # written back
         assert j.get("Jghost")["lost"] is True
         tiles = {t["key"]: t for t in X.board_tiles([], [], [dict(by["Jghost"], tail="")], [], [], set(), time.time())["tiles"]}
-        assert tiles["job:Jghost"]["state"] == "failed" and "restart" in tiles["job:Jghost"]["last"]
+        # JOBS-SURVIVE 2026-11-16: no exit code is not a failure; the tile says so and still closes
+        assert tiles["job:Jghost"]["state"] == "done" and tiles["job:Jghost"]["word"] == "ended (exit unknown)"
+        assert tiles["job:Jghost"]["last"] == "no output"
         assert X.board_tiles([], [], [dict(by["Jghost"], tail="")], [], [], {"job:Jghost"}, time.time())["tiles"] == []
     finally:
         os.kill(live["pid"], 15)
@@ -752,3 +754,90 @@ def test_job_result_reads_only_its_own_log_and_desk_files(tmp_path):
     (j.dir / "J1700000000001.log").unlink()
     (j.dir / "J1700000000001.log").write_text("# J1 t\n# echo hi\nhello\n")
     assert "hello" in j.result(rec)["text"]
+
+
+def _wait_for(fn, secs=10.0):
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        v = fn()
+        if v:
+            return v
+        time.sleep(0.05)
+    return fn()
+
+
+def test_a_job_writes_its_exit_code_beside_its_log(tmp_path):
+    """JOBS-SURVIVE 2026-11-16: the job's own shell writes <id>.rc, so the code outlives the bridge that started it."""
+    j = X.Jobs(tmp_path / "out", lambda: {"PATH": "/usr/bin:/bin"})
+    rec = j.start("echo hi; exit 3", str(tmp_path), "three")
+    rcf = tmp_path / "out" / "jobs" / f"{rec['id']}.rc"
+    assert _wait_for(lambda: rcf.exists()) and rcf.read_text().strip() == "3"
+    assert (tmp_path / "out" / "jobs" / f"{rec['id']}.pid").read_text().strip() == str(rec["pid"])
+    done = _wait_for(lambda: (j.get(rec["id"]) or {}).get("result") and j.get(rec["id"]))
+    assert done["rc"] == 3 and not done.get("lost")
+
+
+def test_a_restarted_bridge_readopts_a_running_job_and_reads_its_exit_code(tmp_path):
+    """JOBS-SURVIVE: a job started by a bridge that is gone is re-adopted by the next one (pid + /proc), watched
+    to its end, and ended with the code its shell wrote: not lost, result stored, handed to its page, metered."""
+    import subprocess as sp
+    out = tmp_path / "out"
+    first = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"})
+    jid = "J1700000000001"
+    log = out / "jobs" / f"{jid}.log"
+    log.write_text(f"# {jid} t in x\n# report\n")
+    with open(log, "ab") as lf:
+        proc = sp.Popen(X.Jobs.shell("sleep 0.6; echo REPORT written; exit 4", first._rc_path(jid)), stdout=lf, stderr=sp.STDOUT,
+                        stdin=sp.DEVNULL, start_new_session=True)
+    reg = out / "jobs" / "jobs.json"
+    reg.write_text(json.dumps([{"id": jid, "title": "TRAIN-3 report", "command": "report", "pid": proc.pid,
+                                "started": int(time.time()), "ended": None, "rc": None, "thread": "t-9"}]))
+    ended = []
+    second = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"}, on_end=ended.append)     # the bridge after the restart
+    assert second.adopt(poll=0.05) == [jid]
+    assert second.adopt(poll=0.05) == []                      # watched once
+    assert second.get(jid)["running"] is True
+    proc.wait()                                               # the test is its parent: reap it, as init would
+    rec = _wait_for(lambda: ended and second.get(jid))
+    assert rec["rc"] == 4 and rec["ended"] is not None and not rec.get("lost")
+    assert "REPORT written" in (rec.get("result") or {}).get("text", "")
+    assert ended[0]["id"] == jid and [r["id"] for r in second.take_unseen("t-9")] == [jid]
+    tiles = {t["key"]: t for t in X.board_tiles([], [], [rec], [], [], set(), time.time())["tiles"]}
+    assert tiles[f"job:{jid}"]["state"] == "failed" and tiles[f"job:{jid}"]["last"] == "REPORT written"
+
+
+def test_a_gone_job_without_an_exit_code_ends_at_its_last_output(tmp_path):
+    """A job from before <id>.rc whose process is gone: rc None, lost, ended when it last wrote (not when noticed)."""
+    out = tmp_path / "out"
+    j = X.Jobs(out, lambda: {"PATH": "/usr/bin:/bin"})
+    jid = "J1700000000002"
+    log = out / "jobs" / f"{jid}.log"
+    log.write_text("# h\n# c\nall done, report at out/x.md\n")
+    os.utime(log, (1700000500, 1700000500))
+    (out / "jobs" / "jobs.json").write_text(json.dumps([{"id": jid, "title": "HARM-1", "pid": 2 ** 22 + 4321,
+                                                       "started": 1700000000, "ended": None, "rc": None}]))
+    r = j.get(jid)
+    assert r["ended"] == 1700000500 and r["rc"] is None and r["lost"] is True
+    t = X.board_tiles([], [], [r], [], [], set(), 1700000600)["tiles"][0]
+    assert (t["state"], t["word"], t["last"]) == ("done", "ended (exit unknown)", "all done, report at out/x.md")
+
+
+def test_job_tiles_skip_permission_rule_warnings_and_show_the_first_real_error(tmp_path):
+    w1 = ("Permission deny rule (/tmp/claude-1002/claude-settings-1d.json): Write(**/.env) is not matched by file "
+          "permission checks — only Edit(path) rules are. Use Edit(**/.env) instead (Edit rules cover all file-editing tools).")
+    w2 = w1.replace("**/.env)", "**/.env.*)")
+    now = 1700001000
+    base = {"started": now - 100, "ended": now - 10, "title": "PARENTS-HOME-1", "log": "/x.log"}
+    jobs = [dict(base, id="Ja", rc=1, tail=f"# h\n# c\n{w1}\n{w2}\n"),
+            dict(base, id="Jb", rc=1, tail=f"{w1}\n{w2}\nstep one ok\nError: the build broke\nexit hook ran\n"),
+            dict(base, id="Jc", rc=0, tail=f"{w1}\nwrote the report\n{w2}\n"),
+            dict(base, id="Jd", rc=None, lost=True, tail=f"{w1}\n{w2}\n")]
+    tiles = {t["key"]: t for t in X.board_tiles([], [], jobs, [], [], set(), now)["tiles"]}
+    assert (tiles["job:Ja"]["state"], tiles["job:Ja"]["last"]) == ("failed", "exit 1")
+    assert (tiles["job:Jb"]["state"], tiles["job:Jb"]["last"]) == ("failed", "Error: the build broke")
+    assert (tiles["job:Jc"]["state"], tiles["job:Jc"]["last"]) == ("done", "wrote the report")
+    assert (tiles["job:Jd"]["word"], tiles["job:Jd"]["last"]) == ("ended (exit unknown)", "no output")
+    assert X.job_lines(f"{w1}\nreal\n") == ["real"]
+    assert X.job_lines("J1794777315538 2026-11-15T21:15:15Z in /home/hands/world\nreal\n") == ["real"]   # a cut header
+    t = X.board_tiles([], [], [dict(base, id="Je", rc=143, tail=f"{w1}\n{w2}\n")], [], [], set(), now)["tiles"][0]
+    assert (t["state"], t["last"]) == ("failed", "stopped by a signal (exit 143)")

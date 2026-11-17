@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import CustomSelect from "../lib/CustomSelect";
 import LaptopImportCard from "../lib/LaptopImportCard";
+import useConsoleLang from "../lib/useConsoleLang";
+import { importWords } from "../lib/importText";
+import { continueHref } from "../lib/moveInPlan";
+import { AI_EXPORTS } from "../lib/aiExports";
+// An imported conversation (scripts/import_chats.py names; api/chat_continue.py CHAT_DOC): "Continue here".
+const CHAT_CONT = /^(chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_/;
 
 const API_BASE = "/api/bf";
 
@@ -306,6 +312,9 @@ export default function Upload() {
   // Import card (2026-10-25): a ChatGPT or Claude export zip goes to /documents/import-chats, which
   // proposes the newest 50 conversations through the same gate as an upload; they land in Pending.
   const [chatImport, setChatImport] = useState(null); // null | {busy} | {result} | {error}
+  // the import cards in the console language (PARENTS-HOME-1, 2026-11-15)
+  const lang = useConsoleLang();
+  const IW = importWords(lang);
   const importChats = async (file) => {
     if (!file) return;
     setChatImport({ busy: true, name: file.name });
@@ -315,24 +324,16 @@ export default function Upload() {
       const r = await fetch(`${API_BASE}/documents/import-chats`, { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setChatImport({ error: (j.error && j.error.message) || j.detail || `The import failed (${r.status}).` });
+        setChatImport({ error: (j.error && j.error.message) || j.detail || IW.chatFailed(r.status) });
         return;
       }
       setChatImport({ result: j });
       loadPending();
     } catch (err) {
-      setChatImport({ error: `The import failed: ${err.message}` });
+      setChatImport({ error: IW.chatFailed(err.message) });
     }
   };
-  const importLine = (j) => {
-    const from = (j.sources || []).map((x) => (x === "chatgpt" ? "ChatGPT" : "Claude")).join(" and ");
-    let line = `Found ${j.conversations} conversations from ${from}. `;
-    line += j.selected < j.conversations ? `Took the newest ${j.selected}. ` : `Took all ${j.selected}. `;
-    line += `${j.proposed} wait below under Pending memory proposals; nothing is remembered until you approve.`;
-    if (j.flagged) line += ` ${j.flagged} look like they carry instructions to a model; read those before approving.`;
-    if (j.stopped) line += ` Stopped early: ${j.stopped}`;
-    return line;
-  };
+  const importLine = (j) => IW.chatLine(j);
 
   // Filter hidden files (.git, .env, .DS_Store, etc.) and obvious binaries we
   // don't want indexing into a memory layer. Buyers folder-uploading hbar.world
@@ -725,17 +726,18 @@ export default function Upload() {
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", fontFamily: "system-ui, -apple-system, sans-serif", color: TEXT }}>
-      <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>Knowledge — Upload &amp; Search</h1>
+      <h1 style={{ fontSize: 26, fontWeight: 600, fontFamily: "Lora, Georgia, serif", margin: "0 0 24px 0" }}>{IW.pageTitle}</h1>
 
       <section style={{ padding: 18, border: `1px solid ${BORDER}`, background: SURFACE, borderRadius: 12, marginBottom: 24 }}>
-        <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>Import your ChatGPT or Claude history</div>
+        <div style={{ fontSize: 15, color: TEXT, marginBottom: 6 }}>{IW.chatTitle}</div>
         <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.7 }}>
-          <div>ChatGPT: chatgpt.com, Settings &gt; Data controls &gt; Export data. The zip comes by email.</div>
-          <div>Claude: claude.ai, Settings &gt; Privacy &gt; Export data. The zip comes by email.</div>
+          {AI_EXPORTS.map((x) => (
+            <div key={x.key}>{x.name}: {x.steps[lang === "ru" ? "ru" : "en"]}{x.verified ? "" : ` (${IW.unverified})`}</div>
+          ))}
         </div>
         <label style={{ ...BTN, display: "inline-block", marginTop: 12, opacity: chatImport && chatImport.busy ? 0.5 : 1, pointerEvents: chatImport && chatImport.busy ? "none" : "auto" }}>
-          {chatImport && chatImport.busy ? `Reading ${chatImport.name}...` : "Choose the export zip"}
-          <input type="file" accept=".zip,application/zip" style={{ display: "none" }}
+          {chatImport && chatImport.busy ? IW.chatReading(chatImport.name) : IW.chatPick}
+          <input type="file" accept=".zip,.json,.html,.htm,.csv,.txt,.md,.pdf" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importChats(f); }} />
         </label>
         {chatImport && chatImport.result && (
@@ -746,7 +748,7 @@ export default function Upload() {
         )}
       </section>
 
-      <LaptopImportCard btn={BTN} onArrived={loadPending} />
+      <div id="laptop"><LaptopImportCard btn={BTN} onArrived={loadPending} lang={lang} /></div>
 
       {/* First-use starter prompt (unreleased 0.10.0): shows until the brain
           holds ten documents, with progress. Replaces the empty-only guide. */}
@@ -1197,6 +1199,10 @@ export default function Upload() {
                                 ? "local-only: only your own hardware's models read this. Click to make it open."
                                 : "open: any reasoner may read this. Click to make it local-only."}
                             />
+                            {CHAT_CONT.test(d.name) && (
+                              <a href={continueHref(d.name, lang)} title={IW.contTitle}
+                                style={{ color: ACCENT, fontSize: 12, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "4px 8px", textDecoration: "none", lineHeight: 1 }}>{IW.cont}</a>
+                            )}
                             <span style={{ color: MUTED, fontSize: 11 }}>{d.chunks} chunks{d.last_updated ? ` · ${new Date(d.last_updated).toLocaleDateString()}` : ""}</span>
                             <button
                               onClick={() => forgetDoc(d.name)}

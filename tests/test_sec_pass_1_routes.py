@@ -38,11 +38,25 @@ PUBLIC_DOORS = {
     "/v1/ask": "signed peer assertion; public-scoped chunks only; per-peer rate limit",
     "/documents/import-laptop/file": "one-run laptop-import bearer token minted by the owner",
     "/documents/import-laptop/finish": "one-run laptop-import bearer token minted by the owner",
+    "/documents/import-laptop/check": "POST: the survey's inventory (names, sizes, dates; no content) under a survey-only one-run token minted by the owner; 64 MB cap, paths cleaned; MOVE-IN-2 2026-11-16, awaiting hbar's review",
     "/v1/federation/dm/receive": "ED25519 signature over the payload; size and rate bounds",
     "/harmonics/exchange": "contributor signature verified; receiver records its own row",
     "/harmonics/score": "scoring open; record=true checks the owner key in the handler (SEC-1)",
     "/submissions": "public contribution queue; the owner lists and decides with the key",
 }
+
+
+# Public GETs that hand out something to RUN on a person's computer. They change no state (so the sweep
+# above does not see them) but they are a door of their own: what they serve runs with the person's rights.
+# Reviewed list; a new ungated route serving a script fails here until it is reviewed and listed.
+PUBLIC_SCRIPT_DOORS = {
+    "/documents/import-laptop/helper.py": "the Python helper, static file from the image (2026-11-03)",
+    "/laptop/agent.sh": "the dial-out agent for Mac and Linux, rendered from scripts/import/agent.sh with the never-send "
+                        "rules of brain_import.py and the Host's address (validated); no key in the address, no state, "
+                        "no-store; it only calls the four token paths; SPOKE-3 2026-11-16, awaiting hbar's review",
+    "/laptop/agent.ps1": "the same agent for Windows PowerShell 5.1; SPOKE-3 2026-11-16, awaiting hbar's review",
+}
+SCRIPT_SUFFIXES = (".sh", ".ps1", ".py", ".bat", ".cmd", ".command", ".exe", ".pkg", ".dmg", ".msi", ".app")
 
 
 def _dep_names(dependant, out):
@@ -77,3 +91,15 @@ def test_settings_and_admin_routes_refuse_a_missing_key(monkeypatch):
         assert r.status_code == 401, (path, r.status_code)
         r = c.post(path, json=body, headers={"X-API-Key": "wrong"})
         assert r.status_code == 401, (path, r.status_code)
+
+
+def test_every_public_script_route_is_a_reviewed_door():
+    found = []
+    for r in m.app.routes:
+        if not isinstance(r, APIRoute) or "GET" not in r.methods:
+            continue
+        if _dep_names(r.dependant, set()) & _GATES:
+            continue
+        if r.path.lower().endswith(SCRIPT_SUFFIXES):
+            found.append(r.path)
+    assert sorted(found) == sorted(PUBLIC_SCRIPT_DOORS), f"public routes serving something to run: {found}"
