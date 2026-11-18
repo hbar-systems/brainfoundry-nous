@@ -508,7 +508,7 @@ class Files:
 # lowercase word, the file is fixed per name. /cc/page/<name>/<file> serves a sibling from that page's own folder
 # (one segment, no dot files, read-only); a sibling html or svg keeps the sandbox, so only index.html is active
 # on the console origin. An app's files.save lands in out/<date>/, never in a page folder.
-PAGE_NAMES = ("court", "sky", "replay")
+PAGE_NAMES = ("court", "sky", "replay", "film")   # film: FILM-PAGE-1 2026-11-18, free writing to a cut film
 PAGE_NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 PAGE_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 PAGE_ACTIVE = ("text/html", "application/xhtml+xml", "image/svg+xml")

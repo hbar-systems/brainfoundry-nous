@@ -307,7 +307,7 @@ request reaching the API. Tests: `tests/test_app_lane.py`.
   scripts build and that must read the bridge (the court reads `state.json` and
   posts rulings to `/cc/chat`) is served instead at `/cc/page/<name>/`, without
   the sandbox: only `<out>/<name>/index.html`, only for a name on a fixed list
-  (`cc_extras.PAGE_NAMES`: court, sky, replay; `CC_PAGES` overrides), behind
+  (`cc_extras.PAGE_NAMES`: court, sky, replay, film; `CC_PAGES` overrides), behind
   the console login. The URL holds no path; `/cc/page/<name>/<file>` reads one
   sibling in that folder (no subfolders, no dot files, symlinks out refused),
   and a sibling HTML or SVG keeps the sandbox. Residual: whoever can write
