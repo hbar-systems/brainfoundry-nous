@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { STATE as TC, tileState, StateDot, LaneMark, Legend, THREADCOLOR_CSS } from '../lib/threadcolor'
 
 // The map (2026-11-06, hbar: "a single MAP so we keep track visually of seeing AI agents, and the
 // different tasks etc. that are happening in real time"; autonomy eval E12). Live lanes, his
@@ -18,8 +19,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 const C = {
   ink: 'var(--text)', dim: 'var(--muted)', gold: 'var(--accent)', card: 'var(--surface2)', surface: 'var(--surface)',
-  line: 'var(--border)', bg: 'var(--bg)', onAccent: 'var(--bg)', warn: '#d4b86a', bad: '#c0605a', ok: '#7fc99c',
+  line: 'var(--border)', bg: 'var(--bg)', onAccent: 'var(--bg)', warn: TC.waiting.color, bad: TC.failed.color, ok: TC.done.color,
 }
+// the colours are the shared scheme (THREADS-1, ui/lib/threadcolor.js): the thread list and the board use the same
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 const STATE = {
   waiting: { color: C.warn, word: 'waiting on you' },
@@ -40,7 +42,7 @@ const ago = (s) => { s = Math.max(0, Math.round(s)); return s < 90 ? 'just now' 
 const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
 
 const CSS = `
-@keyframes lane-blink { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(212,184,106,.7) } 50% { opacity: .35; box-shadow: 0 0 0 7px rgba(212,184,106,0) } }
+@keyframes lane-blink { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(229,135,92,.7) } 50% { opacity: .35; box-shadow: 0 0 0 7px rgba(229,135,92,0) } }
 @keyframes lane-stripes { to { background-position: 28px 0 } }
 @keyframes lane-glow { 0%,100% { opacity: .55 } 50% { opacity: 1 } }
 .lane-blink { animation: lane-blink 1.1s ease-in-out infinite }
@@ -110,7 +112,7 @@ function Bar({ t, now, from, win, thin, sel, onPick }) {
     <div onClick={(e) => { e.stopPropagation(); onPick(t.key) }} title={t.title}
          className={t.state === 'answering' ? 'lane-run' : undefined}
          style={{ position: 'absolute', left: `${x0}%`, width: `calc(${w}% + 4px)`, top: '50%', height: h, marginTop: -h / 2, borderRadius: h / 2, cursor: 'pointer',
-                  backgroundColor: st.color, opacity: t.state === 'done' ? 0.45 : 0.95,
+                  backgroundColor: (TC[tileState(t)] || st).color, opacity: t.state === 'done' ? 0.45 : 0.95,
                   outline: sel ? `2px solid ${C.ink}` : 'none', outlineOffset: 2 }}>
       {live && t.state === 'waiting' && (
         <span className="lane-blink" style={{ position: 'absolute', right: -6, top: '50%', width: h + 8, height: h + 8, marginTop: -(h + 8) / 2, borderRadius: '50%', backgroundColor: C.warn }} />
@@ -128,6 +130,7 @@ export default function MapPage() {
   const [win, setWin] = useState(3600)
   const [busy, setBusy] = useState(null)
   const [note, setNote] = useState(null)
+  const [legend, setLegend] = useState(false)   // the colour words, one press away (THREADS-1)
   const timer = useRef(null)
 
   const load = () => {
@@ -185,7 +188,7 @@ export default function MapPage() {
   return (
     <>
       <Head><title>Map · BrainFoundry</title></Head>
-      <style>{CSS}</style>
+      <style>{CSS + THREADCOLOR_CSS}</style>
       <div onClick={() => setSel(null)}
            style={{ position: 'relative', height: 'calc(100vh - var(--nav-h, 52px))', backgroundColor: C.bg, color: C.ink, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px 6px' }}>
@@ -206,6 +209,7 @@ export default function MapPage() {
                     style={{ ...mono, fontSize: 11, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', backgroundColor: 'transparent',
                              border: `1px solid ${win === s ? C.gold : C.line}`, color: win === s ? C.gold : C.dim }}>{label}</button>
           ))}
+          <span onClick={(e) => e.stopPropagation()} style={{ display: 'contents' }}><Legend open={legend} onToggle={() => setLegend(o => !o)} mono={mono} faint={C.dim} ink={C.ink} /></span>
           <a href="/board" style={{ ...mono, fontSize: 11, color: C.dim }}>board</a>
           <a href="/talk?thread=new" style={{ ...mono, fontSize: 11, color: C.gold }}>+ new</a>
         </div>
@@ -240,7 +244,7 @@ export default function MapPage() {
                            style={{ display: 'flex', alignItems: 'center', height: r.thin ? 20 : 30, cursor: 'pointer' }}>
                         <div style={{ width: LABEL_W, flexShrink: 0, padding: r.thin ? '0 8px 0 26px' : '0 8px 0 14px', boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                       fontSize: r.thin ? 11 : 13, color: r.thin ? C.dim : l.head.state === 'done' ? C.dim : C.ink, ...(r.thin ? mono : {}) }} title={r.label}>
-                          {!r.thin && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', backgroundColor: st.color, marginRight: 7, verticalAlign: 'middle' }} />}
+                          {!r.thin && <><StateDot state={tileState(l.head)} size={7} style={{ marginRight: 6 }} /><LaneMark lane={l.head.lane} size={6} style={{ marginRight: 7 }} /></>}
                           {r.label}
                         </div>
                         <div style={{ position: 'relative', flex: 1, height: '100%', marginRight: 14 }}>

@@ -16,6 +16,7 @@ import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wal
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
+import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -1757,7 +1758,10 @@ function CC() {
   // each row; archived ones hidden until "show". `renaming` is the brain id whose title is an
   // input right now ('header' for the line under the page title).
   const [archivedCount, setArchivedCount] = useState(0)
+  // THREADS-1 (2026-11-18): `showArchived` is the archive view: the archived threads alone (?archived=only),
+  // grouped by week, searchable the same way; a thread quiet for three days moves there by itself (the bridge).
   const [showArchived, setShowArchived] = useState(false)
+  const [legendOpen, setLegendOpen] = useState(false)
   // Thread verdicts (2026-10-12): the central thread rules each thread in the world file
   // ops/threads/verdicts.tsv; the bridge merges verdict, verdict_date, verdict_note into each row.
   // A finished one (done, let go, folded, superseded) is dimmed and hidden while "hide finished"
@@ -2051,7 +2055,7 @@ function CC() {
   const loadThreads = async () => {
     const request = ++threadRequest.current
     setThreadSearching(true)
-    const params = new URLSearchParams({ q: threadQueryRef.current, archived: showArchivedRef.current ? '1' : '0' })
+    const params = new URLSearchParams({ q: threadQueryRef.current, archived: showArchivedRef.current ? 'only' : '0' })
     try {
       const response = await fetch('/cc/threads?' + params, { cache: 'no-store' })
       if (!response.ok) throw new Error('Thread list unavailable')
@@ -2139,12 +2143,22 @@ function CC() {
     return key === k(now) ? 'today' : key === k(y) ? 'yesterday' : key
   }
   const clock = (ts) => { try { const d = new Date(ts); return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' } }
-  const finishedCount = threads.filter(th => FINISHED[th.verdict]).length
+  // the archive groups by week (Monday first): this week, last week, then "week of <date>"
+  const weekLabel = (ts) => {
+    const d = new Date(ts || 0); if (!ts || isNaN(d)) return 'earlier'
+    const monday = x => { const m = new Date(x.getFullYear(), x.getMonth(), x.getDate()); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return m }
+    const w = monday(d); const now = monday(new Date())
+    const weeks = Math.round((now - w) / (7 * 86400000))
+    if (weeks <= 0) return 'this week'
+    if (weeks === 1) return 'last week'
+    return `week of ${w.getFullYear()}-${String(w.getMonth() + 1).padStart(2, '0')}-${String(w.getDate()).padStart(2, '0')}`
+  }
+  const finishedCount = showArchived ? 0 : threads.filter(th => FINISHED[th.verdict]).length
   const threadGroups = (() => {
     const groups = []; const at = {}
     for (const th of threads) {
-      if (!threadQuery.trim() && hideFinished && FINISHED[th.verdict]) continue
-      const label = th.pinned ? 'pinned' : dayLabel(th.last || th.started)
+      if (!showArchived && !threadQuery.trim() && hideFinished && FINISHED[th.verdict]) continue
+      const label = showArchived ? weekLabel(th.last || th.started) : th.pinned ? 'pinned' : dayLabel(th.last || th.started)
       if (!(label in at)) { at[label] = groups.length; groups.push({ label, items: [] }) }
       groups[at[label]].items.push(th)
     }
@@ -3165,11 +3179,22 @@ function CC() {
         onChange={e => { threadQueryRef.current = e.target.value; ++threadRequest.current; setThreadQuery(e.target.value) }}
         placeholder="Find a title, words in a chat, or thread ID"
         style={{ width: '100%', boxSizing: 'border-box', background: C.surface, color: C.ink, border: `1px solid ${C.line}`, borderRadius: '6px', padding: '10px', fontFamily: 'inherit' }} />
-      <p role="status" style={{ ...mono, color: C.faint, fontSize: '10px', margin: '6px 10px' }}>
-        {threadSearching ? 'Searching… ' : `${threads.length} threads. `}Title/content: latest 500 sessions, up to 200 matches; register: latest 200. Search includes finished; use show archived below for archives. Jobs: latest 200 records.
-      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px 14px', margin: '8px 10px 4px' }}>
+        <span role="status" title="Title/content: latest 500 sessions, up to 200 matches; register: latest 200. Jobs: latest 200 records."
+              style={{ ...mono, color: C.faint, fontSize: '10px', flex: 1, minWidth: 0 }}>
+          {threadSearching ? 'Searching…' : showArchived ? `${threads.length} in the archive${threadQuery.trim() ? ' match' : ''}` : `${threads.length} threads`}
+        </span>
+        <Legend open={legendOpen} onToggle={() => setLegendOpen(o => !o)} mono={mono} faint={C.faint} ink={C.ink} />
+        <a data-archive-toggle="1" role="button" tabIndex={0} onClick={toggleArchived} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleArchived() } }}
+           title={showArchived ? 'back to the threads' : 'threads quiet for three days, and the ones archived by hand; nothing is deleted'}
+           style={{ ...mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: '10px',
+                    border: `1px solid ${showArchived ? C.gold : C.line}`, color: showArchived ? C.gold : C.faint }}>
+          {showArchived ? '← threads' : `archive ${archivedCount}`}
+        </a>
+      </div>
+      {showArchived && <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '0 10px 6px' }}>Press one to open it and go on; a new message brings it back to the list.</p>}
       {threadSearchError && <p role="alert" style={{ color: C.gold, fontSize: '12px', margin: '6px 10px' }}>{threadSearchError}</p>}
-      {!threadSearching && !threadGroups.length && <p style={{ color: C.dim, padding: '10px' }}>No matching threads in this scope.</p>}
+      {!threadSearching && !threadGroups.length && <p style={{ color: C.dim, padding: '10px' }}>{showArchived ? (threadQuery.trim() ? 'Nothing in the archive matches.' : 'The archive is empty.') : 'No matching threads in this scope.'}</p>}
       {finishedCount > 0 && (
         <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '4px 10px 2px', display: 'flex', justifyContent: 'space-between' }}>
           <span>{finishedCount} finished</span>
@@ -3181,8 +3206,11 @@ function CC() {
           <p style={{ ...mono, color: C.faint, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', margin: '6px 10px 2px' }}>{g.label}</p>
           {g.items.map(th => {
             const act = { ...mono, color: C.faint, fontSize: '10px', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
+            const state = threadState(th, lightOf(th.brain))
+            const look = stateLook(state)
             return (
-              <div key={th.brain} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 10px', borderRadius: '6px' }}>
+              <div key={th.brain} data-state={state} data-lane={th.lane || ''} className={look.className}
+                   style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '7px 10px', borderRadius: '6px', margin: '2px 0', ...look.style }}>
                 {renaming === th.brain
                   ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} maxLength={80}
                            onKeyDown={e => { if (e.key === 'Enter') finishRename(th.brain); else if (e.key === 'Escape') setRenaming(null) }}
@@ -3190,16 +3218,16 @@ function CC() {
                            style={{ flex: 1, fontSize: '13px', color: C.ink, backgroundColor: 'transparent', border: 'none', borderBottom: `1px solid ${C.line}`, outline: 'none', padding: '0 2px', fontFamily: 'inherit' }} />
                   : <div role="button" tabIndex={0} onClick={() => switchThread(th)} onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); switchThread(th) } }}
                        style={{ flex: 1, minWidth: 0, cursor: 'pointer', textDecoration: 'none', color: cur === th.brain ? C.ink : (th.archived ? C.faint : C.dim), fontSize: '13px', lineHeight: 1.4, opacity: FINISHED[th.verdict] ? 0.55 : 1 }}>
-                      <Light a={lightOf(th.brain) || (th.running ? { state: 'working', via: 'turn' } : null)} style={{ marginRight: '8px' }} />{th.running ? <span style={{ ...mono, color: C.gold, fontSize: '10px', marginRight: '8px' }}>{th.waiting ? 'waits for you' : 'answering'}</span> : null}<JobsLight jobs={th.jobs_running} />{th.title || 'untitled'}
-                      <span style={{ display: 'block', ...mono, fontSize: '10px', color: C.faint }}>
-                        {String(th.brain).slice(0, 8)} · seat: {th.seat || 'unknown'} · owner: {th.task_owner || 'unknown'} · {th.status || 'unknown'}
+                      {state === 'job' && (th.jobs_running || []).length ? null : <StateDot state={state} style={{ marginRight: '7px' }} />}<LaneMark lane={th.lane} style={{ marginRight: '8px' }} />{(state === 'answering' || state === 'waiting') ? <span style={{ ...mono, color: STATE[state].color, fontSize: '10px', marginRight: '8px' }}>{STATE[state].word}</span> : null}<JobsLight jobs={th.jobs_running} />{String(th.title || 'untitled').replace(/^CC:\s*/, '')}
+                      <span title={`owner: ${th.task_owner || 'unknown'} · ${th.status || 'unknown'}`} style={{ display: 'block', ...mono, fontSize: '10px', color: C.faint }}>
+                        {String(th.brain).slice(0, 8)} · {th.seat || 'unknown'}{th.archived ? (th.archived_by === 'idle' ? ' · archived by itself after three quiet days' : ' · archived by hand') : ''}
                       </span>
                       {(th.child_jobs || []).map(job => <a key={job.id} href={'/cc/jobs/' + encodeURIComponent(job.id)} target="_blank" rel="noreferrer"
                         onClick={e => e.stopPropagation()} title="Open job record and log" style={{ display: 'block', ...mono, fontSize: '10px', color: C.dim }}>
                         {job.title || job.id} · {job.ended ? 'ended' : 'not marked finished'} · job record ↗
                       </a>)}
                       {th.verdict && <span title={th.verdict_note || th.verdict} style={{ ...mono, color: th.verdict === 'continue' ? C.gold : C.faint, fontSize: '10px', marginLeft: '8px', border: `1px solid ${th.verdict === 'continue' ? C.gold : C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap' }}>{verdictTag(th)}</span>}
-                      <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{th.pinned ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}{th.archived ? ' · archived' : ''}</span>
+                      <span style={{ ...mono, color: C.faint, fontSize: '10px', marginLeft: '8px' }}>{(th.pinned || th.archived) ? (th.last || th.started || '').slice(0, 10) : clock(th.last || th.started)}</span>
                     </div>}
                 {renaming !== th.brain && th.telegram && <span title="the phone is in this conversation (the bridge's Telegram bot)" style={{ ...mono, color: C.faint, fontSize: '10px', border: `1px solid ${C.line}`, borderRadius: '4px', padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0 }}>telegram</span>}
                 {renaming !== th.brain && (
@@ -3207,7 +3235,7 @@ function CC() {
                     {th.running && !th.waiting ? <a onClick={() => stopThread(th.brain)} title="end the answer in progress in this conversation; it keeps everything up to here" style={{ ...act, color: C.gold }}>stop</a> : null}
                     <a onClick={() => startRename(th.brain, th.title)} style={act}>rename</a>
                     <a onClick={() => updateThread(th.brain, { pinned: !th.pinned })} style={act}>{th.pinned ? 'unpin' : 'pin'}</a>
-                    <a onClick={() => updateThread(th.brain, { archived: !th.archived })} style={act}>{th.archived ? 'unarchive' : 'archive'}</a>
+                    <a onClick={() => updateThread(th.brain, { archived: !th.archived })} title={th.archived ? 'back to the list; it moves to the archive again after three quiet days' : 'into the archive; nothing is deleted'} style={act}>{th.archived ? 'bring back' : 'archive'}</a>
                   </span>
                 )}
               </div>
@@ -3217,7 +3245,8 @@ function CC() {
       ))}
       {(archivedCount > 0 || showArchived) && (
         <p style={{ ...mono, color: C.faint, fontSize: '10px', margin: '8px 10px 4px', borderTop: `1px solid ${C.line}`, paddingTop: '8px' }}>
-          {archivedCount} archived · <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>{showArchived ? 'hide' : 'show'}</a>
+          {showArchived ? <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>back to the threads</a>
+            : <>{archivedCount} in the archive · <a onClick={toggleArchived} style={{ color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>open</a></>}
         </p>
       )}
     </>
@@ -3225,7 +3254,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS }} />
       {/* as raw html: a '>' in the css text is escaped by the server and not by the client, a hydration mismatch (BOARD-4) */}
       <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
