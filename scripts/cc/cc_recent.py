@@ -12,6 +12,12 @@ last ones left off. Five labelled parts, in this order, each one saying which fi
      threads ruled finished in ops/threads/verdicts.tsv are left out, with a count at the end
   5. the memo tape: counts from in/memos/index.json
 
+State cards (2026-11-21, lane SYSTEM, hbar's note 1 "thread continuity"): a message that starts with
+"continue <NAME>" gets that thread's card, ops/lanes/<NAME>.md (lanes, upper case) or
+ops/cards/<name>.md (any other named thread), through state_card(); the bridge puts it in its own
+<state-card> element beside RECENT, so a new thread picks up done / running / owed / next without
+re-reading the old transcript. Template: ops/lanes/TEMPLATE.md in the world.
+
 A missing source reads "(none)"; nothing here raises. Long ops lines are clipped to their gist
 (the path is there for the rest); the five parts share max_chars, the longest trimmed first.
 The composed block is cached for 120 s.
@@ -66,6 +72,37 @@ def recent_block(world_dir, state_dir, hours: int = 48, max_chars: int = 6000, *
     block = "\n\n".join(_fit(parts, max_chars))
     _CACHE[key] = (time.time() + CACHE_S, block)
     return block
+
+
+CONTINUE_RE = re.compile(r"^\s*continue\s+([A-Za-z][A-Za-z0-9_.-]{0,40})\b", re.I)
+CARD_CHARS = 5000
+
+
+def continue_name(message: str) -> str:
+    """The thread name in "continue <NAME> ...", or ''. Only the first word after continue counts."""
+    m = CONTINUE_RE.match(message or "")
+    return m.group(1).strip(".-_") if m else ""
+
+
+def state_card(world_dir, message: str, max_chars: int = CARD_CHARS) -> str:
+    """The state card named by "continue <NAME>": ops/lanes/<NAME>.md, else ops/cards/<name>.md
+    (name lower-cased, case-insensitive match on the file stem). '' when the message is not a
+    continue or no card exists. The text is the card itself, headed by its path; never raises."""
+    name = continue_name(message)
+    if not name or not world_dir:
+        return ""
+    ops = Path(world_dir) / "ops"
+    want = name.lower()
+    for folder in (ops / "lanes", ops / "cards"):
+        try:
+            hits = [p for p in folder.glob("*.md") if p.stem.lower() == want and p.stem != "TEMPLATE"]
+        except OSError:
+            continue
+        if hits:
+            text = _read(hits[0])
+            if text:
+                return f"({_rel(hits[0])})\n" + _clip(text, max_chars)
+    return f"(no state card for {name}: looked in ops/lanes/ and ops/cards/)"
 
 
 # ------------------------------------------------------------------ parts ----

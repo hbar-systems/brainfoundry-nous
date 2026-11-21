@@ -183,3 +183,33 @@ def test_verdict_loader_is_tolerant_and_skips_bad_rows(tmp_path):
     assert R.load_verdicts(tmp_path)["49ae031a"]["verdict"] == "done"
     R._VERDICTS_CACHE.clear()
     assert R.load_verdicts(tmp_path)["49ae031a"]["verdict"] == "keep"
+
+
+# ------------------------------------------------------------ state cards (2026-11-21) ----
+def test_continue_name():
+    assert R.continue_name("continue SYSTEM") == "SYSTEM"
+    assert R.continue_name("  Continue defense, then study") == "defense"
+    assert R.continue_name("please continue SYSTEM") == ""
+    assert R.continue_name("continue") == ""
+    assert R.continue_name("") == ""
+
+
+def test_state_card_lane_then_cards(tmp_path):
+    world = tmp_path / "world"
+    (world / "ops" / "lanes").mkdir(parents=True); (world / "ops" / "cards").mkdir()
+    (world / "ops" / "lanes" / "SYSTEM.md").write_text("# SYSTEM\n## Next\n1. recap script\n")
+    (world / "ops" / "lanes" / "TEMPLATE.md").write_text("# template\n")
+    (world / "ops" / "cards" / "music-father.md").write_text("# music\n## Next\n1. loop\n")
+    card = R.state_card(world, "continue system")
+    assert card.startswith("(") and "ops/lanes/SYSTEM.md" in card and "recap script" in card
+    assert "loop" in R.state_card(world, "continue music-father now")
+    assert "no state card for template" in R.state_card(world, "continue template")
+    assert "no state card for nothing" in R.state_card(world, "continue nothing")
+    assert R.state_card(world, "recap") == ""
+    assert R.state_card(None, "continue SYSTEM") == ""
+
+
+def test_state_card_clipped(tmp_path):
+    world = tmp_path / "world"; (world / "ops" / "lanes").mkdir(parents=True)
+    (world / "ops" / "lanes" / "BIG.md").write_text("x" * 20000)
+    assert len(R.state_card(world, "continue BIG", max_chars=500)) < 600
