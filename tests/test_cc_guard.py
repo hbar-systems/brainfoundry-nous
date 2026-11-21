@@ -29,10 +29,10 @@ def test_hook_settings_shape():
     s = json.loads(S)
     assert s["hooks"]["PermissionRequest"][0]["hooks"][0]["command"] == "/usr/bin/python3 /x/cc-permit-hook.py"
     assert s["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"] == 960
-    assert s["permissions"] == {"deny": G.DENY_ALWAYS}             # the .env rule rides with the hook (2026-11-13)
+    assert s["permissions"] == {"deny": G.DENY_ALWAYS, "ask": G.ASK_SECRETS}             # the .env rule rides with the hook (2026-11-13)
     # JOBS-SURVIVE 2026-11-16: Edit rules only (they cover Write); a Write(...) rule printed a warning in every job
     assert G.DENY_ALWAYS == ["Edit(**/.env)", "Edit(**/.env.*)"]
-    assert json.loads(G.hook_settings("auto", "p", "h", "q", 1))["permissions"]["ask"] == G.ASK_ALWAYS
+    assert json.loads(G.hook_settings("auto", "p", "h", "q", 1))["permissions"]["ask"] == G.ASK_ALWAYS + G.ASK_SECRETS
 
 
 @pytest.mark.parametrize("cmd,want", [
@@ -175,3 +175,14 @@ def test_setting_sources_owner_override(monkeypatch):
     assert G.setting_sources_args() == ["--setting-sources", "user,project"]
     monkeypatch.setenv("CC_SETTING_SOURCES", "off")
     assert G.setting_sources_args() == []
+
+
+def test_secret_reads_raise_a_card_in_every_posture(monkeypatch):
+    """READ-GAP-1 (GATE-1b row 5b): Read/Grep/Glob are pre-allowed, so secret-shaped paths must be ask rules."""
+    for posture in ("cards", "auto", "judged"):
+        ask = json.loads(G.hook_settings(posture, "p", "h", "q", 1))["permissions"]["ask"]
+        for r in ("Read(**/.env)", "Read(~/.ssh/**)", "Read(~/.config/**)", "Read(**/*token*)"):
+            assert r in ask, (posture, r)
+    monkeypatch.setenv("CC_SECRET_READ_EXTRA", "Read(//srv/keys/**), Bash(rm *), junk")
+    ask = json.loads(G.hook_settings("cards", "p", "h", "q", 1))["permissions"]["ask"]
+    assert "Read(//srv/keys/**)" in ask and "Bash(rm *)" not in ask and "junk" not in ask
