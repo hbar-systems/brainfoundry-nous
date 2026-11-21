@@ -25,6 +25,9 @@ scripts
 !scripts/import_chats.py
 # and the laptop import helper the api serves (api/Dockerfile COPY, 2026-11-03)
 !scripts/import/brain_import.py
+# and the dial-out agents the api serves at /laptop/agent.sh and .ps1 (api/Dockerfile COPY, SPOKE-3; broke every Update to ab5a006, MEMBERS-7 2026-11-21)
+!scripts/import/agent.sh
+!scripts/import/agent.ps1
 tests
 notes
 docs
