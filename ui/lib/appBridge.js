@@ -65,6 +65,10 @@
 //   files.save        -> { name, text } or { name, base64, mime? }  permission 'files.write'; lands
 //                        in the owner's Files desk (out/<date>/), through the CC bridge.
 //                        result -> { path, route }; error 'no_files_door' on a brain without CC.
+//   chat.ask          -> { text, send? }  (2026-11-21, MEMBERS -> SYSTEM) puts text into the owner's MAIN
+//                        conversation, not the pane: send false (default) fills the typing box (no
+//                        permission; the owner still presses send), send true sends it at once and
+//                        needs 'chat.send'. Text 1..4000 characters. result -> { placed: 'console'|'page' }
 //   audio.transcribe  -> { base64, mime?, name? }  permission 'audio.transcribe'; the CC bridge's
 //                        speech door. result -> { text }; error 'no_speech_door' when it is not set up.
 //
@@ -174,6 +178,7 @@ const OPEN_ROUTE_RE = /^\/(files|tasks|chat|cc|talk|graph|upload|apps\/[a-z0-9][
 // files.read (2026-11-10): a desk-relative name, plain segments only.
 const DESK_NAME_RE = /^(?!.*(^|\/)\.{1,2}(\/|$))[A-Za-z0-9._ -]+(\/[A-Za-z0-9._ -]+){0,8}$/
 const FILES_READ_MAX = 2000000
+const CHAT_ASK_MAX = 4000
 
 function b64ToBlob(b64, mime) {
   const bin = atob(String(b64))
@@ -182,7 +187,7 @@ function b64ToBlob(b64, mime) {
   return new Blob([bytes], { type: mime || 'application/octet-stream' })
 }
 
-function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
+function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate, toChat }) {
   const store = loadStore(appInfo.id, ls, appInfo)
   function saveStore() {
     const s = JSON.stringify(store)
@@ -355,6 +360,15 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate }) {
       if (typeof navigate !== 'function') return Promise.resolve({ ok: false, error: { code: 'no_navigation' } })
       navigate(route)
       return Promise.resolve({ ok: true, result: { route } })
+    }
+    if (type === 'chat.ask') {
+      const text = typeof payload.text === 'string' ? payload.text.trim() : ''
+      if (!text || text.length > CHAT_ASK_MAX) return Promise.resolve({ ok: false, error: { code: 'bad_text', detail: `1..${CHAT_ASK_MAX} characters` } })
+      const send = payload.send === true
+      if (send && !(appInfo.permissions || []).includes('chat.send')) return denied('chat.send')
+      if (typeof toChat !== 'function') return Promise.resolve({ ok: false, error: { code: 'no_chat' } })
+      const placed = toChat({ text, send })
+      return Promise.resolve({ ok: true, result: { placed: placed || 'console', sent: send } })
     }
     if (type === 'memory.search') {
       if (!perms.includes('memory.read')) return denied('memory.read')

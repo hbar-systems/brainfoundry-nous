@@ -38,10 +38,10 @@ class _Req:
 
 # ---- the shipped app ----
 
-def test_week_manifest_is_valid_and_reads_one_permission():
+def test_week_manifest_is_valid_reads_one_file_and_may_send():
     m = yaml.safe_load((WEEK / "brain-app.yaml").read_text())
     apps._validate_manifest(m)
-    assert m["id"] == "week" and m["permissions"] == ["files.read"]
+    assert m["id"] == "week" and m["permissions"] == ["files.read", "chat.send"]
     assert not m.get("requires_layers")
     for f in ("index.html", "README.md", "LICENSE"):
         assert (WEEK / f).is_file(), f
@@ -85,7 +85,7 @@ def test_install_shipped_copies_registers_and_lists(tmp_apps):
     assert r.id == "week" and len(r.commit_sha) == 40
     assert (tmp_apps / "week" / "index.html").read_text() == (WEEK / "index.html").read_text()
     entry = apps._load_installed()["apps"][0]
-    assert entry["shipped"] == "week" and entry["permissions"] == ["files.read"] and entry["tab"]["route"] == "/week"
+    assert entry["shipped"] == "week" and entry["permissions"] == ["files.read", "chat.send"] and entry["tab"]["route"] == "/week"
     assert apps.list_shipped()["shipped"][0]["installed"] is True
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as ei:          # twice is refused, nothing half-installed
@@ -216,3 +216,11 @@ def test_first_week_opens_the_week_app_beside_the_conversation():
     assert "week beside the chat" in L.summary(lay)
     q = next(q for q in L.QUESTIONS if q["id"] == "first")
     assert "week" in [v for v, _ in q["options"]]
+
+
+def test_week_sends_cc_ask_links_to_the_main_chat():
+    """2026-11-21: a /cc?ask= link in the week page is chat.ask with send, and the manifest holds chat.send."""
+    html = (WEEK / "index.html").read_text()
+    assert "ask('chat.ask', { text: q, send: true })" in html and "u.pathname !== '/cc'" in html
+    man = yaml.safe_load((WEEK / "brain-app.yaml").read_text())
+    assert "chat.send" in man["permissions"] and man["version"] == "0.2.0"

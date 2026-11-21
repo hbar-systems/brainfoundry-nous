@@ -7,7 +7,7 @@
 dialect: brain-app/v1
 id: week
 name: Week
-version: 0.1.0
+version: 0.2.0
 description: "Your week page on one screen: the directions, open loops, rulings and what is owed, as the box last wrote it."
 license: AGPL-3.0
 
@@ -27,8 +27,10 @@ entries:
   ui_bundle: ./
 
 # files.read: the one file week/index.html on the owner's Files desk, through the host page.
+# chat.send (0.2.0, 2026-11-21): a /cc?ask= link pressed in that page is sent in the main conversation.
 permissions:
   - files.read
+  - chat.send
 
 engines:
   brainfoundry-nous: ">=0.13.0"

@@ -78,6 +78,17 @@ export default function AppHost() {
       brainName: process.env.NEXT_PUBLIC_BRAIN_NAME || 'brain',
       theme: readTheme,
       navigate: (route) => router.push(route),
+      // chat.ask (2026-11-21): beside the conversation (the pane is a same-origin frame of /cc) the text
+      // goes to the main chat through the console's own cc-ask / cc-send messages; opened on its own,
+      // the app hands over to /cc?ask=, which only fills the typing box (no referrer from a desk page).
+      toChat: ({ text, send }) => {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: send ? 'cc-send' : 'cc-ask', text }, window.location.origin)
+          return 'console'
+        }
+        router.push('/cc?ask=' + encodeURIComponent(text))
+        return 'page'
+      },
     })
     return { bridge, seed: seedName(bridge.store) }
   }, [appInfo])

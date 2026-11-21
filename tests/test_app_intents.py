@@ -23,8 +23,9 @@ const body = %(body)s
 const status = %(status)d
 const fetch = (url, init) => { calls.push({ url, method: (init && init.method) || 'GET', body: init && typeof init.body === 'string' ? JSON.parse(init.body) : null }); return Promise.resolve({ status, ok: status < 400, json: () => Promise.resolve(body) }) }
 const nav = []
-const b = makeBridge({ appInfo: %(app)s, fetch, ls: null, brainName: 'x', theme: () => ({ tokens: { '--bg': '#000' } }), navigate: r => nav.push(r) })
-b.handleIntent({ type: %(type)s, payload: %(payload)s, request_id: '1' }).then(r => console.log(JSON.stringify({ r, calls, nav })))
+const chat = []
+const b = makeBridge({ appInfo: %(app)s, fetch, ls: null, brainName: 'x', theme: () => ({ tokens: { '--bg': '#000' } }), navigate: r => nav.push(r), toChat: c => { chat.push(c); return 'console' } })
+b.handleIntent({ type: %(type)s, payload: %(payload)s, request_id: '1' }).then(r => console.log(JSON.stringify({ r, calls, nav, chat })))
 """
 
 
@@ -118,3 +119,24 @@ def test_ui_open_only_console_screens(route, ok):
 def test_meta_theme_needs_no_permission():
     out = run("meta.theme")
     assert out["r"]["result"]["tokens"]["--bg"] == "#000"
+
+
+# ---- chat.ask (2026-11-21, MEMBERS -> SYSTEM): text into the main conversation ----
+def test_chat_ask_fills_the_box_without_permission():
+    out = run("chat.ask", {"text": "  plan my lesson  "})
+    assert out["r"]["ok"] is True and out["r"]["result"] == {"placed": "console", "sent": False}
+    assert out["chat"] == [{"text": "plan my lesson", "send": False}] and out["calls"] == []
+
+
+def test_chat_ask_send_needs_chat_send():
+    out = run("chat.ask", {"text": "go", "send": True})
+    assert out["r"]["error"]["code"] == "permission_denied" and "chat.send" in out["r"]["error"]["detail"]
+    assert out["chat"] == []
+    out = run("chat.ask", {"text": "go", "send": True}, perms=["chat.send"])
+    assert out["r"]["ok"] is True and out["chat"] == [{"text": "go", "send": True}]
+
+
+@pytest.mark.parametrize("text", ["", "   ", "x" * 4001, 5])
+def test_chat_ask_bad_text_refused(text):
+    out = run("chat.ask", {"text": text, "send": True}, perms=["chat.send"])
+    assert out["r"]["error"]["code"] == "bad_text" and out["chat"] == []

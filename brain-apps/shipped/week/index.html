@@ -80,6 +80,13 @@
   var RELAY = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest?' +
     'e.target.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href")||"";if(h.charAt(0)==="#")return;' +
     'e.preventDefault();parent.postMessage({type:"week.link",href:a.href},"*")},true)<' + '/script>'
+  function askFor(href) {
+    var u
+    try { u = new URL(href, location.href) } catch (_) { return null }
+    if (u.host !== location.host || u.pathname !== '/cc') return null
+    var t = u.searchParams.get('ask')
+    return t && t.trim() ? t.trim().slice(0, 4000) : null
+  }
   function routeFor(href) {
     var u
     try { u = new URL(href, location.href) } catch (_) { return null }
@@ -96,6 +103,10 @@
   window.addEventListener('message', function (ev) {
     var m = ev.data
     if (ev.source !== frame.contentWindow || !m || m.type !== 'week.link' || typeof m.href !== 'string') return
+    // a /cc?ask=<text> link (member start pages, 2026-11-21) goes to the MAIN conversation and is
+    // sent: the press in the page is the owner's yes; everything else opens as before
+    var q = askFor(m.href)
+    if (q) { ask('chat.ask', { text: q, send: true }); return }
     var route = routeFor(m.href)
     if (route) ask('ui.open', { route: route })
   })

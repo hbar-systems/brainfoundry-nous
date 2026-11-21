@@ -164,7 +164,8 @@
           "email.read",
           "files.read",
           "files.write",
-          "audio.transcribe"
+          "audio.transcribe",
+          "chat.send"
         ]
       },
       "uniqueItems": true
