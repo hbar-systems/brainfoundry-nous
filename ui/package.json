@@ -9,11 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "dompurify": "^3.4.2",
+    "dompurify": "^3.4.17",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.45",
-    "mermaid": "^11.14.0",
-    "next": "14.2.35",
+    "mermaid": "^11.16.1",
+    "next": "15.5.29",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.1.0",
@@ -28,7 +28,7 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",
-    "eslint-config-next": "14.2.35",
+    "eslint-config-next": "15.5.29",
     "typescript": "^5"
   }
 }
