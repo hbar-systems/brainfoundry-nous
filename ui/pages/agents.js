@@ -190,6 +190,7 @@ export default function Agents() {
           <span style={{ ...mono, fontSize: '11px', color: C.dim }}>{agents.filter(a => a.enabled).length} on · {agents.length} in all</span>
           <span style={{ flex: 1 }} />
           <a href="/board" style={link}>board</a>
+          <a href="/cortex" style={link}>cortex</a>
           <a href="/talk" style={link}>one conversation</a>
         </div>
         {note && <p style={{ ...mono, fontSize: '12px', color: C.bad, margin: '0 2px 10px' }}>{note}</p>}
