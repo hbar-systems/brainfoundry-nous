@@ -27,6 +27,9 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
                               job, tick or agent starts until resume; --kill also ends running jobs
     cc-job halt --status      halted or not, budget halts, running jobs
     cc-job resume             removes the HALT file
+    cc-job campaign new|lanes|launch|status|close   a campaign day: one charter, one job per
+                              brief, one report per lane, a scoring pass (2026-10-27, cc_campaign.py,
+                              docs/CAMPAIGN.md)
 
 Jobs never run sudo. A claude started by a job gets the turn's permission settings, and the flags
 that would loosen the owner's posture are refused by the bridge (2026-10-19, cc_guard.py). The person sees every job on the CC page and can ask about it.
@@ -46,6 +49,11 @@ try:
     import cc_halt
 except Exception:  # noqa: BLE001
     cc_halt = None
+# The campaign day (2026-10-27): same arrangement, install.sh copies cc_campaign.py beside cc-job.
+try:
+    import cc_campaign
+except Exception:  # noqa: BLE001
+    cc_campaign = None
 
 HANDS_HOME = Path(os.environ.get("HOME") or Path.home())
 
@@ -129,6 +137,14 @@ def main(argv: list[str]) -> int:
         return _halt_cmd(rest)
     if cmd == "resume":
         return _halt_cmd(["--resume"])
+    if cmd == "campaign":
+        if not cc_campaign:
+            print("cc-job campaign needs cc_campaign.py beside cc-job"); return 1
+        thread = os.environ.get("CC_THREAD_ID", "").strip() or "unknown"
+        start = lambda command, cwd, title: _call("POST", "/jobs/start", {  # noqa: E731
+            "command": command, "cwd": cwd, "title": title, "thread": thread,
+            "run": os.environ.get("CC_RUN_ID", "").strip() or None})
+        return cc_campaign.main(rest, start=start, get=lambda jid: _call("GET", f"/jobs/{jid}"))
     try:
         if cmd == "run":
             cwd, title = None, ""
