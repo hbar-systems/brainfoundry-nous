@@ -13,6 +13,7 @@ import MoveInCards from '../components/MoveInCards'
 import FirstSignIn from '../components/FirstRun'
 import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
+import { press, routeName, slashName, choiceName } from '../lib/presses'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
@@ -942,13 +943,13 @@ function Choices({ choices, onChoice }) {
     <div data-nopick="1" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
       {choices.map((c, i) => (
         <span key={i} style={{ display: 'inline-flex', gap: '2px' }}>
-          <button onClick={() => { mark(i); onChoice(c) }}
+          <button onClick={() => { mark(i); onChoice(c, i) }}
             title={(c.mode === 'agent' ? 'starts a new thread beside this one: ' : 'sends: ') + c.send}
             style={{ ...pill, backgroundColor: used.has(i) ? C.gold : 'transparent', color: used.has(i) ? C.onAccent : C.gold }}>
             {c.label}{c.p ? <span style={{ opacity: 0.7 }}>{' · ' + c.p + '%'}</span> : null}{c.mode === 'agent' ? ' ↗' : ''}
           </button>
           {c.mode !== 'agent' && (
-            <button onClick={() => { mark(i); onChoice({ ...c, mode: 'agent' }) }}
+            <button onClick={() => { mark(i); onChoice({ ...c, mode: 'agent' }, i) }}
               title={'send an agent on this, in a thread of its own: ' + c.send}
               style={{ ...pill, padding: '5px 8px', backgroundColor: 'transparent', color: C.gold }}>↗</button>
           )}
@@ -1109,7 +1110,7 @@ const PANE_ROUTES = [
   ['/future', 'Future'], ['/guide', 'Guide'], ['/integrations', 'Integrations'], ['/upload', 'Knowledge'],
   ['/layout', 'Layout'], ['/map', 'Map'], ['/graph', 'Memory graph'], ['/permits', 'Permits'], ['/persona', 'Persona'],
   ['/profile', 'Profile'], ['/research', 'Research'], ['/settings', 'Settings'], ['/systems', 'Systems'], ['/tasks', 'Tasks'],
-  ['/terminal', 'Terminal'], ['#threads', 'Threads'], ['/trace', 'Trace'], ['/update', 'Update'],
+  ['/terminal', 'Terminal'], ['#threads', 'Threads'], ['/trace', 'Trace'], ['/update', 'Update'], ['/usage', 'Usage'],
 ]
 // '#…' routes are the console's own panels (PANE-1, hbar 2026-11-13: "the threads, board, agents,
 // export ... like side panel"): drawn by this page in the pane, not loaded in a frame, because they
@@ -1739,6 +1740,9 @@ function CC() {
   const [auto, setAuto] = useState([])          // actions the owner allowed to run without a card
   const [showAuto, setShowAuto] = useState(false)
   const [pane, setPane] = useState(null)         // a summoned surface beside the conversation (D54)
+  const paneRoute = pane && pane.route
+  // The private usage log (USAGE-1): every pane that opens, by its route without the query.
+  useEffect(() => { if (paneRoute) press('pane', routeName(paneRoute), curRef.current) }, [paneRoute])
   const [firstRun, setFirstRun] = useState(null) // first-use steps from the api, until complete
   const [threads, setThreads] = useState([])       // CC threads the brain remembers
   const [showThreads, setShowThreads] = useState(false)
@@ -2832,6 +2836,7 @@ function CC() {
   // Anything else starting with a slash goes to the reasoner (its custom commands still work).
   async function slash(text) {
     const [cmd, ...rest] = text.slice(1).split(/\s+/); const arg = rest.join(' ').trim()
+    press('slash', slashName(text, SLASH), curRef.current)   // the command word only, never its argument (USAGE-1)
     if (cmd === 'new') { fresh(); return true }
     if (cmd === 'stop') { await stopTurn(); return true }
     if (cmd === 'posture') {
@@ -3072,7 +3077,8 @@ function CC() {
   // A choice button (2026-10-13). "reply" is the next message in this thread. "agent" starts a thread
   // of its own on the bridge, which answers beside this one and shows in the thread list; this page
   // stays where it is and notes the start.
-  function choose(c) {
+  function choose(c, i) {
+    press('choice', choiceName(c, i), curRef.current)   // how it was sent and where it stood, never its words (USAGE-1)
     if (c.mode !== 'agent') { send(c.send); return }
     setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one. Started by mistake? The thread list is open: press **stop** on its row.` }])
     openThreads(false)

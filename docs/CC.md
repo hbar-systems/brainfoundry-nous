@@ -262,7 +262,11 @@ The agent shelf (`GET /cc/shelf`). Ready agent kinds come from the owner's file,
 
 ## The guide, in the console
 
-"Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required. A third tab, Privacy (2026-10-16), gives six short entries on who reads what, pointing to docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md.
+"Guide" in the drawer (and `/guide` in the chat, or the reasoner opening it when you ask how things work) shows this document inside the console, and a seven-step tutorial that checks itself: connect a reasoner, ask something, see what it makes, give it a file, allow a card, start a job, choose a posture. Each step turns done when your brain has seen it happen; nothing is required. A third tab, Privacy (2026-10-16), gives seven short entries on who reads what and what the console counts, pointing to docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md.
+
+## The usage log: what the console counts (2026-11-22)
+
+The console keeps a private usage log: which menu buttons, pages, panes, choice buttons and slash commands you press, with the time and the thread. It never holds what you write, a choice's words, a slash command's argument or a file's name: a name is a route (`/files`) or a command word (`model`), and the bridge refuses anything else. It is one file on your box, `~/.cc-bridge/surface-events.jsonl`, readable only by the bridge's user; no outside service receives it and the export does not include it. The Usage page (`/usage`, or `/pane /usage`) shows counts per control for the last 7 and 30 days and can delete the file. Turn it off in Settings under "Your console": while off, nothing is written. The file is trimmed to the last 90 days when it passes 2 MB.
 
 ## The terminal, in the console
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { HOME_THREADS, ccHomeOf, homeHref as homeOf, menuHref } from '../lib/home'
 import { isQuiet, ownerTitle, quietMenu, parseAsks, asksUrl, START_HREF } from '../lib/quietHome'
 import { words } from '../lib/consoleText'
+import { press, routeName } from '../lib/presses'
 
 // Static fallback nav. Renders pre-fetch and on /apps/list fetch failure so
 // the brain stays usable even if the api is unreachable. Keep in sync with
@@ -228,8 +229,14 @@ export default function Nav() {
     window.addEventListener(endEvt, onEnd)
   }
 
+  // The private usage log (USAGE-1): one listener for every link in the menu; the name is the link's route.
+  const navPress = (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null
+    if (a) press('nav', routeName(a.getAttribute('href')))
+  }
+
   return (
-    <nav className="bf-nav" style={{
+    <nav className="bf-nav" onClickCapture={navPress} style={{
       backgroundColor: 'var(--bg)',
       borderBottom: '1px solid var(--border)',
       display: 'flex',

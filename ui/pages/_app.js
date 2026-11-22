@@ -1,5 +1,7 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
+import Router from 'next/router'
+import { press, routeName } from '../lib/presses'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
@@ -30,6 +32,17 @@ export default function App({ Component, pageProps }) {
   // Embedded as a pane inside CC (D54): no nav, no top offset. Same origin, same auth.
   const [embedded, setEmbedded] = useState(false)
   useEffect(() => { try { setEmbedded(window.self !== window.top) } catch { setEmbedded(true) } }, [])
+  // The private usage log (USAGE-1, 2026-11-22): each page the owner lands on, by its route alone.
+  // A page inside a pane is counted as the pane, by the conversation that opened it, not here.
+  useEffect(() => {
+    let top = true
+    try { top = window.self === window.top } catch { top = false }
+    if (!top) return
+    const seen = () => press('surface', routeName(window.location.pathname))
+    seen()
+    Router.events.on('routeChangeComplete', seen)
+    return () => Router.events.off('routeChangeComplete', seen)
+  }, [])
   useEffect(() => {
     if (typeof window === 'undefined') return
     const myBuild = window.__NEXT_DATA__ && window.__NEXT_DATA__.buildId

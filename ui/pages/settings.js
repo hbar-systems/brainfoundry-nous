@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { wake as wakePresses } from '../lib/presses'
 
 const API = '/api/bf'
 
@@ -1764,6 +1765,45 @@ function ConsolePanel() {
   )
 }
 
+// ---------- The private usage log (USAGE-1, 2026-11-22) ----------
+// One switch: the console counts what the owner presses (names only), on the box. Off: nothing is written.
+function UsageLogPanel() {
+  const [d, setD] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  useEffect(() => {
+    fetch('/cc/presses', { cache: 'no-store' }).then(r => (r.ok ? r.json() : false)).then(setD).catch(() => setD(false))
+  }, [])
+  if (d === false) return null
+  const on = !!(d && d.on)
+  const flip = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/cc/presses/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !on }) })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'not saved')
+      setD(j); wakePresses()
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  return (
+    <div style={{ paddingTop: 18, marginTop: 16, borderTop: '1px solid var(--border)' }}>
+      <button onClick={flip} disabled={busy || d === null} role="switch" aria-checked={on}
+        style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text)', fontSize: 14 }}>
+        <span style={{ width: 38, height: 22, borderRadius: 11, background: on ? 'var(--accent)' : 'var(--surface2)', border: '1px solid var(--border)', position: 'relative', flexShrink: 0, transition: 'background 0.15s ease' }}>
+          <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: on ? 'var(--bg)' : 'var(--muted)', transition: 'left 0.15s ease' }} />
+        </span>
+        Count what I press in the console
+      </button>
+      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: '10px 0 0 0' }}>
+        {d ? d.what : ''}{d ? (on ? ` ${d.events} event${d.events === 1 ? '' : 's'} so far.` : ' Off: nothing is written.') : ''}
+      </p>
+      <a href="/usage" style={{ ...BTN_GHOST, textDecoration: 'none', display: 'inline-block', marginTop: 8 }}>See the counts</a>
+      {err && <div style={{ color: '#d97777', fontSize: 12, marginTop: 10 }}>{err}</div>}
+    </div>
+  )
+}
+
 // ---------- Spending (2026-10-17, new-mind standard section 4) ----------
 // What this brain has spent, from its own ledger on the server, and the limit the owner sets.
 function SpendPanel() {
@@ -1936,6 +1976,7 @@ export default function Settings() {
 
       <Section title="Your console" subtitle="How much of the console the menu shows, who your brain is, how it looks." defaultOpen={true}>
         <ConsolePanel />
+        <UsageLogPanel />
       </Section>
 
       <Section title="Spending" subtitle="What your brain has spent, and a limit you choose." defaultOpen={true}>
