@@ -5532,6 +5532,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, FILES.listing(self._query().get("path")))
         elif route == "/files/raw":
             FILES.serve(self, self._query().get("path", ""))
+        elif route == "/files/office":
+            FILES.office(self, self._query().get("path", ""))
         elif route.startswith("/files/raw/"):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote

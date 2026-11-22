@@ -33,6 +33,8 @@ KIND_BY_SUFFIX = {
     **{s: "video" for s in (".mp4", ".webm", ".mov", ".m4v")},
     **{s: "image" for s in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")},
     ".pdf": "pdf", ".html": "html", ".htm": "html",
+    # Office files open as a page made by cc_office (hbar 2026-11-22: "No preview for this type" on a deck)
+    **{s: "office" for s in (".pptx", ".docx", ".xlsx", ".ppt", ".doc", ".xls", ".odt", ".odp", ".ods", ".key", ".pages", ".numbers")},
 }
 
 
@@ -442,6 +444,31 @@ class Files:
                 e["view"] = v
             out.append(e)
         return out
+
+    def office(self, handler, raw: str) -> None:
+        """An Office file (pptx, docx, xlsx) as one self-contained page; no scripts may run in it."""
+        import cc_office
+        p = self.resolve(raw)
+        if p is None or not p.is_file() or self.kind(p) != "office":
+            body = b'{"error": "not an office file the reasoner can reach"}'
+            handler.send_response(404); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
+        if not os.access(p, os.R_OK):
+            body = b'{"error": "the reasoner wrote this file closed to the bridge; ask it: open the file to the group (chmod g+r)"}'
+            handler.send_response(403); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
+        body = cc_office.to_html(p)
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/html; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        # pictures are inline data; nothing loads from elsewhere and nothing runs
+        handler.send_header("Content-Security-Policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+        handler.end_headers()
+        handler.wfile.write(body)
 
     def serve(self, handler, raw: str) -> None:
         """Stream a file with the right type; honour a single byte range."""

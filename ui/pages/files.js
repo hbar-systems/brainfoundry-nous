@@ -220,6 +220,10 @@ export default function Files() {
                     style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, flex: 1, minHeight: '60vh', width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: '10px', color: T.ink, backgroundColor: T.card, border: `1px solid ${dirty ? T.gold : T.line}`, borderRadius: '8px', outline: 'none' }} />
                 : <pre onDoubleClick={() => { if (editable(sel.path)) startEdit() }} style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}
               {sel.kind === 'other' && <p style={{ color: T.dim, fontSize: '13px' }}>No preview for this type. Download it, or ask the brain what it is.</p>}
+              {sel.kind === 'office' && (<>
+                {(() => { const pdf = sel.path.replace(/\.[^./]+$/, '.pdf'); return (data && (data.entries || []).some(e => e.name && (sel.path.slice(0, sel.path.lastIndexOf('/') + 1) + e.name) === pdf)) ? <p style={{ ...mono, fontSize: '12px', margin: '0 0 8px 0' }}><a onClick={() => setSel({ ...sel, path: pdf, kind: 'pdf' })} style={{ color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>open the PDF beside it</a> <span style={{ color: T.faint }}>(the exact layout)</span></p> : null })()}
+                <iframe src={'/cc/files/office?path=' + encodeURIComponent(sel.path)} title={sel.path} sandbox="" style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: '#e9e6e1', borderRadius: '6px' }} />
+              </>)}
               <p style={{ ...mono, fontSize: '11px', color: T.faint, margin: 0, wordBreak: 'break-all' }}>{sel.path}</p>
             </div>
           </div>
