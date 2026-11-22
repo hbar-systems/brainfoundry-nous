@@ -840,6 +840,75 @@ console.log(JSON.stringify({
     assert d["money"] == ["EUR 34", "€27-31", "$0.39", "1,200 USD", "£5"]
 
 
+def test_ui_tree_block_parses_and_leaves_choices_alone():
+    # TREE-1 (2026-11-22, hbar): the thread tree block, ui/lib/tree.js. It is not anchored to the end
+    # of the text, so a choices block or the pane marker may follow it, in either order.
+    import json
+    out = _node(r"""
+const T = require('./tree')
+const C = require('./choices')
+const tree = JSON.stringify({ title: 'This thread', nodes: [
+  { id: '1', label: 'Push', state: 'blocked', note: 'waits', why: 'Because.', link: '/update', ask: 'Push now?',
+    children: [{ label: 'Kid', state: 'DONE' }, { state: 'done' }, 'junk'] },
+  { label: 'Odd', state: 'paused', link: 'javascript:alert(1)' },
+  { label: 'Talk', state: 'yours', link: '/talk?thread=abc' },
+  { label: 'Web', link: 'https://example.org/a?b=1' },
+] })
+const ch = '<choices>[{"label":"A","send":"do a"}]</choices>'
+const before = T.splitTree('Text.\n\n<tree>' + tree + '</tree>\n' + ch)
+const after = T.splitTree('Text.\n' + ch + '\n<tree>' + tree + '</tree>')
+const marked = T.splitTree('Text.\n<tree>' + tree + '</tree>\n\n<!--pane:/board-->')
+const deep = (n) => n === 0 ? { label: 'x' } : { label: 'x', children: [deep(n - 1)] }
+const depth = (n) => 1 + (n.children.length ? depth(n.children[0]) : 0)
+const many = { nodes: Array.from({ length: 300 }, (_, i) => ({ label: 'n' + i })) }
+console.log(JSON.stringify({
+  before, beforeChoices: C.splitChoices(before.body),
+  afterBody: after.body, afterTree: !!after.tree, afterChoices: C.splitChoices(after.body),
+  markedBody: marked.body,
+  streaming: T.splitTree('Text.\n\n<tree>{"title": "x", "nodes": [{"label"'),
+  streamingTag: T.splitTree('Text.\n\n<tree>'),
+  unclosed: T.splitTree('Text.\n<tree>{"nodes": [\n' + ch),
+  broken: T.splitTree('Text.\n<tree>{not json}</tree>\nMore.'),
+  empty: T.splitTree('Text.\n<tree>{"nodes": []}</tree>'),
+  prose: T.splitTree('The `<tree>` block is drawn by the page.'),
+  none: T.splitTree('Plain.'),
+  nul: T.splitTree(null),
+  two: T.splitTree('a <tree>{"nodes":[{"label":"one"}]}</tree> b <tree>{"nodes":[{"label":"two"}]}</tree>').tree.nodes[0].label,
+  list: T.parseTree('[{"label":"L"}]').nodes.length,
+  depth: depth(T.parseTree(JSON.stringify({ nodes: [deep(20)] })).nodes[0]),
+  many: T.parseTree(JSON.stringify(many)).nodes.length,
+  asks: before.tree.nodes.map(T.treeAsk),
+  counts: T.treeCounts(before.tree),
+  links: ['//evil.example', 'http://a.b/c', '/files?path=/x y', 'update', '/talk', '/talker'].map(T.treeLink),
+}))""")
+    d = json.loads(out)
+    t = d["before"]["tree"]
+    assert d["before"]["body"] == 'Text.\n\n<choices>[{"label":"A","send":"do a"}]</choices>'
+    assert d["beforeChoices"] == {"body": "Text.", "choices": [{"label": "A", "send": "do a", "mode": "reply"}]}
+    assert d["afterTree"] and d["afterChoices"] == d["beforeChoices"]
+    assert d["markedBody"] == "Text.\n\n<!--pane:/board-->"
+    assert t["title"] == "This thread" and [n["label"] for n in t["nodes"]] == ["Push", "Odd", "Talk", "Web"]
+    push = t["nodes"][0]
+    assert push["id"] == "1" and push["state"] == "blocked" and push["note"] == "waits" and push["why"] == "Because."
+    assert push["link"] == {"href": "/update", "kind": "route"} and push["ask"] == "Push now?"
+    assert push["children"] == [{"id": "1.1", "label": "Kid", "state": "done", "children": []}]
+    odd = t["nodes"][1]
+    assert odd["state"] == "unknown" and odd["raw"] == "paused" and "link" not in odd
+    assert t["nodes"][2]["link"] == {"href": "/talk?thread=abc", "kind": "talk"}
+    assert t["nodes"][3]["link"] == {"href": "https://example.org/a?b=1", "kind": "web"} and t["nodes"][3]["state"] == "unknown"
+    assert d["streaming"] == {"body": "Text.", "tree": None} and d["streamingTag"] == {"body": "Text.", "tree": None}
+    assert d["unclosed"]["tree"] is None and d["unclosed"]["body"] == 'Text.\n\n<choices>[{"label":"A","send":"do a"}]</choices>'
+    assert d["broken"] == {"body": "Text.\n\nMore.", "tree": None}
+    assert d["empty"] == {"body": "Text.", "tree": None}
+    assert d["prose"] == {"body": "The `<tree>` block is drawn by the page.", "tree": None}
+    assert d["none"] == {"body": "Plain.", "tree": None} and d["nul"] == {"body": "", "tree": None}
+    assert d["two"] == "two" and d["list"] == 1 and d["depth"] == 6 and d["many"] == 120
+    assert d["asks"] == ["Push now?", 'About "Odd" (paused): ', 'About "Talk" (yours): ', 'About "Web": ']
+    assert d["counts"] == {"blocked": 1, "done": 1, "unknown": 2, "yours": 1}
+    assert d["links"] == [None, {"href": "http://a.b/c", "kind": "web"}, None, None,
+                          {"href": "/talk", "kind": "talk"}, {"href": "/talker", "kind": "route"}]
+
+
 def test_ui_choices_probability():
     # 2026-10-29 (hbar): choices carry a probability, shown as a percentage on the button.
     import json
