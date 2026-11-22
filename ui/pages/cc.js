@@ -1822,7 +1822,7 @@ function CC() {
   }, [cur])
   useEffect(() => { try { if (notes.length) localStorage.setItem(notesKeyRef.current, JSON.stringify(notes)); else localStorage.removeItem(notesKeyRef.current) } catch {} }, [notes])
   useEffect(() => {
-    const measure = () => { try { const w = convRef.current ? convRef.current.getBoundingClientRect().right : 0; setRoom(window.innerWidth - w >= 300) } catch { setRoom(false) } }
+    const measure = () => { try { setRoom(!!convRef.current && convRef.current.clientWidth >= 860) } catch { setRoom(false) } }  // margin inside the column, never past its clip edge (a side pane open left the cards cut off and the thread scrolled sideways, hbar 2026-11-22)
     measure(); window.addEventListener('resize', measure); const t = setInterval(measure, 2000)
     return () => { window.removeEventListener('resize', measure); clearInterval(t) }
   }, [])
@@ -3326,7 +3326,7 @@ function CC() {
           </div>
         )}
 
-        <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
+        <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
           ...(look.accent ? { '--accent': look.accent, borderRadius: '8px', backgroundColor: look.tint ? `color-mix(in srgb, ${look.accent} ${look.tint}%, transparent)` : undefined } : {}),
           ...(lookDensity === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
           <style dangerouslySetInnerHTML={{ __html: `.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }` }} />
@@ -3377,9 +3377,9 @@ function CC() {
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>
           ) : (
-            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'flex-start', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative' }}>
+            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'flex-start', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative', paddingRight: room && notes.length ? '266px' : 0, minHeight: room && notes.some(n => n.turn === i) ? `${notes.filter(n => n.turn === i).length * 150}px` : undefined }}>
               {notes.some(n => n.turn === i) && (
-                <div style={room ? { position: 'absolute', left: 'calc(100% + 14px)', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px' }
+                <div style={room ? { position: 'absolute', right: '2px', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px', zIndex: 2 }
                                   : { order: t.who === 'me' ? 0 : 2, flex: '0 0 min(280px, 34%)', display: 'flex', flexDirection: 'column', gap: '8px', margin: t.who === 'me' ? '0 10px 0 0' : '0 0 0 10px' }}>
                   {notes.filter(n => n.turn === i).map(noteCard)}
                 </div>
