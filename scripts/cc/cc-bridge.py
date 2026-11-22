@@ -33,6 +33,7 @@ Endpoints (JSON):
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
+  GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
@@ -515,6 +516,7 @@ import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -5318,6 +5320,15 @@ def _systems_thread(sid: str) -> tuple[str | None, bool]:
     return SYSTEMS_THREADS.resolve(sid, _systems_create, exists=exists, keep=_systems_keep)
 
 
+def _dashboard_view() -> dict:
+    """GET /cc/dashboard (DASH-1, 2026-11-22): the owner's knowledge map (<world>/ops/dashboard/knowledge.json,
+    read only; null when the world has none) and one row of live state: threads answering now, jobs running,
+    pushes waiting in the steward's queue. Code and shapes: scripts/cc/cc_dashboard.py."""
+    titles = {t.get("id"): t.get("title") for t in _threads_load() if isinstance(t, dict)}
+    threads = [{"id": r.thread, "title": titles.get(r.thread) or r.title or ""} for r in _runs_active() if r.thread]
+    return cc_dashboard.view(WORLD_DIR or None, threads, JOBS.list(200))
+
+
 def _systems_view() -> dict:
     try:
         SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
@@ -5654,6 +5665,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view())
+        elif route == "/dashboard":
+            self._send(200, _dashboard_view())
         elif route == "/tape":
             _ts = TAPE.state()
             if _ts.get("tape") and WORLD_DIR:
