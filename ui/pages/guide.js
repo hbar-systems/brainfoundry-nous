@@ -43,6 +43,8 @@ const PRIVACY = [
     how: 'A folder on the box only you can read; the Claude and Codex seats cannot. Set it up on the box, as yourself, with scripts/vault-setup.sh. Its text files become local-only memory; every read is listed under Recent reads in Knowledge -> Vault and in the Trace tab.' },
   { label: 'What is not protected',
     how: 'Files outside the vault (the seats can read them), memory is not encrypted, backups hold everything, the API key reads local-only memory, embeddings see all text at ingest, and the allowlist matches model names.' },
+  { label: 'What the console counts',
+    how: 'The console keeps a private usage log: which menu buttons, pages, panes, choice buttons and slash commands you press, with the time and the thread. Never what you write, never a choice\'s words, never a file\'s name. It is one file on your box (~/.cc-bridge/surface-events.jsonl) and is sent nowhere. See the counts on the Usage page (/usage); turn it off in Settings under "Your console".' },
   { label: 'Who reads what',
     how: 'One table: every reader (you, local and hosted models, the seats, brain-apps, Telegram, visitors, other brains, root) against every kind of thing the brain holds.' },
 ]
@@ -127,7 +129,7 @@ export default function Guide() {
         {tab === 'privacy' && (
           <div>
             <p style={{ fontSize: '14px', color: T.dim, lineHeight: 1.6, margin: '0 0 16px 0' }}>
-              Who can read what your brain remembers, in six lines. The full text is in your brain's checkout: docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md. Ask the brain to open either one.
+              Who can read what your brain remembers, in seven lines. The full text is in your brain's checkout: docs/public/06-privacy-and-memory.md and docs/public/07-who-reads-what.md. Ask the brain to open either one.
             </p>
             {PRIVACY.map(s => (
               <div key={s.label} style={{ padding: '12px 0', borderBottom: `1px solid ${T.line}` }}>

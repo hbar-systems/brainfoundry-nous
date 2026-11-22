@@ -311,6 +311,7 @@ PANE_ROUTES = {
     "/integrations": "Integrations", "/future": "Future", "/graph": "Memory graph",
     "/terminal": "Terminal", "/files": "Files", "/guide": "Guide", "/layout": "Layout",
     "/permits": "Permits", "/boxes": "Boxes", "/profile": "Profile",
+    "/usage": "Usage",   # the private usage log's counts (USAGE-1, 2026-11-22)
     "/layout?step=surfaces": "Ways of working",   # the interview's surfaces pick-list (2026-11-13)
 }
 _PANE = re.compile(r"<pane>\s*([^<\s]+)\s*</pane>")
@@ -505,6 +506,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
+import cc_presses  # noqa: E402
 import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
@@ -4859,6 +4861,33 @@ def _tg_loop() -> None:
             time.sleep(30 if code in (401, 404) else 10)
 
 
+# ---- the private usage log (USAGE-1, 2026-11-22) ----
+# ~/.cc-bridge/surface-events.jsonl: which nav buttons, pages, panes, choice buttons and slash commands
+# the owner pressed, with time and thread; names only, never content (cc_presses.py checks each one).
+# Step 1 of ops/2026-10-24_adaptive-surfaces-spec.md. On the box only; off in Settings; /usage shows it.
+PRESSES = cc_presses.Store(STATE_DIR)
+
+
+def _presses_api(method: str, route: str, body: dict | None) -> tuple[int, dict]:
+    """Every /presses route, as (status, object). The operator token is checked before this."""
+    try:
+        if method == "GET" and route == "/presses":
+            return 200, PRESSES.view()
+        if method != "POST" or not isinstance(body, dict):
+            return 404, {"error": "unknown usage route"}
+        if route == "/presses":
+            return 200, {"logged": PRESSES.log(body.get("kind"), body.get("name"), body.get("thread") or "")}
+        if route == "/presses/switch":
+            PRESSES.set_on(body.get("on"))
+            return 200, PRESSES.view()
+        if route == "/presses/clear":
+            n = PRESSES.clear()
+            return 200, {"cleared": n, **PRESSES.view()}
+    except cc_presses.UsageError as e:
+        return 400, {"error": str(e)}
+    return 404, {"error": "unknown usage route"}
+
+
 # ---- the owner's layout file (2026-10-09) ----
 # ~/.cc-bridge/layout.json, beside board.json: the owner's own file on the box, outside every tracked
 # template file, so Update never conflicts. Owner access without a permit, like /files/write: it is the
@@ -5641,6 +5670,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(*_agents_call(["list"]))
         elif route.startswith("/layout"):
             self._send(*_layout_api("GET", route, None, self._query()))
+        elif route == "/presses":
+            self._send(*_presses_api("GET", route, None))
         elif route.startswith("/profile"):
             self._send(*_profile_api("GET", route, None))
         elif route == "/spend":
@@ -5743,6 +5774,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route in ("/update", "/update/check"):
             self._send(*_update_door(check=route == "/update/check"))
+            return
+        if route.startswith("/presses"):
+            self._send(*_presses_api("POST", route, self._json(limit=1000)))
             return
         if route.startswith("/layout"):
             body = self._json(limit=40000)
