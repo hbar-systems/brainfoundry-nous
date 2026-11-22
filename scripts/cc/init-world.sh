@@ -298,7 +298,9 @@ PERSON=$(echo "$FILL_OUT" | sed -n 's/^PERSON=//p')
 git -C "$TARGET" init -q
 git -C "$TARGET" symbolic-ref HEAD refs/heads/main 2>/dev/null || true
 ( cd "$TARGET" && find . -path ./.git -prune -o -type f -print | sed 's#^\./##' | sort | xargs -d '\n' git add -- )
-git -C "$TARGET" -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" commit -q -m "world: opened $OPEN_DATE"
+# the chosen identity wins over GIT_AUTHOR_*/GIT_COMMITTER_* exported by the calling shell
+GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" \
+    git -C "$TARGET" -c user.name="$GIT_NAME" -c user.email="$GIT_EMAIL" commit -q -m "world: opened $OPEN_DATE"
 echo "git: $(git -C "$TARGET" log --oneline -1)"
 
 # 5. ownership (a split box: the world belongs to the hands, the bridge reads through the group)
