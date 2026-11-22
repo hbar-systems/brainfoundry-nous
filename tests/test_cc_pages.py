@@ -172,3 +172,26 @@ def test_court_page_posts_a_ruling_from_the_new_route(monkeypatch, tmp_path):
             assert e.code == 403
     finally:
         srv.shutdown()
+
+
+def test_film_page_listed_and_serves_its_draft(monkeypatch, tmp_path):
+    """FILM-PAGE-1 (2026-11-18): the film page is a working page; its draft.json and state.json are siblings it can
+    read; a sibling html keeps the sandbox; nothing below its folder (film working folders) is served from here."""
+    monkeypatch.delenv("CC_PAGES", raising=False)
+    out = tmp_path / "out"
+    (out / "film" / "k2" / "footage").mkdir(parents=True)
+    (out / "film" / "index.html").write_text("<script>fetch('state.json')</script>")
+    (out / "film" / "draft.json").write_text('{"fragments": []}')
+    (out / "film" / "state.json").write_text('{"film": null}')
+    (out / "film" / "v1.html").write_text("<p>v1</p>")
+    (out / "film" / "k2" / "footage" / "a.mp4").write_bytes(b"x")
+    pg = X.Pages(out)
+    assert "film" in pg.names
+    assert pg.path("film") == (out / "film" / "index.html").resolve()
+    assert pg.path("film", "draft.json") == (out / "film" / "draft.json").resolve()
+    for sub in ("k2", "k2/footage/a.mp4", "../film/draft.json", ".draft.json.tmp"):
+        assert pg.path("film", sub) is None, sub
+    h = _H(); pg.serve(h, "film", "draft.json")
+    assert h.code == 200 and h.sent["Content-Type"].startswith("application/json")
+    h = _H(); pg.serve(h, "film", "v1.html")
+    assert "sandbox" in h.sent["Content-Security-Policy"]
