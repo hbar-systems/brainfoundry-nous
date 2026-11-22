@@ -23,6 +23,8 @@ the bridge; the CLI keeps its own credentials in the brain user's home.
 Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method} (?fresh=1 re-reads both sign-ins)
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
+                          with {"new": true, "parent": <thread>, "label"}: the new thread reports each finished turn to its
+                          parent as a card, handed to the parent's page in GET /cc/jobs?take=1&thread=<parent> -> "reports"
   GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line"}  (live GET <base>/models, 5 s)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
@@ -515,6 +517,7 @@ import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
+import cc_reports  # noqa: E402   a thread started from a choice button reports back to its parent (REPORT-1)
 import cc_halt  # noqa: E402   the kill switch (2026-10-25): HALT file + budget HALT, docs/KILL_SWITCH.md
 
 # A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md): CC_MEMBER names this bridge's
@@ -620,6 +623,26 @@ TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "m
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
 SENT = cc_extras.RecentSends(60)
+# Thread reports (REPORT-1, 2026-11-22, scripts/cc/cc_reports.py): a thread started from another thread's
+# choice button (mode agent) leaves a short card for that parent each time it finishes a turn. The parent's
+# page takes its cards with its jobs (GET /cc/jobs?take=1&thread=<id> -> reports); no other page sees them.
+REPORTS = cc_reports.Reports(STATE_DIR / "reports.json")
+
+
+def _report_to_parent(status: int, payload: dict, parent: str | None = None, label: str = "") -> dict | None:
+    """After a turn: link a new thread to the thread it was started from, then leave the parent a card.
+    A thread without a parent leaves none. Never raises: a report must not fail the turn it reports."""
+    try:
+        child = payload.get("thread")
+        if parent and child:
+            REPORTS.link(child, parent, label)
+        state = cc_reports.state_of(error=status != 200 or bool(payload.get("error")), stopped=bool(payload.get("stopped")),
+                                    card=payload.get("proposal"), reply=payload.get("reply") or "")
+        return REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
+                            parent=parent, label=label)
+    except Exception as e:
+        print(f"thread report not posted: {type(e).__name__}", flush=True)
+        return None
 
 
 def _duplicate(thread: str | None, message: str) -> dict | None:
@@ -4179,7 +4202,8 @@ def _box_wait_next() -> None:
     else:
         threading.Thread(target=_turn, args=(item["message"],), daemon=True,
                          kwargs={"thread": None, "new": True, "source": item["source"], "waited": True,
-                                 "reasoner": item.get("reasoner")}).start()
+                                 "reasoner": item.get("reasoner"), "parent": item.get("parent"),
+                                 "label": item.get("label") or ""}).start()
 
 
 def _drain(thread: str) -> None:
@@ -4210,16 +4234,18 @@ def _state(thread: str | None) -> dict:
             "others": sum(1 for x in _runs_active() if x is not r), "now": time.time()}
 
 
-def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None) -> tuple[int, dict]:
+def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None, parent: str | None = None, label: str = "") -> tuple[int, dict]:
     """A turn, then the thread's next queued message (if any) is started, then the box's wait line."""
-    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited, reasoner=reasoner)
+    status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited, reasoner=reasoner, parent=parent, label=label)
     if status in (200, 500):
+        # a thread started from another thread's choice button tells that thread how the turn ended (REPORT-1)
+        _report_to_parent(status, payload, parent if new else None, label)
         _drain_async(payload.get("thread"))
         _box_wait_next()
     return status, payload
 
 
-def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None) -> tuple[int, dict]:
+def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None, parent: str | None = None, label: str = "") -> tuple[int, dict]:
     """One turn, for the page and for Telegram (2026-09-29). Picks the conversation (an explicit
     thread, a new one, or the box's current one), registers the Run, runs the reasoner, records
     the turn in the brain, emits "done" to every sink, and returns (status, payload). on_run(run)
@@ -4271,7 +4297,8 @@ def _turn_inner(message: str, *, thread: str | None, new: bool, on_run=None, sou
         active = _runs_active()
         if len(active) >= MAX_RUNS and not from_queue:
             if new:
-                n = _box_wait_add({"kind": "new", "message": message, "source": source, "at": time.time(), "reasoner": reasoner}, front=waited)
+                n = _box_wait_add({"kind": "new", "message": message, "source": source, "at": time.time(), "reasoner": reasoner,
+                                   "parent": parent, "label": label}, front=waited)
                 return 202, {"waiting": n, "reply": f"{len(active)} conversations are answering; this one waits in line "
                                                     f"({n} in line) and starts by itself when one finishes."}
             if key:
@@ -5659,7 +5686,9 @@ class Handler(BaseHTTPRequestHandler):
                     o["thread_title"] = titles.get(o.get("thread")) if cc_extras.Jobs.known(o.get("thread")) else None
             self._send(200, {"jobs": JOBS.list(), "thread": th,
                              "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
-                             "others": others})
+                             "others": others,
+                             # REPORT-1: cards from the threads this one started, taken once, by this thread's page only
+                             "reports": REPORTS.take(th) if q.get("take") == "1" and th else []})
         elif route.startswith("/jobs/"):
             q = self._query()   # full=1: the whole result text, for the card's "more" (JOBCARD-1)
             try:
@@ -6292,7 +6321,13 @@ class Handler(BaseHTTPRequestHandler):
         if dup:
             self._send(202, dup)
             return
-        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True, reasoner=seat)
+        # REPORT-1: a choice button (mode agent) names the thread it was pressed in; only a thread on this
+        # box's list can be a parent, and only a new thread gets one
+        parent = str(req.get("parent") or "").strip()[:120] or None
+        if parent and not (req.get("new") is True and any(x.get("brain") == parent for x in _threads_load())):
+            parent = None
+        status, payload = _turn(message, thread=str(req.get("thread") or "").strip() or None, new=req.get("new") is True, on_run=on_run, queue=req.get("queue") is True, reasoner=seat,
+                                parent=parent, label=str(req.get("label") or "")[:120] if parent else "")
         if status >= 300:
             SENT.forget((str(req.get("thread") or "").strip(), message))
         if status != 200 or not stream:

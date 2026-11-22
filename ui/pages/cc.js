@@ -7,6 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
@@ -973,6 +974,32 @@ function BrainText({ text, live, onChoice, pane }) {
 // into the chat, and only into the composer, prefilled with the job's id.
 const JOB_LINES = 6
 const fmtSecs = (s) => (s == null ? '' : s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`)
+
+// A thread this conversation started (a choice button, mode agent) finished a turn (REPORT-1, 2026-11-22):
+// its title, how it ended, the first three lines of its answer, and the link that opens it. It shows only
+// here, in the thread that started it (the 2026-10-11 rule), and says where it came from.
+function ReportCard({ report, onOpenHere }) {
+  const tone = reportTone(report.state)
+  const url = reportHref(report)
+  const ls = reportLines(report)
+  const link = { color: C.gold, cursor: 'pointer', textDecoration: 'underline' }
+  return (
+    <div data-reportcard={report.id}>
+      <p style={{ ...mono, color: tone === 'bad' ? '#d08a7a' : tone === 'ask' ? C.gold : C.dim, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
+        thread you started · {report.state || 'done'}
+      </p>
+      <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{report.title}</p>
+      {ls.length ? <div className="cc-md" style={{ fontSize: '0.92em', color: C.dim }}>{ls.map((l, i) => <Md key={i} text={l} />)}</div>
+                 : <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '0 0 8px 0' }}>no text came back</p>}
+      {url ? (
+        <p style={{ ...mono, fontSize: '11px', color: C.faint, margin: '8px 0 0 0', display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+          <a href={url} target="_blank" rel="noreferrer" title={'opens the thread in a tab of its own: ' + url} style={link}>open the thread ↗</a>
+          <a onClick={() => onOpenHere(report)} title="show that thread here, in place of this one" style={{ ...link, color: C.dim }}>open here</a>
+        </p>
+      ) : <p style={{ ...mono, fontSize: '11px', color: C.faint, margin: '8px 0 0 0' }}>it ended before it was saved, so it has no page; send it again</p>}
+    </div>
+  )
+}
 
 function JobCard({ job, onOpen, onTalk }) {
   const [res, setRes] = useState(job.result || null)
@@ -2303,6 +2330,8 @@ function CC() {
         const { mine, others } = splitFinished(d.finished || [], cur)
         if (curRef.current === cur) {
           for (const j of mine) setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
+          // REPORT-1: the threads this one started report here, once each, and nowhere else
+          for (const rp of reportsMine(d.reports, cur)) setTurns(t => (t.some(x => x.report && x.report.id === rp.id) ? t : [...t, { who: 'brain', report: rp, text: '' }]))
         }
         setOtherJobs(stripItems(d.others || [], others, []))
       } catch {}
@@ -3080,9 +3109,10 @@ function CC() {
   // stays where it is and notes the start.
   function choose(c) {
     if (c.mode !== 'agent') { send(c.send); return }
-    setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one. Started by mistake? The thread list is open: press **stop** on its row.` }])
+    setTurns(t => [...t, { who: 'brain', text: `Started a thread of its own: **${c.label}**. It answers beside this one and reports back here when it finishes a turn. Started by mistake? The thread list is open: press **stop** on its row.` }])
     openThreads(false)
-    fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: c.send, new: true, thread: null, stream: false }) })
+    // REPORT-1: the new thread is told which thread it was started from, and reports each finished turn back here
+    fetch('/cc/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reportStartBody(c, curRef.current)) })
       .then(r => r.json()).then(d => { if (d && d.reply && (d.error || d.waiting)) setTurns(t => [...t, { who: 'brain', text: d.reply, error: !!d.error }]) })
       .catch(() => {}).finally(() => loadThreads())
     setTimeout(() => loadThreads(), 1500)
@@ -3391,10 +3421,11 @@ function CC() {
                 </div>
               )}
               <div data-bubble="1" style={{
-                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && (t.job || t.text) ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && (t.job || t.report || t.text) ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
+                {t.report && <ReportCard report={t.report} onOpenHere={(rp) => switchThread({ brain: rp.child })} />}
                 {t.job && <JobCard job={t.job} onOpen={(path) => openPane({ route: '/files?path=' + encodeURIComponent(path), title: 'Files' })}
                   onTalk={(j) => { setDraft(d => (d ? d + '\n' : '') + `About job ${j.id} (${j.title}): `); if (boxRef.current) boxRef.current.focus() }} />}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
