@@ -134,10 +134,12 @@ def test_hook_script_denies_without_bridge(tmp_path):
 def test_posture_auto_adds_ask_rules_and_mode(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path)
     assert m._posture_current() == "cards"
-    assert "ask" not in json.loads(m._hook_settings())["permissions"]
+    # READ-GAP-1: secret-shaped reads ask in every posture; sudo asks only in auto
+    ask = json.loads(m._hook_settings())["permissions"]["ask"]
+    assert ask == m.cc_guard.ask_secrets() and not set(m.ASK_ALWAYS) & set(ask)
     monkeypatch.setenv("CC_POSTURE", "auto")
     s = json.loads(m._hook_settings())
-    assert s["permissions"]["ask"] == list(m.ASK_ALWAYS)
+    assert s["permissions"]["ask"] == list(m.ASK_ALWAYS) + m.cc_guard.ask_secrets()
     assert s["hooks"]["PermissionRequest"]           # the card hook stays
     monkeypatch.setenv("CC_POSTURE", "nonsense")
     assert m._posture_current() == "cards"
