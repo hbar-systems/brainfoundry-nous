@@ -27,6 +27,20 @@ ASK_ALWAYS = ["Bash(sudo *)", "Bash(sudo:*)"]
 # matched by file permission checks and printed a warning into every job's output, so only the Edit rules remain.
 DENY_ALWAYS = ["Edit(**/.env)", "Edit(**/.env.*)"]
 
+# READ-GAP-1 2026-11-21 (GATE-1b row 5b): the bridge pre-allows Read, Grep and Glob, so a secret file was read
+# with no card. These ask rules take precedence over the allow list in every posture (deny > ask > allow), and
+# Read rules also cover Grep and Glob, so any of them on a secret-shaped path raises a card. CC_SECRET_READ_EXTRA
+# (comma list of extra Read(...) patterns) adds to them; nothing removes them.
+ASK_SECRETS = ["Read(**/.env)", "Read(**/.env.*)", "Read(~/.ssh/**)", "Read(~/.config/**)",
+               "Read(~/.claude/.credentials.json)", "Read(**/*.pem)", "Read(**/*.key)",
+               "Read(**/*secret*)", "Read(**/*credential*)", "Read(**/*token*)"]
+
+
+def ask_secrets() -> list:
+    extra = [x.strip() for x in os.environ.get("CC_SECRET_READ_EXTRA", "").split(",")
+             if re.fullmatch(r"Read\([^()]+\)", x.strip())]
+    return list(dict.fromkeys(ASK_SECRETS + extra))
+
 
 def setting_sources() -> str:
     v = os.environ.get("CC_SETTING_SOURCES", "user").strip()
@@ -50,9 +64,9 @@ def hook_settings(posture: str, hook_python: str, hook_script, post_hook_script,
         # split) can show it in the Files pane (2026-10-01)
         "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [
         {"type": "command", "command": f"{hook_python} {post_hook_script}", "timeout": 10}]}]}}
-    s["permissions"] = {"deny": list(DENY_ALWAYS)}
+    s["permissions"] = {"deny": list(DENY_ALWAYS), "ask": ask_secrets()}
     if posture == "auto":
-        s["permissions"]["ask"] = ASK_ALWAYS
+        s["permissions"]["ask"] = list(ASK_ALWAYS) + s["permissions"]["ask"]
     return json.dumps(s)
 
 

@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_halt  # noqa: E402   the kill switch (2026-10-25): no agent run while ~/.cc-bridge/HALT exists
+import cc_guard  # noqa: E402   READ-GAP-1 2026-11-21: secret-shaped reads raise a card in agents too
 
 AGENTS_DIR = Path(os.environ.get("CC_AGENTS_DIR") or (Path.home() / "agents"))
 HOOK_DIR = Path(os.environ.get("CC_HOOK_DIR") or Path(__file__).resolve().parent)
@@ -410,7 +411,7 @@ def settings(a: dict) -> dict:
                                                     "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-permit-hook.py'}", "timeout": 960}]}],
                   "PostToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit",
                                    "hooks": [{"type": "command", "command": f"{HOOK_PYTHON} {HOOK_DIR / 'cc-post-hook.py'}", "timeout": 10}]}]},
-        "permissions": {"allow": allow, "ask": list(ASK), "deny": deny},
+        "permissions": {"allow": allow, "ask": list(ASK) + cc_guard.ask_secrets(), "deny": deny},
     }
 
 
