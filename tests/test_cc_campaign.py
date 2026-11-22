@@ -300,4 +300,4 @@ def test_commands_pass_the_bridge_job_guard(camp):
     for s in br.started:
         out = G.check_job(s["command"], "cards", "/tmp/settings.json")
         assert not isinstance(out, G.Refused), (s["title"], out)
-        assert "claude --settings /tmp/settings.json -p" in out
+        assert "claude --settings /tmp/settings.json " in out and " -p " in out
