@@ -250,6 +250,10 @@ def test_choices_block_is_taught_and_never_spoken(monkeypatch, tmp_path):
     assert "<choices>" in m.SYSTEM and "never more" in m.SYSTEM
     s = m._speakable('Pick one.\n<choices>[{"label": "A", "send": "do a", "mode": "agent"}]</choices>')
     assert "choices" not in s and "label" not in s and "Pick one" in s
+    # the thread tree (TREE-1, 2026-11-22) is taught the same way and never read aloud
+    assert "<tree>" in m.SYSTEM and "never silently" in m.SYSTEM
+    s = m._speakable('Three open.\n<tree>{"nodes": [{"label": "Push", "state": "done"}]}</tree>')
+    assert "tree" not in s and "label" not in s and "Three open" in s
 
 
 def test_speak_parts_split_on_sentences_and_paragraphs(monkeypatch, tmp_path):

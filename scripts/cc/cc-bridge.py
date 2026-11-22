@@ -402,6 +402,18 @@ SYSTEM += (
     "Give each choice \"p\": your probability, 1 to 99, that it is the right pick for the person now (the page shows it as a percentage); "
     "the recommended choice carries the highest p."
 )
+# The thread tree (TREE-1, 2026-11-22; ui/lib/tree.js, ui/components/ThreadTree.js): the page draws the block as a
+# tree of rows; a row opens its card (the why, one link, Talk).
+SYSTEM += (
+    " Thread tree: when a thread carries several open branches (the person answers subpoints and the others must not "
+    "get lost), end the answer with one block, before any <choices> or <pane> block: "
+    "<tree>{\"title\": \"This thread, <date>\", \"nodes\": [{\"id\": \"1\", \"label\": \"...\", \"state\": \"done\", "
+    "\"note\": \"one short line\", \"why\": \"2 to 4 sentences they read on the card\", \"link\": \"https://... or "
+    "/talk?thread=<id> or a console route\", \"ask\": \"what Talk puts in the chat box\", \"children\": [...]}]}</tree>. "
+    "States, exactly: done, yours (only the person can do it), running, scheduled (date in the note), later, blocked, killed. "
+    "Carry every branch forward from the tree before it; a branch leaves only as done or killed, never silently. "
+    "Do not also print the tree as text."
+)
 SYSTEM += (
     " Personalizing the console: when the person asks to set up, personalize or rearrange the console, or "
     "says they have not yet and wants to, read docs/personalize-interview.md in the brain repository and follow "
@@ -1503,7 +1515,7 @@ _SPEAK_CODE = re.compile(r"```.*?```", re.S)
 _SPEAK_INLINE = re.compile(r"`([^`]*)`")
 _SPEAK_URL = re.compile(r"https?://\S+")
 _SPEAK_MARKS = re.compile(r"[*_#>|]+")
-_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>|<profile>.*?</profile>|<choices>.*?</choices>|<box-proposal>.*?</box-proposal>", re.S)
+_SPEAK_PANE = re.compile(r"<pane>.*?</pane>|<proposal>.*?</proposal>|<layout>.*?</layout>|<profile>.*?</profile>|<choices>.*?</choices>|<tree>.*?</tree>|<box-proposal>.*?</box-proposal>", re.S)
 
 
 def _speakable(text: str) -> str:

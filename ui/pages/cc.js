@@ -14,6 +14,8 @@ import FirstSignIn from '../components/FirstRun'
 import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
+import { splitTree } from '../lib/tree'
+import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 
@@ -958,9 +960,10 @@ function Choices({ choices, onChoice }) {
   )
 }
 function BrainText({ text, live, onChoice, pane }) {
-  const { body, choices, route } = useMemo(() => { const p = splitPane(text); return { ...splitChoices(p.body), route: p.route } }, [text])
+  // the thread tree (TREE-1, 2026-11-22) is cut out first: it sits before the choices, which stay anchored to the end
+  const { body, choices, route, tree } = useMemo(() => { const p = splitPane(text); const t = splitTree(p.body); return { ...splitChoices(t.body), route: p.route, tree: t.tree } }, [text])
   const r = route || (pane && (pane.route || pane)) || null
-  return <><Md text={body} />{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
+  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 // A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS
@@ -2317,6 +2320,9 @@ function CC() {
     const onRoute = (e) => { if (e.detail && e.detail.route) openPane(e.detail) }
     const onSendText = (e) => { if (typeof e.detail === 'string' && sendRef.current) sendRef.current(e.detail) }
     const onAgent = (e) => { if (e.detail && e.detail.send && chooseRef.current) chooseRef.current({ mode: 'agent', label: e.detail.label || 'agent', send: e.detail.send }) }
+    // the tree's Talk (TREE-1): fills the box, never sends
+    const onFillText = (e) => { if (typeof e.detail === 'string') { setDraft(e.detail); if (boxRef.current) boxRef.current.focus() } }
+    window.addEventListener('cc-fill-text', onFillText)
     window.addEventListener('cc-open-route', onRoute); window.addEventListener('cc-send-text', onSendText); window.addEventListener('cc-agent', onAgent)
     const onMsg = (e) => {
       if (e.origin !== window.location.origin) return
@@ -2349,7 +2355,7 @@ function CC() {
       if (e.key === 'cc.handsfree') setHandsfree(e.newValue === '1')
     }
     window.addEventListener('storage', onStore)
-    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath); window.removeEventListener('cc-open-route', onRoute); window.removeEventListener('cc-send-text', onSendText); window.removeEventListener('cc-agent', onAgent); window.removeEventListener('storage', onStore) }
+    return () => { window.removeEventListener('message', onMsg); window.removeEventListener('cc-open-path', onPath); window.removeEventListener('cc-open-route', onRoute); window.removeEventListener('cc-send-text', onSendText); window.removeEventListener('cc-agent', onAgent); window.removeEventListener('cc-fill-text', onFillText); window.removeEventListener('storage', onStore) }
   }, [])
 
   // the whole conversation as markdown: copied, and downloaded as a file (the header's button, or the pane's menu)
