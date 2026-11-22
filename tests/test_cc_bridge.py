@@ -1707,3 +1707,28 @@ def test_piper_speaks_for_real_when_installed(monkeypatch, tmp_path):
     assert m._voice_backend() == "piper"
     audio = m._tts_bytes("Доброе утро.")
     assert len(audio) > 4000
+
+
+def test_threads_archive_only_view_lanes_and_turn_brings_back(monkeypatch, tmp_path):
+    # THREADS-1 (2026-11-18): the archive alone on ?archived=only, a lane on every row, the idle sweep
+    # before the list, and a new turn in an archived thread brings it back.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    import time as _t
+    old = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(_t.time() - 5 * 86400))
+    new = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+    m._threads_save([
+        {"claude": "c1", "brain": "b-old", "title": "CC: render the stems", "started": old, "last": old},
+        {"claude": "c2", "brain": "b-new", "title": "CC: front page", "started": new, "last": new},
+    ])
+    monkeypatch.setattr(m, "ARCHIVE_IDLE_DAYS", 3.0)
+    assert m._threads_sweep() == 1
+    v = m._threads_view()
+    assert [t["brain"] for t in v["threads"]] == ["b-new"] and v["archived_count"] == 1
+    assert v["threads"][0]["lane"] == "sites"
+    a = m._threads_view(archived="only")
+    assert [t["brain"] for t in a["threads"]] == ["b-old"] and a["threads"][0]["lane"] == "music"
+    assert a["threads"][0]["archived_by"] == "idle"
+    monkeypatch.setattr(m, "_brain_api", lambda *a, **k: {"session_id": "b-old"})
+    m._record_turn({"brain_session_id": "b-old"}, "more", "ok", None)
+    assert [t["brain"] for t in m._threads_view()["threads"]][0] == "b-old"
+    assert m._threads_view()["archived_count"] == 0

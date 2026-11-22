@@ -1,6 +1,7 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { LIGHT, LIGHT_CSS } from '../lib/activity'
+import { LIGHT_CSS } from '../lib/activity'
+import { STATE as TC, tileState, stateLook, StateDot, LaneMark, Legend, THREADCOLOR_CSS } from '../lib/threadcolor'
 
 // Mission control: one board for all running work (2026-10-06).
 //
@@ -16,14 +17,15 @@ import { LIGHT, LIGHT_CSS } from '../lib/activity'
 
 const C = {
   ink: 'var(--text)', dim: 'var(--muted)', gold: 'var(--accent)', card: 'var(--surface2)', surface: 'var(--surface)',
-  line: 'var(--border)', bg: 'var(--bg)', onAccent: 'var(--bg)', warn: '#d4b86a', bad: '#c0605a', ok: '#7fc99c',
+  line: 'var(--border)', bg: 'var(--bg)', onAccent: 'var(--bg)', warn: TC.waiting.color, bad: TC.failed.color, ok: TC.done.color,
 }
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
+// the shared scheme (THREADS-1, ui/lib/threadcolor.js): the same colours as the thread list and /map
 const STATE = {
-  waiting: { color: C.warn, word: 'waiting on you' },
-  failed: { color: C.bad, word: 'failed' },
-  answering: { color: C.gold, word: 'answering' },
-  done: { color: C.ok, word: 'done' },
+  waiting: { color: TC.waiting.color, word: 'waiting on you' },
+  failed: { color: TC.failed.color, word: 'failed' },
+  answering: { color: TC.answering.color, word: 'answering' },
+  done: { color: TC.done.color, word: 'done' },
 }
 const link = { ...mono, fontSize: '11px', color: C.dim, cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }
 
@@ -45,6 +47,8 @@ function Btn({ children, onClick, primary, disabled, title }) {
 
 function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
   const st = STATE[t.state] || STATE.done
+  const ts = tileState(t)
+  const look = stateLook(ts === 'archived' ? 'idle' : ts)
   const live = t.state === 'answering' || t.state === 'waiting'
   // a live tile's clock moves between two readings of the board
   const elapsed = live && t.started ? Math.max(t.elapsed_s || 0, (now - Date.parse(t.started)) / 1000) : (t.elapsed_s || 0)
@@ -66,15 +70,14 @@ function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
     window.location.href = t.href
   }
   return (
-    <div onClick={open} role={t.href ? 'link' : undefined}
+    <div onClick={open} role={t.href ? 'link' : undefined} data-state={ts} data-lane={t.lane || ''} className={look.className}
       style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px 14px', borderRadius: '12px', backgroundColor: C.card,
-               border: `1px solid ${t.state === 'waiting' ? C.warn : t.state === 'failed' ? C.bad : C.line}`, borderLeft: `3px solid ${st.color}`,
-               cursor: t.href ? 'pointer' : 'default', minWidth: 0 }}>
+               border: `1px solid ${t.state === 'waiting' ? C.warn : t.state === 'failed' ? C.bad : C.line}`,
+               cursor: t.href ? 'pointer' : 'default', minWidth: 0, ...look.style, ...(ts === 'done' ? { opacity: 0.85 } : {}) }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {/* the activity light (2026-10-25): a turn pulses in the accent, a job amber, a standing agent green; done fades once */}
-        <span className={t.state === 'answering' ? 'cc-light-on' : t.state === 'done' ? 'cc-light-done' : undefined}
-              style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: t.state === 'answering' ? (t.kind === 'job' ? (t.agent ? LIGHT.agent : LIGHT.job) : LIGHT.turn) : st.color, flexShrink: 0 }} />
-        <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: st.color }}>{t.word || st.word}</span>
+        {/* the light (THREADS-1): a turn breathes in the accent, a job is a steady amber ring and edge, waiting the warm clay */}
+        <StateDot state={ts} />
+        <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: TC[ts] ? TC[ts].color : st.color }}>{t.word || (ts === 'job' ? 'job running' : st.word)}</span>
         <span style={{ flex: 1 }} />
         <span style={{ ...mono, fontSize: '11px', color: C.dim, whiteSpace: 'nowrap' }}>
           {live ? clock(elapsed) : [t.elapsed_s ? `took ${took(t.elapsed_s)}` : '', t.ago_s !== null && t.ago_s !== undefined ? ago(t.ago_s) : ''].filter(Boolean).join(' · ')}
@@ -82,7 +85,7 @@ function Tile({ t, now, onDecide, onDismiss, busyCard, billing }) {
         {!live && <a onClick={(e) => { e.stopPropagation(); onDismiss(t.key) }} title="Take this tile off the board; the conversation stays in threads" aria-label="dismiss"
                      style={{ ...mono, fontSize: '14px', lineHeight: 1, color: C.dim, cursor: 'pointer', padding: '0 2px' }}>×</a>}
       </div>
-      <div style={{ fontSize: '14px', color: C.ink, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.title}>{t.title}</div>
+      <div style={{ fontSize: '14px', color: C.ink, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.title}><LaneMark lane={t.lane} style={{ marginRight: '8px', verticalAlign: '2px' }} />{t.title}</div>
       {meta.length > 0 && <div style={{ ...mono, fontSize: '11px', color: C.dim }}>{meta.join(' · ')}</div>}
       {t.last && <div style={{ fontSize: '13px', lineHeight: 1.45, color: t.state === 'failed' ? C.bad : C.dim, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>{t.last}</div>}
       {(t.cards || []).map(c => (
@@ -112,6 +115,7 @@ export default function Board() {
   const [now, setNow] = useState(Date.now())
   const [busyCard, setBusyCard] = useState(null)
   const [only, setOnly] = useState(null)          // a state shown alone, chosen from the counts
+  const [legend, setLegend] = useState(false)     // the colour words, one press away (THREADS-1)
   const [note, setNote] = useState(null)
   const timer = useRef(null)
 
@@ -152,7 +156,7 @@ export default function Board() {
   return (
     <>
       <Head><title>Board · BrainFoundry</title></Head>
-      <style>{LIGHT_CSS}</style>
+      <style>{LIGHT_CSS + ' ' + THREADCOLOR_CSS}</style>
       <div style={{ minHeight: 'calc(100vh - var(--nav-h, 52px))', backgroundColor: C.bg, boxSizing: 'border-box', padding: '10px 12px 40px', color: C.ink }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0 2px 10px', flexWrap: 'wrap' }}>
           <span style={{ ...mono, color: C.gold, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase' }}>mission control</span>
@@ -174,6 +178,7 @@ export default function Board() {
           <a href="/gallery" style={link}>gallery</a>
           <a href="/talk" style={link}>one conversation</a>
           <a href="/files" style={link}>files</a>
+          <Legend open={legend} onToggle={() => setLegend(o => !o)} mono={mono} faint={C.dim} ink={C.ink} />
         </div>
         {note && <p style={{ ...mono, fontSize: '12px', color: C.bad, margin: '0 2px 10px' }}>{note}</p>}
         {board === false && <p style={{ fontSize: '13px', color: C.dim, margin: '24px 2px' }}>The bridge is not answering at /cc/board. The board fills by itself once it does.</p>}

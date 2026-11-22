@@ -517,6 +517,7 @@ import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
+import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -2291,6 +2292,13 @@ THREADS_FILE = STATE_DIR / "threads.json"   # [{claude, brain, title, started, l
 # continue / keep in the world file ops/threads/verdicts.tsv (cc_recent.VERDICTS_REL). The bridge only
 # reads it ($CC_WORLD_DIR, else $WORLD_DIR), cached 60 s; the list shows the ruling after the title.
 VERDICTS_WORLD = WORLD_DIR or os.environ.get("WORLD_DIR", "").strip()
+# THREADS-1 (2026-11-18): a thread quiet for CC_ARCHIVE_IDLE_DAYS (3; 0 = off) leaves the list into the archive by
+# itself; a new turn brings it back. Each row carries a production `lane` (cc_lanes.py), the console's quiet mark.
+try:
+    ARCHIVE_IDLE_DAYS = float(os.environ.get("CC_ARCHIVE_IDLE_DAYS", "").strip() or cc_lanes.ARCHIVE_IDLE_DAYS)
+except ValueError:
+    ARCHIVE_IDLE_DAYS = cc_lanes.ARCHIVE_IDLE_DAYS
+LANES = cc_lanes.Lanes(VERDICTS_WORLD)
 
 
 def _threads_load() -> list:
@@ -2322,13 +2330,29 @@ def _threads_recover() -> int:
     return 0
 
 
-def _threads_view(archived: bool = False, q: str = "") -> dict:
+def _threads_sweep(now: float | None = None) -> int:
+    """The idle archive (THREADS-1): threads quiet for ARCHIVE_IDLE_DAYS move to the archive, never one that is
+    pinned, answering, waiting or has a job running. Run before the list is read; saves only on a change."""
+    if not ARCHIVE_IDLE_DAYS or ARCHIVE_IDLE_DAYS <= 0:
+        return 0
+    busy = {r.thread for r in _runs_active() if r.thread} | set(JOBS.running_by_thread())
+    items = _threads_load()
+    n = cc_lanes.idle_sweep(items, now=now, days=ARCHIVE_IDLE_DAYS, busy=busy)
+    if n:
+        _threads_save(items)
+    return n
+
+
+def _threads_view(archived=False, q: str = "") -> dict:
     """The list the threads dropdown shows (2026-09-30). Pinned first, then by last activity,
     newest on top; archived ones only when asked for, with a count of them either way. The
-    running and waiting marks come from the runs in flight."""
+    running and waiting marks come from the runs in flight. `archived` "only" (THREADS-1): the
+    archive alone, the view the archive press opens."""
     items = [dict(x) for x in _threads_load()]
     n_arch = sum(1 for x in items if x.get("archived"))
-    if not archived:
+    if archived == "only":
+        items = [x for x in items if x.get("archived")]
+    elif not archived:
         items = [x for x in items if not x.get("archived")]
     query = str(q or "").strip()[:120]
     search_error = False
@@ -2368,6 +2392,7 @@ def _threads_view(archived: bool = False, q: str = "") -> dict:
         th["task_owner"] = th.get("task_owner") or "unknown"
         th["status"] = ("waiting on you" if th["waiting"] else "answering") if r else (
             "jobs running" if th["jobs_running"] else th.get("verdict") or "idle")
+        th["lane"] = LANES.of(th.get("title") or "", th.get("system") or "")
     return {"search_error": search_error, "search_scope": "Title/content: latest 500 sessions; up to 200 matches. Thread register: latest 200.",
             "threads": items, "current": st.get("brain_session_id"), "archived_count": n_arch,
             "finished_count": sum(1 for x in items if x.get("verdict") in cc_recent.FINISHED),
@@ -2442,7 +2467,7 @@ def _threads_update(brain: str, title=None, pinned=None, archived=None, style=No
     if pinned is not None:
         th["pinned"] = bool(pinned)
     if archived is not None:
-        th["archived"] = bool(archived)
+        cc_lanes.set_archived(th, bool(archived))   # by hand; brought back, the idle days count from now
     _threads_save(threads)
     st = _load_state()
     if st.get("brain_session_id") == brain and title is not None and th.get("title"):
@@ -3132,6 +3157,7 @@ def _record_turn(state: dict, message: str, reply: str, card: dict | None, earli
         if th.get("brain") == sid:
             th["last"] = now
             th["last_via"] = source
+            cc_lanes.unarchive_on_turn(th)   # an archived thread that gets a new turn comes back (THREADS-1)
             if state.get("session_id"):
                 th["claude"] = state["session_id"]
             if state.get("codex_id"):
@@ -5225,6 +5251,9 @@ def _board() -> dict:
     out = cc_extras.board_tiles(runs, lines, jobs, _threads_load(), pend, _board_dismissed(), time.time(),
                                 result_fn=_board_result, roots=(str(OUT_DIR), WORLD_DIR, str(IN_DIR)))
     out["max_runs"] = MAX_RUNS
+    systems = {str(th.get("brain")): th.get("system") or "" for th in _threads_load() if th.get("brain")}
+    for t in out.get("tiles") or []:   # the production mark, the same lanes as the thread list (THREADS-1)
+        t["lane"] = LANES.of(t.get("title") or "", systems.get(str(t.get("thread") or ""), ""))
     # an API key pays the reasoner's cost figure; on a subscription it is only what the same
     # work would cost at API prices, so the board labels it that way (2026-10-14)
     out["billing"] = "api-key" if _auth_status().get("method") == "api-key" else "subscription"
@@ -5524,7 +5553,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
         elif route == "/threads":
-            self._send(200, _threads_view(archived=self._query().get("archived") == "1", q=self._query().get("q", "")))
+            _threads_sweep()
+            a = self._query().get("archived")
+            self._send(200, _threads_view(archived="only" if a == "only" else a == "1", q=self._query().get("q", "")))
         elif route == "/live":
             # Watch a turn in flight (2026-09-28): the page that asked, another tab, the phone, or
             # a switch back to a thread that is still answering. Replays everything so far, then

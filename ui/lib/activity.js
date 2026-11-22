@@ -6,7 +6,8 @@
 // visible. prefers-reduced-motion: colour only, no pulse. No dependencies.
 import React, { useEffect, useState } from 'react'
 
-export const LIGHT = { turn: 'var(--accent)', job: '#d4b86a', agent: '#7fc99c', done: '#7fc99c', idle: 'var(--border)' }
+// done shares the calm sage of the thread colour scheme (THREADS-1, ui/lib/threadcolor.js)
+export const LIGHT = { turn: 'var(--accent)', job: '#d4b86a', agent: '#7fc99c', done: '#8fb39a', idle: 'var(--border)' }
 export const LIGHT_CSS = '@keyframes cclight { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } } @keyframes cclightdone { from { opacity: 1 } to { opacity: 0.45 } } ' +
   '.cc-light-on { animation: cclight 2s ease-in-out infinite } .cc-light-done { animation: cclightdone 2.5s ease-out 1 forwards } ' +
   '@media (prefers-reduced-motion: reduce) { .cc-light-on, .cc-light-done { animation: none } .cc-light-done { opacity: 0.6 } }'
