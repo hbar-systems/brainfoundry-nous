@@ -41,6 +41,8 @@ Endpoints (JSON):
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
   GET  /cc/tape/file?path=<p>  /cc/tape/stat?path=<p>   a file in the tape folder only (byte ranges honoured)
   POST /cc/tape/write {path,text,mtime?}   the /tape page's own files only: bits.json, replies, inbox markers, a take's slice list
+  GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
+  POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -532,6 +534,7 @@ import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
+import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
@@ -654,6 +657,9 @@ UPLOADS = cc_extras.Uploads(IN_DIR)
 # the name a sign-off on the page records (default "owner").
 TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "memos"),
                     signer=os.environ.get("CC_TAPE_SIGNER", "").strip() or "owner")
+# "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
+# read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
+LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
 SENT = cc_extras.RecentSends(60)
@@ -6008,6 +6014,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _systems_view())
         elif route == "/dashboard":
             self._send(200, _dashboard_view())
+        elif route == "/listening":
+            self._send(200, LISTENING.state())
         elif route == "/tape":
             _ts = TAPE.state()
             if _ts.get("tape") and WORLD_DIR:
@@ -6242,6 +6250,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(413 if n > SYSTEMS_VOICE_MAX else 400, {"ok": False, "error": f"the recording must be between 1 byte and {SYSTEMS_VOICE_MAX // (1024 * 1024)} MB"})
             else:
                 self._send(*_systems_voice(sid, self.headers.get("Content-Type", ""), self.rfile.read(n)))
+            return
+        if route == "/listening/read":
+            self._send(*LISTENING.start())
             return
         if route == "/tape/write":
             # the /tape page's own files only (cc_tape.WRITABLE): rulings, replies, markers, a take's slice list

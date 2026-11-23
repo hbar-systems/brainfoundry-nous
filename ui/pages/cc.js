@@ -12,6 +12,7 @@ import { startBody as reportStartBody, mine as reportsMine, href as reportHref, 
 import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
+import ListeningCard from '../components/ListeningCard'
 import FirstSignIn from '../components/FirstRun'
 import SignInSteps from '../components/SignInSteps'
 import { currentStep, showFirstRun } from '../lib/firstRun'
@@ -3570,6 +3571,9 @@ function CC() {
           ))}
           {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
             <MoveInCards lang={lang} />
+          )}
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
+            <ListeningCard lang={lang} />
           )}
           {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && asks.length > 0 && !paneMode && !firstStep && (
             <div className="cc-asks" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '12px', margin: '4px 0 28px' }}>
