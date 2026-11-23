@@ -100,6 +100,28 @@ _ENTROPY_BITS_MIN = 4.3
 # URL is still caught — only the noisy generic heuristic skips URL bodies.
 _URL_RE = re.compile(r"https?://\S+")
 
+# Tools whose arguments are a command run on the brain's own box. Nothing in the
+# argument itself is put on an outside wire, and commands are full of long
+# paths and file names that the generic entropy heuristic cannot tell from a
+# secret (a 52-char volume path refused a plain `du`, 2026-11-23). For these
+# tools only, the backstop judges a candidate piece by piece (see
+# _opaque_piece). Every tool that sends an argument outward (fetch_url,
+# brain_call, send_telegram_message, one_execute, ...) keeps the strict rule.
+# The named credential patterns and the env-value match are NOT relaxed for
+# anyone.
+_LOCAL_COMMAND_TOOLS = frozenset({"box_act"})
+_PIECE_SPLIT_RE = re.compile(r"[/=]")
+_WORD_SPLIT_RE = re.compile(r"[_\-+]")
+# A "word" inside a file or folder name: letters (plain, Capitalised, CamelCase
+# or ALLCAPS), digits (dates, counters), a short letters+digits tag ("Track5",
+# "120bpm", "b002"), a scrap of at most three characters, or lowercase hex (the
+# groups of a session id, a commit hash: the strict rule never flagged those on
+# their own either, since it requires an uppercase letter).
+_WORD_RE = re.compile(
+    r"(?:[A-Z]?[a-z]+(?:[A-Z][a-z]+)*|[A-Z]+|[0-9]+|[0-9a-f]+"
+    r"|[A-Za-z]{1,8}[0-9]{1,8}|[0-9]{1,8}[A-Za-z]{1,8}|[A-Za-z0-9]{1,3})")
+_OPAQUE_CHARS_MIN = 20
+
 
 def _stringify(args: Dict[str, Any]) -> str:
     """Flatten args to one string to scan. JSON first (covers nested structures
@@ -146,7 +168,21 @@ def _shannon_entropy(s: str) -> float:
     return -sum((c / n) * math.log2(c / n) for c in counts.values())
 
 
-def _scan_high_entropy(text: str) -> str:
+def _opaque_piece(tok: str) -> bool:
+    """True if some piece of a path-like candidate is itself opaque: split the
+    candidate on `/` and `=`, split each piece into words on `_`, `-`, `+`, and
+    count the characters that are NOT name-like words. A folder path or a long
+    descriptive file name is all words; a secret (alone, or hidden as the last
+    piece of a path) leaves 20 or more unexplained characters in one piece."""
+    for piece in _PIECE_SPLIT_RE.split(tok):
+        opaque = sum(len(w) for w in _WORD_SPLIT_RE.split(piece)
+                     if w and not _WORD_RE.fullmatch(w))
+        if opaque >= _OPAQUE_CHARS_MIN:
+            return True
+    return False
+
+
+def _scan_high_entropy(text: str, local_command: bool = False) -> str:
     """Backstop for opaque secrets that match no named prefix. Requires a long
     contiguous token, high entropy, AND mixed character classes (upper, lower,
     digit) — base64/hex secrets have all three; English words and tidy URL slugs
@@ -165,8 +201,14 @@ def _scan_high_entropy(text: str) -> str:
                 and any(c.isupper() for c in tok)
                 and any(c.isdigit() for c in tok)):
             continue
-        if _shannon_entropy(tok) >= _ENTROPY_BITS_MIN:
-            return "contains a long high-entropy token that looks like a secret"
+        if _shannon_entropy(tok) < _ENTROPY_BITS_MIN:
+            continue
+        # Box commands only: a candidate made of name-like words (a path, a
+        # long file name) is not a secret. Strictly looser than the rule above,
+        # never stricter; outward-sending tools do not take this branch.
+        if local_command and not _opaque_piece(tok):
+            continue
+        return "contains a long high-entropy token that looks like a secret"
     return ""
 
 
@@ -197,10 +239,13 @@ def scan_outbound(tool_name: str, args: Dict[str, Any], tier: str) -> Tuple[bool
     if not text:
         return True, ""
 
-    for scan in (_scan_credentials, _scan_env_secrets, _scan_high_entropy):
+    for scan in (_scan_credentials, _scan_env_secrets):
         reason = scan(text)
         if reason:
             return False, reason
+    reason = _scan_high_entropy(text, local_command=tool_name in _LOCAL_COMMAND_TOOLS)
+    if reason:
+        return False, reason
 
     # v1 hook (no-op today): private-corpus-content leakage.
     reason = _scan_private_corpus_leak(tool_name, args, text)
