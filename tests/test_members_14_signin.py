@@ -185,3 +185,4 @@ def test_page_wires_the_screen_the_wait_and_the_switch():
     assert "/cc/login/code" not in steps   # the code never passes through this page
     nav = (ROOT / "ui" / "components" / "Nav.js").read_text()
     assert nav.count("<LangSwitch />") == 2   # both bars: the drawer bar and the tab bar
+    assert "{!ccHome && <div style={{ marginLeft: 'auto'" in nav   # the tab bar's switch sits outside the scrolling links (phone)

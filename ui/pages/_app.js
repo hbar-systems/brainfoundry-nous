@@ -489,7 +489,7 @@ export default function App({ Component, pageProps }) {
           }
 
           .bf-nav { padding: 0 24px; gap: 32px; }
-          .bf-nav-links { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+          .bf-nav-links { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; min-width: 0; flex: 0 1 auto; }
           .bf-nav-links::-webkit-scrollbar { display: none; }
           .bf-nav-link { white-space: nowrap; }
           .bf-brand-name { display: inline; }

@@ -327,9 +327,10 @@ export default function Nav() {
         {/* the bar scrolls sideways, so "more" opens in line rather than as a dropdown it would clip */}
         {more.length > 0 && moreButton}
         {more.length > 0 && moreOpen && moreList(false)}
-        <LangSwitch />
       </div>
       )}
+      {/* outside the scrolling tab bar, so the switch holds the right edge on a phone (MEMBERS-14 walk at 390 px) */}
+      {!ccHome && <div style={{ marginLeft: 'auto', paddingLeft: '8px', flexShrink: 0, display: 'flex' }}><LangSwitch /></div>}
 
       {/* Drag handle — sits on the nav's bottom edge, pulls up or down
           to resize the nav height. Matches the sidebar/messages resize
