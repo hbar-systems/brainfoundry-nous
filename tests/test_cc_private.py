@@ -28,7 +28,7 @@ class _R(io.BytesIO):
     def __exit__(self, *a): return False
 
 
-def _ollama(replies, seen=None, tags=("qwen3:4b",)):
+def _ollama(replies, seen=None, tags=("qwen3:4b", cc_local.PRIVATE_MODEL)):
     """A stub urlopen: /v1/models answers (the seat's probe); /api/tags lists `tags`; /api/chat answers the
     next of `replies` (a message dict)."""
     it = iter(replies)
