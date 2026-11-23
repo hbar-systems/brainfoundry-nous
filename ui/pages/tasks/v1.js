@@ -1,6 +1,9 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
 
+// The tasks page as it looked until SKIN-2 (2026-11-23), kept at /tasks/v1 (feedback_archive_every_look):
+// one list, his tasks then the agents' next rows. The working page is ui/pages/tasks/index.js.
+
 const API = '/api/bf'
 async function api(path, opts = {}) {
   const r = await fetch(`${API}${path}`, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store', ...opts })
@@ -90,7 +93,7 @@ export default function Tasks() {
 
   return (
     <>
-      <Head><title>Tasks · BrainFoundry</title></Head>
+      <Head><title>Tasks v1 · BrainFoundry</title></Head>
       <div style={{ padding: '40px 32px', maxWidth: '720px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
         <h1 style={{ fontSize: 26, color: 'var(--text)', margin: '0 0 6px 0' }}>Tasks</h1>
         <p style={{ color: 'var(--text-dim)', fontSize: 14, lineHeight: 1.6, margin: '0 0 22px 0' }}>

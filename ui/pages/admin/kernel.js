@@ -88,7 +88,7 @@ export default function KernelConsole() {
         </p>
 
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, color: "var(--text-dim)", fontSize: 13, lineHeight: 1.7 }}>
-          <div style={{ color: "var(--accent)", fontFamily: "Lora, Georgia, serif", fontSize: 15, marginBottom: 10 }}>What is this page?</div>
+          <div style={{ color: "var(--accent)", fontFamily: "var(--font-display, Lora, Georgia, serif)", fontSize: 15, marginBottom: 10 }}>What is this page?</div>
           <p style={{ margin: "0 0 10px 0" }}>
             This is the live operator&apos;s window into the <strong style={{ color: "var(--text)" }}>authority kernel</strong> — the layer that stands between any command and your brain&apos;s state.
             Nothing writes to memory or runs a mutation here without passing a two-step gate: <strong style={{ color: "var(--text)" }}>PROPOSE</strong> (declare intent, get a token) and <strong style={{ color: "var(--text)" }}>CONFIRM</strong> (present the token, execute).
@@ -97,7 +97,7 @@ export default function KernelConsole() {
             You&apos;ll use this page to prove to yourself that sovereignty actually holds — not as a slogan, but as a protocol you can poke at.
           </p>
 
-          <div style={{ color: "var(--accent)", fontFamily: "Lora, Georgia, serif", fontSize: 14, margin: "18px 0 6px 0" }}>Try this</div>
+          <div style={{ color: "var(--accent)", fontFamily: "var(--font-display, Lora, Georgia, serif)", fontSize: 14, margin: "18px 0 6px 0" }}>Try this</div>
           <ol style={{ margin: 0, paddingLeft: 20 }}>
             <li style={{ marginBottom: 6 }}>
               Leave the defaults (<code style={{ color: "var(--text)" }}>client_id: demo</code>, <code style={{ color: "var(--text)" }}>command: echo</code>, <code style={{ color: "var(--text)" }}>payload.text: hello</code>) and click <strong style={{ color: "var(--text)" }}>PROPOSE</strong>. The right panel will show a response with a <code style={{ color: "var(--text)" }}>token</code>. That token is auto-filled into the CONFIRM_TOKEN field.
@@ -113,7 +113,7 @@ export default function KernelConsole() {
             </li>
           </ol>
 
-          <div style={{ color: "var(--accent)", fontFamily: "Lora, Georgia, serif", fontSize: 14, margin: "18px 0 6px 0" }}>What you should see</div>
+          <div style={{ color: "var(--accent)", fontFamily: "var(--font-display, Lora, Georgia, serif)", fontSize: 14, margin: "18px 0 6px 0" }}>What you should see</div>
           <p style={{ margin: 0 }}>
             Every response is a structured JSON envelope: <code style={{ color: "var(--text)" }}>{'{ ok, data?, error? }'}</code>. Errors carry a machine-readable code (<code style={{ color: "var(--text)" }}>KERNEL_*</code>) — the same codes your own agents, CLIs, and federated peers will see. This is the contract; the UI is just a thin window onto it.
           </p>

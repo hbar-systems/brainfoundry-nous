@@ -54,7 +54,7 @@ function StatCard({ label, value, sub }) {
       </div>
       <div style={{
         fontSize: '28px',
-        fontFamily: 'Lora, ui-serif, serif',
+        fontFamily: 'var(--font-display, Lora, ui-serif, serif)',
         fontWeight: 600,
         color: COLORS.text,
         marginBottom: sub ? '4px' : 0,
@@ -75,7 +75,7 @@ function SectionTitle({ children, sub }) {
   return (
     <div style={{ marginBottom: '14px' }}>
       <h2 style={{
-        fontFamily: 'Lora, ui-serif, serif',
+        fontFamily: 'var(--font-display, Lora, ui-serif, serif)',
         fontSize: '18px',
         color: COLORS.text,
         margin: 0,
@@ -160,7 +160,7 @@ export default function Trace() {
         padding: '40px 32px',
         maxWidth: '960px',
         margin: '0 auto',
-        fontFamily: 'Lora, ui-serif, serif',
+        fontFamily: 'var(--font-display, Lora, ui-serif, serif)',
       }}>
         <p style={{
           color: COLORS.accent,
@@ -225,7 +225,7 @@ export default function Trace() {
                 Brain born on
               </div>
               <div style={{
-                fontFamily: 'Lora, ui-serif, serif',
+                fontFamily: 'var(--font-display, Lora, ui-serif, serif)',
                 fontSize: '22px',
                 color: COLORS.text,
                 fontWeight: 600,
@@ -448,7 +448,7 @@ export default function Trace() {
             <h2 style={{ fontSize: '13px', color: COLORS.muted, letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 4px 0' }}>
               Tool activity
             </h2>
-            <p style={{ color: COLORS.dim, fontSize: '12px', margin: '0 0 14px 0', fontFamily: 'Lora, ui-serif, serif' }}>
+            <p style={{ color: COLORS.dim, fontSize: '12px', margin: '0 0 14px 0', fontFamily: 'var(--font-display, Lora, ui-serif, serif)' }}>
               What your brain reached out and did — every external tool call, logged.
             </p>
             {toolAudit.length === 0 ? (

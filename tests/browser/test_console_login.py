@@ -73,6 +73,18 @@ pytestmark = [
 ]
 
 
+# On the arm64 box chromium needs user-space nss/nspr (no sudo): the same directory scripts/html-shot.py uses in the
+# world. Given to the browser process only, so the rest of the suite never sees it (SKIN-2, 2026-11-23).
+CHROME_LIBS = Path(os.environ.get("NOUS_CHROME_LIBS", str(Path.home() / ".local/chromelibs/root/usr/lib/aarch64-linux-gnu")))
+
+
+def launch(p):
+    if CHROME_LIBS.is_dir():
+        env = dict(os.environ, LD_LIBRARY_PATH=f"{CHROME_LIBS}:{os.environ.get('LD_LIBRARY_PATH', '')}".rstrip(":"))
+        return p.chromium.launch(env=env)
+    return p.chromium.launch()
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -117,6 +129,8 @@ FAKE = {
         "/cc/activity": {"threads": {}},
         "/cc/jobs": {"finished": [], "others": []},
         "/cc/system": {"warnings": []},
+        # the usage log (USAGE-1, 2026-11-22): every page POSTs its press here (SKIN-2 2026-11-23 found the fake lacked it)
+        "/cc/presses": {"logged": True},
     },
     "term": {},
 }
@@ -292,7 +306,7 @@ def login_problems(url: str, username: str, password: str, shot: Path | None = N
     """Log in like a person and reach the chat page. Returns [] when it works, else what went wrong."""
     problems: list[str] = []
     with sync_api.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         ctx = browser.new_context(http_credentials={"username": username, "password": password})
         page = ctx.new_page()
         errors: list[str] = []
@@ -321,7 +335,7 @@ def login_problems(url: str, username: str, password: str, shot: Path | None = N
 def challenge(url: str) -> tuple[int | None, str]:
     """No credentials: what an outsider meets first. (status, WWW-Authenticate)."""
     with sync_api.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch(p)
         page = browser.new_page()
         resp = page.goto(url + "/", wait_until="load", timeout=30000)
         out = (resp.status, resp.headers.get("www-authenticate", "")) if resp else (None, "")

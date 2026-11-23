@@ -7,6 +7,7 @@ import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import { applyStyle, clearStyle } from '../lib/layout'
 import { watchWall } from '../lib/wallpaper'
+import { watchSkin } from '../lib/skin'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -70,11 +71,6 @@ export default function App({ Component, pageProps }) {
   // new names on read.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const theme = localStorage.getItem('bf-theme') || 'gold'
-    const fontMigration = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
-    const stored = localStorage.getItem('bf-font') || 'system'
-    const font = fontMigration[stored] || stored
-    if (font !== stored) localStorage.setItem('bf-font', font)
     // Nav height: prefer the new continuous pixel value (bf-nav-h), fall
     // back to the old three-step bucket (bf-nav-size), fall back to 52px
     // default. Drag-handle on the nav writes bf-nav-h in pixels; Settings
@@ -89,12 +85,13 @@ export default function App({ Component, pageProps }) {
         localStorage.setItem('bf-nav-h', String(navH))
       }
     }
-    document.documentElement.dataset.theme = theme
-    document.documentElement.dataset.font = font
     if (Number.isFinite(navH) && navH >= 32 && navH <= 96) {
       document.documentElement.style.setProperty('--nav-h', `${navH}px`)
     }
   }, [])
+  // Skin and font (SKIN-2, 2026-11-23): the skin on screen (bf-theme-now, else bf-theme) and the console
+  // font, followed live when another tab or the conversation beside this pane changes them (lib/skin.js).
+  useEffect(() => watchSkin(document.documentElement), [])
 
   // Light was removed on 2026-10-18 (hbar: useless); clear a level a browser may still hold.
   useEffect(() => { try { localStorage.removeItem('bf-lift'); const t = document.getElementById('bf-lift'); if (t) t.remove() } catch {} }, [])
@@ -411,7 +408,7 @@ export default function App({ Component, pageProps }) {
 
           [data-font="inter"] {
             --font-body: "Inter", system-ui, sans-serif;
-            --font-display: Lora, Georgia, serif;
+            --font-display: "Inter", system-ui, sans-serif;
           }
 
           [data-font="lora"] {

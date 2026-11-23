@@ -23,6 +23,7 @@ import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
+import { SKINS, FONT_SHAPES, consoleTheme, currentFont, showTheme, setFont as setSkinFont } from '../lib/skin'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -486,7 +487,7 @@ function ActPhrase({ children }) {
 // the look of different conversations live"). One slim strip above the conversation, folded to one line.
 // The look belongs to the thread and is kept on the box (/cc/threads/update, field `style`), so another
 // device opens the same thread in the same colours. Nothing here needs a push or a rebuild.
-const SKINS = ['gold', 'paper', 'owl', 'dusk', 'ocean', 'rose', 'sage', 'sand', 'octopus', 'sapphire', 'forest', 'crimson', 'mono', 'fox']
+// SKINS and FONT_SHAPES live in lib/skin.js (SKIN-2): the same lists every page follows.
 const TINTS = [0, 6, 12, 20]
 function hslHex(h, s, l) {
   s /= 100; l /= 100
@@ -588,7 +589,7 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
     </span>
   )
 }
-function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) {
+function ToolLine({ look, setLook, text, density, font, onFont, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
   const [wall, setWall] = useState({ image: '', veil: 60 })
@@ -621,6 +622,18 @@ function ToolLine({ look, setLook, text, density, posture, setPosture, extra }) 
             {['compact', 'comfortable'].map(d => <Chip key={d} on={density === d} onClick={() => put('density', d)} title="spacing inside messages">{d}</Chip>)}
           </span>
         </span>
+        {onFont ? (
+          // The font (SKIN-2, 2026-11-23, hbar: "we don't have opportunity to change the font in tools"): six
+          // shapes, each chip in its own face; the whole console takes it, remembered in this browser.
+          <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={lbl}>font</span>
+            {FONT_SHAPES.map(f => (
+              <a key={f.value} onClick={() => onFont(f.value)} title={f.title + '; the whole console, every page'}
+                style={{ fontFamily: f.family, fontSize: '12px', padding: '1px 9px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
+                         border: `1px solid ${font === f.value ? C.gold : C.line}`, color: font === f.value ? C.gold : C.dim, backgroundColor: font === f.value ? C.card : 'transparent' }}>{f.label}</a>
+            ))}
+          </span>
+        ) : null}
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>skin</span>
           {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
@@ -1792,6 +1805,10 @@ function CC() {
   useEffect(() => { try { const f = localStorage.getItem('cc.font'); if (f && FONTS.some(x => x.value === f)) setFont(f) } catch {} }, [])
   const setFontSaved = (v) => { setFont(v); setShowFonts(false); try { if (v) localStorage.setItem('cc.font', v); else localStorage.removeItem('cc.font') } catch {} }
   const fontPick = FONTS.find(x => x.value === font)
+  // The tool line's font chips (SKIN-2): the console font for every page, and this conversation with it.
+  const [consoleFont, setConsoleFont] = useState('system')
+  useEffect(() => { setConsoleFont(currentFont()); const on = () => setConsoleFont(currentFont()); window.addEventListener('bf-skin', on); return () => window.removeEventListener('bf-skin', on) }, [])
+  const pickFont = (v) => { setSkinFont(v, document.documentElement); setConsoleFont(v); setFontSaved(v) }
   const fontFamily = fontPick ? fontPick.family : 'var(--font-display, serif)'
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
@@ -2208,7 +2225,8 @@ function CC() {
   }
   useEffect(() => {
     const root = document.documentElement
-    root.dataset.theme = look.skin || (() => { try { return localStorage.getItem('bf-theme') || 'gold' } catch { return 'gold' } })()
+    // the skin on screen is written for every other page too (lib/skin.js): /apps, /tasks and the panes follow it
+    showTheme(look.skin || consoleTheme(), root)
   }, [look.skin])
   const learnCtx = useMemo(() => ({ on: !!look.learn, thread: cur }), [look.learn, cur])
   const lookText = look.text || textSize
@@ -3437,7 +3455,7 @@ function CC() {
 
         {loggedIn && !hidden.tools && (
           <div style={{ flexShrink: 0, ...(look.accent ? { '--accent': look.accent } : {}) }}>
-            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity}
+            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} font={consoleFont} onFont={pickFont}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
                 <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={recheckCodex} />
