@@ -182,7 +182,7 @@ function LearnDoor({ term }) {
   const line = { display: 'block', fontSize: '13px', color: C.ink, marginBottom: '6px' }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <a data-nopick="1" onClick={openIt} title={'a mini lesson on ' + term}
+      <a data-nopick="1" onClick={openIt} aria-label={'a mini lesson on ' + term}
         style={{ ...mono, fontSize: '9.5px', letterSpacing: '0.06em', marginLeft: '3px', padding: '0 4px', borderRadius: '6px', cursor: 'pointer', verticalAlign: 'super',
                  border: `1px solid ${card.open ? C.gold : C.line}`, color: C.gold }}>learn</a>
       {card.open && (
@@ -249,7 +249,7 @@ function Recall() {
 function InlineCode({ node, children, ...props }) {
   const [done, setDone] = useState(false)
   const txt = (Array.isArray(children) ? children.join('') : String(children == null ? '' : children))
-  return <><code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
+  return <><code {...props} data-nopick="1" aria-label={done ? 'copied' : 'press to copy'}
     onClick={(e) => { e.stopPropagation(); copyText(txt); setDone(true); setTimeout(() => setDone(false), 1200) }}
     style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
     {txt.length >= 2 && txt.length <= 80 && !txt.includes('\n') && !props.className && <LearnDoor term={txt} />}</>
@@ -292,17 +292,19 @@ function CopyDoor({ text }) {
   const [done, setDone] = useState(false)
   return <CardDoor onClick={() => { copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="Copy the exact text">{done ? 'copied' : 'copy'}</CardDoor>
 }
+// In flow, under the line it belongs to (MEMBERS-13, 2026-11-23, hbar's screenshot: a card floating over a
+// report covered the text and file links beside it). It opens on a press only and pushes what follows down;
+// it never lies over another word or link. No hover note anywhere in message text (no `title` on the doors).
 function InfoCard({ children, boxRef }) {
   return (
-    <span ref={boxRef} data-nopick="1" onClick={(e) => e.stopPropagation()}
-      style={{ position: 'absolute', left: 0, top: '1.7em', zIndex: 50, width: 'min(420px, 80vw)', display: 'block', backgroundColor: C.card,
-               border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', boxShadow: '0 8px 28px rgba(0,0,0,0.55)', lineHeight: 1.5, whiteSpace: 'normal' }}>
+    <span ref={boxRef} data-nopick="1" data-infocard="1" onClick={(e) => e.stopPropagation()}
+      style={{ position: 'static', display: 'block', width: 'min(420px, 100%)', boxSizing: 'border-box', margin: '6px 0 8px 0', backgroundColor: C.card,
+               border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', lineHeight: 1.5, whiteSpace: 'normal', fontWeight: 400 }}>
       {children}
     </span>
   )
 }
 function PathLink({ path, children, style, copy }) {
-  const [hov, setHov] = useState(false)
   const [peek, setPeek] = useState(null)
   const card = useCard()
   const img = isImagePath(path)
@@ -313,9 +315,8 @@ function PathLink({ path, children, style, copy }) {
   }, [card.open])
   const route = '/files?path=' + encodeURIComponent(path)
   return (
-    <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
-      <a onClick={(e) => { e.stopPropagation(); setHov(false); if (isMdPath(path)) { card.setOpen(false); openMd(path) } else card.toggle() }} title={isMdPath(path) ? `${path} (click: read it in a card)` : `${path} (click: card with open, full screen, ask, agent)`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
-      {hov && !card.open && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
+    <span style={{ display: 'inline' }}>
+      <a onClick={(e) => { e.stopPropagation(); if (isMdPath(path)) { card.setOpen(false); openMd(path) } else card.toggle() }} aria-label={isMdPath(path) ? `${path}: press to read it in a card` : `${path}: press for a card with open, full screen, ask, agent`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
           <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', overflowWrap: 'anywhere' }}>{name}</span>
@@ -349,7 +350,7 @@ function CommitLink({ sha }) {
   const repoName = info && info.repo ? info.repo.split('/repos/').pop().replace(/^.*\/world$/, 'world') : ''
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <a data-nopick="1" onClick={(e) => { e.stopPropagation(); card.toggle() }} title={`commit ${sha} (click: what it is)`}
+      <a data-nopick="1" onClick={(e) => { e.stopPropagation(); card.toggle() }} aria-label={`commit ${sha}: press for what it is`}
         style={{ ...mono, fontSize: '0.88em', color: C.gold, cursor: 'pointer', backgroundColor: C.codeBg, border: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '4px', padding: '0 5px' }}>{sha}</a>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
@@ -429,7 +430,7 @@ function Highlight({ children, node }) {
   const post = (k) => { card.setOpen(false); ccEmit('cc-send-text', k === 'deeper' ? `Go deeper on "${txt}": the evidence, the state, and the next step.` : `What exactly do you need from me on "${txt}"? Give me the choices.`) }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); const blk = e.currentTarget.closest && e.currentTarget.closest('p, li, td, blockquote'); synRef.current = synopsis(blk ? blk.textContent : '', txt); card.toggle() }} title="click: go deeper or send an agent"
+      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); const blk = e.currentTarget.closest && e.currentTarget.closest('p, li, td, blockquote'); synRef.current = synopsis(blk ? blk.textContent : '', txt); card.toggle() }} aria-label={txt + ': press to go deeper or send an agent'}
         style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
       {txt.length <= 80 && <LearnDoor term={txt} />}
       {card.open && (
@@ -464,7 +465,7 @@ function ActPhrase({ children }) {
           ref.current = { ctx: msgContext(e.currentTarget), sentence: sentenceAround(blk ? blk.textContent : phrase, phrase) }
           card.toggle()
         }}
-        title="click: do it, or ask what it needs"
+        aria-label={phrase + ': press to do it, or ask what it needs'}
         style={{ cursor: 'pointer', backgroundColor: card.open ? 'rgba(212,175,55,0.22)' : 'rgba(212,175,55,0.10)', borderBottom: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '3px', padding: '0 2px' }}>{children}</span>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
@@ -1087,7 +1088,7 @@ function JobCard({ job, onOpen, onTalk }) {
         job finished · {rc === 0 ? 'ok' : rc == null ? 'ended' : `exit ${rc}`}{secs != null ? ` · ${fmtSecs(secs)}` : ''}
       </p>
       <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{job.title}</p>
-      {res ? (text ? <div className="cc-md" style={{ fontSize: '0.92em', maxHeight: open ? 'none' : '12em', overflow: 'hidden', ...(open ? {} : { WebkitMaskImage: 'linear-gradient(to bottom, #000 70%, transparent)', maskImage: 'linear-gradient(to bottom, #000 70%, transparent)' }) }}><Md text={shown} /></div>
+      {res ? (text ? <div className="cc-md cc-jobtext" style={{ fontSize: '0.92em', maxHeight: open ? 'none' : '12em', overflow: 'hidden', ...(open ? {} : { WebkitMaskImage: 'linear-gradient(to bottom, #000 70%, transparent)', maskImage: 'linear-gradient(to bottom, #000 70%, transparent)' }) }}><Md text={shown} /></div>
                    : <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '0 0 8px 0' }}>no text came back</p>)
            : <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>}
       {imgs.length > 0 && (

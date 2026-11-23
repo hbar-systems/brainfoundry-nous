@@ -223,4 +223,4 @@ def test_week_sends_cc_ask_links_to_the_main_chat():
     html = (WEEK / "index.html").read_text()
     assert "ask('chat.ask', { text: q, send: true })" in html and "u.pathname !== '/cc'" in html
     man = yaml.safe_load((WEEK / "brain-app.yaml").read_text())
-    assert "chat.send" in man["permissions"] and man["version"] == "0.2.0"
+    assert "chat.send" in man["permissions"] and man["version"] == "0.3.0"

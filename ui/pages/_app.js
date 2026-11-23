@@ -501,6 +501,8 @@ export default function App({ Component, pageProps }) {
             .bf-nav-link { padding: 6px 10px !important; font-size: 12px !important; }
           }
           /* the quiet home's asks (PARENTS-HOME-1): a press target that answers the pointer */
+          /* a card pressed open inside a cut job result lies in flow, so the cut lifts while it is open (MEMBERS-13) */
+          .cc-jobtext:has([data-infocard]) { max-height: none !important; -webkit-mask-image: none !important; mask-image: none !important; }
           .cc-ask { transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 120ms ease-out; }
           .cc-ask:hover:not(:disabled) { border-color: color-mix(in srgb, var(--border) 50%, var(--accent) 50%) !important; }
           .cc-ask:active:not(:disabled) { transform: scale(0.99); }
