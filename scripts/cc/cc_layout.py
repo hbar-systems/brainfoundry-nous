@@ -94,7 +94,10 @@ MODES = ("newcomer", "operator")
 # Which language the console's chrome speaks: the title, the starter lines, the input and its buttons
 # (ui/lib/consoleText.js holds the strings). Beside mode, not in the layout, so a shared layout pack never
 # switches anyone's language. Unset is English. Not the language the brain answers in: that is Settings.
-LANGS = ("en", "ru")
+# MEMBERS-14 2026-11-23 (hbar: "all the brains should have in their own language and somewhere an opportunity
+# to choose English"): sk Martin, de Johanna, el Christos, rue (Rusyn, Cyrillic) Julesa. "home" is the
+# member's own language, kept when the console is switched to English, so the switch can lead back.
+LANGS = ("en", "ru", "sk", "de", "el", "rue")
 TIERS = {
     "standard": ["_chat", "_knowledge", "_files", "_guide", "_settings", "_apps"],
     "catalogue": ["_tasks", "_research", "_graph", "_integrations", "_trace"],
@@ -433,8 +436,18 @@ class Store:
         with self.lock:
             d = self._read()
             d["lang"] = v
+            if v != "en":
+                d["lang_home"] = v   # the member's own language; English is the switch, never the home
             self._write(d)
         return v
+
+    def lang_home(self) -> str:
+        """The member's own language (the last non-English one set), or "" when the console was only ever English."""
+        d = self._read()
+        for v in (d.get("lang_home"), d.get("lang")):   # a console set before MEMBERS-14 has only lang
+            if v in LANGS and v != "en":
+                return v
+        return ""
 
     def arrangement(self) -> dict | None:
         """The brain's arrangement of catalog items (docs/PERSONALIZATION.md), or None when unset.

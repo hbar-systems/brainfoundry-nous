@@ -39,10 +39,24 @@ function threadName(t) {
   return /^[A-Za-z0-9][A-Za-z0-9:._-]{0,79}$/.test(s) ? s : ''
 }
 
+// The last few press names, kept in this page only, for the "ask hbar" panel (MEMBERS-14,
+// components/HelpButton.js): names from the same closed alphabet, kept whether or not the log is on,
+// and sent only when the member presses Send there after seeing them.
+const RECENT = []
+function remember(name) {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) return
+  if (RECENT[RECENT.length - 1] === name) return
+  RECENT.push(name)
+  if (RECENT.length > 8) RECENT.shift()
+}
+function recent(n) { return RECENT.slice(-(n || 5)) }
+
 // After the bridge says the log is off (or is not there), the page stays quiet for a minute.
 let quietUntil = 0
 function press(kind, name, thread) {
-  if (typeof window === 'undefined' || typeof fetch !== 'function' || !name) return
+  if (typeof window === 'undefined' || !name) return
+  remember(name)
+  if (typeof fetch !== 'function') return
   if (Date.now() < quietUntil) return
   try {
     fetch('/cc/presses', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
@@ -54,4 +68,4 @@ function press(kind, name, thread) {
 }
 function wake() { quietUntil = 0 }
 
-module.exports = { routeName, slashName, choiceName, threadName, press, wake, NAME_RE }
+module.exports = { routeName, slashName, choiceName, threadName, press, wake, recent, NAME_RE }

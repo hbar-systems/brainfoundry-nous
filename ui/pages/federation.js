@@ -1,9 +1,11 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import RecordsTab from '../components/RecordsTab'
+import HelpTab, { useHelpInbox } from '../components/HelpTab'
 
 export default function Federation() {
-  const [tab, setTab] = useState('inbox') // 'inbox' | 'outbox' | 'compose' | 'records'
+  const [tab, setTab] = useState('inbox') // 'inbox' | 'outbox' | 'compose' | 'records' | 'help'
+  const [help, reloadHelp] = useHelpInbox() // MEMBERS-14: help asked by member brains
   const [inbox, setInbox] = useState([])
   const [outbox, setOutbox] = useState([])
   const [composeTo, setComposeTo] = useState('')
@@ -93,7 +95,7 @@ export default function Federation() {
 
         {/* Tab nav */}
         <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-          {['inbox', 'outbox', 'compose', 'records'].map(t => (
+          {['inbox', 'outbox', 'compose', 'records', 'help'].map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -111,7 +113,7 @@ export default function Federation() {
                 marginBottom: '-1px',
               }}
             >
-              {t}{t === 'inbox' && inbox.filter(m => !m.read_at).length > 0 ? ` (${inbox.filter(m => !m.read_at).length})` : ''}
+              {t}{t === 'inbox' && inbox.filter(m => !m.read_at).length > 0 ? ` (${inbox.filter(m => !m.read_at).length})` : ''}{t === 'help' && help.open > 0 ? ` (${help.open})` : ''}
             </button>
           ))}
         </div>
@@ -202,6 +204,11 @@ export default function Federation() {
         {/* Records (A2A-2): signed records from pinned brains, the owner's press */}
         {tab === 'records' && (
           <RecordsTab onStatus={(st) => { setStatus(st); setTimeout(() => setStatus(null), 8000) }} />
+        )}
+
+        {/* Help (MEMBERS-14): a member asked for help; answer here, it goes back signed */}
+        {tab === 'help' && (
+          <HelpTab data={help} reload={reloadHelp} onStatus={(st) => { setStatus(st); setTimeout(() => setStatus(null), 8000) }} />
         )}
 
         {/* Compose */}

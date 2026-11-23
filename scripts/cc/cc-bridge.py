@@ -3529,6 +3529,28 @@ class Login:
 LOGIN = Login()
 
 
+# The terminal door's sign-in link (MEMBERS-14 2026-11-23: "a person who has never seen a terminal"). door.sh
+# login runs Claude Code's own `claude auth login` as before, and writes only the sign-in link it prints to
+# login-url beside the bridge state (same user on member boxes). The code is still typed into Claude Code
+# itself in the door; this page never sees it (ops/legal/claude-code-terms-2026-09-19.md, point 3). The link
+# is shown as the sign-in screen's first button; anything that is not a claude.ai/claude.com https link, or
+# older than ten minutes, is not returned.
+DOOR_URL_FILE = STATE_DIR / "login-url"
+_DOOR_URL_RE = re.compile(r"https://(?:claude\.ai|claude\.com|console\.anthropic\.com)/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{1,1900}")
+
+
+def _door_login_url() -> str | None:
+    try:
+        st = DOOR_URL_FILE.stat()
+        if time.time() - st.st_mtime > 600 or st.st_size > 4000:
+            return None
+        text = DOOR_URL_FILE.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    m = _DOOR_URL_RE.fullmatch(text)
+    return m.group(0) if m else None
+
+
 # --------------------------------------------------------------- memory ----
 # The api's own persona (GET /persona), cached a minute: the fallback when the checkout holds no
 # api/brain_persona.local.md. MEMBERS-11 2026-11-23: two members had their persona only in the
@@ -3572,6 +3594,24 @@ def _language_lines() -> str:
     lines = res.get("lines") if isinstance(res, dict) and isinstance(res.get("lines"), str) else ""
     _LANG_CACHE.update(at=time.time(), lines=lines.strip())
     return _LANG_CACHE["lines"]
+
+
+# The console's language as the answer language when Settings names none (MEMBERS-14 2026-11-23, hbar: "she
+# should have her brain in this language, but of course it should be able to switch to English"). The
+# Settings lines win; a console switched to English answers in English.
+CONSOLE_LANG_NAMES = {"ru": "Russian", "sk": "Slovak", "de": "German", "el": "Greek",
+                      "rue": "Rusyn (Presov Rusyn, written in Cyrillic; not Ukrainian, not Russian)"}
+
+
+def _console_lang_line() -> str:
+    try:
+        name = CONSOLE_LANG_NAMES.get(LAYOUT.lang())
+    except Exception:
+        name = None
+    if not name:
+        return ""
+    return (f"Answer in {name} by default. If the person writes in another language, answer in that one; "
+            "if they ask for English, answer in English.")
 
 
 def _memory(query: str) -> list[dict]:
@@ -3633,7 +3673,7 @@ def _compose(message: str, recent: str = "", first_use: str = "") -> tuple[str, 
     LAST_SOURCES = list(dict.fromkeys(c["source"] for c in chunks))[:12]
     parts = []
     persona = _persona()
-    lang = _language_lines()
+    lang = _language_lines() or _console_lang_line()
     if lang:
         persona = (persona + "\n\n" + lang).strip()
     if persona:
@@ -5044,7 +5084,7 @@ def _surface_pages() -> dict:
 def _layout_view() -> dict:
     cur = LAYOUT.get()
     return {"layout": cur, "resolved": cc_layout.resolve(cur) if cur else None,
-            "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(), "lang": LAYOUT.lang(),
+            "default": cc_layout.DEFAULT, "answers": LAYOUT.answers(), "proposals": LAYOUT.proposals(), "lang": LAYOUT.lang(), "lang_home": LAYOUT.lang_home(),
             "pages": _surface_pages(),
             "questions": [{**q, "options": [list(o) for o in q["options"]]} for q in cc_layout.QUESTIONS]}
 
@@ -5069,7 +5109,7 @@ def _layout_api(method: str, route: str, body: dict | None, query: dict) -> tupl
             return 200, {"mode": mode, "modes": list(cc_layout.MODES), "tiers": cc_layout.TIERS}
         if route == "/layout/lang":   # the console's own words, en or ru (2026-11-12); the page reads it from GET /layout
             lang = LAYOUT.set_lang(body.get("lang")) if method == "POST" else LAYOUT.lang()
-            return 200, {"lang": lang, "langs": list(cc_layout.LANGS)}
+            return 200, {"lang": lang, "langs": list(cc_layout.LANGS), "lang_home": LAYOUT.lang_home()}
         if method == "GET" and route == "/layout/doors":   # the doors view (cc_doors.py, 2026-11-08)
             return 200, {"doors": _doors()}
         if method == "GET" and route == "/layout/export":
@@ -5789,6 +5829,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _activity())
         elif route == "/login/state":
             self._send(200, LOGIN.state())
+        elif route == "/login/door-url":
+            self._send(200, {"url": _door_login_url()})
         elif route == "/update/state":
             self._send(200, _update_state())
         elif route == "/update/log":

@@ -411,4 +411,4 @@ def test_door_claude_login_says_done_only_when_signed_in(tmp_path):
     out = run("login")
     assert "Not signed in yet" in out and "Signed in." not in out and "Done." not in out
     (bin_ / "next").write_text("ok")
-    assert "Signed in. Close this panel" in run("login")
+    assert "Signed in. Go back to the page." in run("login")   # MEMBERS-14: the door now sits inside the sign-in screen

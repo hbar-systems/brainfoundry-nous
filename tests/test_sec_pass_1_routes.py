@@ -36,7 +36,9 @@ PUBLIC_DOORS = {
     "/v1/public/chat": "public-scoped corpus only; Turnstile when configured; per-IP rate limit",
     "/v1/federation/query": "public-scoped corpus only, read-only; per-IP rate limit",
     "/v1/ask": "signed peer assertion; public-scoped chunks only; per-peer rate limit",
-    "/v1/federation/record": "A2A-2: ED25519 record from a pinned peer only; keeps it and countersigns, no other write; per-sender rate limit; 64 kB cap",
+    "/v1/federation/record": "A2A-2: ED25519 record from a pinned peer only; keeps it and countersigns, no other write; per-sender rate limit; 64 kB cap; "
+                             "MEMBERS-14 2026-11-23: help.request/help.answer pass the same checks plus one fixed shape each "
+                             "(api/federation_help.py), an answer only for a request this brain sent; awaiting hbar's review",
     "/documents/import-laptop/file": "one-run laptop-import bearer token minted by the owner",
     "/documents/import-laptop/finish": "one-run laptop-import bearer token minted by the owner",
     "/documents/import-laptop/check": "POST: the survey's inventory (names, sizes, dates; no content) under a survey-only one-run token minted by the owner; 64 MB cap, paths cleaned; MOVE-IN-2 2026-11-16, awaiting hbar's review",

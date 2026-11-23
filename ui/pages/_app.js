@@ -6,6 +6,7 @@ import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import SidesFooter from '../components/SidesFooter'
+import HelpButton from '../components/HelpButton'
 import { applyStyle, clearStyle } from '../lib/layout'
 import { watchWall } from '../lib/wallpaper'
 import { watchSkin } from '../lib/skin'
@@ -489,7 +490,7 @@ export default function App({ Component, pageProps }) {
           }
 
           .bf-nav { padding: 0 24px; gap: 32px; }
-          .bf-nav-links { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+          .bf-nav-links { display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; min-width: 0; flex: 0 1 auto; }
           .bf-nav-links::-webkit-scrollbar { display: none; }
           .bf-nav-link { white-space: nowrap; }
           .bf-brand-name { display: inline; }
@@ -520,6 +521,8 @@ export default function App({ Component, pageProps }) {
       </Head>
       {!embedded && <Nav />}
       {!embedded && <SidesFooter />}
+      {/* ask hbar (MEMBERS-14): one fixed corner button on every top-level screen, never inside a pane */}
+      {!embedded && <HelpButton />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',

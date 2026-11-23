@@ -64,6 +64,7 @@ DEFAULT_TTL = 7 * 24 * 3600
 GENESIS = "0" * 64
 RESERVED = ("record.receipt",)
 REPLY_KINDS = ("record.confirm", "record.decline")
+HELP_PREFIX = "help."  # help.request / help.answer: api/federation_help.py checks their shape
 RECORD_FIELDS = {"v", "kind", "rid", "from", "to", "iat", "exp", "body", "ref", "confirm"}
 
 
@@ -197,6 +198,9 @@ def check_shape(rec: Any, *, now: int) -> None:
     if kind in REPLY_KINDS:
         if ref is None or not isinstance(body.get("rid"), str):
             raise RecordError(400, "a confirmation needs ref and body.rid")
+    if kind.startswith(HELP_PREFIX):  # MEMBERS-14: help records have one fixed shape each
+        from api.federation_help import check_body
+        check_body(kind, body, ref)
 
 
 # ---------------------------------------------------------------- store
@@ -300,6 +304,9 @@ class Door:
             check_shape(rec, now=now)
             if rec["kind"] in REPLY_KINDS:
                 self._check_reply(rec)
+            elif rec["kind"].startswith(HELP_PREFIX):
+                from api.federation_help import check_inbound
+                check_inbound(self, rec)
             receipt = make_receipt(rec, by=self.id, now=now)
             rsig = sign_doc(self._key, receipt)
             self.store.append("in", key, {"dir": "in", "record": rec, "sig": sig,
@@ -373,6 +380,8 @@ class Door:
             raise RecordError(404, "no such inbound record")
         if s["record"]["kind"] in REPLY_KINDS:
             raise RecordError(400, "a confirmation is not confirmed again")
+        if s["record"]["kind"].startswith(HELP_PREFIX):
+            raise RecordError(400, "help is answered in Federation, Help")
         if s.get("answer"):
             return self.row(f"{self.id}/{s['answer']}")
         want = "decline" if decline else confirm_text(s["record"])
@@ -409,7 +418,8 @@ class Door:
                 "to": r["to"], "body": r["body"], "confirm_text": confirm_text(r),
                 "receipted": "receipt" in s, "last_error": s.get("last_error") if "receipt" not in s else None,
                 "answer": (replies[0]["record"]["kind"].split(".")[1] if replies else None),
-                "answerable": s["dir"] == "in" and r["kind"] not in REPLY_KINDS and not s.get("answer"),
+                "answerable": (s["dir"] == "in" and r["kind"] not in REPLY_KINDS
+                               and not r["kind"].startswith(HELP_PREFIX) and not s.get("answer")),
                 "at": s["receipt"]["at"] if "receipt" in s else None,
             })
         return out
