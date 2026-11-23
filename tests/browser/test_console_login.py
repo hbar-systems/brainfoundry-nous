@@ -132,6 +132,9 @@ FAKE = {
         "/cc/system": {"warnings": []},
         # the usage log (USAGE-1, 2026-11-22): every page POSTs its press here (SKIN-2 2026-11-23 found the fake lacked it)
         "/cc/presses": {"logged": True},
+        # the quiet footer line on every page (INLINE-1, 2026-11-23); SKIN-3 found the fake lacked it
+        "/cc/sides/count": {"ready": 0, "items": []},
+        "/cc/sides/seen": {"ok": True},
     },
     "term": {},
 }
