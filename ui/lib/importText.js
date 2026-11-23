@@ -3,7 +3,7 @@
 // The language is the bridge's layout.json key lang (GET /cc/layout), English when unset; the same key
 // ui/lib/consoleText.js reads. tests/test_move_in.py checks both languages carry every key.
 const { ruPlural } = require('./moveIn')
-const VENDOR = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', deepseek: 'DeepSeek', grok: 'Grok', copilot: 'Copilot', perplexity: 'Perplexity', lechat: 'Le Chat', pasted: 'a pasted conversation' }
+const VENDOR = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', deepseek: 'DeepSeek', grok: 'Grok', copilot: 'Copilot', perplexity: 'Perplexity', lechat: 'Le Chat', codex: 'Codex', 'claude-code': 'Claude Code', pasted: 'a pasted conversation' }
 
 const EN = {
   pageTitle: 'Knowledge — Upload & Search',

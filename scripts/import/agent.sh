@@ -5,7 +5,9 @@
 #
 # What it does, once, then it is gone:
 #  1. It looks through your home folder and your cloud folders (iCloud Drive, Google Drive, Dropbox,
-#     OneDrive, Box): names, sizes and dates only. Nothing is read yet.
+#     OneDrive, Box), and the session history of Codex and Claude Code (~/.codex/sessions,
+#     ~/.claude/projects: only the session files, nothing else in those folders): names, sizes and
+#     dates only. Nothing is read yet.
 #  2. It sends that LIST to your own brain over HTTPS, with the one-time key in the line.
 #     Never listed, only counted: hidden files, keys, passwords, mail, browser data, system folders.
 #  3. You choose on your brain's home what to bring. It then sends exactly those files, and only
@@ -44,6 +46,8 @@ export BA_MAX_AUDIO=@@MAX_AUDIO@@
 export BA_MAX_ENTRIES=@@MAX_ENTRIES@@
 export BA_MAX_NAME=400
 IMAGES=' @@IMAGES@@ '
+# the coding agents' history: label|folder under the home|deepest file (path parts, 0 any)
+HISTORY_ROOTS=(@@HISTORY@@)
 
 LOOK=0
 [ "$TOKEN" = "--look" ] && LOOK=1  # look only: walk and count here, send nothing, no key needed
@@ -125,6 +129,15 @@ for p in "$HOME_DIR"/*; do
 done
 # a second account of the same cloud gets "(2)"
 awk -F '\t' '{ n[$1]++; print (n[$1] == 1 ? $1 : $1 " (" n[$1] ")") "\t" $2 }' "$TMP/roots" > "$TMP/roots2"
+# the coding agents' history (label<TAB>folder<TAB>depth): only these two folders under ~/.codex and
+# ~/.claude, never the rest (auth.json, config, credentials); no link followed
+: > "$TMP/hist"
+for h in "${HISTORY_ROOTS[@]}"; do
+  label="${h%%|*}"; rest="${h#*|}"; sub="${rest%%|*}"; depth="${rest##*|}"
+  top="$HOME_DIR/${sub%%/*}"
+  [ -d "$top" ] && [ ! -L "$top" ] && [ -d "$HOME_DIR/$sub" ] && [ ! -L "$HOME_DIR/$sub" ] &&
+    printf '%s\t%s\t%s\n' "$label" "$HOME_DIR/$sub" "$depth" >> "$TMP/hist"
+done
 
 # ── 3. the walk: find prunes the never-entered folders, stat gives size and date, awk keeps the rules ──
 if stat --version >/dev/null 2>&1; then STAT=(stat --printf '%s\t%Y\t%n\n'); else STAT=(stat -f '%z%t%m%t%N'); fi
@@ -137,19 +150,19 @@ TAB='	'
 say "$W_LOOKING"
 [ "$(uname -s)" = Darwin ] && say "$W_MACASK"
 : > "$TMP/rows"; : > "$TMP/places"; : > "$TMP/skipped"; : > "$TMP/private"
-walk() {  # walk <label> <root>
-  local label="$1" root="$2" cloudprune=()
+walk() {  # walk <label> <root> [history depth]
+  local label="$1" root="$2" hist="${3:-}" cloudprune=()
   if [ -z "$label" ]; then  # the cloud folders inside the home are walked as their own roots
     while IFS="$TAB" read -r _l cp; do cloudprune+=(-o -path "$cp"); done < "$TMP/roots2"
   fi
   find "$root" -mindepth 1 \( -type d \( "${PRUNE[@]}" ${cloudprune[@]+"${cloudprune[@]}"} \) -prune \) -o \
     \( -type f ! -path "*$NL*" ! -path "*$TAB*" ! -path '*\\*' -exec "${STAT[@]}" {} + \) 2>>"$TMP/finderr" |
-  BA_ROOT="$root" BA_LABEL="$label" awk -F '\t' -v have="$(awk 'END { print NR }' "$TMP/places")" -v rows="$TMP/rows" -v places="$TMP/places" -v skipped="$TMP/skipped" '
+  BA_ROOT="$root" BA_LABEL="$label" BA_HIST="$hist" awk -F '\t' -v have="$(awk 'END { print NR }' "$TMP/places")" -v rows="$TMP/rows" -v places="$TMP/places" -v skipped="$TMP/skipped" '
     function jq(s) { gsub(/"/, "\\\"", s); return "\"" s "\"" }
     BEGIN { root = ENVIRON["BA_ROOT"]; label = ENVIRON["BA_LABEL"]; sre = ENVIRON["BA_SECRET_RE"]
       readable = ENVIRON["BA_READABLE"]; audio = ENVIRON["BA_AUDIO"]; maxf = ENVIRON["BA_MAX_FILE"] + 0
       maxa = ENVIRON["BA_MAX_AUDIO"] + 0; maxn = ENVIRON["BA_MAX_ENTRIES"] + 0; maxname = ENVIRON["BA_MAX_NAME"] + 0
-      have += 0 }
+      hist = ENVIRON["BA_HIST"]; have += 0 }
     {
       size = $1 + 0; mtime = $2 + 0; path = $0; sub(/^[^\t]*\t[^\t]*\t/, "", path)
       if (substr(path, 1, length(root) + 1) != root "/") next
@@ -162,6 +175,12 @@ walk() {  # walk <label> <root>
       why = ""
       if (substr(base, 1, 1) == ".") why = "hidden"
       else if (low ~ sre) why = "secret"
+      else if (hist != "") {  # a history root: session files only
+        if (ext != "@@HISTORY_EXT@@" || (hist + 0 > 0 && split(rel, _parts, "/") > hist + 0)) why = "not a chat"
+        else if (size > maxf) why = "over 25 MB"
+        else if (size == 0) why = "empty"
+        else if (length(name) > maxname) why = "name too long or odd"
+      }
       else if (ext == "" || (index(readable, " " ext " ") == 0 && index(audio, " " ext " ") == 0)) why = "not readable by Knowledge"
       else if (index(audio, " " ext " ") && size > maxa) why = "over 200 MB"
       else if (!index(audio, " " ext " ") && size > maxf) why = "over 25 MB"
@@ -180,6 +199,10 @@ while IFS="$TAB" read -r label root; do
   sayf "$W_ROOT" "$label"
   walk "$label" "$root"
 done < "$TMP/roots2"
+while IFS="$TAB" read -r label root depth; do
+  sayf "$W_ROOT" "$label"
+  walk "$label" "$root" "$depth"
+done < "$TMP/hist"
 
 # folders the system kept private (macOS privacy, or no permission): named, not looked into
 sed -n -e 's/^find: \(.*\): Operation not permitted$/\1/p' -e 's/^find: \(.*\): Permission denied$/\1/p' "$TMP/finderr" |
@@ -195,6 +218,8 @@ total="$(awk -F '\t' '{ s += $3 } END { printf "%d", s }' "$TMP/places")"
 sayf "$W_FOUND" "$n_rows" "$(human "${total:-0}")"
 clouds="$(cut -f1 "$TMP/roots2" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
 if [ -n "$clouds" ]; then sayf "$W_CLOUDS" "$clouds"; else say "$W_NOCLOUDS"; fi
+hists="$(cut -f1 "$TMP/hist" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+[ -n "$hists" ] && sayf "$W_HISTORY" "$hists"
 n_skip="$(awk -F '\t' '{ s += $2 } END { printf "%d", s }' "$TMP/skipped")"
 [ "$n_skip" -gt 0 ] && sayf "$W_NEVER" "$n_skip"
 if [ -s "$TMP/private" ]; then
@@ -219,7 +244,7 @@ jesc() { awk '{ gsub(/"/, "\\\""); printf "\"%s\"", $0 }'; }
     awk '{ k = $0 ": kept private by the system"; gsub(/"/, "\\\"", k); printf "%s\"%s\":0", (NR > 1 ? "," : ""), k }' "$TMP/private"
   }
   printf '},"roots":['
-  cut -f1 "$TMP/roots2" | awk '{ k = $0; gsub(/"/, "\\\"", k); printf "%s\"%s\"", (NR > 1 ? "," : ""), k }'
+  { cut -f1 "$TMP/roots2"; cut -f1 "$TMP/hist"; } | awk '{ k = $0; gsub(/"/, "\\\"", k); printf "%s\"%s\"", (NR > 1 ? "," : ""), k }'
   printf ']}'
 } | gzip -c > "$TMP/inv.gz"
 code="$(api POST /documents/import-laptop/check -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' --data-binary @"$TMP/inv.gz")"

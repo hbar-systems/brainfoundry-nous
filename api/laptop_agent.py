@@ -75,6 +75,9 @@ def rules() -> dict:
         "max_file": h.MAX_FILE_BYTES,
         "max_audio": h.MAX_AUDIO_FILE_BYTES,
         "max_entries": h.MAX_ENTRIES,
+        # the coding agents' history roots (MEMBERS-11): (label, "dir/dir" under the home, depth)
+        "history": [(label, "/".join(parts), depth) for label, parts, depth in h.AGENT_HISTORY],
+        "history_ext": h.HISTORY_EXT,
     }
 
 
@@ -99,6 +102,7 @@ WORDS = {
         "FOUND": "Found {0} files your brain can take ({1}).",
         "CLOUDS": "Cloud folders: {0}.",
         "NOCLOUDS": "No cloud folders found.",
+        "HISTORY": "Your Codex and Claude Code history on this computer comes along, each session as one conversation: {0}.",
         "NEVER": "Never sent, only counted: {0} files (keys, passwords, hidden files, mail, browser data, video, archives, files too big).",
         "PRIVATE": "The computer kept these private, so they were not looked at: {0}. To include them, run the line again and press Allow when asked.",
         "LISTSENT": "The list is on your brain: {0} files in {1} groups.",
@@ -128,6 +132,7 @@ WORDS = {
         "FOUND": "Нашлось {0} файлов, которые мозг может взять ({1}).",
         "CLOUDS": "Облачные папки: {0}.",
         "NOCLOUDS": "Облачных папок нет.",
+        "HISTORY": "История Codex и Claude Code на этом компьютере тоже переносится, каждая сессия одним разговором: {0}.",
         "NEVER": "Не отправляются никогда, только считаются: {0} файлов (ключи, пароли, скрытые файлы, почта, данные браузера, видео, архивы, слишком большие).",
         "PRIVATE": "Компьютер закрыл эти папки, их не смотрели: {0}. Чтобы добавить их, запустите строку ещё раз и нажмите «Разрешить», когда спросят.",
         "LISTSENT": "Список у мозга: {0} файлов в {1} группах.",
@@ -198,6 +203,7 @@ def render(kind: str, base: str, lang: str = "en") -> str:
             "SKIP_DIRS": " ".join(_sh_q(d) for d in r["skip_dirs"]),
             "DIR_SUFFIXES": " ".join(_sh_q(d) for d in r["dir_suffixes"]),
             "SECRET_RE": r["secret_re"].replace("'", "'\\''"),
+            "HISTORY": " ".join(_sh_q(f"{label}|{sub}|{depth}") for label, sub, depth in r["history"]),
         }
     else:
         fill = {
@@ -205,9 +211,12 @@ def render(kind: str, base: str, lang: str = "en") -> str:
             "SKIP_DIRS": ", ".join(_ps_q(d) for d in r["skip_dirs"]),
             "DIR_SUFFIXES": ", ".join(_ps_q(d) for d in r["dir_suffixes"]),
             "SKIP_FILES": ", ".join(_ps_q(p) for p in r["skip_files"]),
+            "HISTORY": ", ".join(f"@{{ label = {_ps_q(label)}; sub = {_ps_q(sub.replace('/', chr(92)))}; depth = {depth} }}"
+                                 for label, sub, depth in r["history"]),
         }
     fill.update({"READABLE": " ".join(r["readable"]), "AUDIO": " ".join(r["audio"]), "IMAGES": " ".join(r["images"]),
-                 "MAX_FILE": str(r["max_file"]), "MAX_AUDIO": str(r["max_audio"]), "MAX_ENTRIES": str(r["max_entries"])})
+                 "MAX_FILE": str(r["max_file"]), "MAX_AUDIO": str(r["max_audio"]), "MAX_ENTRIES": str(r["max_entries"]),
+                 "HISTORY_EXT": r["history_ext"]})
     for k, v in fill.items():
         text = text.replace(f"@@{k}@@", v)
     left = re.findall(r"@@[A-Z_]+@@", text)

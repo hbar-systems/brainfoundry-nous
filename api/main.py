@@ -5376,8 +5376,9 @@ async def import_laptop_file(
     authorization: str = _Header(""),
 ):
     """One file from the helper: token checked and charged, text extracted, proposed (Path A).
-    keep=file (the survey's pictures): an image is kept as a file in in/<date>/import/, not read."""
-    import time as _time
+    keep=file (the survey's pictures): an image is kept as a file in in/<date>/import/, not read.
+    A .jsonl under "Codex history/" or "Claude Code history/" (MEMBERS-11) is one session: it takes
+    the chat path (one conversation document); a .jsonl anywhere else is refused (415)."""
     raw = _laptop_import.bearer(authorization)
     try:
         _LAPTOP_TOKENS.check(raw)
@@ -5391,6 +5392,8 @@ async def import_laptop_file(
         return await _import_laptop_audio(file, rel, raw)
     if keep == "file" and ext in _laptop_import.IMAGE_EXT:
         return await _import_laptop_audio(file, rel, raw, listing="media.tsv")
+    if _laptop_import.history_source(rel):
+        return await _import_laptop_session(file, rel, raw)
     if ext not in _laptop_import.ACCEPTED_EXT:
         raise HTTPException(status_code=415, detail=f"Knowledge does not read .{ext or '(none)'} files")
     content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
@@ -5411,23 +5414,61 @@ async def import_laptop_file(
         raise HTTPException(status_code=422, detail=f"could not read the file: {str(e)[:200]}")
     if not text.strip():
         raise HTTPException(status_code=422, detail="no text in the file")
+    res = _laptop_propose(text, f"laptop/{rel}", ctype, len(content))
+    _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
+    return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"],
+            "injection_risk": (res.get("injection_scan") or {}).get("risk")}
+
+
+def _laptop_propose(text: str, filename: str, ctype: str, size: int) -> dict:
+    """Propose one text under the laptop import's upload permit (renewed before its 300 s end, and
+    once more when NodeOS refused it)."""
+    import time as _time
     last = None
     for _ in range(2):
-        if not _laptop_permit["id"] or _time.monotonic() - _laptop_permit["at"] > 240:  # permits live 300 s
+        if not _laptop_permit["id"] or _time.monotonic() - _laptop_permit["at"] > 240:
             _laptop_permit["id"] = _issue_upload_permit("laptop-import", "laptop import")["permit_id"]
             _laptop_permit["at"] = _time.monotonic()
         try:
-            res = _propose_document_text(text, filename=f"laptop/{rel}", content_type=ctype,
-                                         size=len(content), permit_id=_laptop_permit["id"])
-            _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
-            return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"],
-                    "injection_risk": (res.get("injection_scan") or {}).get("risk")}
+            return _propose_document_text(text, filename=filename, content_type=ctype, size=size,
+                                          permit_id=_laptop_permit["id"])
         except HTTPException as e:
             if e.status_code != 502:
                 raise
             _laptop_permit["id"] = None
             last = e
     raise last
+
+
+async def _import_laptop_session(file, rel: str, raw: str):
+    """One Codex or Claude Code session file from the survey (MEMBERS-11, 2026-11-23): token checked
+    and charged like any file, parsed by scripts/import_chats.py into ONE conversation document (only
+    the person's typed messages and the visible replies; tool calls, tool output, reasoning and meta
+    lines dropped), then proposed under the same name and path as a chat export, so it lands PENDING
+    and "Continue here" keeps its starting point (api/chat_continue.py)."""
+    from api import chat_import as _ci
+    content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
+    if len(content) > _laptop_import.MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file over {_laptop_import.MAX_FILE_BYTES // 1024 ** 2} MB")
+    try:
+        _LAPTOP_TOKENS.charge(raw, len(content))
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    ic = _ci.tool()
+    try:
+        conv = ic.session_conversation(content, rel)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"could not read the session: {e.__class__.__name__}")
+    if conv is None or conv["source"] != _laptop_import.history_source(rel):
+        raise HTTPException(status_code=422, detail="not a session file of this tool")
+    if not conv["turns"]:
+        raise HTTPException(status_code=422, detail="no conversation in this session (nothing typed)")
+    text = ic.render(conv)
+    name = ic.conv_file_name(conv)
+    res = _laptop_propose(text, name, "text/markdown", len(text.encode("utf-8")))
+    _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
+    return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"], "name": name,
+            "injection_risk": (res.get("injection_scan") or {}).get("risk")}
 
 
 async def _import_laptop_audio(file, rel: str, raw: str, listing: str = "audio.tsv"):

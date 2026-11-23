@@ -5,7 +5,9 @@
 #
 # What it does, once, then it is gone:
 #  1. It looks through your user folder and your cloud folders (OneDrive, Google Drive, Dropbox,
-#     iCloud Drive, Box): names, sizes and dates only. Nothing is read yet.
+#     iCloud Drive, Box), and the session history of Codex and Claude Code (.codex\sessions,
+#     .claude\projects: only the session files, nothing else in those folders): names, sizes and
+#     dates only. Nothing is read yet.
 #  2. It sends that LIST to your own brain over HTTPS, with the one-time key from the line.
 #     Never listed, only counted: hidden files, keys, passwords, mail, browser data, system folders.
 #  3. You choose on your brain's home what to bring. It then sends exactly those files, and only
@@ -36,6 +38,9 @@ $MaxFile = [int64]@@MAX_FILE@@
 $MaxAudio = [int64]@@MAX_AUDIO@@
 $MaxEntries = @@MAX_ENTRIES@@
 $MaxName = 400
+# the coding agents' history: label, folder under the user folder, deepest file (path parts, 0 any)
+$HistoryRoots = @(@@HISTORY@@)
+$HistoryExt = '@@HISTORY_EXT@@'
 
 $token = $env:BRAIN_TOKEN
 if (-not $token) { $token = Read-Host $W.ASKTOKEN }
@@ -98,6 +103,16 @@ function Why([string]$base_, [string]$name, [int64]$size) {
     if ($name.Length -gt $MaxName -or $name -match '[\x00-\x1f]') { return 'name too long or odd' }
     return ''
 }
+function HistWhy([string]$base_, [string]$rel, [string]$name, [int64]$size, [int]$depth) {
+    if ($base_.StartsWith('.')) { return 'hidden' }
+    $low = $base_.ToLowerInvariant()
+    foreach ($p in $SkipFiles) { if ($low -like $p) { return 'secret' } }
+    if ((Ext $base_) -ne $HistoryExt -or ($depth -gt 0 -and $rel.Split('/').Count -gt $depth)) { return 'not a chat' }
+    if ($size -gt $MaxFile) { return 'over 25 MB' }
+    if ($size -eq 0) { return 'empty' }
+    if ($name.Length -gt $MaxName -or $name -match '[\x00-\x1f]') { return 'name too long or odd' }
+    return ''
+}
 function IsLink($info) {
     try { $lt = $info.LinkType } catch { $lt = $null }
     return ($lt -eq 'SymbolicLink' -or $lt -eq 'Junction')
@@ -147,6 +162,19 @@ try {
     }
     $cloudPaths = @{}
     foreach ($x in $roots) { $cloudPaths[$x.path.ToLowerInvariant()] = $true }
+    # the coding agents' history: only these two folders under .codex and .claude, never the rest
+    # (auth.json, config, credentials); no link or junction followed
+    $hist = New-Object System.Collections.ArrayList
+    foreach ($h in $HistoryRoots) {
+        $top = Join-Path $homeDir ($h.sub.Split('\')[0])
+        $dir = Join-Path $homeDir $h.sub
+        $ok = $true
+        foreach ($p in @($top, $dir)) {
+            $gi = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            if (-not $gi -or -not $gi.PSIsContainer -or (IsLink $gi)) { $ok = $false; break }
+        }
+        if ($ok) { [void]$hist.Add(@{ label = $h.label; path = $dir; depth = [int]$h.depth }) }
+    }
 
     # ── 3. the walk ──
     Say LOOKING
@@ -156,7 +184,7 @@ try {
     $skipped = @{}
     $private = New-Object System.Collections.Generic.SortedSet[string]
     $st = @{ count = 0; total = [int64]0 }
-    function Walk([string]$label, [string]$root) {
+    function Walk([string]$label, [string]$root, [int]$histDepth = -1) {
         $stack = New-Object System.Collections.Stack
         $stack.Push($root)
         while ($stack.Count -gt 0) {
@@ -183,7 +211,7 @@ try {
                 $top = if ($rel.Contains('/')) { $rel.Substring(0, $rel.IndexOf('/')) } else { '(home)' }
                 $key = if ($label) { "$label/$top" } else { $top }
                 $name = if ($label) { "$label/$rel" } else { $rel }
-                $why = Why $f.Name $name $f.Length
+                $why = if ($histDepth -ge 0) { HistWhy $f.Name $rel $name $f.Length $histDepth } else { Why $f.Name $name $f.Length }
                 if (-not $why -and $st.count -ge $MaxEntries) { $why = 'over the list limit' }
                 if ($why) { $k = "$($key): $why"; $skipped[$k] = 1 + [int]$skipped[$k]; continue }
                 $mtime = [DateTimeOffset]::new($f.LastWriteTimeUtc).ToUnixTimeSeconds()
@@ -198,9 +226,11 @@ try {
     }
     Walk '' $homeDir
     foreach ($x in $roots) { Say ROOT $x.label; Walk $x.label $x.path }
+    foreach ($x in $hist) { Say ROOT $x.label; Walk $x.label $x.path $x.depth }
 
     Say FOUND $st.count (Human $st.total)
     if ($roots.Count) { Say CLOUDS (($roots | ForEach-Object { $_.label }) -join ', ') } else { Say NOCLOUDS }
+    if ($hist.Count) { Say HISTORY (($hist | ForEach-Object { $_.label }) -join ', ') }
     $nSkip = 0; foreach ($v in $skipped.Values) { $nSkip += $v }
     if ($nSkip -gt 0) { Say NEVER $nSkip }
     if ($private.Count) { Say PRIVATE (@($private) -join ', ') }
@@ -209,7 +239,7 @@ try {
     $sk = New-Object System.Text.StringBuilder
     foreach ($k in $skipped.Keys) { if ($sk.Length) { [void]$sk.Append(',') }; [void]$sk.Append((JStr $k)).Append(':').Append($skipped[$k]) }
     foreach ($p in $private) { if ($sk.Length) { [void]$sk.Append(',') }; [void]$sk.Append((JStr "$($p): kept private by the system")).Append(':0') }
-    $rl = ($roots | ForEach-Object { JStr $_.label }) -join ','
+    $rl = (@($roots) + @($hist) | ForEach-Object { JStr $_.label }) -join ','
     $json = '{"version":"' + $AgentVersion + '","os":"windows","files":[' + $rows.ToString() + '],"skipped":{' + $sk.ToString() + '},"roots":[' + $rl + ']}'
     $raw = (New-Object System.Text.UTF8Encoding $false).GetBytes($json)
     $ms = New-Object System.IO.MemoryStream

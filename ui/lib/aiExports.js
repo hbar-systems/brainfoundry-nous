@@ -1,6 +1,8 @@
 // Where each AI's export button is, for the move-in import card (MOVE-IN-2, 2026-11-16).
 // One entry per AI the brain imports through POST /documents/import-chats; the file is
-// detected on upload, no picker. verified mirrors scripts/import_chats.py FORMATS: false means
+// detected on upload, no picker. 'agents' (MEMBERS-11, 2026-11-23): Codex and Claude Code keep their
+// history on the computer; the survey brings it, a single session .jsonl can be dropped here.
+// verified mirrors scripts/import_chats.py FORMATS: false means
 // the file shape follows third-party descriptions (docs/IMPORT.md "Other AIs (2026-11-16)").
 // Plain ES module, no imports; the home card renders it.
 
@@ -59,6 +61,13 @@ export const AI_EXPORTS = [
     steps: {
       en: 'admin.mistral.ai/account/export: press Export. Drop the file here; if it is not read, paste the conversation instead.',
       ru: 'admin.mistral.ai/account/export: нажмите Export. Положите файл сюда; если он не прочитается, вставьте беседу текстом.',
+    },
+  },
+  {
+    key: 'agents', name: 'Codex, Claude Code', verified: true, url: '',
+    steps: {
+      en: 'Their history is on your computer, not in an export: Bring in this computer brings it. One session: drop its .jsonl from ~/.codex/sessions or ~/.claude/projects here.',
+      ru: 'Их история лежит на компьютере, а не в экспорте: её переносит «Перенести этот компьютер». Одну сессию: положите сюда её .jsonl из ~/.codex/sessions или ~/.claude/projects.',
     },
   },
   {

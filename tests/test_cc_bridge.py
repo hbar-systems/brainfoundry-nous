@@ -1752,3 +1752,16 @@ def test_mail_count_reads_fixed_fields_only(monkeypatch, tmp_path):
     assert m._mail_count(f) == {"exists": False}
     f.write_text(_j.dumps({"count": 0, "newest": None}))
     assert m._mail_count(f)["newest"] is None
+
+
+def test_persona_falls_back_to_api_when_checkout_has_none(monkeypatch, tmp_path):
+    # MEMBERS-11 2026-11-23: a member's persona only in the api's runtime volume
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    calls = []
+    monkeypatch.setattr(m, "_brain_api", lambda meth, path, body=None: calls.append(path) or {"persona": "You are the member's brain."})
+    assert not m.PERSONA_FILE.exists()
+    assert m._persona() == "You are the member's brain."
+    assert m._persona() == "You are the member's brain." and calls == ["/persona"]  # cached a minute
+    m.PERSONA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    m.PERSONA_FILE.write_text("Own file wins.", encoding="utf-8")
+    assert m._persona() == "Own file wins."

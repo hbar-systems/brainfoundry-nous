@@ -47,6 +47,12 @@ ACCEPTED_EXT = TEXT_EXT | DOC_EXT | IMAGE_EXT
 AUDIO_EXT = {"wav", "aif", "aiff", "mp3", "flac", "m4a", "ogg", "als", "mid", "midi"}
 MAX_AUDIO_FILE_BYTES = 200 * 1024 ** 2
 ARRIVALS_KEPT = 500
+# The coding agents' local history (MEMBERS-11, 2026-11-23): the helpers walk ~/.codex/sessions and
+# ~/.claude/projects as two labelled roots (scripts/import/brain_import.py AGENT_HISTORY) and offer
+# only their session files. A .jsonl under one of these labels is one conversation (parsed by
+# scripts/import_chats.py, the chat path); a .jsonl anywhere else is not a type Knowledge reads.
+HISTORY_LABELS = {"Codex history": "codex", "Claude Code history": "claude-code"}
+HISTORY_EXT = "jsonl"
 
 TOKEN_RE = re.compile(r"^imp_[A-Za-z0-9_-]{32,64}$")
 
@@ -198,6 +204,14 @@ def clean_relpath(path: str) -> str:
     if len(p) > 400:
         raise ValueError("path too long")
     return "/".join(parts)
+
+
+def history_source(rel: str) -> str:
+    """'codex' or 'claude-code' for a session file under one of the two history labels, else ''."""
+    top = rel.split("/", 1)[0]
+    if "/" in rel and top in HISTORY_LABELS and extension(rel) == HISTORY_EXT:
+        return HISTORY_LABELS[top]
+    return ""
 
 
 def extension(path: str) -> str:
