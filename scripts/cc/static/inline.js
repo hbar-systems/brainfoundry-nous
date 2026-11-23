@@ -3,7 +3,10 @@
    <script src="/cc/inline.js" data-page="court-tasks"></script>
    <li data-talk-key="T123" data-talk-title="Fix the door" data-talk-text="..." data-talk-link="/cc/...">...</li>
 
-   Every element with data-talk-key gets a small "note" press. It opens a box under the item: type a question,
+   A press inside the item marked data-talk-open is the note press (else a small "note" chip is added); a press
+   marked data-talk-send="text" sends that text at once as a turn of the item's note (a ruling, a done), and the
+   answer shows in the box; with no console behind the page, both fall back to their own href.
+   Every element with data-talk-key gets a note press. It opens a box under the item: type a question,
    a clarification, or "send an agent". The turn goes to a side conversation bound to that item (never a new
    thread in the list); the answer comes back into the same box, folded, with a dot until you open it. A job
    the agent starts lands in the box as a card when it ends. A quiet line at the bottom says "2 answers ready".
@@ -57,14 +60,34 @@
     return ''
   }
 
+  // the presses that belong to this item, not to an item nested inside it (a group holds its tasks)
+  function own(node, sel) {
+    return Array.prototype.filter.call(node.querySelectorAll(sel), function (x) { return x.closest('[data-talk-key]') === node })
+  }
   function chip(node) {
     var key = node.getAttribute('data-talk-key')
-    var c = node.querySelector('[data-talk-chip]')
+    var c = own(node, '[data-talk-chip]')[0]
+    if (!node.getAttribute('data-talk-wired')) {
+      node.setAttribute('data-talk-wired', '1')
+      own(node, '[data-talk-send]').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          if (refused) return                      // the plain file: the press keeps its own href (the chat)
+          e.preventDefault(); e.stopPropagation()
+          send(key, b.getAttribute('data-talk-send'), b.getAttribute('data-talk-mode') || 'ask')
+        })
+      })
+      var o = own(node, '[data-talk-open]')[0]
+      if (o) {
+        o.setAttribute('data-talk-chip', '1'); c = o
+        c.addEventListener('click', function (e) { if (refused) return; e.preventDefault(); e.stopPropagation(); toggle(key) })
+        c.setAttribute('data-talk-label', c.textContent)
+      }
+    }
     if (!c) {
       c = el('button', 'font:11px ui-monospace,monospace;letter-spacing:.08em;background:none;border:1px solid ' + C.line +
         ';color:' + C.dim + ';border-radius:12px;padding:2px 9px;cursor:pointer;margin-left:6px;vertical-align:middle')
       c.type = 'button'; c.setAttribute('data-talk-chip', '1')
-      ;(node.querySelector('[data-talk-slot]') || node).appendChild(c)
+      ;(own(node, '[data-talk-slot]')[0] || node).appendChild(c)
       c.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); toggle(key) })
     }
     var s = sides[key]
@@ -73,16 +96,17 @@
       c.appendChild(el('span', 'display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px;background:' +
         (s.state === 'running' || s.state === 'waiting' ? C.dim : s.state === 'failed' ? C.bad : C.gold)))
     }
-    c.appendChild(document.createTextNode(s && s.turns && s.turns.length ? 'note · ' + Math.ceil(s.turns.length / 2) : 'note'))
+    var label = c.getAttribute('data-talk-label') || 'note'
+    c.appendChild(document.createTextNode(s && s.turns && s.turns.length ? label + ' · ' + Math.ceil(s.turns.length / 2) : label))
     c.title = refused ? 'talk in place works when this page is opened at ' + base + '/page/…' : (stateWord(s) || 'ask, clarify or send an agent, right here')
   }
 
   function box(key) {
     var node = itemOf(key)
     if (!node) return null
-    var b = node.querySelector('[data-talk-box]')
+    var b = own(node, '[data-talk-box]')[0]
     if (!b) {
-      b = el('div', 'margin:8px 0 4px 0;padding:10px 12px;border:1px solid ' + C.line + ';border-radius:10px;background:' + C.bg +
+      b = el('div', 'grid-column:1/-1;margin:8px 0 4px 0;padding:10px 12px;border:1px solid ' + C.line + ';border-radius:10px;background:' + C.bg +
         ';color:' + C.ink + ';font:14px/1.45 system-ui,sans-serif;text-align:left;cursor:auto')
       b.setAttribute('data-talk-box', '1')
       b.addEventListener('click', function (e) { e.stopPropagation() })
@@ -153,27 +177,37 @@
 
   function toggle(key) {
     open[key] = !open[key]
+    if (open[key]) { var n = itemOf(key), d = n && n.closest('details'); while (d) { d.open = true; d = d.parentElement && d.parentElement.closest('details') } }
     if (open[key] && drafts[key] == null) { try { drafts[key] = localStorage.getItem('cc.inline.draft.' + key) || '' } catch (e) { drafts[key] = '' } }
     draw(key)
     if (open[key]) { var t = box(key) && box(key).querySelector('textarea'); if (t) t.focus() }
   }
 
   function say(key, mode) {
-    var node = itemOf(key)
     var text = (drafts[key] || '').trim()
+    if (!text) return
+    drafts[key] = ''; try { localStorage.removeItem('cc.inline.draft.' + key) } catch (e) {}
+    send(key, text, mode, true)
+  }
+
+  // one turn of the item's note: typed in its box, or a press that carries its own text
+  function send(key, text, mode, typed) {
+    var node = itemOf(key)
+    text = String(text || '').trim()
     if (!node || !text) return
+    if (!open[key]) { open[key] = true; if (drafts[key] == null) drafts[key] = '' }
     var body = { key: key, message: text, mode: mode, page: page, home: home || undefined,
       title: node.getAttribute('data-talk-title') || (node.textContent || '').trim().slice(0, 120),
       text: node.getAttribute('data-talk-text') || '', link: node.getAttribute('data-talk-link') || location.pathname }
     var s = sides[key] || (sides[key] = { key: key, turns: [] })
-    s.turns = (s.turns || []).concat([{ who: 'me', text: text, mode: mode }]); s.state = 'running'; s.ready = false
-    drafts[key] = ''; try { localStorage.removeItem('cc.inline.draft.' + key) } catch (e) {}
+    if (s.state === 'running' || s.state === 'waiting') { s.error = 'still answering the last one'; draw(key); return }
+    s.turns = (s.turns || []).concat([{ who: 'me', text: text, mode: mode }]); s.state = 'running'; s.ready = false; s.error = null
     draw(key); chip(node)
     api('POST', '/sides/say', body).then(function (d) {
-      if (d._status >= 300) { s.state = 'failed'; s.error = d.error || ('the door answered ' + d._status); s.turns.pop(); drafts[key] = text }
+      if (d._status >= 300) { s.state = 'failed'; s.error = d.error || ('the door answered ' + d._status); s.turns.pop(); if (typed) drafts[key] = text }
       else if (d.side) sides[key] = Object.assign(d.side, { cards: s.cards })
       draw(key); chip(node); poll(true)
-    }).catch(function () { s.state = 'failed'; s.error = 'the console did not answer'; drafts[key] = text; draw(key) })
+    }).catch(function () { s.state = 'failed'; s.error = 'the console did not answer'; if (typed) drafts[key] = text; draw(key) })
   }
 
   // the footer's quiet line: "2 answers ready", press to jump to the first one on this page
@@ -217,11 +251,14 @@
 
   function scan() { Array.prototype.forEach.call(document.querySelectorAll('[data-talk-key]'), chip) }
 
-  window.ccInline = { scan: scan, open: function (k) { if (!open[k]) toggle(k) }, sides: sides }
+  window.ccInline = { scan: scan, open: function (k) { if (!open[k]) toggle(k) }, send: send, sides: sides }
   function start() {
     scan()
     if (refused) return
     tick(); seen()
+    // /cc/page/<name>/#talk=<key>: open that item's note (the footer of another page jumps here this way)
+    var h = /^#talk=(.+)$/.exec(location.hash || '')
+    if (h) { var k = decodeURIComponent(h[1]); if (itemOf(k)) { toggle(k); itemOf(k).scrollIntoView({ block: 'center' }) } }
     setInterval(seen, 60000)
     document.addEventListener('visibilitychange', seen)
   }

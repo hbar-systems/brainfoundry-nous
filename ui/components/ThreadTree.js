@@ -3,8 +3,13 @@
 // tree at the end of message and get quick clarity".
 // The block is parsed by ui/lib/tree.js; this draws it. A row opens its card: the why, one full
 // link, then Talk, which fills the chat box (it never sends by itself).
+// INLINE-1 (2026-11-23): Talk opens a small note box on the card itself (hbar: "I don't want to leave this
+// page"); the turn goes to a side conversation bound to this node, the answer comes back in the box. A page on
+// a conversation with no id yet keeps the old Talk (it fills the chat box).
 import { useState } from 'react'
 import { treeAsk, treeCounts } from '../lib/tree'
+import { treeKey } from '../lib/sides'
+import SideNote from './SideNote'
 
 const mono = { fontFamily: 'var(--font-mono, monospace)' }
 const ORDER = ['blocked', 'yours', 'running', 'scheduled', 'later', 'done', 'killed', 'unknown']
@@ -44,8 +49,10 @@ function openLink(link) {
   else if (typeof window !== 'undefined') window.open(link.href, '_blank', 'noopener')
 }
 
-function Card({ node }) {
+function Card({ node, cur, title }) {
   const s = STATE[node.state] || STATE.unknown
+  const key = treeKey(cur, node)
+  const [talk, setTalk] = useState(false)
   const word = node.state === 'unknown' ? (node.raw || '') : s.word
   return (
     <div data-tree-card={node.id} style={{ margin: '4px 0 8px 19px', padding: '10px 12px', borderRadius: '8px',
@@ -61,14 +68,18 @@ function Card({ node }) {
         </div>
       ) : null}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
-        <Door accent onClick={() => emit('cc-fill-text', treeAsk(node))} title="Puts this in the chat box; you finish and send it">talk</Door>
+        {key
+          ? <Door accent onClick={() => setTalk(t => !t)} title="A small box right here: ask, clarify or send an agent; the answer comes back in it">{talk ? 'fold' : 'talk'}</Door>
+          : <Door accent onClick={() => emit('cc-fill-text', treeAsk(node))} title="Puts this in the chat box; you finish and send it">talk</Door>}
         {node.link ? <Door onClick={() => openLink(node.link)} title={node.link.href}>open</Door> : null}
       </div>
+      {key && talk ? <SideNote item={{ key, title: node.label, text: [title ? 'Tree: ' + title + '.' : '', node.why || node.note || '', node.state ? 'State: ' + node.state + '.' : '', node.link ? 'Link: ' + node.link.href : ''].filter(Boolean).join(' '),
+        link: '/talk?thread=' + encodeURIComponent(cur), page: 'console tree', home: cur }} /> : null}
     </div>
   )
 }
 
-function Row({ node, depth, open, toggle, shut, fold }) {
+function Row({ node, depth, open, toggle, shut, fold, cur, title }) {
   const kids = node.children || []
   const isOpen = open === node.id
   const folded = shut.has(node.id)
@@ -94,13 +105,13 @@ function Row({ node, depth, open, toggle, shut, fold }) {
             style={{ ...mono, flex: '0 0 auto', fontSize: '11px', color: 'var(--muted)', padding: '1px 6px', cursor: 'pointer' }}>{folded ? '+' + kids.length : '−'}</a>
         ) : null}
       </div>
-      {isOpen ? <Card node={node} /> : null}
-      {!folded ? kids.map((k) => <Row key={k.id} node={k} depth={depth + 1} open={open} toggle={toggle} shut={shut} fold={fold} />) : null}
+      {isOpen ? <Card node={node} cur={cur} title={title} /> : null}
+      {!folded ? kids.map((k) => <Row key={k.id} node={k} depth={depth + 1} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={title} />) : null}
     </div>
   )
 }
 
-export default function ThreadTree({ tree }) {
+export default function ThreadTree({ tree, cur }) {
   const [open, setOpen] = useState(null)
   const [shut, setShut] = useState(() => new Set())
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
@@ -113,7 +124,7 @@ export default function ThreadTree({ tree }) {
       <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', padding: '0 6px 6px', overflowWrap: 'anywhere' }}>
         {tree.title || 'This thread'}{line ? <span style={{ textTransform: 'none', letterSpacing: 0 }}>{'  ·  ' + line}</span> : null}
       </div>
-      {tree.nodes.map((n) => <Row key={n.id} node={n} depth={0} open={open} toggle={toggle} shut={shut} fold={fold} />)}
+      {tree.nodes.map((n) => <Row key={n.id} node={n} depth={0} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={tree.title} />)}
     </div>
   )
 }

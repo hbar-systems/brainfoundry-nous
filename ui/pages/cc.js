@@ -1029,7 +1029,7 @@ function BrainText({ text, live, onChoice, pane, cur }) {
     return { ...splitChoices(s.body), route: p.route, tree: t.tree, steers: s.steers }
   }, [text])
   const r = route || (pane && (pane.route || pane)) || null
-  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
+  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} cur={cur} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 // A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS

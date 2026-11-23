@@ -5,6 +5,7 @@ import { press, routeName } from '../lib/presses'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
+import SidesFooter from '../components/SidesFooter'
 import { applyStyle, clearStyle } from '../lib/layout'
 import { watchWall } from '../lib/wallpaper'
 import { watchSkin } from '../lib/skin'
@@ -518,6 +519,7 @@ export default function App({ Component, pageProps }) {
         `}</style>
       </Head>
       {!embedded && <Nav />}
+      {!embedded && <SidesFooter />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',

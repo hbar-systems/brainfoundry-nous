@@ -283,3 +283,40 @@ def test_page_folder_is_on_the_console_origin_files_raw_stays_sandboxed(monkeypa
                 assert e.code in (400, 404), bad
     finally:
         srv.shutdown()
+
+
+# ---- ui/lib/sides.js and the console wiring ----
+def test_sides_lib_under_node():
+    from test_cc_cardlog import _node
+    d = _node(r"""
+const S = require('./sides')
+const cur = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+console.log(JSON.stringify({
+  key: S.treeKey(cur, { id: 'n1 x' }), none: S.treeKey('new:1', { id: 'n1' }), none2: S.treeKey(cur, {}),
+  body: S.sayBody({ key: 'k', title: 't', home: cur }, '  hi  ', 'weird'),
+  agent: S.sayBody({ key: 'k' }, 'x', 'agent').mode,
+  busy: [S.busy({ state: 'running' }), S.busy({ state: 'waiting' }), S.busy({ state: 'ready' }), S.busy(null)],
+  words: [S.stateWord({ state: 'running' }), S.stateWord({ state: 'ready', ready: true }), S.stateWord({ state: 'failed', error: 'e' })],
+  lines: [S.footerLine(0), S.footerLine(1), S.footerLine(3)],
+  jump: [S.jumpHref({ key: 'court-tasks:T1', link: '/cc/page/court/tasks/#x' }), S.jumpHref({ key: 'k', link: '/talk?thread=1' }),
+         S.jumpHref({ key: 'k', link: 'javascript:alert(1)' }), S.jumpHref({ key: 'k', link: '//evil.example' })],
+}))
+""")
+    assert d["key"] == "tree:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:n1-x" and d["none"] is None and d["none2"] is None
+    assert d["body"]["message"] == "hi" and d["body"]["mode"] == "ask" and d["body"]["home"] and d["agent"] == "agent"
+    assert d["busy"] == [True, True, False, False]
+    assert d["words"] == ["working…", "answer ready", "did not finish: e"]
+    assert d["lines"] == ["", "1 answer ready", "3 answers ready"]
+    assert d["jump"] == ["/cc/page/court/tasks/#talk=court-tasks%3AT1", "/talk?thread=1", None, None]
+
+
+def test_console_wiring():
+    tree = (ROOT / "ui" / "components" / "ThreadTree.js").read_text()
+    assert "<SideNote item=" in tree and "treeKey(cur, node)" in tree and "emit('cc-fill-text', treeAsk(node))" in tree
+    assert "<ThreadTree tree={tree} cur={cur} />" in (ROOT / "ui" / "pages" / "cc.js").read_text()
+    app = (ROOT / "ui" / "pages" / "_app.js").read_text()
+    assert "{!embedded && <SidesFooter />}" in app
+    note = (ROOT / "ui" / "components" / "SideNote.js").read_text()
+    assert "/cc/sides/say" in note and "/cc/sides/read" in note and "dangerouslySetInnerHTML" not in note
+    foot = (ROOT / "ui" / "components" / "SidesFooter.js").read_text()
+    assert "/cc/sides/count" in foot and "/cc/sides/seen" in foot
