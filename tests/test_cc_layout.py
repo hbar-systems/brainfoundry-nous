@@ -348,7 +348,7 @@ def test_lang_defaults_to_english_and_round_trips(tmp_path):
 def test_bridge_lang_route(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=False)
     st, d = m._layout_api("GET", "/layout/lang", None, {})
-    assert st == 200 and d == {"lang": "en", "langs": list(L.LANGS)}
+    assert st == 200 and d == {"lang": "en", "langs": list(L.LANGS), "lang_home": ""}   # lang_home: MEMBERS-14
     st, d = m._layout_api("POST", "/layout/lang", {"lang": "ru"}, {})
     assert st == 200 and d["lang"] == "ru"
     st, d = m._layout_api("GET", "/layout", None, {})

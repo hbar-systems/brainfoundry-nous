@@ -42,7 +42,7 @@ function Ways({ lang, F, onDone, onSkip }) {
       <ul className="fr-ways">
         {(q ? q.options : []).map(([v, name]) => {
           const on = !!(picks && picks.includes(v))
-          const ru = lang === 'ru' && F.about[v]
+          const ru = lang !== 'en' && F.about[v]
           const about = ru ? ru[1] : ((q.about && q.about[v]) || '')
           return (
             <li key={v}>

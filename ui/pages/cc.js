@@ -1,5 +1,5 @@
 import Head from 'next/head'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
@@ -12,6 +12,7 @@ import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
 import FirstSignIn from '../components/FirstRun'
+import SignInSteps from '../components/SignInSteps'
 import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { press, routeName, slashName, choiceName } from '../lib/presses'
@@ -1718,6 +1719,20 @@ function CC() {
   const [asks, setAsks] = useState([])
   // the first sign-in order (SWITCH-1, 2026-11-16): once on a member brain's quiet home, state on the bridge
   const [signinOrder, setSigninOrder] = useState(null)
+  // a start pressed before the sign-in (MEMBERS-14 2026-11-23: MEMBERS-13 saw every one fail with an English error):
+  // kept here and in this browser for 30 minutes, the sign-in screen says so, and it is sent once a reasoner is in
+  const [pendingStart, setPendingStartState] = useState(null)
+  const setPendingStart = (t) => {
+    setPendingStartState(t)
+    try { if (t) localStorage.setItem('cc.pendingStart', JSON.stringify({ text: t, at: Date.now() })); else localStorage.removeItem('cc.pendingStart') } catch {}
+  }
+  useEffect(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem('cc.pendingStart') || 'null')
+      if (p && typeof p.text === 'string' && Date.now() - (p.at || 0) < 30 * 60 * 1000) setPendingStartState(p.text)
+      else localStorage.removeItem('cc.pendingStart')
+    } catch {}
+  }, [])
   useEffect(() => {
     if (!quietHome) return
     fetch('/cc/first-run', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => { if (j) setSigninOrder(j) })
@@ -2133,6 +2148,8 @@ function CC() {
       .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setHealth)
       .catch(() => setHealth(false))
+  // the sign-in screen's own look (step 3): a fresh check, kept stable for its timer
+  const recheckSignIn = useCallback(() => { loadHealth(true) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const loadPending = () =>
     fetch('/cc/permits', { cache: 'no-store' }).then(r => r.ok ? r.json() : { pending: [] }).then(d => { setPending(d.pending || []); setAuto(d.auto || []) }).catch(() => {})
   const loadFirstRun = () =>
@@ -2720,6 +2737,12 @@ function CC() {
   const loggedIn = claudeIn || codexIn || localIn
   const firstOn = showFirstRun(signinOrder, quietHome) && !paneMode && turns.length === 0
   const firstStep = firstOn ? currentStep(signinOrder, loggedIn) : null
+  // the start that waited for the sign-in runs once a reasoner is in (MEMBERS-14)
+  useEffect(() => {
+    if (!loggedIn || !pendingStart || !sendRef.current) return
+    const q = pendingStart; setPendingStart(null)
+    sendRef.current(q)
+  }, [loggedIn, pendingStart])  // eslint-disable-line react-hooks/exhaustive-deps
   // The doors view: the doors once per page, and once per browser session the bare console opens on a blank
   // thread (the doors), not on the thread left open last time; ?thread= and panes keep their thread.
   useEffect(() => {
@@ -3087,6 +3110,8 @@ function CC() {
     if (!text && files.length === 0 && !block) return
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    // before any sign-in: the start waits for it instead of failing (MEMBERS-14 2026-11-23)
+    if (health && !loggedIn && typeof forced === 'string' && !paneMode) { setPendingStart(text); return }
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
     if (typeof forced !== 'string' && files.length > 0) {
       // Attachments go to the box first (in/<date>/), then the message names them.
@@ -3443,7 +3468,10 @@ function CC() {
         )}
 
         {firstStep && health && <FirstSignIn lang={lang} state={signinOrder} loggedIn={loggedIn} onChange={setSigninOrder} />}
-        {health && !loggedIn && (!firstStep || firstStep === 'seat') && <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />}
+        {health && !loggedIn && (!firstStep || firstStep === 'seat') && (health.signin_proxy
+          ? <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />
+          : <SignInSteps lang={lang} bare={firstStep === 'seat'} loggedIn={loggedIn} onRecheck={recheckSignIn} pendingStart={pendingStart}
+              other={<SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />} />)}
 
         {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>

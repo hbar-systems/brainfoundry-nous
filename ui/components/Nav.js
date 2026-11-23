@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import LangSwitch from './LangSwitch'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
 import { HOME_THREADS, ccHomeOf, homeHref as homeOf, menuHref } from '../lib/home'
@@ -270,7 +271,8 @@ export default function Nav() {
         </span>
       </Link>
       {ccHome ? (
-        <div style={{ marginLeft: 'auto', position: 'relative' }}>
+        <div style={{ marginLeft: 'auto', position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <LangSwitch />
           <button onClick={() => setDrawer(d => !d)} aria-expanded={drawer} className={quiet ? 'bf-quiet-menu' : undefined}
             style={{ background: drawer ? 'var(--surface2)' : 'transparent', color: 'var(--muted)', border: '1px solid var(--border)',
                      borderRadius: '6px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.06em' }}>
@@ -325,6 +327,7 @@ export default function Nav() {
         {/* the bar scrolls sideways, so "more" opens in line rather than as a dropdown it would clip */}
         {more.length > 0 && moreButton}
         {more.length > 0 && moreOpen && moreList(false)}
+        <LangSwitch />
       </div>
       )}
 
