@@ -25,7 +25,8 @@ Endpoints (JSON):
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
                           with {"new": true, "parent": <thread>, "label"}: the new thread reports each finished turn to its
                           parent as a card, handed to the parent's page in GET /cc/jobs?take=1&thread=<parent> -> "reports"
-  GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line"}  (live GET <base>/models, 5 s)
+  GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line","engine","private","chosen"}  (live GET <base>/models, 5 s)
+  POST /cc/seat/private   {"on": true|false} -> {"ok","local"}: the person chooses the private brain (SEAT-3)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
@@ -66,6 +67,7 @@ import select
 import signal
 import subprocess
 import tempfile
+import uuid
 import sys
 import threading
 import time
@@ -528,6 +530,7 @@ import cc_codex  # noqa: E402
 import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
+import cc_private  # noqa: E402   the private seat's lean engine (SEAT-3, 2026-11-23): Ollama direct, three read-only tools
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
@@ -4028,11 +4031,36 @@ def _codex_status(fresh: bool = False) -> dict:
     return dict(st)
 
 
+PRIVATE_CHOICE = STATE_DIR / "private.json"   # {"chosen": true, "at": ...}: the person picked the private seat (SEAT-3)
+
+
+def _private_chosen() -> bool:
+    if os.environ.get("CC_LOCAL_CHOSEN", "").strip() == "1":   # the owner's own endpoint, chosen for the whole brain
+        return True
+    try:
+        return bool(json.loads(PRIVATE_CHOICE.read_text()).get("chosen"))
+    except Exception:
+        return False
+
+
+def _private_choose(on: bool) -> dict:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    PRIVATE_CHOICE.write_text(json.dumps({"chosen": bool(on), "at": int(time.time())}))
+    return _local_status(live=False)
+
+
 def _local_status(live: bool = True) -> dict:
-    """The Local seat's state for the page: configured, answering, `local: <model> at <host>`. live:
-    a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down never stalls it.
+    """The Local seat's state for the page: configured, answering, `local: <model> at <host>`, and whether
+    the person chose it. live: a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down
+    never stalls it. On the native engine a live check also says whether the model is installed there.
     Never carries the key."""
-    return cc_local.status(os.environ, live=live)
+    st = cc_local.status(os.environ, live=live, chosen=_private_chosen())
+    if live and st.get("reachable") and st.get("engine") == "native" and st.get("model"):
+        lst = cc_local.settings(os.environ)
+        if cc_private.installed(lst["base"], lst["model"]) is False:
+            st["reachable"] = False
+            st["reason"] = st["line"] = cc_private.NO_MODEL.format(m=lst["model"], h=st.get("host"))
+    return st
 
 
 # ---- the Codex seat's gated write mode (2026-11-03) ----
@@ -4151,7 +4179,8 @@ def _default_seat() -> str:
     cx = _codex_status()
     if cx.get("installed") and cx.get("signedIn"):
         return "codex"
-    if _local_status(live=False).get("configured"):
+    loc = _local_status(live=False)
+    if loc.get("configured") and loc.get("chosen"):   # offered is not chosen (SEAT-3): the person picks it once
         return "local"
     return "claude"
 
@@ -4163,6 +4192,44 @@ def _reasoner_pick(requested, thread_entry: dict | None, state: dict, default=No
         if r in REASONERS:
             return r
     return default() if default else "claude"
+
+
+PRIVATE_DIR = STATE_DIR / "private"   # one file per private-seat thread: the last few exchanges, text only
+
+
+def _run_private_turn(message: str, session_id: str | None, lst: dict, on_event, run, recent: str, first_use: str):
+    """A turn on the private seat's lean engine (cc_private.py): the bridge's own Local instructions and
+    composed prompt, straight to Ollama, three read-only tools run as the hands user. Same refusals, same
+    box-proposal card path as the Codex engine (the caller handles the reply exactly the same way)."""
+    if lst.get("model") and cc_private.installed(lst["base"], lst["model"]) is False:
+        return cc_private.NO_MODEL.format(m=lst["model"], h=cc_local.host(lst["base"])) + ". This turn was not answered; nothing fell back to another seat.", session_id, True
+    sid = session_id if (session_id and re.fullmatch(r"[a-f0-9]{32}", session_id)) else uuid.uuid4().hex
+    hist_file = PRIVATE_DIR / f"{sid}.json"
+    try:
+        history = json.loads(hist_file.read_text())
+    except Exception:
+        history = []
+    prompt, used = _compose(message, recent, first_use)
+    print(f"memory chunks={used} recent={len(recent)} seat=local engine=native", flush=True)
+    on_event("start", {"model": lst["model"], "session_id": sid, "reasoner": "local"})
+
+    def _run_tool(argv):
+        p = subprocess.run(_as_hands(argv), cwd=RUN_CWD, capture_output=True, text=True, timeout=30)
+        return p.stdout, p.returncode
+    d = cc_private.run_turn(lst["base"], lst["model"], LOCAL_SYSTEM, prompt, history, RUN_CWD, _run_tool, on_event=on_event)
+    META.update({"in": d["in"], "cached": 0, "out": d["out"], "steps": d["steps"], "cost": 0})
+    if run is not None and getattr(run, "stopped", False):
+        return "(stopped by you)", sid, False
+    if d["error"]:
+        return f"The private brain could not answer this turn: {d['error']}. Nothing fell back to another seat.", sid, True
+    try:
+        PRIVATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        hist_file.write_text(json.dumps(cc_private.keep(history, d["messages"])))
+    except OSError:
+        pass
+    on_event("block", {})
+    on_event("text", {"t": d["reply"]})
+    return d["reply"], sid, False
 
 
 def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
@@ -4179,6 +4246,8 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
     no = cc_local.probe(lst) if local else cc_codex.refusal(_codex_status(fresh=True))
     if no:
         return no, session_id, True
+    if local and lst.get("engine") == "native":
+        return _run_private_turn(message, session_id, lst, on_event or (lambda k, p: None), run, recent, first_use)
     write = False
     note = ""
     if not local and CODEX_WRITE:
@@ -6554,6 +6623,15 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/telegram/unpair":
             out = _tg_unpair()
             self._send(200 if out.get("ok") else 409, out)
+            return
+        if route == "/seat/private":
+            # the third seat on the sign-in screen (SEAT-3): the person chooses the private brain, or leaves it
+            on = req.get("on", True) is not False
+            st = _local_status(live=False)
+            if on and not st.get("configured"):
+                self._send(409, {"ok": False, "error": "this brain has no private model yet; the owner turns it on with CC_PRIVATE=1"})
+                return
+            self._send(200, {"ok": True, "local": _private_choose(on)})
             return
         if route == "/login/apikey":
             key = str(req.get("key", "")).strip()

@@ -14,6 +14,7 @@ import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../
 import MoveInCards from '../components/MoveInCards'
 import FirstSignIn from '../components/FirstRun'
 import SignInSteps from '../components/SignInSteps'
+import SeatChoice from '../components/SeatChoice'
 import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { press, routeName, slashName, choiceName } from '../lib/presses'
@@ -587,6 +588,11 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
             {seatName('local', local)}
           </Chip>
           <span style={{ ...mono, fontSize: '10px', color: localOn ? C.faint : '#d08a7a' }}>{(local && local.line) || 'local model: status unknown'}</span>
+          {/* the way back to the sign-in screen from the private brain (SEAT-3): the choice is undone, nothing else */}
+          {local && local.chosen && local.engine === 'native' ? (
+            <a onClick={() => fetch('/cc/seat/private', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) }).then(() => onRecheck && onRecheck()).catch(() => {})}
+              title="back to the sign-in screen: Claude or ChatGPT answer better" style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>sign in instead</a>
+          ) : null}
         </>
       ) : null}
     </span>
@@ -2251,7 +2257,8 @@ function CC() {
   // A brain signed in only with ChatGPT starts its threads on Codex, not on a Claude that cannot answer (2026-11-07).
   const claudeIn = !!(health && health.auth && health.auth.loggedIn)
   const codexIn = !!(health && health.codex && health.codex.installed && health.codex.signedIn)
-  const localIn = !!(health && health.local && health.local.configured)
+  // offered is not chosen (SEAT-3): a configured private seat opens the chat only once the person picked it
+  const localIn = !!(health && health.local && health.local.configured && health.local.chosen)
   const defaultSeat = claudeIn ? 'claude' : codexIn ? 'codex' : localIn ? 'local' : 'claude'
   const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || defaultSeat)
   const seatRef = useRef('claude'); seatRef.current = seat
@@ -3519,8 +3526,10 @@ function CC() {
         {firstStep && health && <FirstSignIn lang={lang} state={signinOrder} loggedIn={loggedIn} onChange={setSigninOrder} />}
         {health && !loggedIn && (!firstStep || firstStep === 'seat') && (health.signin_proxy
           ? <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />
-          : <SignInSteps lang={lang} bare={firstStep === 'seat'} loggedIn={loggedIn} onRecheck={recheckSignIn} pendingStart={pendingStart}
-              other={<SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />} />)}
+          : <SeatChoice lang={lang} local={health.local} codex={health.codex} onOpenPane={openPane} codexLogin={CODEX_LOGIN} onChosen={() => loadHealth(true)}>
+              <SignInSteps lang={lang} bare loggedIn={loggedIn} onRecheck={recheckSignIn} pendingStart={pendingStart}
+                other={<SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />} />
+            </SeatChoice>)}
 
         {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
@@ -3536,7 +3545,7 @@ function CC() {
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} font={consoleFont} onFont={pickFont}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={recheckCodex} />
+                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={() => { recheckCodex(); loadHealth(true) }} />
                 <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
                   title="learning mode: bold phrases and code terms get a 'learn' door with a mini lesson (one small side call each, nothing posted here)">learn {look.learn ? 'on' : 'off'}</Chip>
                 <Recall />
