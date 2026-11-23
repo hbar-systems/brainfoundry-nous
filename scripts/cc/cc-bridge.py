@@ -536,6 +536,8 @@ import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
 import cc_threads_store  # noqa: E402   threads.json safe save and recovery (2026-11-13)
 import cc_reports  # noqa: E402   a thread started from a choice button reports back to its parent (REPORT-1)
+import cc_cardlog  # noqa: E402   a thread's cards are kept as its log and drawn again after a reload (INLINE-1)
+import cc_sides  # noqa: E402   talk in place: a side conversation bound to one item on a page (INLINE-1)
 import cc_halt  # noqa: E402   the kill switch (2026-10-25): HALT file + budget HALT, docs/KILL_SWITCH.md
 
 # A member on a shared box (2026-10-19, docs/MULTI_INSTANCE.md): CC_MEMBER names this bridge's
@@ -622,8 +624,22 @@ def _job_spent(rec: dict) -> None:
                minutes=max(0, rec["ended"] - rec["started"]) / 60)
 
 
+def _job_ended(rec: dict) -> None:
+    """A finished job: its minutes, then its card in its thread's log (INLINE-1), so a reload draws it again."""
+    _job_spent(rec)
+    try:
+        CARDLOG.add(rec.get("thread"), "job", rec)
+        side = SIDES.touch_thread(rec.get("thread"))
+        if side and side.get("home"):
+            CARDLOG.add(side["home"], "job", rec)   # an agent sent from a note: its job is in the home thread's log too
+        if side:
+            _side_tell(side)
+    except Exception as e:  # noqa: BLE001  (the log never breaks the job it logs)
+        print(f"card log: job not logged: {type(e).__name__}", flush=True)
+
+
 JOBS = cc_extras.Jobs(OUT_DIR, lambda: _hands_env(), wrap=lambda argv: _as_hands(argv),
-                      resolve=lambda run_id: _job_thread(run_id), on_end=_job_spent, guard=lambda c: _job_guard(c))
+                      resolve=lambda run_id: _job_thread(run_id), on_end=_job_ended, guard=lambda c: _job_guard(c))
 
 
 def _job_thread(run_id: str | None) -> str | None:
@@ -645,6 +661,11 @@ SENT = cc_extras.RecentSends(60)
 # choice button (mode agent) leaves a short card for that parent each time it finishes a turn. The parent's
 # page takes its cards with its jobs (GET /cc/jobs?take=1&thread=<id> -> reports); no other page sees them.
 REPORTS = cc_reports.Reports(STATE_DIR / "reports.json")
+# The card log (INLINE-1, 2026-11-23, scripts/cc/cc_cardlog.py): every job tile and report card is also
+# written under its thread when it is made, so the page draws them again after a reload (GET /cc/cards).
+CARDLOG = cc_cardlog.CardLog(STATE_DIR / "cardlog.json")
+# Talk in place (INLINE-1, scripts/cc/cc_sides.py): a side conversation bound to one item on a page.
+SIDES = cc_sides.Sides(STATE_DIR / "sides.json")
 
 
 def _report_to_parent(status: int, payload: dict, parent: str | None = None, label: str = "") -> dict | None:
@@ -656,8 +677,11 @@ def _report_to_parent(status: int, payload: dict, parent: str | None = None, lab
             REPORTS.link(child, parent, label)
         state = cc_reports.state_of(error=status != 200 or bool(payload.get("error")), stopped=bool(payload.get("stopped")),
                                     card=payload.get("proposal"), reply=payload.get("reply") or "")
-        return REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
+        card = REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
                             parent=parent, label=label)
+        if card:
+            CARDLOG.add(card.get("parent"), "report", card)
+        return card
     except Exception as e:
         print(f"thread report not posted: {type(e).__name__}", flush=True)
         return None
@@ -2361,7 +2385,8 @@ def _threads_view(archived=False, q: str = "") -> dict:
     newest on top; archived ones only when asked for, with a count of them either way. The
     running and waiting marks come from the runs in flight. `archived` "only" (THREADS-1): the
     archive alone, the view the archive press opens."""
-    items = [dict(x) for x in _threads_load()]
+    # INLINE-1: a note's side conversation lives in its box on the page, not in the list
+    items = [dict(x) for x in _threads_load() if x.get("via") != "side"]
     n_arch = sum(1 for x in items if x.get("archived"))
     if archived == "only":
         items = [x for x in items if x.get("archived")]
@@ -4323,10 +4348,18 @@ def _state(thread: str | None) -> dict:
 
 def _turn(message: str, *, thread: str | None, new: bool, on_run=None, source: str = "page", queue: bool = False, from_queue: str | None = None, waited: bool = False, reasoner: str | None = None, parent: str | None = None, label: str = "") -> tuple[int, dict]:
     """A turn, then the thread's next queued message (if any) is started, then the box's wait line."""
+    if thread and not new and source not in ("steer", "note"):
+        # INLINE-1: the owner wrote into the thread, so its open cards from before are answered
+        try:
+            CARDLOG.answer_before(thread)
+        except Exception:  # noqa: BLE001
+            pass
     status, payload = _turn_inner(message, thread=thread, new=new, on_run=on_run, source=source, queue=queue, from_queue=from_queue, waited=waited, reasoner=reasoner, parent=parent, label=label)
     if status in (200, 500):
         # a thread started from another thread's choice button tells that thread how the turn ended (REPORT-1)
         _report_to_parent(status, payload, parent if new else None, label)
+        if source in ("note", "queue"):
+            _side_after(message, status, payload)
         _drain_async(payload.get("thread"))
         _box_wait_next()
     return status, payload
@@ -5515,6 +5548,113 @@ def _systems_voice(sid: str, ctype: str, raw: bytes) -> tuple[int, dict]:
     return 200, {"ok": True, "system": sid, "path": path, "size": len(data)}
 
 
+# Talk in place (INLINE-1, 2026-11-23). POST /cc/sides/say {key, message, mode, title, text, link, page, home}
+# starts one turn in the item's side conversation and answers at once (202); GET /cc/sides?keys=a,b|page=|home=
+# reads them; POST /cc/sides/read clears a dot; POST /cc/sides/seen says the owner is looking; GET /cc/sides/count
+# is the footer's line. The threat note is in docs/CC.md ("Talk in place"). In short: the same door as a typed
+# turn (operator token, no app frame, same _turn, posture and cards); the side's thread is made first and kept off
+# the thread list, so it never moves the box's current thread; at most SIDE_RATE turns an hour.
+SIDE_RATE = 40
+SIDE_SENT: list = []
+SIDE_LOCK = threading.Lock()
+
+
+def _side_thread(title: str) -> str | None:
+    t = "CC: note: " + " ".join(str(title or "").split())[:100]
+    created = _brain_api("POST", "/sessions", {"model_name": "cc", "title": t})
+    tid = str((created or {}).get("session_id") or "")
+    if not tid:
+        return None
+    threads = _threads_load()
+    if not any(x.get("brain") == tid for x in threads):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        threads.append({"claude": None, "brain": tid, "title": t, "started": now, "last": now, "via": "side"})
+        _threads_save(threads)
+    return tid
+
+
+def _side_tell(side: dict) -> None:
+    """An answer is ready and nobody looked at a page for five minutes: one Telegram line, the title only."""
+    try:
+        if TG is None or TG.owner() is None or not SIDES.away():
+            return
+        _notify(f"Note ready: {' '.join(str(side.get('title') or side.get('key') or '').split())[:80]}")
+    except Exception as e:  # noqa: BLE001
+        print(f"sides: no telegram line: {type(e).__name__}", flush=True)
+
+
+def _side_after(message: str, status: int, payload: dict) -> None:
+    """A turn ended; when it was a side's (also one that waited in line), its answer goes into the side."""
+    try:
+        key = SIDES.by_prompt(message)
+        if not key:
+            return
+        ok = status == 200 and not payload.get("error")
+        side = SIDES.finish(key, ok=ok, reply=payload.get("reply") or "", thread=payload.get("thread"),
+                            error=payload.get("reply") or str(payload.get("error") or ""))
+        if not side:
+            return
+        if side.get("mode") == "agent" and side.get("home") and side.get("thread"):
+            # the agent reports to the thread the note was opened from, as a card in its log (REPORT-1)
+            state = cc_reports.state_of(error=not ok, stopped=bool(payload.get("stopped")),
+                                        card=payload.get("proposal"), reply=payload.get("reply") or "")
+            card = REPORTS.post(side["thread"], title=f"note: {side.get('title') or key}", state=state,
+                                reply=payload.get("reply") or "", parent=side["home"], label=side.get("title") or "")
+            if card:
+                CARDLOG.add(card.get("parent"), "report", card)
+        _side_tell(side)
+    except Exception as e:  # noqa: BLE001  (a note must not fail the turn it answers)
+        print(f"sides: answer not kept: {type(e).__name__}", flush=True)
+
+
+def _sides_post(route: str, body: dict, start=None) -> tuple[int, dict]:
+    if route == "/sides/seen":
+        SIDES.seen()
+        return 200, {"ok": True, "ready": SIDES.ready_count()}
+    if route == "/sides/read":
+        ok = SIDES.read(body.get("key"))
+        return (200 if ok else 404), {"ok": ok, "ready": SIDES.ready_count()}
+    if route != "/sides/say":
+        return 404, {"ok": False, "error": "no such door"}
+    home = str(body.get("home") or "").strip()[:120] or None
+    if home is not None and (not cc_reports.known(home) or not any(x.get("brain") == home and x.get("via") != "side" for x in _threads_load())):
+        home = None   # a page outside a thread (a brain-built page) has no home thread; the note still answers in place
+    with SIDE_LOCK:
+        now = time.time()
+        SIDE_SENT[:] = [t for t in SIDE_SENT if now - t < 3600]
+        if len(SIDE_SENT) >= SIDE_RATE:
+            return 429, {"ok": False, "error": f"at most {SIDE_RATE} notes an hour from pages; type into a thread instead"}
+    status, d = SIDES.begin(body.get("key"), str(body.get("message") or ""), mode=str(body.get("mode") or "ask"),
+                            title=str(body.get("title") or ""), text=str(body.get("text") or ""),
+                            link=str(body.get("link") or ""), page=str(body.get("page") or ""), home=home)
+    if status != 200:
+        return status, d
+    with SIDE_LOCK:
+        SIDE_SENT.append(time.time())
+    side, text = d["side"], d["prompt"]
+    key = side["key"]
+
+    def run():
+        try:
+            tid = side.get("thread") or _side_thread(side.get("title") or key)
+            if not tid:
+                SIDES.finish(key, ok=False, error="the brain did not open a thread for this note (its api did not answer)")
+                return
+            if not side.get("thread"):
+                SIDES.finish_thread(key, tid)
+            st, pl = _turn(text, thread=tid, new=False, source="note")
+            if st == 202:
+                SIDES.waiting(key)
+            elif st not in (200, 500):
+                SIDES.finish(key, ok=False, thread=tid, error=(pl or {}).get("reply") or str((pl or {}).get("error") or st))
+        except Exception as e:  # noqa: BLE001
+            print(f"sides: turn failed: {type(e).__name__}", flush=True)
+            SIDES.finish(key, ok=False, error=f"the bridge failed this note: {type(e).__name__}")
+    (start or (lambda f: threading.Thread(target=f, daemon=True).start()))(run)
+    print(f"sides: note key={key[:40]} mode={side.get('mode')} home={(home or '-')[:8]} chars={len(text)}", flush=True)
+    return 202, {"ok": True, "side": SIDES.get(key)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "cc-bridge/0.2"
 
@@ -5780,8 +5920,14 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 1 and parts[0] in PAGES.names:
                 q = self.path.split("?", 1)[1] if "?" in self.path else ""
                 self._send_bytes(301, b"", "text/plain", {"Location": f"{BASE}/page/{parts[0]}/" + (f"?{q}" if q else "")})
+            elif len(parts) == 2 and parts[0] in PAGES.names and PAGES.is_folder(parts[0], parts[1]):
+                # INLINE-1: /cc/page/court/tasks goes to its slash form too
+                q = self.path.split("?", 1)[1] if "?" in self.path else ""
+                self._send_bytes(301, b"", "text/plain", {"Location": f"{BASE}/page/{parts[0]}/{parts[1]}/" + (f"?{q}" if q else "")})
             elif len(parts) == 2:
                 PAGES.serve(self, parts[0], parts[1])
+            elif len(parts) == 3:
+                PAGES.serve(self, parts[0], parts[1] + "/" + parts[2])
             else:
                 self._send(404, {"error": "no such page"})
         elif route == "/spoke/state":
@@ -5881,11 +6027,44 @@ class Handler(BaseHTTPRequestHandler):
                 titles = {t.get("brain"): t.get("title") for t in _threads_load()}
                 for o in others:
                     o["thread_title"] = titles.get(o.get("thread")) if cc_extras.Jobs.known(o.get("thread")) else None
+            finished = JOBS.take_unseen(th) if q.get("take") == "1" and th else []
+            reports = REPORTS.take(th) if q.get("take") == "1" and th else []
+            # INLINE-1: a card handed to the page is in the thread's log too (it was written there when it
+            # was made; this covers one made before the log existed), so a reload draws it again
+            for j in finished:
+                CARDLOG.add(j.get("thread"), "job", j)
+            for rp in reports:
+                CARDLOG.add(rp.get("parent"), "report", rp)
             self._send(200, {"jobs": JOBS.list(), "thread": th,
-                             "finished": JOBS.take_unseen(th) if q.get("take") == "1" and th else [],
+                             "finished": finished,
                              "others": others,
                              # REPORT-1: cards from the threads this one started, taken once, by this thread's page only
-                             "reports": REPORTS.take(th) if q.get("take") == "1" and th else []})
+                             "reports": reports,
+                             # INLINE-1: the footer's quiet line ("2 answers ready")
+                             "sides_ready": SIDES.ready_count()})
+        elif route == "/sides" or route == "/sides/count":
+            # INLINE-1: the notes of a page (or of given items, or of a home thread), and the footer's count
+            q = self._query()
+            if route == "/sides/count":
+                self._send(200, {"ready": SIDES.ready_count(), "items": SIDES.ready_list()})
+            else:
+                keys = [k for k in (q.get("keys") or "").split(",") if k][:200]
+                rows = SIDES.list(keys=keys, page=(q.get("page") or "")[:200], home=(q.get("home") or "")[:120])
+                for r in rows:
+                    r["cards"] = CARDLOG.list(r.get("thread")) if r.get("thread") else []
+                self._send(200, {"sides": rows, "ready": SIDES.ready_count()})
+        elif route == "/inline.js":
+            # INLINE-1: the one script a brain-built page includes for talk in place (scripts/cc/static/inline.js)
+            try:
+                data = (Path(__file__).resolve().parent / "static" / "inline.js").read_bytes()
+            except OSError:
+                self._send(404, {"error": "no inline.js on this bridge"})
+                return
+            self._send_bytes(200, data, "text/javascript; charset=utf-8", {"X-Content-Type-Options": "nosniff"})
+        elif route == "/cards":
+            # INLINE-1: the thread's card log, oldest first, with each card's state (open or answered)
+            th = (self._query().get("thread") or "").strip()
+            self._send(200, {"thread": th, "cards": CARDLOG.list(th)})
         elif route.startswith("/jobs/"):
             q = self._query()   # full=1: the whole result text, for the card's "more" (JOBCARD-1)
             try:
@@ -6043,6 +6222,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, {"ok": False, "error": "the brain did not open the thread (its api did not answer)"})
                 return
             self._send(200, {"ok": True, "system": sid, "thread": tid, "created": created})
+            return
+        if route == "/cards/answered":
+            # INLINE-1: the owner pressed "answered" on one card of the thread's log
+            body = self._json(limit=2000) or {}
+            ok = CARDLOG.answer(str(body.get("thread") or ""), str(body.get("id") or ""))
+            self._send(200 if ok else 404, {"ok": ok})
+            return
+        if route.startswith("/sides"):
+            # INLINE-1: talk in place (scripts/cc/cc_sides.py); the threat note is in docs/CC.md
+            body = self._json(limit=cc_sides.MESSAGE_MAX * 4 + 4000)
+            if body is None:
+                self._send(400, {"ok": False, "error": "unreadable or too large"})
+                return
+            self._send(*_sides_post(route, body))
             return
         m_steer = STEER_RE.match(route)
         if m_steer:
