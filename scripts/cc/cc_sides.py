@@ -33,6 +33,7 @@ CONTEXT_MAX = 2000           # the item's text carried on the first turn
 TURNS_MAX = 40
 MAX_SIDES = 500
 TTL = 60 * 24 * 3600
+STALE = 30 * 60              # a turn "working" this long was lost (a bridge restart); the next press may start again
 AWAY = 5 * 60                # Telegram only when no page reported the owner for this long
 STATES = ("idle", "running", "waiting", "ready", "failed")
 
@@ -121,13 +122,15 @@ class Sides:
         with self.lock:
             d = self._load()
             s = d["items"].get(k)
-            if s and s.get("state") in ("running", "waiting"):
+            if s and s.get("state") in ("running", "waiting") and time.time() - float(s.get("updated") or 0) < STALE:
                 return 409, {"ok": False, "busy": True, "error": "this note is still answering"}
             if not s:
                 s = {"key": k, "title": _one_line(title, 160) or k, "text": str(text or "").strip()[:CONTEXT_MAX],
                      "link": _link(link), "page": _one_line(page, 200), "home": _one_line(home, 120) or None,
                      "thread": None, "turns": [], "created": time.time()}
                 d["items"][k] = s
+            elif home and not s.get("home"):
+                s["home"] = _one_line(home, 120)      # a note first used by a ruling press learns its home on a later turn
             p = prompt(s, msg, mode)
             s["turns"] = (s.get("turns") or []) + [{"who": "me", "text": msg, "mode": mode, "at": time.time()}]
             s["turns"] = s["turns"][-TURNS_MAX:]

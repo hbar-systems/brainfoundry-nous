@@ -25,7 +25,16 @@
   var home = (me && me.getAttribute('data-home')) || ''
   var refused = location.origin === 'null'
   var sides = {}, open = {}, drafts = {}
-  var C = { ink: '#e8e2d6', dim: '#a89e90', faint: '#7a7166', line: 'rgba(232,226,214,0.16)', bg: '#22201d', gold: '#d9b36c', bad: '#d08a7a' }
+  var C = { ink: '#e8e2d6', dim: '#a89e90', faint: '#7a7166', line: 'rgba(232,226,214,0.16)', bg: '#22201d', gold: '#d9b36c', bad: '#d08a7a', onGold: '#1c1a17' }
+  // the box takes the page's own tone: a light page (the tasks court is cream) gets a light, warm box
+  function tone() {
+    try {
+      var m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(document.body).backgroundColor || '')
+      if (m && (0.299 * m[1] + 0.587 * m[2] + 0.114 * m[3]) > 150) {
+        C = { ink: '#2b2620', dim: '#6f6556', faint: '#9a8f80', line: '#e2d8c6', bg: '#fffaf1', gold: '#8a6a2e', bad: '#9a4f3f', onGold: '#fffaf1' }
+      }
+    } catch (e) {}
+  }
 
   function el(tag, css, text) {
     var n = document.createElement(tag)
@@ -164,7 +173,7 @@
     var busy = s.state === 'running' || s.state === 'waiting'
     ;[['ask', 'ask'], ['agent', 'send an agent']].forEach(function (m) {
       var btn = el('button', 'font:12px ui-monospace,monospace;border-radius:14px;padding:4px 12px;cursor:pointer;border:1px solid ' +
-        (m[0] === 'ask' ? C.gold : C.line) + ';background:' + (m[0] === 'ask' ? C.gold : 'transparent') + ';color:' + (m[0] === 'ask' ? '#1c1a17' : C.ink), m[1])
+        (m[0] === 'ask' ? C.gold : C.line) + ';background:' + (m[0] === 'ask' ? C.gold : 'transparent') + ';color:' + (m[0] === 'ask' ? C.onGold : C.ink), m[1])
       btn.type = 'button'; btn.disabled = busy; if (busy) btn.style.opacity = '0.5'
       btn.addEventListener('click', function () { say(key, m[0]) })
       row.appendChild(btn)
@@ -253,6 +262,7 @@
 
   window.ccInline = { scan: scan, open: function (k) { if (!open[k]) toggle(k) }, send: send, sides: sides }
   function start() {
+    tone()
     scan()
     if (refused) return
     tick(); seen()

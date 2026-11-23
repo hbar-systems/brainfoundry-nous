@@ -42,6 +42,10 @@ def test_first_turn_carries_the_item_later_turns_do_not(tmp_path):
     assert st == 200 and "Item: Fix the door." in d["prompt"] and "The door 403s" in d["prompt"] and "/cc/page/court/tasks/#T12" in d["prompt"]
     assert d["prompt"].endswith("why does it 403?") and d["side"]["state"] == "running"
     assert s.begin(ITEM["key"], "again")[0] == 409                                  # one turn at a time
+    raw = __import__("json").loads((tmp_path / "s.json").read_text())
+    raw["items"][ITEM["key"]]["updated"] -= S.STALE + 1
+    (tmp_path / "s2.json").write_text(__import__("json").dumps(raw))
+    assert S.Sides(tmp_path / "s2.json").begin(ITEM["key"], "again")[0] == 200     # a turn lost to a restart frees the note
     assert s.by_prompt(d["prompt"]) == ITEM["key"]
     s.finish_thread(ITEM["key"], SIDE)
     s.finish(ITEM["key"], ok=True, reply="Because the token rotated.", thread="new:1")
@@ -159,6 +163,10 @@ def test_send_an_agent_reports_into_the_home_threads_log(monkeypatch, tmp_path):
                   "result": {"rc": 0, "text": "ok"}})
     assert [e["kind"] for e in m.CARDLOG.list(CENTRAL)] == ["report", "job"]
     assert [e["kind"] for e in m.CARDLOG.list(SIDE)] == ["job"] and m.SIDES.get(ITEM["key"])["ready"]
+    # a note made without a home (a ruling press) learns it on a later turn
+    m._sides_post("/sides/say", {"key": "k1", "message": "clerk rule k1 done"}, start=lambda f: f())
+    m._sides_post("/sides/say", {"key": "k1", "message": "fix", "mode": "agent", "home": CENTRAL}, start=lambda f: f())
+    assert m.SIDES.get("k1")["home"] == CENTRAL and len(m.REPORTS.take(CENTRAL)) == 1
     # a home that is not a thread on this box (or is a side itself) is dropped, the note still answers in place
     st, _ = m._sides_post("/sides/say", {"key": "k2", "message": "x", "mode": "agent", "home": SIDE}, start=lambda f: f())
     assert m.SIDES.get("k2")["home"] is None
