@@ -10,6 +10,11 @@ showing any other thread never sees it.
 Kept in one small JSON file (links child -> parent, and the cards not yet taken), written with a
 temp file and a rename, so a bridge restart between the child's answer and the parent page's next
 poll loses nothing. Pure: no network, no bridge imports; tests/test_cc_reports.py runs it on temp dirs.
+
+Steered turns (BOARD-5, 2026-11-23): the central chat may send one turn into a standing system thread
+(POST /cc/threads/<id>/say). That thread has no origin of its own, so the door leaves a one-shot mark
+(`expect`): the next finished turn of that thread reports to the steering thread, then the mark is gone.
+A mark wins over the thread's link for that one turn; a later turn falls back to the link, or to nobody.
 """
 from __future__ import annotations
 
@@ -27,8 +32,9 @@ WIDTH = 200
 TTL = 7 * 24 * 3600          # an untaken card is dropped after a week
 MAX_CARDS = 200
 MAX_LINKS = 500
+EXPECT_TTL = 24 * 3600   # a steer mark nobody's turn used is dropped after a day
 
-_BLOCKS = re.compile(r"<(choices|proposal|pane|layout|profile)>.*?(</\1>|\Z)", re.S | re.I)
+_BLOCKS = re.compile(r"<(choices|proposal|pane|layout|profile|tree|steer)>.*?(</\1>|\Z)", re.S | re.I)
 _COMMENT = re.compile(r"<!--.*?(-->|\Z)", re.S)
 _RULE = re.compile(r"^[\s\-=*_|:]+$")          # a rule, a table separator, an empty bullet
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -99,7 +105,8 @@ class Reports:
         links = d.get("links") if isinstance(d.get("links"), dict) else {}
         cards = [c for c in (d.get("cards") or []) if isinstance(c, dict) and c.get("id") and c.get("parent")] \
             if isinstance(d.get("cards"), list) else []
-        return {"links": links, "cards": cards}
+        expect = d.get("expect") if isinstance(d.get("expect"), dict) else {}
+        return {"links": links, "cards": cards, "expect": expect}
 
     def _save(self, d: dict) -> None:
         now = time.time()
@@ -107,6 +114,8 @@ class Reports:
         if len(d["links"]) > MAX_LINKS:
             keep = sorted(d["links"].items(), key=lambda kv: float((kv[1] or {}).get("at") or 0))[-MAX_LINKS:]
             d["links"] = dict(keep)
+        d["expect"] = {k: v for k, v in (d.get("expect") or {}).items()
+                       if isinstance(v, dict) and now - float(v.get("at") or 0) < EXPECT_TTL}
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(d))
@@ -143,6 +152,33 @@ class Reports:
             self._save(d)
             return True
 
+    # ---- steer marks (BOARD-5) ----
+    def expect(self, child, to, label: str = "") -> bool:
+        """The next finished turn of `child` reports to `to` (a steer). Never to itself; a newer
+        steer replaces an older one that has not been used."""
+        if not known(child) or not known(to) or child == to:
+            return False
+        with self.lock:
+            d = self._load()
+            d["expect"][child] = {"to": str(to), "label": " ".join(str(label or "").split())[:120], "at": time.time()}
+            self._save(d)
+            return True
+
+    def unexpect(self, child) -> bool:
+        """A steer that never became a turn (refused, busy) leaves no mark behind."""
+        with self.lock:
+            d = self._load()
+            if child not in d["expect"]:
+                return False
+            d["expect"].pop(child)
+            self._save(d)
+            return True
+
+    def expected(self, child) -> str | None:
+        with self.lock:
+            e = self._load()["expect"].get(child) if known(child) else None
+            return (e or {}).get("to") or None
+
     # ---- cards ----
     def post(self, child, *, title: str | None = None, state: str = "done", reply: str = "",
              parent: str | None = None, label: str = "") -> dict | None:
@@ -152,21 +188,29 @@ class Reports:
         One waiting card per child: a newer turn replaces the card the parent has not read yet."""
         with self.lock:
             d = self._load()
+            ex = d["expect"].pop(child, None) if known(child) else None
             ln = d["links"].get(child) if known(child) else None
-            to = (ln or {}).get("parent") or (parent if known(parent) else None)
+            to = (ex or {}).get("to") or (ln or {}).get("parent") or (parent if known(parent) else None)
+            if ex and EXPECT_TTL <= time.time() - float(ex.get("at") or 0):
+                to = (ln or {}).get("parent") or (parent if known(parent) else None)
             if not to or to == child:
+                if ex:
+                    self._save(d)
                 return None
+            if ex and ex.get("label"):
+                label = ex["label"]
             card = {
                 "id": "R" + secrets.token_hex(5),
                 "parent": to,
                 "child": child if known(child) else None,
                 "title": clean_title(title, (ln or {}).get("label") or label),
+                "steered": bool(ex),
                 "state": state if state in STATES else "done",
                 "lines": first_lines(reply),
                 "at": time.time(),
             }
             if card["child"]:
-                d["cards"] = [c for c in d["cards"] if c.get("child") != card["child"]]
+                d["cards"] = [c for c in d["cards"] if not (c.get("child") == card["child"] and c.get("parent") == to)]
             d["cards"].append(card)
             self._save(d)
             return dict(card)

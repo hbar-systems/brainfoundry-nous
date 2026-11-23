@@ -1,6 +1,8 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
 
+// The systems page as it looked until BOARD-5 (2026-11-23), kept at /systems/v1 (feedback_archive_every_look):
+// one thread open at a time. The working page is ui/pages/systems/index.js.
 // The systems page (BOARD-3 2026-11-12, BOARD-4 2026-11-13). hbar: "ON SINGLE PAGE I SEE EACH SYSTEM AND I CAN
 // DISCUSS IN THE CHAT IN A SYSTEM WHILE SEEING ALL THE SYSTEMS WHATS GOING ON AND FUNCTIONING", with "HOW MANY
 // AGENTS/TEAMS OF AGENTS ... CAN BE SEEN ACTIVE" per system.
@@ -330,7 +332,7 @@ export default function Systems() {
   const running = data && data.running
   return (
     <>
-      <Head><title>Systems</title></Head>
+      <Head><title>Systems v1</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
       <div className="sy">
         <div className="sy-split">
