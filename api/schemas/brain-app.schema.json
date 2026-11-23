@@ -165,7 +165,8 @@
           "files.read",
           "files.write",
           "audio.transcribe",
-          "chat.send"
+          "chat.send",
+          "ledgers.read"
         ]
       },
       "uniqueItems": true
