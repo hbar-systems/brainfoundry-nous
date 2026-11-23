@@ -160,7 +160,7 @@ Helper: `scripts/import/brain_import.py` (one file, Python 3.8+ standard library
 
 ### Never sent, by rule (in the helper, whatever the answer)
 
-- Hidden files and folders: `.ssh`, `.gnupg`, `.aws`, `.config`, `.env`, `.netrc`, `.git`, ...
+- Hidden files and folders: `.ssh`, `.gnupg`, `.aws`, `.config`, `.env`, `.netrc`, `.git`, ... (the survey's one exception, 2026-11-23: the session files of `~/.codex/sessions` and `~/.claude/projects`, see "Codex and Claude Code history" below)
 - Key, password and vault files: `id_rsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, keychains, 1Password/Bitwarden/KeePass folders and exports, `*.gpg`, `*.asc`, `*.ovpn`, and any name holding `password`, `secret`, `credential` or `token`.
 - System and app folders: `Library`, `AppData`, `Program Files`, `node_modules`, `venv`, `build`, `dist`, photo libraries, app bundles.
 - What the brain cannot use: video, archives, databases.
@@ -231,6 +231,42 @@ When the brain has a spoke (`docs/spoke.md`) and the computer joined it, the hom
 - The home lists "Your chats from ChatGPT and Claude" (the AIs found) with Continue here on each; the Knowledge page's document rows carry the same button for conversation documents. The button opens `/?continue=<name>`: the console opens a new thread and sends that first message. From another site, or when the import's injection scan flagged the conversation, it only fills the composer and waits for the person's send.
 
 Not done yet: resume after a broken survey run (a new line resends); the survey walk on a real Mac and Windows (tested on Linux with made-up cloud folders); a group chosen while the helper is gone waits until the token expires.
+
+## Codex and Claude Code history (MEMBERS-11, 2026-11-23)
+
+hbar 2026-11-23: "An easy way to do import from the Claude and the Codex of the individual, this was one of our main onboarding issues." The coding agents keep their history on the computer, not in an account export: Codex (CLI, IDE extension and desktop app) in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, Claude Code in `~/.claude/projects/<folder slug>/<session>.jsonl`. Both are hidden folders, which every walk skips by rule, and `.jsonl` is not a type Knowledge reads, so before this none of it came in.
+
+### What comes, what never does
+
+- One session file is one conversation document, the same shape as a chat export (`# <title>`, `Source: codex session, conversation <id>`, `Started:`, then `Working folder: <cwd>` when the session names one, then `## Me, <time>` and `## Assistant (Codex)` or `## Assistant (Claude Code)`). File name `codex_<date>_<slug>_<id8>.md` or `claude-code_<date>_<slug>_<id8>.md`; `api/chat_continue.py` knows both prefixes, so Continue here works on them.
+- Kept: the person's typed messages and the assistant's visible text replies (Codex commentary and final answers; Claude Code text blocks). An answer split around tool steps becomes one turn. An image the person pasted is `[image]`.
+- Dropped by rule: tool calls and their arguments, tool results and command output, reasoning and thinking, system, developer and environment-context messages (`<environment_context>`, `# AGENTS.md instructions`, `<system-reminder>` spans, slash-command and local-command lines), file-history snapshots, summaries, compaction summaries, side chains (Claude Code subagents), API error lines and every meta line. A session with nothing typed (a Codex subagent, a run started by a tool) is no conversation and is not proposed.
+- Title: the first typed message, one line, 80 characters. Dates from the line timestamps (UTC).
+- Parsers: `codex_conversation()`, `claude_code_conversation()` and `session_conversation()` in `scripts/import_chats.py`; `FORMATS` marks both verified (structure read from real files on the box 2026-11-23, read only; tests use synthetic files only). Codex writes the typed text twice in newer versions (an `event_msg` `user_message` and the `response_item` beside the injected context); the event copy is used when present, else the items.
+
+### Three ways in
+
+1. Bring in this computer (the survey, Door 1): all three walkers (`brain_import.py` `survey()`, `agent.sh`, `agent.ps1`) walk two more labelled roots after the cloud folders: "Codex history" = `<home>/.codex/sessions` and "Claude Code history" = `<home>/.claude/projects` (Windows `%USERPROFILE%\.codex\sessions`, `%USERPROFILE%\.claude\projects`). One list: `AGENT_HISTORY` and `HISTORY_EXT` in `brain_import.py`, rendered into both agents by `api/laptop_agent.py`. Inside these roots only `*.jsonl` is offered (everything else counted as "not a chat"); Claude Code files only at `<slug>/<session>.jsonl` (subagent files and memory folders deeper down are "not a chat"); the 25 MB cap and the secret-name rules hold; hidden files inside stay out. Nothing else under `~/.codex` or `~/.claude` is ever walked: `auth.json`, `config.toml`, `history.jsonl`, `.credentials.json`, `settings.json`, memory files. A link in place of either folder is not followed. The inventory names them `Codex history/2026/11/08/rollout-....jsonl`, `Claude Code history/-Users-sam-code-site/<id>.jsonl` (the label replaces the hidden part, so `clean_relpath` takes them as they are), and `roots` ends with the two labels.
+2. The plan (`api/laptop_survey.py`): each label is ONE group, never split, kind knowledge, proposed by default, `why` `codex_history` / `claude_code_history` ("your Codex history, one conversation per session"). Anything under a label that is not a session file is dropped from the inventory.
+3. The file route: `POST /documents/import-laptop/file` with a `.jsonl` under one of the two labels takes the chat path (`_import_laptop_session` in `api/main.py`): token checked and charged like any file (25 MB), parsed into one conversation, proposed through `_propose_document_text` under the conversation's own name (not `laptop/...`), so it lands PENDING and keeps its Continue here starting point. The parsed source must match the label (a Claude Code file under "Codex history" is 422); nothing typed is 422; a `.jsonl` anywhere else stays 415. Nothing is remembered before the person's yes.
+4. One dropped file: the home chats card and the Knowledge page take a session `.jsonl` (POST /documents/import-chats, the chip "Codex, Claude Code" in `ui/lib/aiExports.js` says where the files are).
+
+The home card says it in one line (`compAgents` in `ui/lib/moveInPlan.js`, en and ru); the agents print `HISTORY` (`WORDS` in `api/laptop_agent.py`) when they found either folder.
+
+### Without a terminal
+
+- Codex desktop app or IDE extension: the same `~/.codex/sessions` folder on the same computer, so the survey line brings it. A person who never opens a terminal can drop one session file on the chats card (Finder: Go, Go to Folder, `~/.codex/sessions`; Windows: `%USERPROFILE%\.codex\sessions` in the Explorer address bar).
+- Claude desktop app and claude.ai chats live on Anthropic's servers, not on the computer: those come only through the claude.ai export (Door 2, the Claude chip). Claude Code sessions started from the desktop app are local and live in `~/.claude/projects` like any other.
+
+### Tests
+
+`tests/test_agent_history.py` (synthetic sessions only): both parsers keep typed and visible text and drop tool lines, reasoning and injected context (a secret in a tool result or environment block never reaches the document); the event copy is used once; subagents are no conversation; prep and the chats route take a dropped `.jsonl`; the Python survey offers the session files only (`auth.json`, `config.toml`, `history.jsonl`, `.credentials.json`, `settings.json`, memory and subagent files never listed; secret names, empty and over 25 MB counted); a linked `.codex` is not followed; the plan keeps each history as one knowledge group; the rendered agents carry the roots; `agent.sh` end to end lists exactly what the Python survey lists and brings both sessions as PENDING conversation documents with their Continue here records; the route takes a session under a label and refuses one elsewhere (415), a hidden path (400), no token (401), the wrong tool or nothing typed (422).
+
+### Not verified
+
+- A real Mac and a real Windows laptop with Codex and Claude Code installed (here: Linux, made-up homes).
+- `agent.ps1`: checked statically only (rendered roots and words); no PowerShell on the box.
+- Older Codex rollouts (before `session_meta` lines) are read by a fallback (the item on the line itself); no such file was on the box to read.
 
 ## Other AIs (2026-11-16)
 
