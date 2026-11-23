@@ -6,7 +6,7 @@ import { importWords } from "../lib/importText";
 import { continueHref } from "../lib/moveInPlan";
 import { AI_EXPORTS } from "../lib/aiExports";
 // An imported conversation (scripts/import_chats.py names; api/chat_continue.py CHAT_DOC): "Continue here".
-const CHAT_CONT = /^(chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_/;
+const CHAT_CONT = /^(claude-code|codex|chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_/;
 
 const API_BASE = "/api/bf";
 
@@ -737,7 +737,7 @@ export default function Upload() {
         </div>
         <label style={{ ...BTN, display: "inline-block", marginTop: 12, opacity: chatImport && chatImport.busy ? 0.5 : 1, pointerEvents: chatImport && chatImport.busy ? "none" : "auto" }}>
           {chatImport && chatImport.busy ? IW.chatReading(chatImport.name) : IW.chatPick}
-          <input type="file" accept=".zip,.json,.html,.htm,.csv,.txt,.md,.pdf" style={{ display: "none" }}
+          <input type="file" accept=".zip,.json,.jsonl,.html,.htm,.csv,.txt,.md,.pdf" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importChats(f); }} />
         </label>
         {chatImport && chatImport.result && (

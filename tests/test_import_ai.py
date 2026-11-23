@@ -253,7 +253,7 @@ def test_claude_with_role_free_messages_stays_claude():
 
 def test_formats_table_names_every_source():
     assert set(ic.FORMATS) == {"chatgpt", "claude", "gemini", "deepseek", "grok", "copilot", "lechat",
-                               "perplexity", "pasted"}
+                               "perplexity", "pasted", "codex", "claude-code"}
     assert all(isinstance(v["verified"], bool) and v["note"] for v in ic.FORMATS.values())
 
 

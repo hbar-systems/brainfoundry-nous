@@ -3,7 +3,8 @@
 Every AI through the same card and gate (2026-11-16): a ChatGPT, Claude, Gemini
 (Takeout), DeepSeek, Grok, Copilot or Le Chat export, as the zip or as the bare
 file inside it, detected from the file; or any conversation pasted as text or
-dropped as text, markdown, html or pdf, which becomes one document.
+dropped as text, markdown, html or pdf, which becomes one document. A Codex or
+Claude Code session file (.jsonl) is one conversation too (MEMBERS-11, 2026-11-23).
 
 The person uploads the zip ChatGPT or Claude mailed them; this runs the same
 prep and select as scripts/import_chats.py (docs/IMPORT.md steps 2 and 3,
@@ -42,7 +43,7 @@ class NotAnExport(ValueError):
     """The upload is not an export this can read; the message is for the person."""
 
 
-_SUFFIXES = (".zip", ".json", ".csv", ".html", ".htm", ".txt", ".md", ".markdown", ".pdf")
+_SUFFIXES = (".zip", ".jsonl", ".json", ".csv", ".html", ".htm", ".txt", ".md", ".markdown", ".pdf")
 
 
 def _suffix(filename):

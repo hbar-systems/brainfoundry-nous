@@ -17,10 +17,10 @@ import re
 import time
 from pathlib import Path
 
-CHAT_DOC = re.compile(r"^(chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_")
+CHAT_DOC = re.compile(r"^(claude-code|codex|chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_")
 SOURCES = {"chatgpt": "ChatGPT", "claude": "Claude", "gemini": "Gemini", "deepseek": "DeepSeek",
            "grok": "Grok", "copilot": "Copilot", "perplexity": "Perplexity", "lechat": "Le Chat",
-           "pasted": "another AI"}
+           "pasted": "another AI", "codex": "Codex", "claude-code": "Claude Code"}
 LAST_TURNS = 6
 TURN_CHARS = 4000
 SEED_CHARS = 16000

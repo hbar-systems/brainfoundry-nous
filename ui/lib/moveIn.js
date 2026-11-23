@@ -6,8 +6,8 @@
 // key) and the pure state rules; ui/components/MoveInCards.js draws them. Mechanism only: no person here.
 
 // The names an imported conversation gets in memory (scripts/import_chats.py prep): chatgpt_<date>_...,
-// claude_<date>_..., claude-project_<date>_...
-const CHAT_DOC = /^(chatgpt|claude|claude-project)_/
+// claude_<date>_..., claude-project_<date>_..., codex_ and claude-code_ (local agent history, MEMBERS-11)
+const CHAT_DOC = /^(chatgpt|claude|claude-project|claude-code|codex)_/
 
 // How many conversations the home asks the import to take: the import's own ceiling (api/chat_import.py
 // NEWEST_MAX), so a person's whole history comes, not the Knowledge page's default newest 50.

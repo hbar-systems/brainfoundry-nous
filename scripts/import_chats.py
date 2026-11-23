@@ -3,8 +3,10 @@
 
 ChatGPT and Claude (2026-10-13); Gemini, DeepSeek, Grok, Copilot and Le Chat
 exports, plus any pasted or dropped conversation (text, markdown, html, pdf)
-as one document, added 2026-11-16 (docs/IMPORT.md "Other AIs"). The vendor is
-detected from the file itself; FORMATS says which shapes were confirmed.
+as one document, added 2026-11-16 (docs/IMPORT.md "Other AIs"). One Codex or
+Claude Code session file (.jsonl, the local history of the coding agents) as one
+conversation, added 2026-11-23 (MEMBERS-11). The vendor is detected from the
+file itself; FORMATS says which shapes were confirmed.
 
 Five steps, each a subcommand (docs/IMPORT.md, 2026-10-13):
 
@@ -73,13 +75,20 @@ FORMATS = {
     "perplexity": {"verified": False, "note": "no documented bulk file format (account 'Export my data' or a "
                    "privacy request); threads come in through the fallback (Export as Markdown/PDF, or paste)"},
     "pasted": {"verified": True, "note": "our own fallback: text, markdown, html or pdf, one conversation"},
+    # MEMBERS-11 2026-11-23: the local history of the coding agents, one session file each.
+    "codex": {"verified": True, "note": "Codex CLI/IDE ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl: session_meta, "
+              "response_item message (user input_text, assistant output_text), event_msg user_message/"
+              "agent_message; read from real files 2026-11-23 (structure only)"},
+    "claude-code": {"verified": True, "note": "Claude Code ~/.claude/projects/<slug>/<session>.jsonl: lines typed "
+                    "user/assistant with message.content (text, tool_use, tool_result, thinking blocks), sessionId, "
+                    "cwd, timestamp; read from real files 2026-11-23 (structure only)"},
 }
 
 # How the assistant is named in "## Assistant (<name>)". ChatGPT and Claude keep the
 # capitalize() spelling they have had since 2026-10-13 (documents already in memory).
 DISPLAY = {"chatgpt": "Chatgpt", "claude": "Claude", "gemini": "Gemini", "deepseek": "DeepSeek",
            "grok": "Grok", "copilot": "Copilot", "perplexity": "Perplexity", "lechat": "Le Chat",
-           "pasted": "AI"}
+           "pasted": "AI", "codex": "Codex", "claude-code": "Claude Code"}
 
 GAP_S = 30 * 60  # Gemini (and nameless Copilot rows) start a new conversation after 30 minutes quiet
 
@@ -617,6 +626,187 @@ def normalize(conv):
     return None
 
 
+# ── coding agents' local history: one session file, one conversation (MEMBERS-11, 2026-11-23) ──
+#
+# Codex (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) and Claude Code
+# (~/.claude/projects/<slug>/<session>.jsonl) keep every session as JSON lines. Only the
+# person's typed messages and the assistant's visible text replies are kept. Tool calls, tool
+# results, reasoning, system/developer/environment messages, file snapshots and meta lines are
+# dropped by rule: they carry file contents, command output and sometimes secrets.
+
+SESSION_SOURCES = ("codex", "claude-code")
+SESSION_TITLE_CHARS = 80
+# A message that is nothing but tag blocks (<environment_context>...</environment_context>,
+# <command-name>...</command-name><command-args>...) was written by the tool, not typed.
+_WRAPPED = re.compile(r"(?:\s*<([A-Za-z][\w -]*)(?:\s[^>]*)?>.*?</\1>\s*)+", re.S)
+_MESSAGE = re.compile(r"<message>(.*?)</message>", re.S)
+_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+_INJECTED_START = ("# AGENTS.md instructions", "Caveat: The messages below were generated",
+                   "[Request interrupted by user", "<environment_context>", "<user_instructions>",
+                   "<INSTRUCTIONS>", "<instructions>", "<turn_aborted>", "<user_shell_command>")
+
+
+def _typed(text):
+    """The person's own words of one user message, or '' when the tool wrote it."""
+    t = _REMINDER.sub("", text or "").strip()
+    if _WRAPPED.fullmatch(t):
+        # a brain console's own wrapping (<persona>, <memory>, ... then <message>typed</message>)
+        m = _MESSAGE.search(t)
+        return _typed(m.group(1)) if m else ""
+    if not t or t.startswith(_INJECTED_START):
+        return ""
+    return t
+
+
+def _merge(turns):
+    """Consecutive turns of one side (an answer split around tool steps) become one turn."""
+    out = []
+    for role, when, text in turns:
+        if out and out[-1][0] == role:
+            out[-1] = (role, out[-1][1] or when, out[-1][2] + "\n\n" + text)
+        else:
+            out.append((role, when, text))
+    return out
+
+
+def _jsonl(data):
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", "replace")
+    for line in data.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(o, dict):
+            yield o
+
+
+def session_kind(lines):
+    """'codex', 'claude-code' or '' from the first lines of a session file."""
+    for o in lines:
+        if o.get("type") in ("session_meta", "response_item", "event_msg", "turn_context") and "payload" in o:
+            return "codex"
+        if o.get("type") in ("user", "assistant", "summary") and ("sessionId" in o or "parentUuid" in o):
+            return "claude-code"
+    return ""
+
+
+def _session_conv(source, sid, cwd, turns):
+    turns = _merge(turns)
+    if not any(r == "user" for r, _w, _t in turns):
+        turns = []  # no typed message: a subagent's or a tool's run, not the person's conversation
+    first = next((t for r, _w, t in turns if r == "user"), "")
+    title = _one_line(first)
+    if len(title) > SESSION_TITLE_CHARS:
+        title = title[:SESSION_TITLE_CHARS - 1].rstrip() + "…"
+    whens = [w for _r, w, _t in turns if w]
+    return {"id": sid or "", "source": source, "date": whens[0][:10] if whens else "",
+            "updated": whens[-1] if whens else "", "title": title or "Untitled session",
+            "turns": turns, "cwd": _one_line(cwd or "")}
+
+
+def codex_conversation(lines):
+    sid, cwd, sub = "", "", False
+    items, events = [], []
+    for o in lines:
+        p = o.get("payload") if isinstance(o.get("payload"), dict) else None
+        typ = o.get("type")
+        if p is None and typ == "message":  # older rollouts: the item itself on the line
+            p, typ = o, "response_item"
+        if p is None:
+            if not sid and o.get("id") and o.get("timestamp"):  # older rollouts: the meta line
+                sid = str(o["id"])
+            continue
+        when = _iso(o.get("timestamp") or p.get("timestamp"))[1]
+        if typ == "session_meta":
+            sid = sid or str(p.get("id") or p.get("session_id") or "")
+            cwd = cwd or str(p.get("cwd") or "")
+            src = p.get("source")
+            sub = sub or p.get("thread_source") == "subagent" or (isinstance(src, dict) and "subagent" in src)
+        elif typ == "turn_context" and not cwd:
+            cwd = str(p.get("cwd") or "")
+        elif typ == "event_msg" and p.get("type") in ("user_message", "agent_message"):
+            msg = p.get("message")
+            if isinstance(msg, str):
+                role = "user" if p["type"] == "user_message" else "assistant"
+                text = _typed(msg) if role == "user" else msg.strip()
+                if text:
+                    events.append((role, when, text))
+        elif typ == "response_item" and p.get("type") == "message" and p.get("role") in ("user", "assistant"):
+            role, parts = p["role"], []
+            for b in p.get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                if role == "user" and b.get("type") == "input_text":
+                    parts.append(_typed(b.get("text") or ""))
+                elif role == "user" and b.get("type") == "input_image":
+                    parts.append("[image]")
+                elif role == "assistant" and b.get("type") == "output_text":
+                    parts.append((b.get("text") or "").strip())
+            text = "\n\n".join(x for x in parts if x)
+            if text and text != "[image]":
+                items.append((role, when, text))
+    if sub:
+        return _session_conv("codex", sid, cwd, [])
+    # Codex writes the typed text twice (event_msg user_message, and the response item beside the
+    # injected context). When the events are there they are the clean copy; else the items.
+    use = events if any(r == "user" for r, _w, _t in events) else items
+    return _session_conv("codex", sid, cwd, use)
+
+
+def claude_code_conversation(lines):
+    sid, cwd, turns = "", "", []
+    for o in lines:
+        typ = o.get("type")
+        sid = sid or str(o.get("sessionId") or "")
+        if typ not in ("user", "assistant"):
+            continue  # summaries, file-history snapshots, attachments, system and meta lines
+        cwd = cwd or str(o.get("cwd") or "")
+        if (o.get("isSidechain") or o.get("isMeta") or o.get("isCompactSummary") or o.get("isVisibleInTranscriptOnly")
+                or o.get("isApiErrorMessage") or "toolUseResult" in o):
+            continue
+        m = o.get("message") if isinstance(o.get("message"), dict) else {}
+        if typ == "assistant" and m.get("model") == "<synthetic>":
+            continue
+        content = m.get("content")
+        parts = []
+        if isinstance(content, str):
+            parts.append(_typed(content) if typ == "user" else content.strip())
+        elif isinstance(content, list):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text":
+                    t = b.get("text") or ""
+                    parts.append(_typed(t) if typ == "user" else t.strip())
+                elif b.get("type") == "image" and typ == "user":
+                    parts.append("[image]")
+                # tool_use, tool_result, thinking, redacted_thinking, documents: never kept
+        text = "\n\n".join(x for x in parts if x)
+        if text and text != "[image]":
+            turns.append((typ, _iso(o.get("timestamp"))[1], text))
+    return _session_conv("claude-code", sid, cwd, turns)
+
+
+def session_conversation(data, name=""):
+    """One normalized conversation from one Codex or Claude Code session file (bytes or str),
+    or None when it is neither."""
+    lines = list(_jsonl(data))
+    kind = session_kind(lines)
+    if kind == "codex":
+        c = codex_conversation(lines)
+    elif kind == "claude-code":
+        c = claude_code_conversation(lines)
+    else:
+        return None
+    if not c["id"]:
+        c["id"] = hashlib.sha256((name + "\n").encode() + (data if isinstance(data, bytes) else data.encode())).hexdigest()[:16]
+    return c
+
+
 # ── the fallback: one pasted or dropped conversation ─────────────────────
 
 _USER = r"you|user|me|human|я|вы|пользователь"
@@ -720,9 +910,11 @@ ROLE_LABEL = {"user": "Me", "assistant": "Assistant"}
 
 def render(c):
     head = [f"# {c['title'] or 'Untitled'}", "",
-            f"Source: {c['source']} export, conversation {c['id']}",
-            f"Started: {c['date'] or 'unknown'}" + (f"; last turn {c['updated']}" if c.get("updated") else ""),
-            ""]
+            f"Source: {c['source']} {'session' if c['source'] in SESSION_SOURCES else 'export'}, conversation {c['id']}",
+            f"Started: {c['date'] or 'unknown'}" + (f"; last turn {c['updated']}" if c.get("updated") else "")]
+    if c.get("cwd"):
+        head.append(f"Working folder: {c['cwd']}")
+    head.append("")
     body = []
     for role, when, text in c["turns"]:
         label = ROLE_LABEL[role] + (" (" + DISPLAY.get(c["source"], c["source"].capitalize()) + ")"
@@ -731,12 +923,20 @@ def render(c):
     return "\n".join(head + body)
 
 
+def conv_file_name(c):
+    """The document's file name: <source>_<date>_<slug>_<id8>.md (chat_continue knows the prefix)."""
+    return f"{c['source']}_{c['date'] or 'undated'}_{_slug(c['title'])}_{str(c['id']).replace('-', '')[:8]}.md"
+
+
 def _load_or_paste(src, title=None):
     """An export file, else (a bare text, markdown, html or pdf file) one pasted conversation."""
     p = pathlib.Path(src).expanduser()
     if p.is_file() and not zipfile.is_zipfile(p) and not p.name.lower().endswith(".json"):
         data = p.read_bytes()
         convs = []
+        if p.name.lower().endswith(".jsonl"):  # one Codex or Claude Code session (MEMBERS-11)
+            c = session_conversation(data, p.name)
+            return ([{"_norm": c}] if c else []), []
         if p.name.lower().endswith(".csv"):
             convs = copilot_conversations(data)
         elif p.name.lower().endswith((".html", ".htm")):
@@ -761,7 +961,7 @@ def prep(src, out_dir, title=None):
             continue
         cid = c["id"] or hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()[:16]
         c["id"] = cid
-        name = f"{c['source']}_{c['date'] or 'undated'}_{_slug(c['title'])}_{cid.replace('-', '')[:8]}.md"
+        name = conv_file_name(c)
         text = render(c)
         (out / "docs" / name).write_text(text, encoding="utf-8")
         rows.append({"id": cid, "source": c["source"], "kind": "conversation", "date": c["date"],
