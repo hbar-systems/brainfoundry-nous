@@ -5,6 +5,7 @@ import { press, routeName } from '../lib/presses'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
+import HelpButton from '../components/HelpButton'
 import { applyStyle, clearStyle } from '../lib/layout'
 import { watchWall } from '../lib/wallpaper'
 import { watchSkin } from '../lib/skin'
@@ -518,6 +519,8 @@ export default function App({ Component, pageProps }) {
         `}</style>
       </Head>
       {!embedded && <Nav />}
+      {/* ask hbar (MEMBERS-14): one fixed corner button on every top-level screen, never inside a pane */}
+      {!embedded && <HelpButton />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
