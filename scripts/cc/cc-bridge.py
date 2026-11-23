@@ -3492,10 +3492,31 @@ LOGIN = Login()
 
 
 # --------------------------------------------------------------- memory ----
+# The api's own persona (GET /persona), cached a minute: the fallback when the checkout holds no
+# api/brain_persona.local.md. MEMBERS-11 2026-11-23: two members had their persona only in the
+# api's runtime volume, so the console chat ran with none.
+_API_PERSONA = {"at": 0.0, "text": ""}
+
+
+def _api_persona() -> str:
+    if time.time() - _API_PERSONA["at"] < 60:
+        return _API_PERSONA["text"]
+    res = _brain_api("GET", "/persona")
+    text = res.get("persona") if isinstance(res, dict) and isinstance(res.get("persona"), str) else ""
+    _API_PERSONA.update(at=time.time(), text=text.strip())
+    return _API_PERSONA["text"]
+
+
 def _persona() -> str:
     try:
         # the profile's managed block is always kept whole, even in a persona longer than the cut (2026-10-18)
-        return cc_profile.clip_persona(PERSONA_FILE.read_text(encoding="utf-8"), PERSONA_MAX).strip()
+        text = PERSONA_FILE.read_text(encoding="utf-8")
+    except Exception:
+        text = ""
+    if not text.strip():
+        text = _api_persona()
+    try:
+        return cc_profile.clip_persona(text, PERSONA_MAX).strip() if text.strip() else ""
     except Exception:
         return ""
 
@@ -5529,7 +5550,7 @@ class Handler(BaseHTTPRequestHandler):
                              "brain_session_id": _st.get("brain_session_id"), "title": _st.get("title"),
                              "reasoner": _reasoner_version(), "cwd": CWD, "tools": ALLOWED_TOOLS,
                              "memory": bool(BRAIN_API_KEY), "memory_k": MEMORY_K,
-                             "persona": PERSONA_FILE.exists(), "auth": _auth_status(fresh=_fresh),
+                             "persona": PERSONA_FILE.exists() or bool(_API_PERSONA["text"]), "auth": _auth_status(fresh=_fresh),
                              "hands": "one" if ONE_ENABLED else None,
                              "model": _model_current() or None,
                              "box": BOX_ENABLED and GATE is not None,
