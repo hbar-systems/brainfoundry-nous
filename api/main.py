@@ -4613,6 +4613,65 @@ def federation_records_answer(req: RecordAnswerRequest, api_key: str = Depends(g
         return _record_refuse(e)
 
 
+# ── Help over the record door (MEMBERS-14, 2026-11-23): "ask hbar" ─────────────
+# The member's console asks its own brain (owner key) to sign a help.request to the helper
+# brain named in data/help.json or BRAIN_HELP_PEER; the helper's owner answers in Federation,
+# Help. Both go through POST /v1/federation/record with all its checks. api/federation_help.py.
+
+class HelpAskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # nothing beyond the shape: no memory, chat, files
+    screen: str = "/"
+    pressed: List[str] = []
+    words: str
+    lang: str = "en"
+
+
+class HelpAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    peer: str
+    rid: str
+    words: str
+
+
+@app.get("/v1/help/status")
+def help_status(api_key: str = Depends(get_api_key)):
+    """The member's side: is a helper set and pinned, what was asked, what came back."""
+    from api import federation_help as _fh, federation_record as _fr
+    try:
+        return _fh.status(_fr.door_from_env())
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.post("/v1/help/ask")
+def help_ask(req: HelpAskRequest, api_key: str = Depends(get_api_key)):
+    from api import federation_help as _fh, federation_record as _fr
+    try:
+        return _fh.ask(_fr.door_from_env(), screen=req.screen, pressed=req.pressed, words=req.words,
+                       lang=req.lang, console_version=BRAIN_VERSION)
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.get("/v1/help/inbox")
+def help_inbox(api_key: str = Depends(get_api_key)):
+    """The helper's side: help requests from pinned member brains, and their answers."""
+    from api import federation_help as _fh, federation_record as _fr
+    try:
+        return _fh.inbox(_fr.door_from_env())
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.post("/v1/help/answer")
+def help_answer(req: HelpAnswerRequest, api_key: str = Depends(get_api_key)):
+    from api import federation_help as _fh, federation_record as _fr
+    try:
+        return _fh.answer(_fr.door_from_env(), frm=req.peer, rid=req.rid, words=req.words)
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
 class VouchRequest(BaseModel):
     days: int = 30
 
