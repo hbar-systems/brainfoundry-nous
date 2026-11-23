@@ -78,7 +78,7 @@ export default function Federation() {
   return (
     <>
       <Head><title>Federation · BrainFoundry</title></Head>
-      <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
+      <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'var(--font-display, Lora, ui-serif, serif)' }}>
 
         <p style={{ color: 'var(--accent)', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: 'DM Mono, monospace', margin: '0 0 6px 0' }}>
           brainfoundry-nous · federation

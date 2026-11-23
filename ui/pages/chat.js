@@ -3,6 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import MessageRenderer from '../lib/MessageRenderer'
 import CustomSelect from '../lib/CustomSelect'
 import { loadModelsAndDefault, persistModelChoice } from '../lib/defaultModel'
+import { setConsoleTheme, setFont as setSkinFont } from '../lib/skin'
 
 const THEME_OPTIONS = [
   { value: 'gold', label: 'gold', swatch: '#c9a96e' },
@@ -391,15 +392,13 @@ export default function Chat() {
   const applyTheme = (val) => {
     setTheme(val)
     if (typeof window !== 'undefined') {
-      localStorage.setItem('bf-theme', val)
-      document.documentElement.dataset.theme = val
+      setConsoleTheme(val, document.documentElement)
     }
   }
   const applyFont = (val) => {
     setFont(val)
     if (typeof window !== 'undefined') {
-      localStorage.setItem('bf-font', val)
-      document.documentElement.dataset.font = val
+      setSkinFont(val, document.documentElement)
     }
   }
 

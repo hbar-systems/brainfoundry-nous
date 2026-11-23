@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { wake as wakePresses } from '../lib/presses'
+import { setConsoleTheme, setFont as setSkinFont } from '../lib/skin'
 
 const API = '/api/bf'
 
@@ -56,15 +57,13 @@ function AppearancePanel() {
   const applyTheme = (val) => {
     setTheme(val)
     if (typeof window === 'undefined') return
-    localStorage.setItem('bf-theme', val)
-    document.documentElement.dataset.theme = val
+    setConsoleTheme(val, document.documentElement)
   }
 
   const applyFont = (val) => {
     setFont(val)
     if (typeof window === 'undefined') return
-    localStorage.setItem('bf-font', val)
-    document.documentElement.dataset.font = val
+    setSkinFont(val, document.documentElement)
   }
 
   const applyNavH = (val) => {
@@ -199,7 +198,7 @@ function BrainLayoutPanel() {
 
   const applyLive = (c) => {
     if (typeof window === 'undefined' || !c) return
-    if (c.theme) { localStorage.setItem('bf-theme', c.theme); document.documentElement.dataset.theme = c.theme }
+    if (c.theme) setConsoleTheme(c.theme, document.documentElement)
     // accent override: 'default' clears the inline override (theme accent wins)
     if (c.accent && c.accent !== 'default') {
       document.documentElement.style.setProperty('--accent', c.accent)

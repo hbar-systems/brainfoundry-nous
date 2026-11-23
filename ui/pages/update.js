@@ -414,7 +414,7 @@ export default function Update() {
   return (
     <>
       <Head><title>Update · BrainFoundry</title></Head>
-      <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
+      <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto', fontFamily: 'var(--font-display, Lora, ui-serif, serif)' }}>
 
         <div style={{ marginBottom: '28px' }}>
           <p style={{

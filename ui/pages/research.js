@@ -50,7 +50,7 @@ export default function Research() {
   return (
     <>
       <Head><title>Research · BrainFoundry</title></Head>
-      <div style={{ padding: '40px 32px', maxWidth: '820px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
+      <div style={{ padding: '40px 32px', maxWidth: '820px', margin: '0 auto', fontFamily: 'var(--font-display, Lora, ui-serif, serif)' }}>
         <h1 style={{ fontSize: 26, color: 'var(--text)', margin: '0 0 6px 0' }}>Deep Research</h1>
         <p style={{ color: 'var(--text-dim)', fontSize: 14, lineHeight: 1.6, margin: '0 0 22px 0' }}>
           Ask a question. Your brain plans searches, reads multiple sources, and writes a cited report —

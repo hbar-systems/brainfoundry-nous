@@ -574,7 +574,7 @@ export default function Integrations() {
   return (
     <>
       <Head><title>Integrations · BrainFoundry</title></Head>
-      <div style={{ padding: '40px 32px', maxWidth: '780px', margin: '0 auto', fontFamily: 'Lora, ui-serif, serif' }}>
+      <div style={{ padding: '40px 32px', maxWidth: '780px', margin: '0 auto', fontFamily: 'var(--font-display, Lora, ui-serif, serif)' }}>
         <h1 style={{ fontSize: 26, color: 'var(--text)', margin: '0 0 6px 0' }}>Integrations</h1>
         <p style={{ color: 'var(--text-dim)', fontSize: 14, lineHeight: 1.6, margin: '0 0 26px 0' }}>
           Connect your tools so your brain can act on your real world — read-only, untrusted by default.
