@@ -70,7 +70,7 @@ export default function RecordsTab({ onStatus }) {
   }
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t) }, [])
   if (records === null) return null
-  const shown = records.filter(r => !r.kind.startsWith('record.')).reverse()
+  const shown = records.filter(r => !r.kind.startsWith('record.') && !r.kind.startsWith('help.')).reverse() // help lives in its own tab
   if (!shown.length) {
     return (
       <p style={{ color: 'var(--muted)', fontSize: '13px', fontStyle: 'italic' }}>
