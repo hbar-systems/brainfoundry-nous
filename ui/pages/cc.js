@@ -17,6 +17,7 @@ import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wal
 import { press, routeName, slashName, choiceName } from '../lib/presses'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { splitTree } from '../lib/tree'
+import { splitSteer, steerBody, sayUrl } from '../lib/steer'
 import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
@@ -963,11 +964,57 @@ function Choices({ choices, onChoice }) {
     </div>
   )
 }
-function BrainText({ text, live, onChoice, pane }) {
-  // the thread tree (TREE-1, 2026-11-22) is cut out first: it sits before the choices, which stay anchored to the end
-  const { body, choices, route, tree } = useMemo(() => { const p = splitPane(text); const t = splitTree(p.body); return { ...splitChoices(t.body), route: p.route, tree: t.tree } }, [text])
+// A steer line (BOARD-5, 2026-11-23): the reasoner proposed a turn for another system's standing thread. The
+// person's press sends it (POST /cc/systems/thread, then /cc/threads/<id>/say with this thread as "from"); the
+// steered thread reports back here through REPORT-1. Nothing is sent without the press.
+function SteerLines({ steers, cur }) {
+  const [st, setSt] = useState({})               // system -> { phase: 'sending' | 'sent' | 'err', text }
+  if (!steers || steers.length === 0) return null
+  const put = (sid, v) => setSt(m => ({ ...m, [sid]: v }))
+  const go = async (s) => {
+    put(s.system, { phase: 'sending', text: 'sending' })
+    try {
+      const r = await fetch('/cc/systems/thread', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system: s.system }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d.thread) { put(s.system, { phase: 'err', text: d.error || `the bridge answered ${r.status}` }); return }
+      const r2 = await fetch(sayUrl(d.thread), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(steerBody(s, cur)) })
+      const d2 = await r2.json().catch(() => ({}))
+      if (!r2.ok || !d2.ok) { put(s.system, { phase: 'err', text: d2.error || `the bridge answered ${r2.status}` }); return }
+      put(s.system, { phase: 'sent', text: d2.reports_to ? 'sent; it reports back here' : 'sent', thread: d.thread })
+    } catch { put(s.system, { phase: 'err', text: 'the bridge did not answer' }) }
+  }
+  return (
+    <div data-nopick="1" style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+      {steers.map(s => {
+        const v = st[s.system] || {}
+        return (
+          <div key={s.system} data-steer={s.system} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', padding: '8px 12px', borderRadius: '12px', backgroundColor: C.card }}>
+            <span style={{ ...mono, fontSize: '12px', color: C.gold, whiteSpace: 'nowrap' }}>{s.system}</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: '14px', color: C.ink, overflowWrap: 'anywhere' }}>{s.say}</span>
+            {v.phase === 'sent' ? (
+              <a href={`/talk?thread=${encodeURIComponent(v.thread)}`} style={{ ...mono, fontSize: '12px', color: C.dim, whiteSpace: 'nowrap' }}>{v.text}</a>
+            ) : (
+              <button onClick={() => go(s)} disabled={v.phase === 'sending'} title={`sends this to the ${s.system} thread`}
+                style={{ ...mono, fontSize: '12px', padding: '4px 12px', borderRadius: '14px', cursor: 'pointer', border: `1px solid ${C.gold}`, backgroundColor: 'transparent', color: C.gold, whiteSpace: 'nowrap' }}>
+                {v.phase === 'sending' ? 'sending' : 'send'}
+              </button>
+            )}
+            {v.phase === 'err' ? <span role="status" style={{ fontSize: '12px', color: '#d08a7a' }}>{v.text}</span> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+function BrainText({ text, live, onChoice, pane, cur }) {
+  // the thread tree (TREE-1, 2026-11-22) is cut out first: it sits before the choices, which stay anchored to the end;
+  // the steer lines (BOARD-5) sit before the choices too
+  const { body, choices, route, tree, steers } = useMemo(() => {
+    const p = splitPane(text); const t = splitTree(p.body); const s = splitSteer(t.body)
+    return { ...splitChoices(s.body), route: p.route, tree: t.tree, steers: s.steers }
+  }, [text])
   const r = route || (pane && (pane.route || pane)) || null
-  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
+  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 // A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS
@@ -989,7 +1036,7 @@ function ReportCard({ report, onOpenHere }) {
   return (
     <div data-reportcard={report.id}>
       <p style={{ ...mono, color: tone === 'bad' ? '#d08a7a' : tone === 'ask' ? C.gold : C.dim, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
-        thread you started · {report.state || 'done'}
+        {report.steered ? 'thread you steered' : 'thread you started'} · {report.state || 'done'}
       </p>
       <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{report.title}</p>
       {ls.length ? <div className="cc-md" style={{ fontSize: '0.92em', color: C.dim }}>{ls.map((l, i) => <Md key={i} text={l} />)}</div>
@@ -3468,7 +3515,7 @@ function CC() {
                 {t.job && <JobCard job={t.job} onOpen={(path) => openPane({ route: '/files?path=' + encodeURIComponent(path), title: 'Files' })}
                   onTalk={(j) => { setDraft(d => (d ? d + '\n' : '') + `About job ${j.id} (${j.title}): `); if (boxRef.current) boxRef.current.focus() }} />}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
-                {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} pane={t.pane} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
+                {t.who === 'brain' ? (t.text ? <BrainText text={t.text} live={t.live} onChoice={choose} pane={t.pane} cur={cur} /> : (t.live ? <span style={{ color: C.dim, fontStyle: 'italic' }}>working{t.model ? ` with ${shortModel(t.model)}` : ''}…</span> : null)) : (t.who === 'me' && t.text ? <LinkedText text={t.text} /> : t.text)}
                 {t.voices && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
                     {t.voices.map(v => (
