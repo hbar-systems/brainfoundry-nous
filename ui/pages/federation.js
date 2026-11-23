@@ -1,8 +1,9 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
+import RecordsTab from '../components/RecordsTab'
 
 export default function Federation() {
-  const [tab, setTab] = useState('inbox') // 'inbox' | 'outbox' | 'compose'
+  const [tab, setTab] = useState('inbox') // 'inbox' | 'outbox' | 'compose' | 'records'
   const [inbox, setInbox] = useState([])
   const [outbox, setOutbox] = useState([])
   const [composeTo, setComposeTo] = useState('')
@@ -92,7 +93,7 @@ export default function Federation() {
 
         {/* Tab nav */}
         <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-          {['inbox', 'outbox', 'compose'].map(t => (
+          {['inbox', 'outbox', 'compose', 'records'].map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -196,6 +197,11 @@ export default function Federation() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Records (A2A-2): signed records from pinned brains, the owner's press */}
+        {tab === 'records' && (
+          <RecordsTab onStatus={(st) => { setStatus(st); setTimeout(() => setStatus(null), 8000) }} />
         )}
 
         {/* Compose */}

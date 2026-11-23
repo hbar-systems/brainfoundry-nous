@@ -2,6 +2,7 @@
 <!--
   Week: a brain-app shipped with BrainFoundry (brain-apps/shipped/week).
   Created: 2026-11-10 (WEEK-APP-1)
+  2026-11-23 (MEMBERS-13): the shown page keeps its own choices (language, gift opened) across loads.
 
   Shows the owner's week page (week/index.html on the Files desk) full size, so the layout can
   open it beside the conversation at the start (start = /apps/week). The app runs sandboxed in an
@@ -80,6 +81,61 @@
   var RELAY = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest?' +
     'e.target.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href")||"";if(h.charAt(0)==="#")return;' +
     'e.preventDefault();parent.postMessage({type:"week.link",href:a.href},"*")},true)<' + '/script>'
+  // The shown page's own storage (MEMBERS-13, 2026-11-23). The page's sandbox gives it no
+  // localStorage, so a start page's choices (its language, the gift opened) were asked again after
+  // every console load. A second small script, put first in the page, gives it an in-page store
+  // seeded from this app's own store (keys under PAGE), and posts each write up here; this app keeps
+  // it in its own store, which the host page keeps per app (bridge storage.set). Per browser.
+  var PAGE = 'page:'
+  var PAGE_KEYS = 50
+  var PAGE_KEY_MAX = 100
+  var PAGE_VALUE_MAX = 2000
+  function pageStore() {
+    var o = {}
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i)
+        if (k && k.indexOf(PAGE) === 0) o[k.slice(PAGE.length)] = localStorage.getItem(k)
+      }
+    } catch (_) {}
+    return o
+  }
+  function storeScript(seed) {
+    return '<script>(function(){var d=' + JSON.stringify(seed).replace(/</g, '\\u003c') + ';' +
+      'function up(m){m.type="week.storage";try{parent.postMessage(m,"*")}catch(e){}}var s={};' +
+      'Object.defineProperties(s,{length:{get:function(){return Object.keys(d).length}},' +
+      'key:{value:function(i){var k=Object.keys(d);return i>=0&&i<k.length?k[i]:null}},' +
+      'getItem:{value:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null}},' +
+      'setItem:{value:function(k,v){k=String(k);v=String(v);d[k]=v;up({op:"set",key:k,value:v})}},' +
+      'removeItem:{value:function(k){k=String(k);delete d[k];up({op:"remove",key:k})}},' +
+      'clear:{value:function(){for(var k in d)delete d[k];up({op:"clear"})}}});' +
+      'var real=null;try{real=window.localStorage;real.getItem("x")}catch(e){real=null}' +
+      'if(!real){try{Object.defineProperty(window,"localStorage",{value:s,configurable:true})}catch(e){}}})()<' + '/script>'
+  }
+  // first in <head>, so the page's own scripts see the store; a page without <head> gets it first
+  function withStore(text) {
+    var shim = storeScript(pageStore())
+    var m = /<head(\s[^>]*)?>/i.exec(text)
+    if (m) return text.slice(0, m.index + m[0].length) + shim + text.slice(m.index + m[0].length)
+    m = /^\s*<!doctype[^>]*>/i.exec(text)
+    if (m) return m[0] + shim + text.slice(m[0].length)
+    return shim + text
+  }
+  function keepPage(m) {
+    try {
+      if (m.op === 'clear') {
+        Object.keys(pageStore()).forEach(function (k) { localStorage.removeItem(PAGE + k) })
+        return
+      }
+      if (typeof m.key !== 'string' || !m.key || m.key.length > PAGE_KEY_MAX) return
+      if (m.op === 'remove') { localStorage.removeItem(PAGE + m.key); return }
+      if (m.op !== 'set' || typeof m.value !== 'string' || m.value.length > PAGE_VALUE_MAX) return
+      var have = pageStore()
+      if (!Object.prototype.hasOwnProperty.call(have, m.key) && Object.keys(have).length >= PAGE_KEYS) return
+      localStorage.setItem(PAGE + m.key, m.value)
+    } catch (_) {}
+  }
+
   function askFor(href) {
     var u
     try { u = new URL(href, location.href) } catch (_) { return null }
@@ -102,7 +158,9 @@
 
   window.addEventListener('message', function (ev) {
     var m = ev.data
-    if (ev.source !== frame.contentWindow || !m || m.type !== 'week.link' || typeof m.href !== 'string') return
+    if (ev.source !== frame.contentWindow || !m) return
+    if (m.type === 'week.storage') { keepPage(m); return }
+    if (m.type !== 'week.link' || typeof m.href !== 'string') return
     // a /cc?ask=<text> link (member start pages, 2026-11-21) goes to the MAIN conversation and is
     // sent: the press in the page is the owner's yes; everything else opens as before
     var q = askFor(m.href)
@@ -117,7 +175,7 @@
       if (r.ok && r.result && typeof r.result.text === 'string') {
         if (r.result.text !== lastText) {
           lastText = r.result.text
-          frame.srcdoc = r.result.text + RELAY
+          frame.srcdoc = withStore(r.result.text) + RELAY
         }
         document.body.classList.add('shown')
         return

@@ -490,3 +490,40 @@ Steering: when the person asks the central chat to tell another system something
 When a thread carries several open branches, the brain ends its answer with a tree of them: one row per branch, with its state (done, yours, running, scheduled, later, blocked, killed) and a short note. Press a row and its card opens under it: why the branch is in that state, one full link, and **talk**, which puts a question about that branch in the chat box for you to finish and send. A branch with branches under it has a small fold at the right. Branches stay on the tree from answer to answer until they are done or killed.
 
 For the reasoner: one `<tree>{"title": ..., "nodes": [{"id", "label", "state", "note", "why", "link", "ask", "children"}]}</tree>` block before any choices or pane block (parser `ui/lib/tree.js`, drawing `ui/components/ThreadTree.js`). A block that does not parse shows nothing. Links are limited to https addresses, `/talk` threads and console routes. The block is never read aloud. Telegram still shows the block as text (not handled yet).
+
+## Cards are a log, and talk in place (INLINE-1, 2026-11-23)
+
+### Cards survive a reload
+A job's finished tile and a report card used to be handed to the page once and kept only in the page's memory, so a reload or a crashed browser lost them. The bridge's own list of unseen jobs lived in memory too, so a bridge restart lost them as well.
+Now every card is written to the thread's log on the box when it is made (`scripts/cc/cc_cardlog.py`, `~/.cc-bridge/cardlog.json`): a job when it ends, a report when the child thread posts it, and the steer reports of BOARD-5 the same way.
+`GET /cc/cards?thread=<id>` returns the log, oldest first. The page merges it between the messages by time, so a reload shows the same cards in the same places.
+Each card is open or answered. Typing into the thread answers every card before it (steered turns and notes do not count). The small "answered" press under a card answers that card alone (`POST /cc/cards/answered`).
+Cards are kept 60 days, at most 200 per thread.
+The typing box keeps its draft per thread in the browser (`localStorage cc.draft.<thread>`), cleared when the box empties on send.
+
+### Talk in place
+A note is a small box on one item: a node of the thread tree in the chat, or a row on a brain-built page. Typing there sends one turn to a side conversation bound to that item. The answer comes back into the same box, folded, with a dot until it is opened.
+"send an agent" in the same box is a turn with an agent's instruction. Its report card lands in the box and in the log of the thread the note was opened from. A job it starts lands in the box when it ends.
+Doors: `POST /cc/sides/say {key, message, mode, title, text, link, page, home}` (202, the turn runs in the background), `GET /cc/sides?keys=|page=|home=`, `POST /cc/sides/read`, `POST /cc/sides/seen`, `GET /cc/sides/count`. Store: `scripts/cc/cc_sides.py`, `~/.cc-bridge/sides.json`.
+A brain-built page gets it with one line: `<script src="/cc/inline.js" data-page="<name>" data-home="<thread>"></script>`. It then marks items with `data-talk-key` (plus `data-talk-title`, `data-talk-text`, `data-talk-link`); `data-talk-open` marks the talk press and `data-talk-send="<text>"` a press that sends its own text (a ruling). `/cc/page/<name>/#talk=<key>` opens that item's note.
+Pages may now have one folder level of sub-pages: `<out>/court/tasks/index.html` is `/cc/page/court/tasks/`. Only a folder with its own `index.html` counts, so a data folder such as `court/d/` stays closed.
+The footer of every console page shows one quiet line ("2 answers ready") that jumps to the first one. When an answer comes and no console page has said the owner is looking for over five minutes, one Telegram line goes out with the note's title only, never its content (paired phone only, inside the `/notify` hourly cap).
+
+### Threat note: talk in place
+The door writes a turn that runs the reasoner with tools, so it is treated as a write door, like the steer door.
+- Who can call it: only the owner through the console login. It is a page route that needs the operator token, which Caddy adds after the console login. It is not on the list of POST routes that skip the token, and the test pins that.
+  The hands (the reasoner, its jobs, cc-job, the hook) do not hold that token. The hook's X-CC-Ask token does not open it, and a brain app's frame is refused even with the token (Origin null or cross-site).
+  A page at `/cc/files/raw` is an opaque origin, so it is refused too. inline.js says so on the press, and the page's buttons fall back to their old links to the chat.
+- A brain-built page at `/cc/page/...` is same-origin and was able to call `/cc/chat` with the owner's login before this change (COURT-8). The note door adds no reach beyond that.
+  The new risk is that a page the reasoner wrote could send notes by itself while the owner has it open. The answer is the same as for `/cc/chat`: posture and cards, unchanged. Notes also carry three marks of their own:
+  - every note turn is recorded in its own thread, titled "CC: note: ...", so the record shows where it came from;
+  - each page sends at most 40 notes an hour (429 after that);
+  - one turn runs at a time per note (409).
+  The sub-page rule only opens folders that the same hands could already serve as a page, so it is no looser.
+- What a note turn can do: the same `_turn()` as a typed turn, with an existing thread, no seat of its own, no parent, no queue override, and source "note". `source` only labels the turn; no permission is keyed off it. Every tool call passes the same hook, posture and cards. It is never looser.
+- The side's thread is made before its first turn (`POST /sessions`, like the /systems standing threads). The turn is therefore explicit and never moves the box's current thread, the one Telegram and a bare /cc open.
+  The thread is kept off the thread list (`via: side`) but stays continuable from its note.
+- Where answers go: a question answers only in its note. An agent's report goes to the home thread only when `home` is a real thread on this box that is not itself a note. Anything else is dropped, and the note still answers in place.
+- What the page draws: inline.js builds every answer with textContent and creates links as nodes, for https:// and /cc/ paths only. It never uses innerHTML, and the test pins that. A note's link is kept only when it is a console path or an https address (no javascript:, no data:, no //host).
+- The Telegram line carries the title only. A title is the item's own label, written by the page, so it can say what the item is. It never carries the answer.
+- Known edge: if the box is at its run cap, the note waits in line (state "waits for a free seat") and finishes by itself when it is drained. If the bridge restarts while the turn is waiting, the turn is lost, as a typed turn's is. The note shows "working" for up to 30 minutes, then takes a new press.

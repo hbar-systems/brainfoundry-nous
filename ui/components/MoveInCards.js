@@ -215,6 +215,8 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
             <button type="button" className="mi-btn" onClick={start}>{P.compNew}</button>
           </>
         )}
+        {/* MEMBERS-13 walk: in another browser or after a reload the line is gone (the token is not shown twice); a new line, not a stuck wait */}
+        {step === 'line' && !(mint && mint.token) && <button type="button" className="mi-btn mi-primary" onClick={start}>{P.compNew}</button>}
         {step === 'plan' && (
           <button type="button" className="mi-btn mi-primary" disabled={sending === 'busy' || !t.files || over} onClick={choose}>
             {t.proposed ? P.bringProposed(t.files, fmtBytes(t.bytes)) : P.bringChosen(t.files, fmtBytes(t.bytes))}

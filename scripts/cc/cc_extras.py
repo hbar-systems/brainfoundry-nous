@@ -553,16 +553,31 @@ class Pages:
         if name not in self.names or not PAGE_NAME_RE.fullmatch(name):
             return None
         sub = sub or "index.html"
-        if not PAGE_FILE_RE.fullmatch(sub) or ".." in sub:
+        # INLINE-1 (2026-11-23): one folder level inside a page, so <out>/court/tasks/index.html is the page
+        # /cc/page/court/tasks/ on the console origin (talk in place needs the console's doors; /cc/files/raw
+        # stays an opaque origin). The folder is the page's own, written by the same hands as the page.
+        folder, _, leaf = sub.rpartition("/")
+        if folder and not leaf:
+            leaf, sub = "index.html", folder + "/index.html"
+        if folder and not PAGE_NAME_RE.fullmatch(folder):
+            return None
+        if folder and not (self.out / name / folder / "index.html").is_file():
+            return None   # only a sub-page (a folder with its own index.html); a data folder like court/d/ stays closed
+        if not PAGE_FILE_RE.fullmatch(leaf) or ".." in leaf:
             return None
         try:
-            real_folder = (self.out / name).resolve(strict=True)
+            real_folder = (self.out / name / folder).resolve(strict=True) if folder else (self.out / name).resolve(strict=True)
             real = (self.out / name / sub).resolve(strict=True)
         except (OSError, RuntimeError):
             return None
-        if real_folder != self.out.resolve() / name or real.parent != real_folder or not real.is_file():
+        want = self.out.resolve() / name / folder if folder else self.out.resolve() / name
+        if real_folder != want or real.parent != real_folder or not real.is_file():
             return None
         return real
+
+    def is_folder(self, name: str, folder: str) -> bool:
+        """A sub-page folder of a page (it has its own index.html)."""
+        return bool(PAGE_NAME_RE.fullmatch(folder or "")) and self.path(name, folder + "/index.html") is not None
 
     def serve(self, handler, name: str, sub: str = "") -> None:
         p = self.path(name, sub)
@@ -586,7 +601,7 @@ class Pages:
         handler.send_header("Content-Length", str(len(data)))
         handler.send_header("Cache-Control", "no-store")
         handler.send_header("X-Content-Type-Options", "nosniff")
-        if (sub or "index.html") != "index.html" and ctype.split(";")[0] in PAGE_ACTIVE:
+        if ((sub or "index.html").rpartition("/")[2] or "index.html") != "index.html" and ctype.split(";")[0] in PAGE_ACTIVE:
             # a sibling page stays an ordinary desk page: opaque origin
             handler.send_header("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-downloads")
         else:

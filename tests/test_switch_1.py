@@ -344,10 +344,12 @@ def test_first_run_order_and_picks():
     assert sorted(out[13]) == sorted(from_bridge)                        # a Russian line for every way of working
 
 
-def test_first_run_seat_card_says_the_small_model_is_not_chatgpt():
+def test_first_run_seat_card_says_sign_in_first():
+    """MEMBERS-13 walk 2026-11-23: member brains have no Local seat (add-member.sh sets no CC_LOCAL_*), so the old
+    line "runs on a small free model (llama3.2)" was false there and a start pressed before sign-in failed."""
     out = _node("firstRun.js", "console.log(JSON.stringify([m.FIRST_TEXT.en.seatLocal, m.FIRST_TEXT.ru.seatLocal]))")
-    assert "llama3.2" in out[0] and "cannot replace ChatGPT" in out[0]
-    assert "llama3.2" in out[1] and "заменить ChatGPT не может" in out[1]
+    assert "llama3.2" not in out[0] and out[0].startswith("Sign in first") and "Moving in (step 3) works already" in out[0]
+    assert "llama3.2" not in out[1] and out[1].startswith("Сначала войдите")
 
 
 def test_connect_card_steps():

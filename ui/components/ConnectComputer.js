@@ -106,6 +106,7 @@ export default function ConnectComputer({ lang = 'en', onState }) {
   const lap = st.status && st.status.laptop
   const seen = lap && lap.seen ? (() => { try { return new Date(lap.seen).toLocaleString(lang === 'ru' ? 'ru-RU' : [], { dateStyle: 'medium', timeStyle: 'short' }) } catch { return '' } })() : ''
   const pill = { off: T.off, get: T.stGet, made: T.stMade, asleep: T.stAsleep, look: T.stHere, looked: T.stHere, moving: T.stMoving }[step]
+  if (step === 'off') return null   // the paste card above does the same; a dead second card confused (MEMBERS-13 walk 2026-11-23)
   const tone = step === 'off' || step === 'get' ? 'new' : (step === 'look' || step === 'looked') ? 'done' : 'wait'
   const mac = os === 'mac'
 

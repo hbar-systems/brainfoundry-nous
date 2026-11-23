@@ -7,6 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { merge as logMerge, whenOf as logWhen, addLive as logAddLive, answerAll as logAnswerAll } from '../lib/cardlog'
 import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
@@ -183,7 +184,7 @@ function LearnDoor({ term }) {
   const line = { display: 'block', fontSize: '13px', color: C.ink, marginBottom: '6px' }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <a data-nopick="1" onClick={openIt} title={'a mini lesson on ' + term}
+      <a data-nopick="1" onClick={openIt} aria-label={'a mini lesson on ' + term}
         style={{ ...mono, fontSize: '9.5px', letterSpacing: '0.06em', marginLeft: '3px', padding: '0 4px', borderRadius: '6px', cursor: 'pointer', verticalAlign: 'super',
                  border: `1px solid ${card.open ? C.gold : C.line}`, color: C.gold }}>learn</a>
       {card.open && (
@@ -250,7 +251,7 @@ function Recall() {
 function InlineCode({ node, children, ...props }) {
   const [done, setDone] = useState(false)
   const txt = (Array.isArray(children) ? children.join('') : String(children == null ? '' : children))
-  return <><code {...props} data-nopick="1" title={done ? 'copied' : 'click to copy'}
+  return <><code {...props} data-nopick="1" aria-label={done ? 'copied' : 'press to copy'}
     onClick={(e) => { e.stopPropagation(); copyText(txt); setDone(true); setTimeout(() => setDone(false), 1200) }}
     style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, color: done ? C.gold : C.codeFg, padding: '1px 5px', borderRadius: '4px', cursor: 'copy' }}>{children}</code>
     {txt.length >= 2 && txt.length <= 80 && !txt.includes('\n') && !props.className && <LearnDoor term={txt} />}</>
@@ -293,17 +294,19 @@ function CopyDoor({ text }) {
   const [done, setDone] = useState(false)
   return <CardDoor onClick={() => { copyText(text); setDone(true); setTimeout(() => setDone(false), 1200) }} title="Copy the exact text">{done ? 'copied' : 'copy'}</CardDoor>
 }
+// In flow, under the line it belongs to (MEMBERS-13, 2026-11-23, hbar's screenshot: a card floating over a
+// report covered the text and file links beside it). It opens on a press only and pushes what follows down;
+// it never lies over another word or link. No hover note anywhere in message text (no `title` on the doors).
 function InfoCard({ children, boxRef }) {
   return (
-    <span ref={boxRef} data-nopick="1" onClick={(e) => e.stopPropagation()}
-      style={{ position: 'absolute', left: 0, top: '1.7em', zIndex: 50, width: 'min(420px, 80vw)', display: 'block', backgroundColor: C.card,
-               border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', boxShadow: '0 8px 28px rgba(0,0,0,0.55)', lineHeight: 1.5, whiteSpace: 'normal' }}>
+    <span ref={boxRef} data-nopick="1" data-infocard="1" onClick={(e) => e.stopPropagation()}
+      style={{ position: 'static', display: 'block', width: 'min(420px, 100%)', boxSizing: 'border-box', margin: '6px 0 8px 0', backgroundColor: C.card,
+               border: `1px solid ${C.gold}`, borderRadius: '10px', padding: '10px 12px', lineHeight: 1.5, whiteSpace: 'normal', fontWeight: 400 }}>
       {children}
     </span>
   )
 }
 function PathLink({ path, children, style, copy }) {
-  const [hov, setHov] = useState(false)
   const [peek, setPeek] = useState(null)
   const card = useCard()
   const img = isImagePath(path)
@@ -314,9 +317,8 @@ function PathLink({ path, children, style, copy }) {
   }, [card.open])
   const route = '/files?path=' + encodeURIComponent(path)
   return (
-    <span style={{ position: 'relative', display: 'inline' }} onMouseEnter={() => img && setHov(true)} onMouseLeave={() => setHov(false)}>
-      <a onClick={(e) => { e.stopPropagation(); setHov(false); if (isMdPath(path)) { card.setOpen(false); openMd(path) } else card.toggle() }} title={isMdPath(path) ? `${path} (click: read it in a card)` : `${path} (click: card with open, full screen, ask, agent)`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
-      {hov && !card.open && <img src={rawUrl(path)} alt="" style={{ position: 'absolute', left: 0, top: '1.6em', zIndex: 40, maxWidth: '260px', maxHeight: '200px', objectFit: 'contain', backgroundColor: '#000', border: `1px solid ${C.line}`, borderRadius: '6px', pointerEvents: 'none' }} />}
+    <span style={{ display: 'inline' }}>
+      <a onClick={(e) => { e.stopPropagation(); if (isMdPath(path)) { card.setOpen(false); openMd(path) } else card.toggle() }} aria-label={isMdPath(path) ? `${path}: press to read it in a card` : `${path}: press for a card with open, full screen, ask, agent`} style={{ color: C.gold, cursor: 'pointer', textDecoration: 'none', overflowWrap: 'anywhere', border: `1px solid ${card.open ? C.gold : C.line}`, backgroundColor: C.card, borderRadius: '5px', padding: '0 4px', ...(style || {}) }}>{children || path}</a>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
           <span style={{ display: 'block', color: C.ink, fontWeight: 600, fontSize: '13px', overflowWrap: 'anywhere' }}>{name}</span>
@@ -350,7 +352,7 @@ function CommitLink({ sha }) {
   const repoName = info && info.repo ? info.repo.split('/repos/').pop().replace(/^.*\/world$/, 'world') : ''
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <a data-nopick="1" onClick={(e) => { e.stopPropagation(); card.toggle() }} title={`commit ${sha} (click: what it is)`}
+      <a data-nopick="1" onClick={(e) => { e.stopPropagation(); card.toggle() }} aria-label={`commit ${sha}: press for what it is`}
         style={{ ...mono, fontSize: '0.88em', color: C.gold, cursor: 'pointer', backgroundColor: C.codeBg, border: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '4px', padding: '0 5px' }}>{sha}</a>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
@@ -430,7 +432,7 @@ function Highlight({ children, node }) {
   const post = (k) => { card.setOpen(false); ccEmit('cc-send-text', k === 'deeper' ? `Go deeper on "${txt}": the evidence, the state, and the next step.` : `What exactly do you need from me on "${txt}"? Give me the choices.`) }
   return (
     <span style={{ position: 'relative', display: 'inline' }}>
-      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); const blk = e.currentTarget.closest && e.currentTarget.closest('p, li, td, blockquote'); synRef.current = synopsis(blk ? blk.textContent : '', txt); card.toggle() }} title="click: go deeper or send an agent"
+      <strong onClick={(e) => { e.stopPropagation(); ctxRef.current = msgContext(e.currentTarget); const blk = e.currentTarget.closest && e.currentTarget.closest('p, li, td, blockquote'); synRef.current = synopsis(blk ? blk.textContent : '', txt); card.toggle() }} aria-label={txt + ': press to go deeper or send an agent'}
         style={{ cursor: 'pointer', borderBottom: `1px dotted ${card.open ? C.gold : C.faint}`, color: card.open ? C.gold : undefined }}>{children}</strong>
       {txt.length <= 80 && <LearnDoor term={txt} />}
       {card.open && (
@@ -465,7 +467,7 @@ function ActPhrase({ children }) {
           ref.current = { ctx: msgContext(e.currentTarget), sentence: sentenceAround(blk ? blk.textContent : phrase, phrase) }
           card.toggle()
         }}
-        title="click: do it, or ask what it needs"
+        aria-label={phrase + ': press to do it, or ask what it needs'}
         style={{ cursor: 'pointer', backgroundColor: card.open ? 'rgba(212,175,55,0.22)' : 'rgba(212,175,55,0.10)', borderBottom: `1px solid ${card.open ? C.gold : C.line}`, borderRadius: '3px', padding: '0 2px' }}>{children}</span>
       {card.open && (
         <InfoCard boxRef={card.boxRef}>
@@ -1027,7 +1029,7 @@ function BrainText({ text, live, onChoice, pane, cur }) {
     return { ...splitChoices(s.body), route: p.route, tree: t.tree, steers: s.steers }
   }, [text])
   const r = route || (pane && (pane.route || pane)) || null
-  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
+  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} cur={cur} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 // A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS
@@ -1041,6 +1043,18 @@ const fmtSecs = (s) => (s == null ? '' : s < 60 ? `${s} s` : s < 3600 ? `${Math.
 // A thread this conversation started (a choice button, mode agent) finished a turn (REPORT-1, 2026-11-22):
 // its title, how it ended, the first three lines of its answer, and the link that opens it. It shows only
 // here, in the thread that started it (the 2026-10-11 rule), and says where it came from.
+// INLINE-1: a logged card's state, under it: open (with a press to mark it answered) or answered.
+function CardState({ answered, onAnswered }) {
+  return (
+    <p data-cardstate={answered ? 'answered' : 'open'} style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: answered ? C.faint : C.gold, margin: '8px 0 0 0' }}>
+      {answered ? 'answered' : <>waits for you · <a onClick={onAnswered} title="mark this card answered (writing into the thread does it too)" style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>answered</a></>}
+    </p>
+  )
+}
+
+const DRAFT_NEW = 'cc.draft.new'
+const draftKey = (cur) => (cur && !String(cur).startsWith('new:') ? 'cc.draft.' + cur : DRAFT_NEW)
+
 function ReportCard({ report, onOpenHere }) {
   const tone = reportTone(report.state)
   const url = reportHref(report)
@@ -1100,7 +1114,7 @@ function JobCard({ job, onOpen, onTalk }) {
         job finished · {rc === 0 ? 'ok' : rc == null ? 'ended' : `exit ${rc}`}{secs != null ? ` · ${fmtSecs(secs)}` : ''}
       </p>
       <p style={{ margin: '0 0 8px 0', color: C.ink, fontSize: '1em' }}>{job.title}</p>
-      {res ? (text ? <div className="cc-md" style={{ fontSize: '0.92em', maxHeight: open ? 'none' : '12em', overflow: 'hidden', ...(open ? {} : { WebkitMaskImage: 'linear-gradient(to bottom, #000 70%, transparent)', maskImage: 'linear-gradient(to bottom, #000 70%, transparent)' }) }}><Md text={shown} /></div>
+      {res ? (text ? <div className="cc-md cc-jobtext" style={{ fontSize: '0.92em', maxHeight: open ? 'none' : '12em', overflow: 'hidden', ...(open ? {} : { WebkitMaskImage: 'linear-gradient(to bottom, #000 70%, transparent)', maskImage: 'linear-gradient(to bottom, #000 70%, transparent)' }) }}><Md text={shown} /></div>
                    : <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '0 0 8px 0' }}>no text came back</p>)
            : <pre style={{ ...mono, fontSize: '11px', color: C.faint, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '0 0 8px 0', maxHeight: '120px', overflow: 'auto' }}>{(job.tail || '').trim().split('\n').slice(-6).join('\n')}</pre>}
       {imgs.length > 0 && (
@@ -1918,6 +1932,28 @@ function CC() {
     // a pane on /panes tells its host which thread it shows, so the layout survives a reload
     if (paneModeRef.current && key && !String(key).startsWith('new:')) { try { window.parent.postMessage({ type: 'cc-pane-thread', pane: paneModeRef.current, thread: key }, window.location.origin) } catch {} }
   }
+  // INLINE-1 (2026-11-23): the typing box keeps its draft per thread across a reload or a crash
+  // (localStorage cc.draft.<thread>, cleared when the box empties on send). A brand new conversation's
+  // draft moves with it when the bridge names the thread.
+  const draftKeyRef = useRef(null)
+  const draftCurRef = useRef(null)
+  useEffect(() => {
+    const key = draftKey(cur)
+    const prev = draftKeyRef.current
+    const wasSending = String(draftCurRef.current || '').startsWith('new:')
+    draftKeyRef.current = key; draftCurRef.current = cur
+    if (prev === key) return
+    let stored = ''
+    try { stored = localStorage.getItem(key) || '' } catch {}
+    if (wasSending && key !== DRAFT_NEW && !stored) { setDraft(d => { try { if (d) localStorage.setItem(key, d); localStorage.removeItem(DRAFT_NEW) } catch {} return d }); return }
+    setDraft(stored)
+  }, [cur])
+  useEffect(() => {
+    const key = draftKeyRef.current
+    if (!key) return undefined
+    const tm = setTimeout(() => { try { if (draft) localStorage.setItem(key, draft); else localStorage.removeItem(key) } catch {} }, draft ? 250 : 0)
+    return () => clearTimeout(tm)
+  }, [draft])
   // notes follow the thread shown
   useEffect(() => {
     notesKeyRef.current = `cc.notes.${cur && !String(cur).startsWith('new:') ? cur : 'new'}`
@@ -2138,18 +2174,30 @@ function CC() {
     fetch('/api/bf/onboarding/first-use', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setFirstRun(d && Array.isArray(d.steps) ? d : null)).catch(() => {})
   // History: the current thread's turns come from the brain's own record, so a reload
   // shows the conversation instead of an empty screen.
+  // INLINE-1 (2026-11-23): the thread's cards come from its log on the box (GET /cc/cards), merged in
+  // time order between the messages with their state, so a reload or a crashed browser loses none.
   const loadHistory = (brainId) => {
     if (!brainId) return
+    const cards = fetch(`/cc/cards?thread=${encodeURIComponent(brainId)}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null)).then(d => (d && Array.isArray(d.cards) ? d.cards : [])).catch(() => [])
     fetch(`/api/bf/sessions/${encodeURIComponent(brainId)}/messages`, { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : null))
-      .then(d => {
+      .then(async d => {
         if (!d || !Array.isArray(d.messages)) return
         // a hand-back is recorded as a bracketed line ("[agent report received: ...]"); it shows as a small line again
-        setTurns(d.messages.map(m => (m.role !== 'user' && /^\[agent report received[^\]]*\]$/.test((m.content || '').trim())
+        const msgs = d.messages.map(m => ({ ...(m.role !== 'user' && /^\[agent report received[^\]]*\]$/.test((m.content || '').trim())
           ? { who: 'note', text: m.content.trim().slice(1, -1) }
-          : { who: m.role === 'user' ? 'me' : 'brain', text: m.content })))
+          : { who: m.role === 'user' ? 'me' : 'brain', text: m.content }), ...(logWhen(m.created_at) != null ? { at: logWhen(m.created_at) } : {}) }))
+        const log = await cards
+        if (curRef.current !== brainId) return
+        setTurns(logMerge(msgs, log))
       })
       .catch(() => {})
+  }
+  const markAnswered = (t) => {
+    if (!t || !t.logId || !curRef.current) return
+    setTurns(ts => ts.map(x => (x.logId === t.logId ? { ...x, answered: true } : x)))
+    fetch('/cc/cards/answered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: curRef.current, id: t.logId }) }).catch(() => {})
   }
   const loadThreads = async () => {
     const request = ++threadRequest.current
@@ -2413,9 +2461,10 @@ function CC() {
         setJobs(d.jobs || [])
         const { mine, others } = splitFinished(d.finished || [], cur)
         if (curRef.current === cur) {
-          for (const j of mine) setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
+          // INLINE-1: each card is also in the thread's log; one already drawn from the log is not drawn twice
+          for (const j of mine) setTurns(t => logAddLive(t, 'job', j))
           // REPORT-1: the threads this one started report here, once each, and nowhere else
-          for (const rp of reportsMine(d.reports, cur)) setTurns(t => (t.some(x => x.report && x.report.id === rp.id) ? t : [...t, { who: 'brain', report: rp, text: '' }]))
+          for (const rp of reportsMine(d.reports, cur)) setTurns(t => logAddLive(t, 'report', rp))
         }
         setOtherJobs(stripItems(d.others || [], others, []))
       } catch {}
@@ -3123,7 +3172,8 @@ function CC() {
     const busyNow = busy || !!(curRef.current && runningRef.current[curRef.current])
     if (busyNow && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
     if (typeof forced !== 'string') setDraft('')
-    setTurns(t => [...t, { who: 'me', text }])
+    // INLINE-1: writing into the thread answers its open cards (the bridge marks its log the same way)
+    setTurns(t => [...logAnswerAll(t), { who: 'me', text }])
     // The thread this turn belongs to: the one shown, or a fresh one under a temporary key until
     // the bridge names it in "done".
     const isNew = freshRef.current || !curRef.current
@@ -3530,6 +3580,7 @@ function CC() {
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.report && <ReportCard report={t.report} onOpenHere={(rp) => switchThread({ brain: rp.child })} />}
+                {(t.job || t.report) && t.logId && <CardState answered={t.answered} onAnswered={() => markAnswered(t)} />}
                 {t.job && <JobCard job={t.job} onOpen={(path) => openPane({ route: '/files?path=' + encodeURIComponent(path), title: 'Files' })}
                   onTalk={(j) => { setDraft(d => (d ? d + '\n' : '') + `About job ${j.id} (${j.title}): `); if (boxRef.current) boxRef.current.focus() }} />}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
@@ -3752,7 +3803,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} quiet={quietHome ? { title: (layoutBase && pane.route === layoutBase.start && startLabel) || W.menu.start, words: W } : null} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
+      {pane && <Pane pane={pane} quiet={quietHome ? { title: layoutBase && pane.route === layoutBase.start ? (startLabel || W.menu.start) : (pane.title || W.menu.start), words: W } : null} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
                      panel={pane.route === '#threads' ? <div style={{ padding: '6px' }}>{threadList}</div> : pane.route === '#export' ? <ExportPanel turns={turns} title={curThread && curThread.title} /> : null} />}
       </div>
     </LearnCtx.Provider>

@@ -7,7 +7,7 @@
 dialect: brain-app/v1
 id: week
 name: Week
-version: 0.2.0
+version: 0.3.0
 description: "Your week page on one screen: the directions, open loops, rulings and what is owed, as the box last wrote it."
 license: AGPL-3.0
 
