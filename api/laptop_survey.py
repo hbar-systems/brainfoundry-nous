@@ -65,10 +65,15 @@ CODE_LEAVE_FILES = 150
 PICTURES_PROPOSE_MAX = 2000
 
 CLOUD_ROOTS = ("iCloud Drive", "Google Drive", "Dropbox", "OneDrive", "Box")
+# The coding agents' history (MEMBERS-11): each label is ONE group, never split, proposed into
+# Knowledge; every session becomes one conversation document (the chat path) when it arrives.
+HISTORY_WHY = {"Codex history": "codex_history", "Claude Code history": "claude_code_history"}
 
 
 def _area(parts):
     """The first folder of a path, with the cloud root kept in front ("Google Drive/Work")."""
+    if parts and parts[0] in li.HISTORY_LABELS:
+        return parts[0]
     if len(parts) > 2 and parts[0] in CLOUD_ROOTS:
         return f"{parts[0]}/{parts[1]}"
     return parts[0] if len(parts) > 1 else "(home)"
@@ -99,6 +104,10 @@ def validate(inv: dict) -> dict:
             raise ValueError("each file is [path, size, modified]")
         rel = li.clean_relpath(path)
         ext = li.extension(rel)
+        if rel.split("/", 1)[0] in li.HISTORY_LABELS:  # a history root: its session files only
+            if li.history_source(rel) and 0 < size <= li.MAX_FILE_BYTES:
+                out.append((rel, size, int(mtime)))
+            continue
         if not _kind(ext) or size <= 0 or size > li.max_file_bytes(ext):
             continue  # the helper should not have listed it; it is simply not offered
         out.append((rel, size, int(mtime)))
@@ -129,7 +138,7 @@ def plan(inv: dict, now: float | None = None) -> list:
     count = {}
     for rel, _s, _m in files:
         parts = PurePosixPath(rel).parts
-        if _kind(li.extension(rel)) == "knowledge":
+        if _kind(li.extension(rel)) == "knowledge" and not li.history_source(rel):
             a = _area(parts)
             count[a] = count.get(a, 0) + 1
     split_at = {a for a, n in count.items() if n > SPLIT_FILES}
@@ -137,7 +146,7 @@ def plan(inv: dict, now: float | None = None) -> list:
     for rel, size, mtime in files:
         parts = PurePosixPath(rel).parts
         ext = li.extension(rel)
-        kind = _kind(ext)
+        kind = "knowledge" if li.history_source(rel) else _kind(ext)
         key = _group_key(parts, kind, split_at if kind == "knowledge" else set())
         g = groups.get(key)
         if g is None:
@@ -155,7 +164,9 @@ def plan(inv: dict, now: float | None = None) -> list:
         top = folder.split("/")[0].lower()
         audio = sum(n for e, n in g["types"].items() if e in li.AUDIO_EXT)
         proposal, why = kind, "documents" if kind == "knowledge" else ("music" if audio * 2 >= g["files"] else "pictures")
-        if kind == "knowledge":
+        if folder in HISTORY_WHY:
+            why = HISTORY_WHY[folder]
+        elif kind == "knowledge":
             if g["code"] * 10 >= g["files"] * 8 and g["files"] > CODE_LEAVE_FILES:
                 proposal, why = "leave", "code"
             elif top == "downloads" and now - g["newest"] > OLD_DOWNLOADS:

@@ -322,10 +322,55 @@ def cloud_roots(home, system=None):
     return uniq
 
 
+# The local history of the coding agents (MEMBERS-11, 2026-11-23). Every walk skips hidden folders
+# by rule, so these two are named roots, like the cloud folders: only their session files (.jsonl)
+# are offered, the brain turns each into one conversation document. Nothing else under ~/.codex or
+# ~/.claude is ever walked (auth.json, config, credentials, memory folders stay out).
+# (label, path parts under the home, deepest offered file: parts of its path under the root; 0 any)
+AGENT_HISTORY = [
+    ("Codex history", (".codex", "sessions"), 0),            # sessions/YYYY/MM/DD/rollout-*.jsonl
+    ("Claude Code history", (".claude", "projects"), 2),     # projects/<slug>/<session>.jsonl
+]
+HISTORY_EXT = "jsonl"
+
+
+def history_roots(home):
+    """(label, folder, depth) for the coding agents' history folders this computer has. No link is
+    followed: the hidden folder and its history folder must both be real folders."""
+    home = Path(home)
+    out = []
+    for label, parts, depth in AGENT_HISTORY:
+        p, ok = home, True
+        for part in parts:
+            p = p / part
+            if p.is_symlink() or not p.is_dir():
+                ok = False
+                break
+        if ok:
+            out.append((label, p, depth))
+    return out
+
+
+def history_verdict(name, rel, size, depth):
+    """Why a file under a history root is not offered, or ''."""
+    why = skip_file(name)
+    if why:
+        return why
+    if ext_of(name) != HISTORY_EXT or (depth and rel.count("/") + 1 > depth):
+        return "not a chat"
+    if size > MAX_FILE_BYTES:
+        return "over 25 MB"
+    if size == 0:
+        return "empty"
+    return ""
+
+
 def survey(home, extra=(), system=None, limit=MAX_ENTRIES):
     """The inventory: (rows [[name, size, mtime]], skipped {"<folder>: <why>": n}, places {name: path},
     roots [labels]). Names are 'Documents/x.pdf' under the home and 'iCloud Drive/x.pdf' in a cloud
-    folder. Only offerable files are listed; what is never sent is only counted, never named."""
+    folder. Only offerable files are listed; what is never sent is only counted, never named.
+    The coding agents' history comes last, 'Codex history/...' and 'Claude Code history/...'
+    (session files only); roots ends with their labels after the cloud labels."""
     home = Path(home)
     clouds = cloud_roots(home, system) + [(Path(f).name, Path(f)) for f in extra]
     cloud_paths = {p.resolve() for _l, p in clouds}
@@ -346,7 +391,7 @@ def survey(home, extra=(), system=None, limit=MAX_ENTRIES):
         rows.append([name, size, mtime])
         places[name] = p
 
-    def walk_root(label, root):
+    def walk_root(label, root, history=None):
         root = Path(root)
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             dp = Path(dirpath)
@@ -372,6 +417,9 @@ def survey(home, extra=(), system=None, limit=MAX_ENTRIES):
                 except OSError:
                     continue
                 rel = p.relative_to(root).as_posix()
+                if history is not None:
+                    add(label, root, rel, p, size, history_verdict(f, rel, size, history))
+                    continue
                 why = skip_file(f)
                 if not why:
                     e = ext_of(f)
@@ -386,7 +434,10 @@ def survey(home, extra=(), system=None, limit=MAX_ENTRIES):
     walk_root("", home)
     for label, root in clouds:
         walk_root(label, root)
-    return rows, skipped, places, [label for label, _p in clouds]
+    hist = history_roots(home)
+    for label, root, depth in hist:
+        walk_root(label, root, depth)
+    return rows, skipped, places, [label for label, _p in clouds] + [label for label, _p, _d in hist]
 
 
 def survey_run(a, out=print):
@@ -404,10 +455,13 @@ def survey_run(a, out=print):
         out(f"Connected to {a.brain}.")
     out("Looking through this computer (names, sizes and dates only; nothing is read or sent yet)...")
     t0 = time.time()
-    rows, skipped, places, clouds = survey(home, a.folder)
+    rows, skipped, places, roots = survey(home, a.folder)
+    hist = [label for label, _p, _d in history_roots(home)]
+    clouds = [r for r in roots if r not in hist]
     total = sum(r[1] for r in rows)
     out(f"Found {len(rows)} files your brain can take ({human(total)}) in {time.time() - t0:.0f} s"
-        + (f"; cloud folders: {', '.join(clouds)}" if clouds else "; no cloud folders found") + ".")
+        + (f"; cloud folders: {', '.join(clouds)}" if clouds else "; no cloud folders found")
+        + (f"; also {', '.join(hist)} (your sessions as conversations)" if hist else "") + ".")
     if skipped:
         out(f"Never sent: {sum(skipped.values())} files (keys, passwords, hidden, mail, browser, video, archives, too big).")
     receipt = {"version": VERSION, "brain": a.brain, "mode": "survey", "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -421,7 +475,7 @@ def survey_run(a, out=print):
             out(f"  {k}: {n} files")
         receipt["would_list"] = len(rows)
         return _write_receipt(a, receipt, out)
-    inv = {"version": VERSION, "os": sys.platform, "files": rows, "skipped": skipped, "roots": clouds}
+    inv = {"version": VERSION, "os": sys.platform, "files": rows, "skipped": skipped, "roots": roots}
     st, j = brain.inventory(inv)
     if st != 200:
         raise SystemExit(f"the brain did not take the list ({st}): {j.get('detail')}")

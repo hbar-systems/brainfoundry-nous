@@ -160,6 +160,7 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
       {step === 'start' && (
         <>
           <p className="mi-sub">{P.compSub}</p>
+          <p className="mi-sub">{P.compAgents}</p>
           <p className="mi-sub">{P.compNever}</p>
           <p className="mi-note mi-dim">{P.compNoApp}</p>
         </>
@@ -268,7 +269,7 @@ function AiChats({ lang, W, P, chat, chatBusy, approving, onFile, onPaste, remem
         )}
         {chat.step === 'new' && paste === null && <button type="button" className="mi-btn" onClick={onAsked}>{W.chatAsked}</button>}
         {paste === null && chat.waitingYes === 0 && <button type="button" className="mi-link" onClick={() => setPaste('')}>{P.chatsPaste}</button>}
-        <input ref={input} type="file" accept=".zip,.json,.html,.htm,.csv,.txt,.md,.pdf,application/zip,application/json,text/html,text/csv,text/plain,application/pdf" hidden
+        <input ref={input} type="file" accept=".zip,.json,.jsonl,.html,.htm,.csv,.txt,.md,.pdf,application/zip,application/json,text/html,text/csv,text/plain,application/pdf" hidden
           onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; onFile(f) }} />
       </div>
       <p className="mi-note mi-dim">{P.chatsSeat}</p>
