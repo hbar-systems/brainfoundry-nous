@@ -112,6 +112,7 @@ FAKE = {
         "/onboarding/first-use": {"steps": [], "complete": True, "fresh": False},
         "/onboarding/welcome": {"seen_version": 999},
         "/v1/federation/peers": {"peers": []},
+        "/v1/help/status": {"helper": None, "ready": False, "message": "no helper set", "button": True, "asked": []},   # MEMBERS-14 help button
         "/admin/system": {"warnings": []},
     },
     "cc": {
