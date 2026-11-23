@@ -4494,6 +4494,125 @@ async def federation_ping_peer(req: dict, api_key: str = Depends(get_api_key)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── Record door (A2A-2, 2026-11-23): signed records between pinned peers ────────
+# Generic: kind and body mean nothing here (api/federation_record.py, docs/RECORDS.md).
+# The inbound door is the only unauthenticated route; it takes pinned peers only.
+# Sending, confirming and declining are the owner's (API key, console-only proxy) and
+# confirming needs the record's exact confirm text typed.
+
+def _record_refuse(e):
+    return JSONResponse(status_code=e.status, content={"detail": e.reason})
+
+
+@app.post("/v1/federation/record")
+async def federation_record_in(http_request: Request):
+    """A pinned peer hands this brain a signed record; reply with a signed receipt."""
+    from api import federation_record as _fr
+    from api.tools import federation_audit
+    try:
+        raw = await http_request.body()
+        if len(raw) > 64_000:
+            return JSONResponse(status_code=413, content={"detail": "envelope too large"})
+        env = json.loads(raw or b"{}")
+    except Exception:
+        return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
+    rec = env.get("record") if isinstance(env, dict) else None
+    frm = rec.get("from") if isinstance(rec, dict) and isinstance(rec.get("from"), str) else "anonymous"
+    rl = _ask_rate_limiter.check(f"record:peer:{frm}"[:120])
+    if rl:
+        return JSONResponse(status_code=429, content={"detail": "rate_limited"})
+    try:
+        out = _fr.door_from_env().receive(env)
+        outcome = "kept"
+    except _fr.RecordError as e:
+        out, outcome = e, f"refused:{e.reason}"[:120]
+    try:
+        federation_audit.record_event(
+            direction="in", peer_brain_id=frm, query=f"record {rec.get('kind') if isinstance(rec, dict) else '?'}",
+            verified=outcome == "kept", trust="peer" if outcome == "kept" else "anonymous",
+            outcome=outcome, surface="record")
+    except Exception:
+        pass
+    return _record_refuse(out) if isinstance(out, _fr.RecordError) else out
+
+
+class RecordSendRequest(BaseModel):
+    kind: str
+    to: str
+    rid: str
+    body: Dict[str, Any] = {}
+    ref: Optional[str] = None
+    confirm: Optional[str] = None
+    ttl: int = 7 * 24 * 3600
+
+
+class RecordAnswerRequest(BaseModel):
+    peer: str
+    rid: str
+    typed: str
+    decline: bool = False
+    note: str = ""
+
+
+@app.get("/v1/federation/records")
+def federation_records_list(api_key: str = Depends(get_api_key)):
+    from api import federation_record as _fr
+    try:
+        return {"records": _fr.door_from_env().list()}
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.get("/v1/federation/records/row")
+def federation_records_row(peer: str, rid: str, api_key: str = Depends(get_api_key)):
+    """The shared row for '<peer>/<rid>' (peer = the record's sender)."""
+    from api import federation_record as _fr
+    try:
+        return _fr.door_from_env().row(f"{peer}/{rid}")
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.get("/v1/federation/records/verify")
+def federation_records_verify(api_key: str = Depends(get_api_key)):
+    from api import federation_record as _fr
+    try:
+        p = _fr.door_from_env().verify()
+        return {"clean": not p, "problems": p}
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.post("/v1/federation/records/send")
+def federation_records_send(req: RecordSendRequest, api_key: str = Depends(get_api_key)):
+    from api import federation_record as _fr
+    try:
+        return _fr.door_from_env().send(kind=req.kind, to=req.to, rid=req.rid, body=req.body,
+                                         ref=req.ref, confirm=req.confirm, ttl=req.ttl)
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.post("/v1/federation/records/redeliver")
+def federation_records_redeliver(req: dict, api_key: str = Depends(get_api_key)):
+    from api import federation_record as _fr
+    try:
+        return _fr.door_from_env().redeliver(str(req.get("rid") or ""))
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
+@app.post("/v1/federation/records/answer")
+def federation_records_answer(req: RecordAnswerRequest, api_key: str = Depends(get_api_key)):
+    """The owner's press on an inbound record: confirm (exact text) or decline."""
+    from api import federation_record as _fr
+    try:
+        return _fr.door_from_env().answer(frm=req.peer, rid=req.rid, typed=req.typed,
+                                           decline=req.decline, note=req.note)
+    except _fr.RecordError as e:
+        return _record_refuse(e)
+
+
 class VouchRequest(BaseModel):
     days: int = 30
 
