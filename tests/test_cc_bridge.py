@@ -1732,3 +1732,23 @@ def test_threads_archive_only_view_lanes_and_turn_brings_back(monkeypatch, tmp_p
     m._record_turn({"brain_session_id": "b-old"}, "more", "ok", None)
     assert [t["brain"] for t in m._threads_view()["threads"]][0] == "b-old"
     assert m._threads_view()["archived_count"] == 0
+
+
+def test_mail_count_reads_fixed_fields_only(monkeypatch, tmp_path):
+    """MAIL-3 2026-11-23: /cc/mail/count passes the box checker's file on, fixed fields, capped."""
+    import json as _j
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    f = tmp_path / "count.json"
+    assert m._mail_count(f) == {"exists": False}
+    f.write_text("{half")
+    assert m._mail_count(f) == {"exists": False}
+    f.write_text(_j.dumps({"count": 253, "mailbox": "hello@hbar.systems", "checked_at": "2026-11-23T11:06:41Z",
+                           "newest": {"from": "A <a@b>", "subject": "x" * 900, "date": "d", "body": "no"}, "token": "t"}))
+    d = m._mail_count(f, now=f.stat().st_mtime + 600)
+    assert d["exists"] and d["count"] == 253 and d["age_min"] == 10 and d["trust"] == "untrusted"
+    assert set(d) == {"exists", "count", "mailbox", "checked_at", "trust", "newest", "age_min"}
+    assert set(d["newest"]) == {"from", "subject", "date"} and len(d["newest"]["subject"]) == 300
+    f.write_text(_j.dumps({"count": -1}))
+    assert m._mail_count(f) == {"exists": False}
+    f.write_text(_j.dumps({"count": 0, "newest": None}))
+    assert m._mail_count(f)["newest"] is None

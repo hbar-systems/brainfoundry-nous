@@ -45,7 +45,7 @@ def run(type_, payload=None, perms=(), layers=(), body=None, status=200):
 @pytest.mark.parametrize("intent,perm", [
     ("memory.search", "memory.read"), ("tasks.list", "tasks.read"), ("tasks.add", "tasks.write"),
     ("tasks.complete", "tasks.write"), ("calendar.upcoming", "calendar.read"), ("email.recent", "email.read"),
-    ("web.fetch", "network.outbound"), ("files.save", "files.write"), ("audio.transcribe", "audio.transcribe"),
+    ("email.count", "email.read"), ("web.fetch", "network.outbound"), ("files.save", "files.write"), ("audio.transcribe", "audio.transcribe"),
 ])
 def test_each_intent_needs_its_permission(intent, perm):
     out = run(intent, {"query": "x", "text": "x", "id": "abc", "url": "https://a.b", "name": "a.txt", "base64": "eA=="})
@@ -87,6 +87,22 @@ def test_calendar_and_email_marked_untrusted():
     assert out["r"]["result"]["trust"] == "untrusted"
     out = run("email.recent", {"unread_only": True}, perms=["email.read"], body={"messages": []})
     assert out["calls"][0]["url"].startswith("/api/bf/integrations/email/messages?") and "unread_only=true" in out["calls"][0]["url"]
+
+
+def test_email_count_reads_the_box_line_untrusted():
+    out = run("email.count", {"path": "/etc/passwd"}, perms=["email.read"],
+              body={"exists": True, "count": 3, "mailbox": "hello@x", "checked_at": "2026-11-23T11:00:00Z", "age_min": 4,
+                    "newest": {"from": "Ada <a@x.org>", "subject": "Lunch", "date": "d", "extra": 1}, "secret": 1})
+    assert out["calls"] == [{"url": "/cc/mail/count", "method": "GET", "body": None}]
+    r = out["r"]["result"]
+    assert r["count"] == 3 and r["trust"] == "untrusted" and "secret" not in r
+    assert r["newest"] == {"from": "Ada <a@x.org>", "subject": "Lunch", "date": "d"}
+
+
+def test_email_count_without_door_is_quietly_absent():
+    for status, body in ((404, {}), (200, {"exists": False}), (502, {"error": "x"})):
+        out = run("email.count", {}, perms=["email.read"], body=body, status=status)
+        assert out["r"] == {"ok": True, "result": {"exists": False}}
 
 
 def test_web_fetch_http_only():

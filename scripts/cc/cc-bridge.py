@@ -2616,6 +2616,29 @@ def _learn_rows(name: str) -> list:
     return [ln.split("\t") for ln in lines[1:] if ln.strip()]
 
 
+def _mail_count(path: Path | None = None, now: float | None = None) -> dict:
+    """The new-mail line for Today (MAIL-3 2026-11-23). The box's own checker (world
+    scripts/mail/inbox.py --count, read-only IMAP) writes out/mail/count.json; this only reads it and
+    passes fixed fields on. Sender and subject are a stranger's words: trust "untrusted"."""
+    p = Path(path or os.environ.get("CC_MAIL_COUNT", "").strip() or (OUT_DIR / "mail" / "count.json"))
+    try:
+        d = json.loads(p.read_text())
+        n = int(d.get("count"))
+    except Exception:  # noqa: BLE001  no checker on this brain, or a half-written file
+        return {"exists": False}
+    if n < 0:
+        return {"exists": False}
+    nw = d.get("newest") if isinstance(d.get("newest"), dict) else None
+    out = {"exists": True, "count": n, "mailbox": str(d.get("mailbox") or "")[:120],
+           "checked_at": str(d.get("checked_at") or "")[:32], "trust": "untrusted",
+           "newest": {k: str(nw.get(k) or "")[:300] for k in ("from", "subject", "date")} if nw else None}
+    try:
+        out["age_min"] = max(0, int(((now or time.time()) - p.stat().st_mtime) // 60))
+    except OSError:
+        out["age_min"] = None
+    return out
+
+
 def _learn_due(today: str | None = None) -> dict:
     """The cards due today. A card's step is how many recalls in a row it got right since the last
     miss; it is due LEARN_STEPS[step] days after its last recall (or after it was saved)."""
@@ -5493,6 +5516,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/learn/due":
             self._send(200, _learn_due())
+            return
+        if route == "/mail/count":
+            self._send(200, _mail_count())
             return
         if route == "/health":
             _st = _load_state()

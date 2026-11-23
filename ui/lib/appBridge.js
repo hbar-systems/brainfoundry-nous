@@ -59,6 +59,7 @@
 //   tasks.complete    -> { id, done? }      permission 'tasks.write'. result -> { ok }
 //   calendar.upcoming -> { max_results? }   permission 'calendar.read'. result -> { source, connected, events, trust }
 //   email.recent      -> { query?, max_results?, unread_only? }  permission 'email.read'.
+//   email.count       -> {}  permission 'email.read'. The box's new-mail count (out/mail/count.json via /cc/mail/count, MAIL-3).
 //                        result -> { source, connected, messages, trust }
 //   web.fetch         -> { url }  permission 'network.outbound'; the brain's guarded fetch_url
 //                        (http/https, no private addresses). result -> { url, title, text, trust }
@@ -415,6 +416,18 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate, toChat }) 
       if (payload.unread_only) q.set('unread_only', 'true')
       return call(`/api/bf/integrations/email/messages?${q}`, { method: 'GET' },
         'email_failed', b => ({ source: b.source || null, connected: b.connected !== false, messages: b.messages || [], trust: 'untrusted' }))
+    }
+    if (type === 'email.count') {
+      if (!perms.includes('email.read')) return denied('email.read')
+      return fetch('/cc/mail/count', { method: 'GET' })
+        .then(r => r.json().catch(() => ({})).then(b => ({ status: r.status, ok: r.ok, b })))
+        .then(({ status, ok, b }) => {
+          if (!ok || b.exists !== true) return { ok: true, result: { exists: false } }
+          const nw = b.newest && typeof b.newest === 'object' ? { from: String(b.newest.from || ''), subject: String(b.newest.subject || ''), date: String(b.newest.date || '') } : null
+          return { ok: true, result: { exists: true, count: Number(b.count) || 0, mailbox: String(b.mailbox || ''),
+            checked_at: String(b.checked_at || ''), age_min: b.age_min == null ? null : Number(b.age_min), newest: nw, trust: 'untrusted' } }
+        })
+        .catch(() => ({ ok: true, result: { exists: false } }))
     }
     if (type === 'web.fetch') {
       if (!perms.includes('network.outbound')) return denied('network.outbound')
