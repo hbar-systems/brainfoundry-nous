@@ -1,7 +1,8 @@
 """SKIN-2 (2026-11-23): the shared skin module and the tasks page grouping, run under node.
 
-ui/lib/skin.js: the skin on screen (bf-theme-now) is what every page opens in, the console font is one of six
-shapes, and a page inside a pane copies its parent's skin. ui/lib/taskGroups.js: one list from tasks, job
+ui/lib/skin.js (SKIN-3): two levels, a thread's own skin and font (drawn only in its own document) and the
+console default (bf-theme, bf-font: every page that is not a thread and every thread without its own); the font
+is one of six shapes. ui/lib/taskGroups.js: one list from tasks, job
 asks and next rows, grouped by time or by system, his-hands items first.
 """
 from __future__ import annotations
@@ -38,23 +39,49 @@ def _node(script: str):
     return json.loads(r.stdout)
 
 
-def test_a_thread_skin_is_what_other_pages_open_in():
+# two documents (two tabs, or a pane and its page) on one browser store: each loads its own copy of the module,
+# a write in one fires the storage event in the other only, as browsers do.
+TWO_DOCS = r"""
+function doc() {
+  delete require.cache[require.resolve('./skin.js')];
+  const listeners = [];
+  global.window = { self: 1, top: 1, addEventListener: (n, f) => { if (n === 'storage') listeners.push(f) }, removeEventListener: () => {}, dispatchEvent: () => {} };
+  const mod = require('./skin.js');
+  const r = { dataset: {} };
+  return { mod, root: r, listeners };
+}
+const docs = [];
+const realSet = localStorage.setItem;
+function wire() {
+  localStorage.setItem = (k, v) => { realSet(k, v); docs.forEach(d => { if (d !== writer) d.listeners.forEach(f => f({ key: k })) }) };
+}
+let writer = null;
+const as = (d, fn) => { writer = d; fn(); writer = null };
+"""
+
+
+def test_two_levels_thread_own_over_default():
     out = _node("""
 const s = require('./skin.js');
-const fresh = s.currentTheme();
+const fresh = [s.currentTheme(), s.currentFont()];
 s.setConsoleTheme('ocean', root);
 const a = [s.consoleTheme(), s.currentTheme(), root.dataset.theme];
-s.showTheme('rose', root);                     // a thread with its own skin
-const b = [s.consoleTheme(), s.currentTheme(), root.dataset.theme];
-s.showTheme(null, root);                       // a thread without one: the console skin
-const c = [s.currentTheme()];
-s.showTheme('nonsense', root);
-console.log(JSON.stringify({ fresh, a, b, c, d: s.currentTheme() }));
+s.showOwn({ skin: 'rose', font: 'lora' }, root);          // a thread with its own skin and font
+const b = [s.consoleTheme(), s.currentTheme(), root.dataset.theme, root.dataset.font, localStorage.getItem('bf-theme'), localStorage.getItem('bf-font')];
+s.setConsoleTheme('sage', root);                            // the default changes: the thread keeps its own
+const c = [root.dataset.theme, s.consoleTheme()];
+s.showOwn({ skin: null }, root);                            // back to the default
+const d = [root.dataset.theme, root.dataset.font];
+s.showOwn({ skin: 'nonsense', font: 'comic' }, root);
+console.log(JSON.stringify({ fresh, a, b, c, d, e: [root.dataset.theme, root.dataset.font], keys: Object.keys(store) }));
 """)
-    assert out["fresh"] == "gold"
+    assert out["fresh"] == ["gold", "system"]
     assert out["a"] == ["ocean", "ocean", "ocean"]
-    assert out["b"] == ["ocean", "rose", "rose"]
-    assert out["c"] == ["ocean"] and out["d"] == "ocean"
+    # the thread's own choice is drawn, and never written to the browser store
+    assert out["b"] == ["ocean", "rose", "rose", "lora", "ocean", None]
+    assert out["c"] == ["rose", "sage"]
+    assert out["d"] == ["sage", "system"] and out["e"] == ["sage", "system"]
+    assert "bf-theme-now" not in out["keys"]
 
 
 def test_font_is_one_of_six_shapes_and_old_tokens_migrate():
@@ -65,35 +92,60 @@ const migrated = s.currentFont();
 s.setFont('jetbrains', root);
 const set = [s.currentFont(), root.dataset.font];
 s.setFont('comic-sans', root);
-console.log(JSON.stringify({ n: s.FONT_SHAPES.length, migrated, set, after: s.currentFont() }));
+console.log(JSON.stringify({ n: s.FONT_SHAPES.length, migrated, set, after: s.currentFont(), fam: s.fontFamily('lora'), none: s.fontFamily('x') }));
 """)
-    assert 4 <= out["n"] <= 6
+    assert out["n"] == 6
     assert out["migrated"] == "lora"
     assert out["set"] == ["jetbrains", "jetbrains"] and out["after"] == "jetbrains"
+    assert out["fam"].startswith("Lora") and out["none"] is None
 
 
-def test_watch_skin_applies_and_follows_other_documents():
-    out = _node("""
-const s = require('./skin.js');
-localStorage.setItem('bf-theme', 'sage'); localStorage.setItem('bf-font', 'crimson');
-s.watchSkin(root);
-const first = [root.dataset.theme, root.dataset.font];
-localStorage.setItem('bf-theme-now', 'dusk');
-heard.filter(h => h[0] === 'storage').forEach(h => h[1]({ key: 'bf-theme-now' }));
-console.log(JSON.stringify({ first, now: root.dataset.theme }));
+def test_a_thread_skin_never_reaches_another_tab():
+    # SKIN-3: two tabs with different threads; a skin and font picked in one leave the other as it was
+    out = _node(TWO_DOCS + """
+localStorage.setItem('bf-theme', 'gold');
+const A = doc(); docs.push(A); A.mod.watchSkin(A.root);
+const B = doc(); docs.push(B); B.mod.watchSkin(B.root);
+wire();
+as(B, () => B.mod.showOwn({ skin: 'owl', font: 'crimson' }, B.root));
+as(A, () => A.mod.showOwn({ skin: 'fox', font: 'jetbrains' }, A.root));
+const one = [A.root.dataset.theme, A.root.dataset.font, B.root.dataset.theme, B.root.dataset.font];
+as(A, () => A.mod.showOwn({ skin: 'rose' }, A.root));
+const two = [A.root.dataset.theme, B.root.dataset.theme, B.root.dataset.font];
+console.log(JSON.stringify({ one, two }));
 """)
-    assert out["first"] == ["sage", "crimson"]
-    assert out["now"] == "dusk"
+    assert out["one"] == ["fox", "jetbrains", "owl", "crimson"]
+    assert out["two"] == ["rose", "owl", "crimson"]
 
 
-def test_a_pane_copies_its_parents_skin():
+def test_the_default_reaches_only_what_has_no_choice():
+    # a third tab is not a thread (apps, tasks): it follows the default; a thread with its own skin does not
+    out = _node(TWO_DOCS + """
+localStorage.setItem('bf-theme', 'gold');
+const T = doc(); docs.push(T); T.mod.watchSkin(T.root);   // a thread with its own skin
+const N = doc(); docs.push(N); N.mod.watchSkin(N.root);   // a thread without one
+const P = doc(); docs.push(P); P.mod.watchSkin(P.root);   // /apps
+wire();
+as(T, () => T.mod.showOwn({ skin: 'owl' }, T.root));
+as(N, () => N.mod.showOwn({}, N.root));
+as(N, () => N.mod.setConsoleTheme('ocean', N.root));      // the tool line set to "default"
+as(P, () => P.mod.setFont('inter', P.root));               // the font default, from Settings on /apps
+console.log(JSON.stringify([T.root.dataset.theme, N.root.dataset.theme, P.root.dataset.theme, T.root.dataset.font, N.root.dataset.font]));
+""")
+    assert out == ["owl", "ocean", "ocean", "inter", "inter"]
+
+
+def test_watch_skin_retires_the_shared_key_and_has_no_parent_copy():
     out = _node("""
 const s = require('./skin.js');
+localStorage.setItem('bf-theme', 'sage'); localStorage.setItem('bf-font', 'crimson'); localStorage.setItem('bf-theme-now', 'dusk');
 window.top = 2; window.parent = { document: { documentElement: { dataset: { theme: 'fox', font: 'inter' } } } };
 s.watchSkin(root);
-console.log(JSON.stringify([root.dataset.theme, root.dataset.font]));
+console.log(JSON.stringify({ first: [root.dataset.theme, root.dataset.font], now: localStorage.getItem('bf-theme-now') }));
 """)
-    assert out == ["fox", "inter"]
+    # a page in a pane is not a thread: it opens in the default, not in the skin of the thread beside it
+    assert out["first"] == ["sage", "crimson"]
+    assert out["now"] is None
 
 
 ITEMS = r"""
@@ -165,4 +217,7 @@ def test_tool_line_has_font_chips_and_shares_the_skin_list():
     cc = (PAGES / "cc.js").read_text()
     assert "from '../lib/skin'" in cc and "const SKINS = [" not in cc
     assert "<span style={lbl}>font</span>" in cc and "FONT_SHAPES.map" in cc
-    assert "showTheme(look.skin || consoleTheme(), root)" in cc
+    # SKIN-3: the chips name the level they set, and the thread's look is drawn in its own document only
+    assert "showOwn({ skin: look.skin, font: look.font }, document.documentElement)" in cc
+    assert ">this thread</Chip>" in cc and ">default</Chip>" in cc
+    assert "showTheme" not in cc and "bf-theme-now" not in cc

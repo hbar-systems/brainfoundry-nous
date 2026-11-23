@@ -25,7 +25,7 @@ import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
-import { SKINS, FONT_SHAPES, consoleTheme, currentFont, showTheme, setFont as setSkinFont } from '../lib/skin'
+import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont } from '../lib/skin'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -592,7 +592,10 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
     </span>
   )
 }
-function ToolLine({ look, setLook, text, density, font, onFont, posture, setPosture, extra }) {
+// SKIN-3 (2026-11-23): the skin and font chips set one of two levels, named on the line: "this thread" (kept
+// with the thread, drawn only where it is open) or "default" (every thread without its own, and the pages that
+// are not a thread: apps, tasks, systems, the brain's own pages). `defaults` is the console default now.
+function ToolLine({ look, setLook, text, density, onFont, defaults, onDefault, scope, setScope, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
   const [wall, setWall] = useState({ image: '', veil: 60 })
@@ -601,6 +604,7 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
   useEffect(() => { setWall(readWall()); const on = () => setWall(readWall()); window.addEventListener('bf-wall', on); return () => window.removeEventListener('bf-wall', on) }, [])
   const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
+  const thread = scope !== 'default'
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
   return (
     <div data-nopick="1" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', padding: open ? '6px 8px' : '2px 8px', marginBottom: '6px',
@@ -612,6 +616,11 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
         tools {open ? '▾' : '▸'}
       </a>
       {open && <>
+        <span data-skin-scope={scope} style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+          <span style={lbl}>skin + font set</span>
+          <Chip on={thread} onClick={() => setScope('thread')} title="the skin and font chips change this thread only, wherever it is open">this thread</Chip>
+          <Chip on={!thread} onClick={() => setScope('default')} title="the skin and font chips change the default: threads without their own choice, and apps, tasks, systems pages">default</Chip>
+        </span>
         <ColourWheel value={look.accent} onPick={(hex) => put('accent', hex)} />
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
@@ -630,16 +639,22 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
           // shapes, each chip in its own face; the whole console takes it, remembered in this browser.
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={lbl}>font</span>
-            {FONT_SHAPES.map(f => (
-              <a key={f.value} onClick={() => onFont(f.value)} title={f.title + '; the whole console, every page'}
-                style={{ fontFamily: f.family, fontSize: '12px', padding: '1px 9px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
-                         border: `1px solid ${font === f.value ? C.gold : C.line}`, color: font === f.value ? C.gold : C.dim, backgroundColor: font === f.value ? C.card : 'transparent' }}>{f.label}</a>
-            ))}
+            {FONT_SHAPES.map(f => {
+              const on = thread ? look.font === f.value : defaults.font === f.value
+              const title = thread ? (on ? 'back to the default font' : f.title + '; this thread only') : f.title + '; the default, for every thread without its own font and every other page'
+              return (
+                <a key={f.value} data-font-chip={f.value} onClick={() => (thread ? put('font', on ? null : f.value) : onFont(f.value))} title={title}
+                  style={{ fontFamily: f.family, fontSize: '12px', padding: '1px 9px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
+                           border: `1px ${!on && thread && !look.font && defaults.font === f.value ? 'dashed' : 'solid'} ${on ? C.gold : C.line}`, color: on ? C.gold : C.dim, backgroundColor: on ? C.card : 'transparent' }}>{f.label}</a>
+              )
+            })}
           </span>
         ) : null}
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>skin</span>
-          {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
+          {SKINS.map(s => thread
+            ? <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the default skin' : 'this thread in the ' + s + ' skin; other threads keep theirs'}>{s}{!look.skin && defaults.skin === s ? ' ·' : ''}</Chip>
+            : <Chip key={s} on={defaults.skin === s} onClick={() => onDefault(s)} title={'the default skin: every thread without its own, and apps, tasks, systems'}>{s}</Chip>)}
         </span>
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>wallpaper</span>
@@ -1834,11 +1849,16 @@ function CC() {
   useEffect(() => { try { const f = localStorage.getItem('cc.font'); if (f && FONTS.some(x => x.value === f)) setFont(f) } catch {} }, [])
   const setFontSaved = (v) => { setFont(v); setShowFonts(false); try { if (v) localStorage.setItem('cc.font', v); else localStorage.removeItem('cc.font') } catch {} }
   const fontPick = FONTS.find(x => x.value === font)
-  // The tool line's font chips (SKIN-2): the console font for every page, and this conversation with it.
-  const [consoleFont, setConsoleFont] = useState('system')
-  useEffect(() => { setConsoleFont(currentFont()); const on = () => setConsoleFont(currentFont()); window.addEventListener('bf-skin', on); return () => window.removeEventListener('bf-skin', on) }, [])
-  const pickFont = (v) => { setSkinFont(v, document.documentElement); setConsoleFont(v); setFontSaved(v) }
-  const fontFamily = fontPick ? fontPick.family : 'var(--font-display, serif)'
+  // The console default skin and font (SKIN-3), as the tool line shows them; another tab changing the default
+  // reaches here through lib/skin.js (storage event, then bf-skin).
+  const [defaults, setDefaults] = useState({ skin: 'gold', font: 'system' })
+  useEffect(() => { const on = () => setDefaults({ skin: consoleTheme(), font: consoleFont() }); on(); window.addEventListener('bf-skin', on); return () => window.removeEventListener('bf-skin', on) }, [])
+  // the default font: the console's, and the conversation font of this browser cleared so it follows the default
+  const pickFont = (v) => { setSkinFont(v, document.documentElement); setFontSaved('') }
+  const pickDefaultSkin = (t) => setConsoleTheme(t, document.documentElement)
+  const [skinScope, setSkinScopeState] = useState('thread')
+  useEffect(() => { try { if (localStorage.getItem('cc.skinScope') === 'default') setSkinScopeState('default') } catch {} }, [])
+  const setSkinScope = (v) => { setSkinScopeState(v); try { if (v === 'default') localStorage.setItem('cc.skinScope', 'default'); else localStorage.removeItem('cc.skinScope') } catch {} }
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
   const [sysWarn, setSysWarn] = useState([])
@@ -2289,10 +2309,12 @@ function CC() {
     }, 500)
   }
   useEffect(() => {
-    const root = document.documentElement
-    // the skin on screen is written for every other page too (lib/skin.js): /apps, /tasks and the panes follow it
-    showTheme(look.skin || consoleTheme(), root)
-  }, [look.skin])
+    // this thread's own skin and font, drawn in this document only (SKIN-3): another tab or pane is untouched
+    showOwn({ skin: look.skin, font: look.font }, document.documentElement)
+  }, [look.skin, look.font])
+  useEffect(() => () => showOwn(null, document.documentElement), [])
+  // the conversation's font: the thread's own, else this browser's pick under details, else the skin's display font
+  const fontFamily = (look.font && shapeFamily(look.font)) || (fontPick ? fontPick.family : 'var(--font-display, serif)')
   const learnCtx = useMemo(() => ({ on: !!look.learn, thread: cur }), [look.learn, cur])
   const lookText = look.text || textSize
   const lookDensity = look.density || density
@@ -3533,7 +3555,8 @@ function CC() {
 
         {loggedIn && !hidden.tools && (
           <div style={{ flexShrink: 0, ...(look.accent ? { '--accent': look.accent } : {}) }}>
-            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} font={consoleFont} onFont={pickFont}
+            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} onFont={pickFont}
+              defaults={defaults} onDefault={pickDefaultSkin} scope={skinScope} setScope={setSkinScope}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
                 <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={recheckCodex} />

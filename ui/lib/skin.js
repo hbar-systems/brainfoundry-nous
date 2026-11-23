@@ -1,14 +1,17 @@
-// The console's skin and font, shared by every page (SKIN-2, 2026-11-23, hbar: "I'm seeing Apps right now
-// and it's golden and brown. What if people want to make it a different kind of colour and style?"; "we
-// don't have opportunity to change the font in tools").
+// The console's skin and font, shared by every page.
 //
-// Before this, a skin picked on the tool line lived only on the conversation page: /apps, /tasks and every
-// page opened in the pane beside the chat read the console skin (localStorage bf-theme) and stayed gold.
-// Now the skin the console is showing is kept as bf-theme-now, read first by every page (_app.js), and
-// pages already open (other tabs, the panes) follow it live through the browser's storage event.
-//   bf-theme      the console skin (Settings, Chat tab, or the tool line with no thread skin)
-//   bf-theme-now  the skin on screen right now: a thread's own skin, else bf-theme
-//   bf-font       the font of the whole console, one of FONT_SHAPES
+// SKIN-2 (2026-11-23) kept the skin on screen in one browser key (bf-theme-now) that every open tab and pane
+// followed live, so a skin picked in one thread repainted every other thread open beside it (SKIN-3, hbar
+// 2026-11-23: "it should be independent but they all change when i change on any single thread!?").
+//
+// SKIN-3: two levels, both kept.
+//   the console default  bf-theme (skin) and bf-font (font) in this browser: what a thread with no choice of
+//                        its own opens in, and every page that is not a thread (apps, tasks, systems, the pages
+//                        the brain builds). Other tabs and panes follow a change of the default live (storage
+//                        event), except where a thread has its own choice.
+//   a thread's own       skin and font kept with the thread on the box (its `style`, /cc/threads/update), drawn
+//                        only in the document that shows that thread (showOwn). Never written to a shared key,
+//                        so it never reaches another tab or pane.
 // The palettes and the font families themselves are the [data-theme] and [data-font] blocks in _app.js.
 
 const SKINS = ['gold', 'paper', 'owl', 'dusk', 'ocean', 'rose', 'sage', 'sand', 'octopus', 'sapphire', 'forest', 'crimson', 'mono', 'fox']
@@ -25,62 +28,68 @@ const FONT_SHAPES = [
 const FONT_MIGRATION = { ui: 'system', serif: 'lora', mono: 'dm-mono' }
 const okSkin = (s) => SKINS.includes(s)
 const okFont = (f) => FONT_SHAPES.some(x => x.value === f)
+const fontFamily = (f) => { const x = FONT_SHAPES.find(s => s.value === f); return x ? x.family : null }
 
 function get(k) { try { return localStorage.getItem(k) } catch { return null } }
 function set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v) } catch {} }
 const changed = () => { try { window.dispatchEvent(new CustomEvent('bf-skin')) } catch {} }
 
+// The console default.
 function consoleTheme() { const t = get('bf-theme'); return okSkin(t) ? t : 'gold' }
-function currentTheme() { const t = get('bf-theme-now'); return okSkin(t) ? t : consoleTheme() }
-function currentFont() {
+function consoleFont() {
   const s = get('bf-font') || 'system'
   const f = FONT_MIGRATION[s] || s
   return okFont(f) ? f : 'system'
 }
 
-// The skin on screen (a thread's own, or the console's when the thread has none).
-function showTheme(t, root) {
-  const v = okSkin(t) ? t : consoleTheme()
-  set('bf-theme-now', v)
-  if (root) root.dataset.theme = v
-  changed()
-  return v
+// This document's own choice (the thread it shows), in memory only. One per document: a pane is its own document.
+const own = { theme: null, font: null }
+let ownRoot = null
+function currentTheme() { return own.theme || consoleTheme() }
+function currentFont() { return own.font || consoleFont() }
+function draw(root) {
+  const r = root || ownRoot
+  if (!r) return
+  r.dataset.theme = currentTheme()
+  r.dataset.font = currentFont()
 }
-// The console skin itself: what every thread without its own skin, and every page, opens in.
+
+// A thread page: draw this thread's own skin and font here, and nowhere else. null = follow the default.
+function showOwn(choice, root) {
+  own.theme = choice && okSkin(choice.skin) ? choice.skin : null
+  own.font = choice && okFont(choice.font) ? choice.font : null
+  if (root) ownRoot = root
+  draw(root)
+  changed()
+}
+// The console default skin and font (Settings, the Chat tab, the tool line set to "default").
 function setConsoleTheme(t, root) {
   if (!okSkin(t)) return
   set('bf-theme', t)
-  showTheme(t, root)
+  draw(root)
+  changed()
 }
 function setFont(f, root) {
   if (!okFont(f)) return
   set('bf-font', f)
-  if (root) root.dataset.font = f
+  draw(root)
   changed()
 }
 
-// _app.js: put the skin and font on <html> before paint, then follow changes made in other documents.
-// A page inside a pane copies its parent's skin first (same origin), so it matches the thread beside it
-// even before the parent has written bf-theme-now.
+// _app.js: put the default skin and font on <html> before paint, then follow a change of the default made in
+// another tab or pane. A thread page's own choice (showOwn) wins over the default in its own document only.
 function watchSkin(root) {
   if (typeof window === 'undefined' || !root) return () => {}
-  let theme = currentTheme(), font = currentFont()
-  try {
-    if (window.self !== window.top) {
-      const p = window.parent.document.documentElement.dataset
-      if (okSkin(p.theme)) theme = p.theme
-      if (okFont(p.font)) font = p.font
-    }
-  } catch {}
-  root.dataset.theme = theme
-  root.dataset.font = font
-  if (get('bf-font') !== font && get('bf-font')) set('bf-font', font)
+  ownRoot = root
+  set('bf-theme-now', null)   // SKIN-2's shared "skin on screen" key, retired
+  const legacy = get('bf-font')
+  if (legacy && FONT_MIGRATION[legacy]) set('bf-font', FONT_MIGRATION[legacy])
+  draw(root)
   const on = (e) => {
-    if (!e || e.key === 'bf-theme-now' || e.key === 'bf-theme') root.dataset.theme = currentTheme()
-    if (!e || e.key === 'bf-font') root.dataset.font = currentFont()
+    if (!e || e.key === 'bf-theme' || e.key === 'bf-font' || e.key === null) { draw(root); changed() }
   }
   window.addEventListener('storage', on)
   return () => window.removeEventListener('storage', on)
 }
 
-module.exports = { SKINS, FONT_SHAPES, consoleTheme, currentTheme, currentFont, showTheme, setConsoleTheme, setFont, watchSkin }
+module.exports = { SKINS, FONT_SHAPES, fontFamily, consoleTheme, consoleFont, currentTheme, currentFont, showOwn, setConsoleTheme, setFont, watchSkin }

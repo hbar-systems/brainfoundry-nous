@@ -2460,11 +2460,13 @@ def _threads_order(items: list) -> list:
 
 _STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl", "dusk", "ocean", "rose", "sage", "sand")
 _STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+# the thread's own font (SKIN-3, 2026-11-23): the [data-font] tokens of ui/lib/skin.js FONT_SHAPES
+_STYLE_FONTS = ("system", "inter", "lora", "crimson", "dm-mono", "jetbrains")
 
 
 def _thread_style(raw) -> dict | None:
     """The look of one thread (2026-10-13, the tool line): accent colour, tint strength, text
-    size, density, skin, learning mode. Unknown keys and bad values are dropped, never stored;
+    size, density, skin, font (SKIN-3), learning mode. Unknown keys and bad values are dropped, never stored;
     an empty dict clears the look. None when the value is not a dict at all."""
     if not isinstance(raw, dict):
         return None
@@ -2479,6 +2481,8 @@ def _thread_style(raw) -> dict | None:
         out["density"] = raw["density"]
     if raw.get("skin") in _STYLE_SKINS:
         out["skin"] = raw["skin"]
+    if raw.get("font") in _STYLE_FONTS:
+        out["font"] = raw["font"]
     if raw.get("learn") is True:
         out["learn"] = True
     return out
