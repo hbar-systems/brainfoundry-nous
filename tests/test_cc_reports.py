@@ -217,5 +217,5 @@ def test_bridge_wait_line_keeps_the_parent(monkeypatch, tmp_path):
     src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
     assert '"parent": parent, "label": label}, front=waited)' in src           # a thread that waits for a slot still knows its parent
     assert '"parent": item.get("parent")' in src
-    assert '"reports": REPORTS.take(th) if q.get("take") == "1" and th else []' in src   # only a page that names its thread takes
+    assert 'reports = REPORTS.take(th) if q.get("take") == "1" and th else []' in src and '"reports": reports,' in src   # only a page that names its thread takes
     assert 'any(x.get("brain") == parent for x in _threads_load())' in src     # a parent must be a thread on this box

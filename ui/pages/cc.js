@@ -7,6 +7,7 @@ import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
 import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '../lib/jobs'
+import { merge as logMerge, whenOf as logWhen, addLive as logAddLive, answerAll as logAnswerAll } from '../lib/cardlog'
 import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
@@ -1028,7 +1029,7 @@ function BrainText({ text, live, onChoice, pane, cur }) {
     return { ...splitChoices(s.body), route: p.route, tree: t.tree, steers: s.steers }
   }, [text])
   const r = route || (pane && (pane.route || pane)) || null
-  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
+  return <><Md text={body} />{!live && tree && <ThreadTree tree={tree} cur={cur} />}{!live && <SteerLines steers={steers} cur={cur} />}{!live && <Choices choices={choices} onChoice={onChoice} />}{!live && <VisualChip route={typeof r === 'string' ? r : null} />}</>
 }
 
 // A finished job's card (2026-11-13, JOBCARD-1, hbar: "I WANT LINK/VISUAL/RESULT SEEN IMMEDIATELY AFTER AGENTS
@@ -1042,6 +1043,18 @@ const fmtSecs = (s) => (s == null ? '' : s < 60 ? `${s} s` : s < 3600 ? `${Math.
 // A thread this conversation started (a choice button, mode agent) finished a turn (REPORT-1, 2026-11-22):
 // its title, how it ended, the first three lines of its answer, and the link that opens it. It shows only
 // here, in the thread that started it (the 2026-10-11 rule), and says where it came from.
+// INLINE-1: a logged card's state, under it: open (with a press to mark it answered) or answered.
+function CardState({ answered, onAnswered }) {
+  return (
+    <p data-cardstate={answered ? 'answered' : 'open'} style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: answered ? C.faint : C.gold, margin: '8px 0 0 0' }}>
+      {answered ? 'answered' : <>waits for you · <a onClick={onAnswered} title="mark this card answered (writing into the thread does it too)" style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>answered</a></>}
+    </p>
+  )
+}
+
+const DRAFT_NEW = 'cc.draft.new'
+const draftKey = (cur) => (cur && !String(cur).startsWith('new:') ? 'cc.draft.' + cur : DRAFT_NEW)
+
 function ReportCard({ report, onOpenHere }) {
   const tone = reportTone(report.state)
   const url = reportHref(report)
@@ -1919,6 +1932,28 @@ function CC() {
     // a pane on /panes tells its host which thread it shows, so the layout survives a reload
     if (paneModeRef.current && key && !String(key).startsWith('new:')) { try { window.parent.postMessage({ type: 'cc-pane-thread', pane: paneModeRef.current, thread: key }, window.location.origin) } catch {} }
   }
+  // INLINE-1 (2026-11-23): the typing box keeps its draft per thread across a reload or a crash
+  // (localStorage cc.draft.<thread>, cleared when the box empties on send). A brand new conversation's
+  // draft moves with it when the bridge names the thread.
+  const draftKeyRef = useRef(null)
+  const draftCurRef = useRef(null)
+  useEffect(() => {
+    const key = draftKey(cur)
+    const prev = draftKeyRef.current
+    const wasSending = String(draftCurRef.current || '').startsWith('new:')
+    draftKeyRef.current = key; draftCurRef.current = cur
+    if (prev === key) return
+    let stored = ''
+    try { stored = localStorage.getItem(key) || '' } catch {}
+    if (wasSending && key !== DRAFT_NEW && !stored) { setDraft(d => { try { if (d) localStorage.setItem(key, d); localStorage.removeItem(DRAFT_NEW) } catch {} return d }); return }
+    setDraft(stored)
+  }, [cur])
+  useEffect(() => {
+    const key = draftKeyRef.current
+    if (!key) return undefined
+    const tm = setTimeout(() => { try { if (draft) localStorage.setItem(key, draft); else localStorage.removeItem(key) } catch {} }, draft ? 250 : 0)
+    return () => clearTimeout(tm)
+  }, [draft])
   // notes follow the thread shown
   useEffect(() => {
     notesKeyRef.current = `cc.notes.${cur && !String(cur).startsWith('new:') ? cur : 'new'}`
@@ -2139,18 +2174,30 @@ function CC() {
     fetch('/api/bf/onboarding/first-use', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => setFirstRun(d && Array.isArray(d.steps) ? d : null)).catch(() => {})
   // History: the current thread's turns come from the brain's own record, so a reload
   // shows the conversation instead of an empty screen.
+  // INLINE-1 (2026-11-23): the thread's cards come from its log on the box (GET /cc/cards), merged in
+  // time order between the messages with their state, so a reload or a crashed browser loses none.
   const loadHistory = (brainId) => {
     if (!brainId) return
+    const cards = fetch(`/cc/cards?thread=${encodeURIComponent(brainId)}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null)).then(d => (d && Array.isArray(d.cards) ? d.cards : [])).catch(() => [])
     fetch(`/api/bf/sessions/${encodeURIComponent(brainId)}/messages`, { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : null))
-      .then(d => {
+      .then(async d => {
         if (!d || !Array.isArray(d.messages)) return
         // a hand-back is recorded as a bracketed line ("[agent report received: ...]"); it shows as a small line again
-        setTurns(d.messages.map(m => (m.role !== 'user' && /^\[agent report received[^\]]*\]$/.test((m.content || '').trim())
+        const msgs = d.messages.map(m => ({ ...(m.role !== 'user' && /^\[agent report received[^\]]*\]$/.test((m.content || '').trim())
           ? { who: 'note', text: m.content.trim().slice(1, -1) }
-          : { who: m.role === 'user' ? 'me' : 'brain', text: m.content })))
+          : { who: m.role === 'user' ? 'me' : 'brain', text: m.content }), ...(logWhen(m.created_at) != null ? { at: logWhen(m.created_at) } : {}) }))
+        const log = await cards
+        if (curRef.current !== brainId) return
+        setTurns(logMerge(msgs, log))
       })
       .catch(() => {})
+  }
+  const markAnswered = (t) => {
+    if (!t || !t.logId || !curRef.current) return
+    setTurns(ts => ts.map(x => (x.logId === t.logId ? { ...x, answered: true } : x)))
+    fetch('/cc/cards/answered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thread: curRef.current, id: t.logId }) }).catch(() => {})
   }
   const loadThreads = async () => {
     const request = ++threadRequest.current
@@ -2414,9 +2461,10 @@ function CC() {
         setJobs(d.jobs || [])
         const { mine, others } = splitFinished(d.finished || [], cur)
         if (curRef.current === cur) {
-          for (const j of mine) setTurns(t => [...t, { who: 'brain', job: j, text: '' }])
+          // INLINE-1: each card is also in the thread's log; one already drawn from the log is not drawn twice
+          for (const j of mine) setTurns(t => logAddLive(t, 'job', j))
           // REPORT-1: the threads this one started report here, once each, and nowhere else
-          for (const rp of reportsMine(d.reports, cur)) setTurns(t => (t.some(x => x.report && x.report.id === rp.id) ? t : [...t, { who: 'brain', report: rp, text: '' }]))
+          for (const rp of reportsMine(d.reports, cur)) setTurns(t => logAddLive(t, 'report', rp))
         }
         setOtherJobs(stripItems(d.others || [], others, []))
       } catch {}
@@ -3124,7 +3172,8 @@ function CC() {
     const busyNow = busy || !!(curRef.current && runningRef.current[curRef.current])
     if (busyNow && !realKey) { const qid = `q${Date.now()}`; queueRef.current.push({ qid, text }); if (typeof forced !== 'string') setDraft(''); setTurns(t => [...t, { who: 'me', text, queued: true, qid }]); return }
     if (typeof forced !== 'string') setDraft('')
-    setTurns(t => [...t, { who: 'me', text }])
+    // INLINE-1: writing into the thread answers its open cards (the bridge marks its log the same way)
+    setTurns(t => [...logAnswerAll(t), { who: 'me', text }])
     // The thread this turn belongs to: the one shown, or a fresh one under a temporary key until
     // the bridge names it in "done".
     const isNew = freshRef.current || !curRef.current
@@ -3531,6 +3580,7 @@ function CC() {
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
                 {t.report && <ReportCard report={t.report} onOpenHere={(rp) => switchThread({ brain: rp.child })} />}
+                {(t.job || t.report) && t.logId && <CardState answered={t.answered} onAnswered={() => markAnswered(t)} />}
                 {t.job && <JobCard job={t.job} onOpen={(path) => openPane({ route: '/files?path=' + encodeURIComponent(path), title: 'Files' })}
                   onTalk={(j) => { setDraft(d => (d ? d + '\n' : '') + `About job ${j.id} (${j.title}): `); if (boxRef.current) boxRef.current.focus() }} />}
                 {t.queued && <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', color: C.gold, margin: '0 0 4px 0' }}>queued · <a onClick={() => { queueRef.current = queueRef.current.filter(x => x.qid !== t.qid); setTurns(ts => ts.filter(x => x.qid !== t.qid)) }} style={{ cursor: 'pointer', textDecoration: 'underline' }}>cancel</a></div>}
