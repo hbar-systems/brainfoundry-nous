@@ -82,6 +82,12 @@ _CREDENTIAL_PATTERNS = [
 _SENSITIVE_ENV_MARKERS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD",
                           "PWD", "PRIVATE", "CREDENTIAL")
 _ENV_EXEMPT_MARKERS = ("PUBLIC",)
+# Exact names that contain a marker by accident and hold no secret: the shell's
+# working directory (PWD = "print working directory") and the previous one. Their
+# values are folder paths, so matching them refused any argument that named the
+# folder the process stands in (seen 2026-11-23). Exact match only: DB_PWD,
+# SMTP_PWD and the like stay protected.
+_ENV_EXEMPT_NAMES = frozenset({"PWD", "OLDPWD"})
 # Don't treat trivially-short or boolean-ish env values as secrets to match —
 # they cause false positives (e.g. a flag "1" appearing in any query).
 _MIN_ENV_VALUE_LEN = 10
@@ -146,6 +152,8 @@ def _scan_env_secrets(text: str) -> str:
     which is not itself a secret."""
     for name, value in os.environ.items():
         up = name.upper()
+        if up in _ENV_EXEMPT_NAMES:
+            continue
         if any(m in up for m in _ENV_EXEMPT_MARKERS):
             continue
         if not any(m in up for m in _SENSITIVE_ENV_MARKERS):

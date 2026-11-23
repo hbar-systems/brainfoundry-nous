@@ -338,3 +338,20 @@ def test_box_rule_is_never_stricter_than_the_strict_rule():
     for s in samples:
         if egress._scan_high_entropy(s, local_command=True):
             assert egress._scan_high_entropy(s), s
+
+
+def test_env_match_ignores_the_shell_working_directory(monkeypatch):
+    # PWD and OLDPWD hold folder paths, not passwords; only the exact names are
+    # exempt, so a real *_PWD secret is still matched.
+    from api.tools import egress
+    monkeypatch.setenv("PWD", "/srv/brain/workdir")
+    monkeypatch.setenv("OLDPWD", "/srv/brain/elsewhere")
+    for tool, tier in (("box_act", "red"), ("brain_call", "yellow")):
+        allow, reason = egress.scan_outbound(
+            tool, {"query": "ls /srv/brain/workdir /srv/brain/elsewhere"}, tier)
+        assert allow is True, reason
+    monkeypatch.setenv("DB_PWD", "hunter2-not-a-folder")
+    allow, reason = egress.scan_outbound(
+        "box_act", {"summary": "echo hunter2-not-a-folder"}, "red")
+    assert allow is False and "DB_PWD" in reason
+    assert "hunter2" not in reason
