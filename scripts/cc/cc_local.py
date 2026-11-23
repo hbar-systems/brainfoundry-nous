@@ -51,7 +51,7 @@ NOT_ANSWERING = "local model: endpoint not answering, is the pod up?"
 # Apache or MIT model, and runs it on the lean engine (cc_private.py) instead of Codex. The member
 # still has to choose it on the sign-in screen: a configured seat is offered, never taken by itself.
 PRIVATE_URL = "http://127.0.0.1:11435/v1"     # the stack's Ollama port on a brain box (docs/MULTI_INSTANCE.md)
-PRIVATE_MODEL = "qwen3:4b"                     # Apache 2.0; SEAT-3 bench, ops/2026-11-23_seat-3.md in hbar.world
+PRIVATE_MODEL = "qwen3:4b-instruct-2507-q4_K_M"   # Apache 2.0, no thinking text; SEAT-3 bench round 2 (hbar.world ops/2026-11-23_seat-3.md)
 ENGINES = ("native", "codex")
 
 

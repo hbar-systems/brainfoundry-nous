@@ -207,3 +207,42 @@ def test_bridge_refuses_when_the_model_is_not_installed(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_run_turn", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no fallback to Claude")))
     reply, sid, err = m._run_codex_turn("hi", None, on_event=lambda k, p: None, seat="local")
     assert err is True and "not installed" in reply and "nothing fell back" in reply
+
+
+# ------------------------------------------------------------ round 2 of the bench: the engine's own words ----
+SYS_WITH_PROPOSAL = ("You are the brain. You may read files. When the person asks for a change on this box, you may propose "
+                     "exactly one shell command: end your answer with <box-proposal>{...}</box-proposal>. ... You cannot "
+                     "change anything else from this surface: not memory, not settings.")
+
+
+def test_system_keeps_the_rule_in_the_engines_words_and_context_moves_out_of_the_message():
+    s = cc_private.private_system(SYS_WITH_PROPOSAL, "<persona>\nMara\n</persona>")
+    assert "you may propose exactly one shell command" not in s          # the copied JSON example is gone
+    assert "Only when the person asks you to CHANGE" in s and "Never propose to read" in s
+    assert s.rstrip().endswith("Mara\n</persona>")
+    no_box = cc_private.private_system("You are the brain. When the person wants a change, say exactly what you would change.")
+    assert "<box-proposal>" not in no_box                                # without the box lane there is nothing to propose
+    ctx, msg = cc_private.split_prompt("<persona>\nP\n</persona>\n\n<memory>\nM\n</memory>\n\n<message>\nhello\n</message>")
+    assert (ctx, msg) == ("<persona>\nP\n</persona>\n\n<memory>\nM\n</memory>", "hello")
+
+
+def test_a_read_dressed_as_a_proposal_runs_as_the_read_and_a_change_stays_a_proposal(tmp_path):
+    assert cc_private.proposal_as_read('<box-proposal>{"command": "read_file \'notes/a.md\'", "summary": "x"}</box-proposal>') == ("read_file", {"path": "notes/a.md"})
+    assert cc_private.proposal_as_read('<box-proposal>{"command": "list_files", "summary": "x"}</box-proposal>') == ("list_files", {"path": "."})
+    for change in ("rm -rf notes", "read_file notes/a.md; rm x", "cat .env", "search"):
+        assert cc_private.proposal_as_read('<box-proposal>{"command": "%s"}</box-proposal>' % change) is None, change
+    ws = _ws(tmp_path)
+    ran = []
+    op = _ollama([{"content": '<box-proposal>{"command": "read_file notes/garden.md"}</box-proposal>'}, {"content": "They split."}])
+    d = cc_private.run_turn(BASE, "qwen3:4b", SYS_WITH_PROPOSAL, "<message>\nwhat went wrong?\n</message>", [], ws,
+                            lambda a: ran.append(a) or ("Tomatoes split", 0), opener=op)
+    assert d["reply"] == "They split." and ran and ran[0][0] == "head"
+    # a proposed read of a secret is refused like any other read
+    op = _ollama([{"content": '<box-proposal>{"command": "read_file .env"}</box-proposal>'}, {"content": "I may not."}])
+    d = cc_private.run_turn(BASE, "qwen3:4b", SYS_WITH_PROPOSAL, "x", [], ws, lambda a: (_ for _ in ()).throw(AssertionError("no run")), opener=op)
+    assert d["reply"] == "I may not."
+
+
+def test_copied_context_blocks_are_cut_from_the_answer():
+    assert cc_private.clean_reply("<memory>\nold\n</memory>\n\nThe answer.") == "The answer."
+    assert cc_private.clean_reply("<persona>x</persona>Hi") == "Hi"
