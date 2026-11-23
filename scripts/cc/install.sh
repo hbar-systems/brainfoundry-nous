@@ -97,21 +97,48 @@ cat > "$DOOR_TMP" <<'DOOR'
 export PATH="$HOME/.local/bin:$PATH" TERM=xterm-256color
 case "${1:-}" in
   login)
+    # MEMBERS-14 2026-11-23: the console's sign-in screen opens this door inline (/claude/?arg=login&arg=<lang>),
+    # so its words follow the console language. Claude Code's own `claude auth login` runs as before and the
+    # code is typed here, into Claude Code itself. The only thing kept is the sign-in link it prints, written to
+    # ~/.cc-bridge/login-url so the page can show it as one button; the rest of the output is read and dropped.
+    L="${2:-en}"
+    case "$L" in
+      ru)  T1='Вход в Claude, на вашем сервере.'; T2='Скопируйте код со страницы Claude, вставьте его в строку ниже и нажмите Enter.'; TOK='Вход выполнен. Вернитесь на страницу.'; TNO='Вход ещё не выполнен. На странице нажмите «Начать вход заново».' ;;
+      sk)  T1='Prihlásenie do Claude, na tvojom serveri.'; T2='Skopíruj kód zo stránky Claude, vlož ho do riadku nižšie a stlač Enter.'; TOK='Prihlásené. Vráť sa na stránku.'; TNO='Ešte nie si prihlásený. Na stránke stlač „Začať prihlásenie znova“.' ;;
+      de)  T1='Die Anmeldung bei Claude, auf deinem Server.'; T2='Kopier den Code von der Claude-Seite, füg ihn unten in die Zeile ein und drück Enter.'; TOK='Angemeldet. Geh zurück zur Seite.'; TNO='Noch nicht angemeldet. Drück auf der Seite „Anmeldung neu starten“.' ;;
+      el)  T1='Η σύνδεση στο Claude, στον server σου.'; T2='Αντίγραψε τον κωδικό από τη σελίδα του Claude, επικόλλησέ τον στη γραμμή από κάτω και πάτα Enter.'; TOK='Συνδέθηκες. Γύρνα στη σελίδα.'; TNO='Δεν συνδέθηκες ακόμα. Στη σελίδα πάτα «Ξεκίνα ξανά τη σύνδεση».' ;;
+      rue) T1='Приголошіня до Claude, на твоїм сервері.'; T2='Скопіруй код зо сторінкы Claude, вклади го до рядка долу і стисни Enter.'; TOK='Приголошена. Вернь ся на сторінку.'; TNO='Іщі не єсь приголошена. На сторінцї стисни «Зачати приголошіня знову».' ;;
+      *)   T1="Claude's own sign-in, on your server."; T2='Copy the code from the Claude page, paste it on the line below and press Enter.'; TOK='Signed in. Go back to the page.'; TNO='Not signed in yet. On the page, press "Start the sign-in again".' ;;
+    esac
     clear
-    printf '\n  Signing in to your own account, through the provider'"'"'s own flow.\n'
-    printf '  1. A link appears below. Open it and sign in.\n  2. Copy the code it shows.\n  3. Paste the code here and press Enter.\n\n'
+    printf '\n  %s\n  %s\n\n' "$T1" "$T2"
     # The sign-in must land with the user the bridge runs as. After harden-user.sh that is
     # not the door's user; signing in here as the door's user left the bridge disconnected
     # (observed 2026-09-21). __BRIDGE_USER__ is filled in by the installer.
     CA=(env); [ "__LOGIN_USER__" != "$(id -un)" ] && CA=(sudo -n -u "__LOGIN_USER__" -H env)
     CA+=(PATH="/home/__LOGIN_USER__/.local/bin:/usr/local/bin:/usr/bin:/bin" TERM="$TERM")
-    "${CA[@]}" claude auth login --claudeai \
-        || printf '\n  The sign-in did not finish (or this panel could not act as __LOGIN_USER__).\n'
+    URLF="$HOME/.cc-bridge/login-url"; rm -f "$URLF" 2>/dev/null
+    FIFO=""
+    if command -v script >/dev/null && command -v mkfifo >/dev/null && [ -d "$HOME/.cc-bridge" ]; then
+        FIFO=$(mktemp -u "$HOME/.cc-bridge/login-out.XXXXXXXX") && mkfifo -m 600 "$FIFO" || FIFO=""
+    fi
+    if [ -n "$FIFO" ]; then
+        # the reader keeps only the first claude.ai link; everything else, the pasted code's echo included, is dropped
+        ( umask 077; LC_ALL=C awk -v f="$URLF" -v re='https://(claude[.]ai|claude[.]com|console[.]anthropic[.]com)/[-A-Za-z0-9._~:/?#@!$&()*+,;=%]+' '!d && match($0, re) { printf "%s", substr($0, RSTART, RLENGTH) > f; close(f); d = 1 }' < "$FIFO" >/dev/null 2>&1 ) &
+        printf -v CMD '%q ' "${CA[@]}" claude auth login --claudeai
+        script -qefc "$CMD" "$FIFO" \
+            || printf '\n  The sign-in did not finish (or this panel could not act as __LOGIN_USER__).\n'
+        wait 2>/dev/null; rm -f "$FIFO"
+    else
+        "${CA[@]}" claude auth login --claudeai \
+            || printf '\n  The sign-in did not finish (or this panel could not act as __LOGIN_USER__).\n'
+    fi
+    rm -f "$URLF" 2>/dev/null
     # "signed in" only when it is: the panel said "Done" after a failed login too (2026-11-07)
     if "${CA[@]}" claude auth status --json 2>/dev/null | grep -Eq '"loggedIn": *true'; then
-        printf '\n  Signed in. Close this panel; the page looks again when it closes.\n'
+        printf '\n  %s\n' "$TOK"
     else
-        printf '\n  Not signed in yet. Close this panel and press "Sign in with a Claude subscription" again.\n'
+        printf '\n  %s\n' "$TNO"
     fi
     sleep 3600 ;;
   codex-login)
