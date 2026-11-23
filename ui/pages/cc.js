@@ -3735,7 +3735,7 @@ function CC() {
         )}
         </div>
       </div>
-      {pane && <Pane pane={pane} quiet={quietHome ? { title: (layoutBase && pane.route === layoutBase.start && startLabel) || W.menu.start, words: W } : null} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
+      {pane && <Pane pane={pane} quiet={quietHome ? { title: layoutBase && pane.route === layoutBase.start ? (startLabel || W.menu.start) : (pane.title || W.menu.start), words: W } : null} side={paneSide} onSide={flipSide} onRoute={onPaneRoute} onClose={() => { setPane(null); loadHealth(true) }}
                      panel={pane.route === '#threads' ? <div style={{ padding: '6px' }}>{threadList}</div> : pane.route === '#export' ? <ExportPanel turns={turns} title={curThread && curThread.title} /> : null} />}
       </div>
     </LearnCtx.Provider>

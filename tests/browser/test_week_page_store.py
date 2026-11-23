@@ -18,6 +18,7 @@ Skips without python playwright. Run:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -98,6 +99,17 @@ def host_url():
     srv.shutdown()
 
 
+# chromium needs nss libs this box keeps in user space (no sudo); same place SKIN-2 points the login test at
+LIBS = Path.home() / ".local/chromelibs/root/usr/lib/aarch64-linux-gnu"
+
+
+def _launch(p):
+    env = dict(os.environ)
+    if LIBS.is_dir():
+        env["LD_LIBRARY_PATH"] = f"{LIBS}:{env.get('LD_LIBRARY_PATH', '')}"
+    return p.chromium.launch(args=["--no-sandbox"], env=env)
+
+
 def _page_frame(pg):
     pg.wait_for_function("() => document.getElementById('f').contentWindow.frames.length > 0", timeout=10000)
     for fr in pg.frames:
@@ -109,7 +121,7 @@ def _page_frame(pg):
 
 def test_page_choice_survives_a_console_reload(host_url):
     with sync_api.sync_playwright() as p:
-        b = p.chromium.launch(args=["--no-sandbox"])
+        b = _launch(p)
         pg = b.new_page()
         errs = []
         pg.on("pageerror", lambda e: errs.append(str(e)))
