@@ -338,7 +338,8 @@ def test_health_fresh_rereads_both_sign_ins():
 
 def test_sign_in_card_rechecks_and_never_offers_a_second_chatgpt_login():
     src = (ROOT / "ui" / "pages" / "cc.js").read_text()
-    assert "fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health'" in src
+    # PANES-FIX-1 (2026-11-24): the frames on one page share the check (sharedHealth); a fresh one still asks fresh=1
+    assert "const url = fresh === true ? '/cc/health?fresh=1' : '/cc/health'" in src and "sharedHealth(fresh)" in src
     assert "onClose={() => { setPane(null); loadHealth(true) }}" in src          # a closed sign-in panel looks again
     card = src.split("function SignIn(", 1)[1].split("\nfunction ", 1)[0]
     assert "onRecheck" in card and ">recheck</Btn>" in card
