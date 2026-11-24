@@ -501,6 +501,8 @@ def test_thread_style_is_checked_and_kept_on_the_thread(monkeypatch, tmp_path):
                          "learn": True, "evil": "x", "font": "url(javascript:1)"})
     assert s == {"accent": "#a1b2c3", "tint": 30, "text": "18px", "skin": "owl", "learn": True}
     assert m._thread_style({"accent": "red; background:url(x)"}) == {}
+    # SKIN-3: a thread keeps its own font, one of the six console shapes
+    assert m._thread_style({"font": "lora", "skin": "fox"}) == {"font": "lora", "skin": "fox"}
     assert m._thread_style("no") is None
     assert m._threads_update("b1", style=s)["style"]["accent"] == "#a1b2c3"
     assert m._threads_view()["threads"][0]["style"]["skin"] == "owl"

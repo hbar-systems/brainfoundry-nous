@@ -91,8 +91,8 @@ export default function App({ Component, pageProps }) {
       document.documentElement.style.setProperty('--nav-h', `${navH}px`)
     }
   }, [])
-  // Skin and font (SKIN-2, 2026-11-23): the skin on screen (bf-theme-now, else bf-theme) and the console
-  // font, followed live when another tab or the conversation beside this pane changes them (lib/skin.js).
+  // Skin and font (SKIN-3, 2026-11-23): the console default (bf-theme, bf-font), followed live when another tab
+  // changes the default; a thread page draws its own skin and font over it in its own document (lib/skin.js).
   useEffect(() => watchSkin(document.documentElement), [])
 
   // Light was removed on 2026-10-18 (hbar: useless); clear a level a browser may still hold.
