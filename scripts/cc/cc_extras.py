@@ -8,6 +8,7 @@ Imported by cc-bridge.py (same directory). Standard library only.
 - Jobs: commands that outlive a turn. Started detached (own session), logged to
   out/jobs/<id>.log, recorded in out/jobs/jobs.json. Nothing here runs sudo.
 - Uploads: multipart bodies from the page, saved under in/<date>/, size-capped.
+- BigUploads: files over that cap in 8 MB pieces, resumable, sha256 on finish (VIDEO-DOOR-1, 2026-11-24).
 """
 from __future__ import annotations
 
@@ -1447,6 +1448,260 @@ class Uploads:
             return dest_dir / cand
         finally:
             os.close(dfd)
+
+
+# ── big files in pieces (VIDEO-DOOR-1, 2026-11-24) ──
+# hbar 2026-11-24: "GIVE ME A NORMAL PLACE I CAN DRAG AND DROP THE VIDEO INTO!" A six-minute phone video is
+# several hundred MB, past MAX_UPLOAD and past what one request through the proxies should carry. The page
+# sends such a file in pieces of BIG_CHUNK bytes: start (name, size, key) -> the offset already on the box,
+# then each piece at that offset, then finish. A dropped connection loses at most the piece in flight; the
+# same file dropped again (same name, size, lastModified -> same key) resumes where it stopped. Pieces sit
+# in in/.partial/<id>.part; finish checks the size, hashes the file, and moves it to in/<date>/<name>
+# (name-1 ... when taken), mode 0664, so the hands and the bridge's group can read it.
+
+BIG_CHUNK = 8 * 1024 * 1024
+BIG_CHUNK_MAX = 16 * 1024 * 1024                      # a piece may be up to this; the page sends BIG_CHUNK
+BIG_MAX_DEFAULT = 4 * 1024 ** 3                       # CC_UPLOAD_MAX_BYTES overrides
+BIG_FLOOR_DEFAULT = 5 * 1024 ** 3                     # CC_UPLOAD_FLOOR_BYTES: never leave less than this free
+BIG_STALE = 3 * 86400                                 # an unfinished upload older than this is swept
+
+
+def _env_bytes(name: str, default: int) -> int:
+    try:
+        v = int(str(os.environ.get(name, "")).strip())
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+def _mb(n: int) -> str:
+    return f"{n / (1024 * 1024):.0f} MB" if n < 1024 ** 3 else f"{n / 1024 ** 3:.1f} GB"
+
+
+class BigUploads:
+    def __init__(self, in_dir: Path, max_bytes: int | None = None, floor_bytes: int | None = None,
+                 clock=time.time, free_fn=None):
+        self.dir = Path(in_dir)
+        self.max = max_bytes if max_bytes is not None else _env_bytes("CC_UPLOAD_MAX_BYTES", BIG_MAX_DEFAULT)
+        self.floor = floor_bytes if floor_bytes is not None else _env_bytes("CC_UPLOAD_FLOOR_BYTES", BIG_FLOOR_DEFAULT)
+        self.clock = clock
+        self.free_fn = free_fn or self._free
+        self.lock = threading.Lock()
+
+    # -- helpers --
+    @property
+    def partial(self) -> Path:
+        return self.dir / ".partial"
+
+    def _free(self) -> int:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        st = os.statvfs(str(self.dir))
+        return st.f_bavail * st.f_frsize
+
+    @staticmethod
+    def _id(key: str) -> str:
+        return hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:32]
+
+    @staticmethod
+    def _valid_id(uid) -> bool:
+        return isinstance(uid, str) and re.fullmatch(r"[0-9a-f]{32}", uid) is not None
+
+    def _meta(self, pfd: int, uid: str) -> dict | None:
+        try:
+            return json.loads(read_file(pfd, uid + ".json"))
+        except (FileNotFoundError, ValueError):
+            return None
+
+    @staticmethod
+    def _have(pfd: int, uid: str) -> int:
+        try:
+            return os.stat(uid + ".part", dir_fd=pfd, follow_symlinks=False).st_size
+        except FileNotFoundError:
+            return 0
+
+    def _room(self, need: int) -> dict | None:
+        free = self.free_fn()
+        if free - need < self.floor:
+            return {"error": f"the box has {_mb(free)} free; this file needs {_mb(need)} more and the box keeps {_mb(self.floor)} free. Make room first (the System page shows the disk)",
+                    "free": free, "need": need, "status": 507}
+        return None
+
+    def _sweep(self, pfd: int) -> None:
+        now = self.clock()
+        for n in os.listdir(pfd):
+            if not (n.endswith(".part") or n.endswith(".json")):
+                continue
+            try:
+                st = os.stat(n, dir_fd=pfd, follow_symlinks=False)
+                if now - st.st_mtime > BIG_STALE:
+                    os.unlink(n, dir_fd=pfd)
+            except OSError:
+                pass
+
+    # -- the three steps --
+    def start(self, body: dict) -> dict:
+        name = Uploads._safe_name(str(body.get("name") or "file"))
+        size = body.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            return {"error": "size must be a whole number of bytes above 0", "status": 400}
+        if size > self.max:
+            return {"error": f"{_mb(size)} is over this box's limit of {_mb(self.max)} per file (CC_UPLOAD_MAX_BYTES)", "status": 413}
+        key = f"{name}|{size}|{str(body.get('key') or '')[:200]}"
+        uid = self._id(key)
+        with self.lock:
+            pfd = open_dir(self.partial, create=True)
+            try:
+                self._sweep(pfd)
+                meta = self._meta(pfd, uid)
+                have = self._have(pfd, uid) if meta else 0
+                if meta and (meta.get("size") != size or have > size):
+                    meta, have = None, 0
+                if not meta:
+                    for n in (uid + ".part", uid + ".json"):
+                        try:
+                            os.unlink(n, dir_fd=pfd)
+                        except FileNotFoundError:
+                            pass
+                full = self._room(size - have)
+                if full:
+                    return full
+                if not meta:
+                    meta = {"name": name, "size": size, "started": int(self.clock())}
+                    replace_file(pfd, uid + ".json", json.dumps(meta).encode(), 0o660)
+                    os.close(create_new(pfd, uid + ".part", 0o660))
+            finally:
+                os.close(pfd)
+        return {"ok": True, "id": uid, "name": name, "size": size, "received": have, "chunk": BIG_CHUNK}
+
+    def status(self, uid) -> dict:
+        if not self._valid_id(uid):
+            return {"error": "no such upload", "status": 404}
+        pfd = open_dir(self.partial, create=True)
+        try:
+            meta = self._meta(pfd, uid)
+            if not meta:
+                return {"error": "no such upload (finished, or swept after three days)", "status": 404}
+            return {"ok": True, "id": uid, "name": meta["name"], "size": meta["size"], "received": self._have(pfd, uid)}
+        finally:
+            os.close(pfd)
+
+    def chunk(self, uid, offset, handler) -> dict:
+        """One piece at `offset`. The body is read whole before anything is written, so a piece cut
+        off in flight leaves the file as it was; an offset other than what the box holds is a 409 with
+        the right one, and the page carries on from there."""
+        data = read_body(handler, BIG_CHUNK_MAX)
+        if not self._valid_id(uid):
+            return {"error": "no such upload", "status": 404}
+        if not data:
+            return {"error": f"a piece must be between 1 byte and {_mb(BIG_CHUNK_MAX)}", "status": 400}
+        want = handler.headers.get("Content-Length")
+        if want and "chunked" not in (handler.headers.get("Transfer-Encoding") or "").lower() and len(data) != int(want):
+            return {"error": f"the piece was cut off ({len(data)} of {want} bytes); send it again", "status": 408}
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            return {"error": "offset must be a number", "status": 400}
+        with self.lock:
+            pfd = open_dir(self.partial, create=True)
+            try:
+                meta = self._meta(pfd, uid)
+                if not meta:
+                    return {"error": "no such upload (finished, or swept after three days)", "status": 404}
+                try:
+                    pst = os.stat(uid + ".part", dir_fd=pfd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pst = None
+                if pst is None or not stat_mod.S_ISREG(pst.st_mode):
+                    return {"error": "the upload's file is missing or not a plain file; start again", "status": 409, "received": 0}
+                have = pst.st_size
+                if offset != have:
+                    return {"error": "out of step", "received": have, "status": 409}
+                if have + len(data) > meta["size"]:
+                    return {"error": "more bytes than the file has", "received": have, "status": 400}
+                full = self._room(meta["size"] - have)
+                if full:
+                    return full
+                fd = os.open(uid + ".part", os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=pfd)
+                try:
+                    view = memoryview(data)
+                    while view:
+                        n = os.write(fd, view)
+                        view = view[n:]
+                finally:
+                    os.close(fd)
+                return {"ok": True, "received": have + len(data), "size": meta["size"]}
+            finally:
+                os.close(pfd)
+
+    def finish(self, uid) -> dict:
+        if not self._valid_id(uid):
+            return {"error": "no such upload", "status": 404}
+        day = time.strftime("%Y-%m-%d", time.gmtime(self.clock()))
+        dest_dir = self.dir / day
+        with self.lock:
+            pfd = open_dir(self.partial, create=True)
+            try:
+                meta = self._meta(pfd, uid)
+                if not meta:
+                    return {"error": "no such upload (finished, or swept after three days)", "status": 404}
+                have = self._have(pfd, uid)
+                if have != meta["size"]:
+                    return {"error": f"the box holds {have} of {meta['size']} bytes; send the rest first", "received": have, "status": 409}
+                h = hashlib.sha256()
+                fd = os.open(uid + ".part", os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=pfd)
+                with os.fdopen(fd, "rb") as f:
+                    for piece in iter(lambda: f.read(1 << 20), b""):
+                        h.update(piece)
+                    try:
+                        os.fchmod(f.fileno(), 0o664)
+                    except OSError:
+                        pass
+                dfd = open_dir(dest_dir, create=True)
+                try:
+                    name = meta["name"]
+                    stem, suffix = Path(name).stem, Path(name).suffix
+                    cand, i = name, 1
+                    while True:
+                        try:
+                            # a hard link never replaces an existing name (nor a planted link at it)
+                            os.link(uid + ".part", cand, src_dir_fd=pfd, dst_dir_fd=dfd, follow_symlinks=False)
+                            break
+                        except FileExistsError:
+                            cand = f"{stem}-{i}{suffix}"; i += 1
+                            if i > 10000:
+                                raise
+                finally:
+                    os.close(dfd)
+                for n in (uid + ".part", uid + ".json"):
+                    try:
+                        os.unlink(n, dir_fd=pfd)
+                    except FileNotFoundError:
+                        pass
+            finally:
+                os.close(pfd)
+        path = dest_dir / cand
+        return {"ok": True, "files": [{"name": cand, "path": str(path), "size": have, "sha256": h.hexdigest()}]}
+
+    def handle(self, route: str, handler, query: dict, body_json) -> tuple[int, dict]:
+        """The bridge's door: /upload/big/start|status|chunk|finish -> (http status, answer)."""
+        step = route.rsplit("/", 1)[-1]
+        try:
+            if step == "chunk":
+                d = self.chunk(query.get("id"), query.get("offset"), handler)
+            elif step in ("start", "status", "finish"):
+                body = body_json() or {}
+                d = self.start(body) if step == "start" else self.status(body.get("id")) if step == "status" else self.finish(body.get("id"))
+            else:
+                return 404, {"ok": False, "error": "no such step"}
+        except UnsafePath as e:
+            return 400, {"ok": False, "error": str(e)}
+        except PermissionError:
+            return 400, {"ok": False, "error": f"could not write into {self.dir}: closed to the bridge"}
+        except OSError as e:     # ELOOP: a link planted at a piece's name
+            return 400, {"ok": False, "error": f"refused: {type(e).__name__} on the upload's file"}
+        code = d.pop("status", 200 if d.get("ok") else 400)
+        d.setdefault("ok", False)
+        return code, d
 
 
 def shell_quote(cmd: list[str]) -> str:

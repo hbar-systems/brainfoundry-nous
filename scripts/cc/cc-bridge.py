@@ -22,6 +22,9 @@ the bridge; the CLI keeps its own credentials in the brain user's home.
 
 Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method} (?fresh=1 re-reads both sign-ins)
+  POST /cc/upload/big/start  {"name","size","key"} -> {"id","received","chunk"}  (a file over the 50 MB cap, VIDEO-DOOR-1)
+  POST /cc/upload/big/chunk?id=&offset=  raw bytes (one piece, up to 16 MB) -> {"received"}; 409 {"received"} when out of step
+  POST /cc/upload/big/status {"id"} -> {"received","size"};  POST /cc/upload/big/finish {"id"} -> {"files":[{"path","size","sha256"}]}
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
                           with {"new": true, "parent": <thread>, "label"}: the new thread reports each finished turn to its
                           parent as a card, handed to the parent's page in GET /cc/jobs?take=1&thread=<parent> -> "reports"
@@ -655,6 +658,8 @@ def _job_thread(run_id: str | None) -> str | None:
     r = RUNS.get(run_id or "") if "RUNS" in globals() else None
     return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
+# files over the 50 MB cap, in 8 MB pieces, resumable (VIDEO-DOOR-1 2026-11-24); CC_UPLOAD_MAX_BYTES, CC_UPLOAD_FLOOR_BYTES
+BIG_UPLOADS = cc_extras.BigUploads(IN_DIR)
 # The memo tape (TAPE-2, 2026-11-14, scripts/cc/cc_tape.py): the console's /tape page reads and writes this one
 # folder through /cc/tape/*; a brain without one (no index.json there) answers {tape: false}. CC_TAPE_SIGNER is
 # the name a sign-off on the page records (default "owner").
@@ -6370,6 +6375,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "unreadable or too large"})
                 return
             self._send(*_steer(m_steer.group(1), body))
+            return
+        if route.startswith("/upload/big/"):
+            # VIDEO-DOOR-1: the same operator gate as /upload above (this route is not in the open list)
+            try:
+                code, d = BIG_UPLOADS.handle(route, self, self._query(), lambda: self._json(limit=4000))
+            except Exception as e:   # noqa: BLE001  an answer, not a dead thread
+                code, d = 500, {"ok": False, "error": f"could not take the piece: {type(e).__name__}"}
+            self._send(code, d)
             return
         if route == "/upload":
             try:
