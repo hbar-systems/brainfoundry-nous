@@ -244,7 +244,7 @@ hbar, after two days of one member's sitting: "did we consider limits so we dont
 |---|---|---|---|
 | note | 403 | 1 | 12.5 s (10 notes, 12.46 to 12.86) |
 | slide deck PDF, 25 slides | 1,550 | 4 | 63.8 s (3 decks, 63.3 to 64.3) |
-| book PDF, 300 pages | 126,000 | 281 | measuring at commit time (expected about 75 min at 15.9 s a chunk) |
+| book PDF, 300 pages | 126,000 | 281 | not measured whole: the run stopped at its 60-minute limit; extrapolated 281 x 15.9 s = about 74 minutes (unverified) |
 
 Embedding is nearly all of it: extracting the 300-page PDF's text layer takes 1.4 s; one 512-token chunk takes 12.5 s alone and 15.9 s in a batch. So a 2-core member brain reads about 5 notes a minute, and 1,825 documents are a night's work, not a sitting's.
 
