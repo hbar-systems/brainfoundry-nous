@@ -10,6 +10,7 @@ import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '.
 import { merge as logMerge, whenOf as logWhen, addLive as logAddLive, answerAll as logAnswerAll } from '../lib/cardlog'
 import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
+import { uploadFiles, fmtMB } from '../lib/bigUpload'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
 import ListeningCard from '../components/ListeningCard'
@@ -1553,6 +1554,7 @@ function CC() {
   const [files, setFiles] = useState([])            // attachments chosen for the next message
   const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
+  const [attachProg, setAttachProg] = useState('')  // "412 of 640 MB" while a big file goes up in pieces (VIDEO-DOOR-1)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   const autoAskRef = useRef(null)                   // ?ask= from the brain's own pages: sent once the console is up (2026-11-13)
   // ?continue=<conversation document> (MOVE-IN-2, 2026-11-16): a new thread seeded with an imported
@@ -3153,13 +3155,12 @@ function CC() {
     if (!text && files.length === 0) return
     let saved = []
     if (files.length > 0) {
-      const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
-      try {
-        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
-        const d = await r.json().catch(() => ({}))
-        if (!r.ok || !d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
-        saved = d.files || []
-      } catch { setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
+      // any size: over 50 MB goes in resumable pieces (ui/lib/bigUpload.js, VIDEO-DOOR-1)
+      setAttaching(files.length)
+      const d = await uploadFiles(files, setAttachProg)
+      setAttaching(0); setAttachProg('')
+      if (!d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error}`, error: true }]); return }
+      saved = d.files || []
       setFiles([])
     }
     setDraft('')
@@ -3194,18 +3195,17 @@ function CC() {
     if (typeof forced !== 'string' && files.length > 0) {
       // Attachments go to the box first (in/<date>/), then the message names them.
       const sending = files, keptDraft = draft
-      const fd = new FormData(); sending.forEach(f => fd.append('file', f, f.name))
+      // Any size (VIDEO-DOOR-1 2026-11-24): up to 50 MB in one request as before, bigger files in 8 MB
+      // resumable pieces with one progress line "412 of 640 MB" (ui/lib/bigUpload.js).
       setDraft(''); setFiles([]); setAttaching(sending.length)
       const restore = () => { setDraft(d0 => d0 || keptDraft); setFiles(f0 => [...sending, ...f0]) }
       let saved = []
       try {
-        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
-        const d = await r.json().catch(() => ({}))
-        if (!r.ok || !d.ok) { restore(); setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
+        const d = await uploadFiles(sending, setAttachProg)
+        if (!d.ok) { restore(); setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error}`, error: true }]); return }
         saved = d.files || []
-      } catch { restore(); setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
-      finally { setAttaching(0) }
-      text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ')
+      } finally { setAttaching(0); setAttachProg('') }
+      text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path + (f.sha256 ? ` (sha256 ${f.sha256})` : '')).join(', ')
     }
     // A message sent while the thread answers is accepted by the bridge and queued there (2026-10-09):
     // delivered as the next turn the moment the running one ends, in order, cancellable below.
@@ -3801,11 +3801,11 @@ function CC() {
           </p>
         )}
         {attaching > 0 && (
-          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0' }}>attaching {attaching} file{attaching === 1 ? '' : 's'}, sending right after</p>
+          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0' }}>{attachProg ? `uploading ${attachProg}` : `attaching ${attaching} file${attaching === 1 ? '' : 's'}`}, sending right after</p>
         )}
         {files.length > 0 && (
           <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}><ChipThumb file={f} />{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
+            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}><ChipThumb file={f} />{f.name} · {f.size >= 1024 * 1024 ? fmtMB(f.size) : (f.size / 1024).toFixed(0) + ' KB'} <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
           </p>
         )}
         {footQuiet && (

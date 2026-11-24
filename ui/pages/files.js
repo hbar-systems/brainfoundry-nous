@@ -1,6 +1,7 @@
 import Head from 'next/head'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import MdView from '../components/MdView'
+import { uploadFiles } from '../lib/bigUpload'
 
 // Files: what the reasoner made, what you gave it, and the repositories it works in,
 // browsed and played inside the console. Served by the bridge (/cc/files), which only
@@ -32,6 +33,27 @@ export default function Files() {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState(null)   // {ok, text}
+  // Drop a file anywhere on this page, or press "upload" (VIDEO-DOOR-1 2026-11-24, hbar: "GIVE ME A NORMAL PLACE
+  // I CAN DRAG AND DROP THE VIDEO INTO!"). Any size up to the box's cap: big files go in resumable pieces
+  // (ui/lib/bigUpload.js) into in/<date>/; one line says "412 of 640 MB", then where it landed.
+  const pickRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+  const [upLine, setUpLine] = useState(null)       // {busy, text, error}
+  async function takeFiles(list) {
+    const fs = Array.from(list || [])
+    if (!fs.length || (upLine && upLine.busy)) return
+    setUpLine({ busy: true, text: 'starting' })
+    const d = await uploadFiles(fs, (line) => setUpLine({ busy: true, text: line }))
+    if (!d.ok) { setUpLine({ error: true, text: 'Could not upload: ' + d.error }); return }
+    const f = d.files[d.files.length - 1]
+    setUpLine({ text: d.files.length === 1 ? `saved ${f.path}${f.sha256 ? ' · sha256 ' + f.sha256.slice(0, 12) : ''}` : `saved ${d.files.length} files in ${f.path.slice(0, f.path.lastIndexOf('/'))}`, path: f.path })
+    load(f.path.slice(0, f.path.lastIndexOf('/')))
+  }
+  const dropProps = {
+    onDragOver: (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); if (!dragging) setDragging(true) } },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false) },
+    onDrop: (e) => { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); setDragging(false); takeFiles(e.dataTransfer.files) } },
+  }
   const embedded = typeof window !== 'undefined' && window.self !== window.top
   // Full screen (hbar 2026-10-13): a visual fills the whole screen, no list, no toolbar; files?path=..&full=1 opens it so.
   const [full, setFull] = useState(false)
@@ -132,7 +154,8 @@ export default function Files() {
   return (
     <>
       <Head><title>Files · BrainFoundry</title></Head>
-      <div style={{ display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
+      <div {...dropProps} style={{ position: 'relative', display: 'flex', height: 'calc(100vh - var(--nav-h, 52px))', minHeight: '480px', color: T.ink, fontFamily: 'var(--font-display, serif)' }}>
+        {dragging && <div style={{ position: 'absolute', inset: '10px', zIndex: 5, border: `2px dashed ${T.gold}`, borderRadius: '14px', background: 'color-mix(in srgb, var(--surface) 88%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', fontSize: '18px', color: T.ink }}>Drop to put it on the box</div>}
         <div style={{ width: sel ? '42%' : '100%', minWidth: '280px', borderRight: sel ? `1px solid ${T.line}` : 0, display: sel && narrow ? 'none' : 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '10px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <a onClick={() => { setData(d => ({ ...(d || {}), path: null, entries: [] })); fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {}) }} style={{ ...mono, fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', color: T.gold, cursor: 'pointer' }}>Files</a>
@@ -140,7 +163,15 @@ export default function Files() {
             {data && data.roots && data.roots.map(r => (
               <a key={r.path} onClick={() => load(r.path)} style={{ ...mono, fontSize: '12px', color: data.path && data.path.startsWith(r.path) ? T.ink : T.dim, cursor: 'pointer', textDecoration: 'underline' }}>{r.label}</a>
             ))}
+            <a onClick={() => pickRef.current && pickRef.current.click()} title="or drop a file anywhere on this page; any size, it lands in in/ under today's date" style={{ ...mono, fontSize: '12px', color: T.gold, cursor: 'pointer', textDecoration: 'underline', marginLeft: 'auto' }}>upload</a>
+            <input ref={pickRef} type="file" multiple style={{ display: 'none' }} onChange={e => { takeFiles(e.target.files); e.target.value = '' }} />
           </div>
+          {upLine && (
+            <div style={{ ...mono, fontSize: '12px', padding: '8px 16px', borderBottom: `1px solid ${T.line}`, color: upLine.error ? 'var(--danger, #c0533a)' : upLine.busy ? T.ink : T.dim, overflowWrap: 'anywhere', display: 'flex', gap: '10px', alignItems: 'baseline' }}>
+              <span style={{ flex: 1 }}>{upLine.busy ? 'uploading ' : ''}{upLine.text}</span>
+              {!upLine.busy && <a onClick={() => setUpLine(null)} style={{ cursor: 'pointer', color: T.faint }}>x</a>}
+            </div>
+          )}
           {data && data.path && (
             <div style={{ ...mono, fontSize: '12px', color: T.dim, padding: '8px 16px', borderBottom: `1px solid ${T.line}`, wordBreak: 'break-all' }}>
               {crumbs.map((c, i) => {
