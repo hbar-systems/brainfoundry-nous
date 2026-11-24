@@ -178,7 +178,7 @@ def test_door_words_follow_the_language_and_fall_back_to_english(tmp_path):
 def test_page_wires_the_screen_the_wait_and_the_switch():
     cc = (ROOT / "ui" / "pages" / "cc.js").read_text()
     assert "import SignInSteps from '../components/SignInSteps'" in cc
-    assert "health.signin_proxy\n          ? <SignIn" in cc and ": <SignInSteps lang={lang}" in cc   # the old card only where the page-driven sign-in is on
+    assert "health.signin_proxy\n          ? <SignIn" in cc and ": <SeatChoice lang={lang}" in cc and "<SignInSteps lang={lang} bare" in cc   # the old card only where the page-driven sign-in is on; SEAT-3: the steps sit inside the three-seat choice
     assert "if (health && !loggedIn && typeof forced === 'string' && !paneMode) { setPendingStart(text); return }" in cc
     steps = (ROOT / "ui" / "components" / "SignInSteps.js").read_text()
     assert "/cc/login/door-url" in steps and "/claude/?arg=login&arg=" in steps
