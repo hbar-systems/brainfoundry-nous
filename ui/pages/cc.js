@@ -26,6 +26,8 @@ import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
+import SurfaceCard, { SURFACE_CSS } from '../components/SurfaceCard'
+import { sayMatch, keyIndex } from '../lib/surfaces'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
 import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont } from '../lib/skin'
 
@@ -1550,6 +1552,8 @@ const HL_OK = () => { try { return !!(window.CSS && CSS.highlights && window.Hig
 function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
+  const surfacesRef = useRef([])                    // the surfaces register (GET /cc/surfaces, SURFACES-1 2026-11-24)
+  const [surfHit, setSurfHit] = useState(null)      // {turn, i}: the pad a number key just pressed, for its flash
   const [files, setFiles] = useState([])            // attachments chosen for the next message
   const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
@@ -2410,6 +2414,9 @@ function CC() {
       })
       .catch(() => setHealth(false))
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
+    // SURFACES-1: a message that is only a system's say-word shows its card, with no model turn
+    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) surfacesRef.current = d.surfaces }).catch(() => {})
     // ?ask= prefills; from the brain's own desk pages (same origin, /cc/files/raw/: the court, the board)
     // it is sent on arrival, so one press there acts (hbar 2026-11-12 "i got sent back"). Any other
     // origin, or no referrer (Telegram, typed), keeps prefill only.
@@ -3188,6 +3195,11 @@ function CC() {
     if (!text && files.length === 0 && !block) return
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    // a system's say-word alone (SURFACES-1): its card in the thread, the brain is not asked
+    if (typeof forced !== 'string' && files.length === 0 && !block) {
+      const sf = sayMatch(text, surfacesRef.current)
+      if (sf) { setDraft(''); setTurns(t => [...t, { who: 'me', text }, { who: 'surface', surface: sf }]); return }
+    }
     // before any sign-in: the start waits for it instead of failing (MEMBERS-14 2026-11-23)
     if (health && !loggedIn && typeof forced === 'string' && !paneMode) { setPendingStart(text); return }
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
@@ -3370,6 +3382,7 @@ function CC() {
   }
 
   function onKey(e) {
+    if (!draft && !e.metaKey && !e.ctrlKey && !e.altKey && surfaceKey(e.key)) { e.preventDefault(); return }
     if (e.key === 'Escape' && active) { e.preventDefault(); stopTurn(); return }
     if (e.key === 'Escape' && listening) { e.preventDefault(); stopListening(false); return }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && active && draft.trim()) { e.preventDefault(); sendNow(); return }
@@ -3379,6 +3392,32 @@ function CC() {
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
+
+  // SURFACES-1: a card's pad. An address opens beside the chat (the pane); an ask goes into the box, not sent.
+  const surfaceOpen = (s, a) => openPane({ route: a.open, title: `${s.name} · ${a.label}` })
+  const surfaceAsk = (a) => { setDraft(a.ask); setTimeout(() => { const b = boxRef.current; if (b) { b.focus(); try { b.setSelectionRange(a.ask.length, a.ask.length) } catch {} } }, 0) }
+  // keys 1 to 5 press the newest card's pads while the box is empty and that card is the last thing in the thread
+  const surfaceKey = (key) => {
+    const n = turns.length - 1, t = turns[n]
+    if (!t || t.who !== 'surface') return false
+    const i = keyIndex(key, t.surface.actions.length)
+    if (i < 0) return false
+    const a = t.surface.actions[i]
+    setSurfHit({ turn: n, i }); setTimeout(() => setSurfHit(h => (h && h.turn === n && h.i === i ? null : h)), 220)
+    if (a.kind === 'ask') surfaceAsk(a); else surfaceOpen(t.surface, a)
+    return true
+  }
+  const surfaceKeyRef = useRef(surfaceKey); surfaceKeyRef.current = surfaceKey
+  useEffect(() => {
+    const k = (e) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = e.target, tag = el && el.tagName
+      if (el && (el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return
+      if (surfaceKeyRef.current(e.key)) e.preventDefault()
+    }
+    document.addEventListener('keydown', k)
+    return () => document.removeEventListener('keydown', k)
+  }, [])
 
   const slimHero = !paneMode && !hidden.hero && !heroShow && turns.length > 2
   // A card waits: open its conversation, or the board beside the chat for a thread still starting.
@@ -3467,7 +3506,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS + ' ' + SURFACE_CSS }} />
       {/* as raw html: a '>' in the css text is escaped by the server and not by the client, a hydration mismatch (BOARD-4) */}
       <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
@@ -3626,7 +3665,14 @@ function CC() {
               {health.session ? ' The previous thread continues.' : ''}
             </p>
           )}
-          {turns.map((t, i) => (t.who === 'note' ? (
+          {turns.map((t, i) => (t.who === 'surface' ? (
+            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '6px 0' : '10px 0' }}>
+              <div style={{ width: '100%', maxWidth: paneMode ? '100%' : '560px' }}>
+                <SurfaceCard s={t.surface} keys={i === turns.length - 1} hit={surfHit && surfHit.turn === i ? surfHit.i : -1}
+                  onOpen={(a) => surfaceOpen(t.surface, a)} onAsk={surfaceAsk} />
+              </div>
+            </div>
+          ) : t.who === 'note' ? (
             <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '3px 0' : '4px 0' }}>
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>

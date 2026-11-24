@@ -34,6 +34,8 @@ Endpoints (JSON):
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
+  GET  /cc/surfaces       the surfaces register {surfaces:[{name,system,say,hue,line,mark,count_to?,actions}],skipped} from
+                          <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
   POST /cc/threads/<id>/say {"message","from"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
@@ -534,6 +536,7 @@ import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_private  # noqa: E402   the private seat's lean engine (SEAT-3, 2026-11-23): Ollama direct, three read-only tools
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_surfaces  # noqa: E402   the surfaces register: a system's name -> its card (SURFACES-1, 2026-11-24)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
@@ -6085,6 +6088,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view())
+        elif route == "/surfaces":
+            # a system's card (SURFACES-1): read fresh each time (a few small files), so a register edit shows at once
+            _host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip().split(":")[0]
+            self._send(200, cc_surfaces.load(WORLD_DIR or None, host=os.environ.get("CC_CONSOLE_HOST", "") or _host))
         elif route == "/dashboard":
             self._send(200, _dashboard_view())
         elif route == "/listening":
