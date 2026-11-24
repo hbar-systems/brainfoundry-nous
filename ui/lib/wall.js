@@ -249,7 +249,7 @@ async function loadWall(f, storage) {
       if (d && (d.look || d.set !== undefined)) {
         const v = { look: d.look || null, set: Array.isArray(d.set) ? d.set : null }
         if (v.set) writeLocal(storage, v)
-        return { ...v, from: 'bridge' }
+        return { ...v, from: 'bridge', ...wallExtra(d) }
       }
     }
   } catch {}
@@ -344,9 +344,66 @@ function addGroups(rest) {
   return KINDS.map(k => ({ kind: k, label: label[k], items: (rest || []).filter(t => kindOf(t) === k) })).filter(g => g.items.length)
 }
 
+// ---- continue (WALL-4, 2026-11-24) ----
+// hbar: "fill it with what we are currently doing-- the systems that is + prompts to continue from what has been in
+// this thread, and maybe some faint ones that i HAVE BEEN working on in other threads ... i want a clear way to open
+// and start the system up again in this new manner".
+//
+//   promptsOf(tile)           up to five prompts to continue (the tile's `prompts`, from the card's "## Continue")
+//   waitsForMore(p)           a prompt ending in ":" waits for him to finish it; it is never sent as it stands
+//   promptPress(armed, p)     {text, send}: the first press puts the line in the box, a second press on the same
+//                             line sends it (never one that waits for more)
+//   ringOf(tiles, kept, faint)  the outer ring: the faint systems (dim names, no box; a press brings one in) and the
+//                             ones outside the orbit that run something; each {id, running, faint}
+//   wallExtra(d)              the faint list, the seed notice and the home setting from GET /cc/wall
+//   homeOnWall(path, wall)    the bare console address opens on the wall when the setting is on
+
+const PROMPTS_MAX = 5
+function promptsOf(t) {
+  const out = []
+  for (const p of (t && Array.isArray(t.prompts) ? t.prompts : [])) {
+    if (typeof p !== 'string') continue
+    const v = p.replace(/\s+/g, ' ').replace(/^\s+/, '').slice(0, 300)
+    if (v.trim() && !out.includes(v)) out.push(/:\s*$/.test(v) ? v.replace(/:\s*$/, ': ') : v.trim())
+    if (out.length >= PROMPTS_MAX) break
+  }
+  return out
+}
+const waitsForMore = (p) => /:\s*$/.test(String(p || ''))
+function promptPress(armed, p) {
+  const v = String(p || '')
+  if (!v.trim()) return { text: '', send: false }
+  if (armed === v && !waitsForMore(v)) return { text: v.trim(), send: true }
+  return { text: v, send: false }
+}
+
+function ringOf(tiles, kept, faint) {
+  const by = Object.fromEntries((tiles || []).filter(Boolean).map(t => [t.id, t]))
+  const inOrbit = new Set(kept || [])
+  const out = []
+  for (const id of faint || []) {
+    if (typeof id !== 'string' || id === CENTRE || inOrbit.has(id) || !by[id] || out.some(x => x.id === id)) continue
+    out.push({ id, running: cellState(by[id]).running, live: !!(by[id].said && by[id].said.live), faint: true })
+  }
+  for (const d of rimDots(tiles, kept)) if (!out.some(x => x.id === d.id)) out.push({ ...d, faint: false })
+  return out
+}
+
+function wallExtra(d) {
+  const fresh = d && d.fresh && Array.isArray(d.fresh.set) && typeof d.fresh.stamp === 'number' ? { set: d.fresh.set, stamp: d.fresh.stamp } : null
+  return { faint: d && Array.isArray(d.faint) ? d.faint.filter(x => typeof x === 'string') : [], fresh, home: !!(d && d.home === true) }
+}
+
+// the say-word: a message that is only "wall" (or "the wall", "open the wall") opens /wall, the brain is not asked
+const WALL_WORDS = ['wall', 'the wall', 'open the wall', 'open wall']
+const isWallWord = (text) => WALL_WORDS.includes(String(text == null ? '' : text).toLowerCase().replace(/\s+/g, ' ').trim().replace(/[.!]$/, '').trim())
+
+const homeOnWall = (path, wall) => String(path || '') === '/' && !!(wall && wall.home === true)
+
 const systemsUrl = (depth) => '/cc/systems' + (depth ? '?depth=' + encodeURIComponent(depth) : '')
 
 module.exports = {
+  PROMPTS_MAX, WALL_WORDS, isWallWord, promptsOf, waitsForMore, promptPress, ringOf, wallExtra, homeOnWall,
   KINDS, kindOf, openOf, minsText, jobLines, depthOf, jobsBySystem, addGroups, systemsUrl, treeSize,
   cellLine, cellState, sentOver, sendText, sendClip, Recorder, clipName,
   CENTRE, LOOKS, START_MAX, SET_MAX, LOCAL_KEY, pickLook, keptSet, addTo, removeFrom, rimDots, orbitPlace, rimPlace, loadWall, saveWall,

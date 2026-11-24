@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots, kindOf, openOf, addGroups } from '../lib/wall'
+import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, ringOf, kindOf, openOf, addGroups, promptsOf, promptPress, waitsForMore } from '../lib/wall'
 import WallDepth from './WallDepth'
 
 // The orbit (WALL-2, 2026-11-24): the wall's personal look. hbar, verbatim: "it should be a full black screen as
@@ -106,6 +106,25 @@ const CSS = `
 .wo-add button.lit{color:var(--oink)}.wo-add button.lit::after{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--olit);margin-left:6px;vertical-align:middle}
 .wo-add p{width:100%;text-align:center;margin:0 0 6px;font-size:11px;letter-spacing:.14em;color:var(--omute);text-transform:lowercase}
 .wo-empty{position:absolute;left:50%;top:calc(50% + 120px);transform:translateX(-50%);color:var(--omute);font-size:13px;text-align:center}
+.wo-bw{display:flex;flex-direction:column;align-items:center;gap:6px;position:relative}
+.wo-b:focus-within{z-index:4}
+.wo-pr{display:flex;flex-direction:column;align-items:stretch;gap:1px;width:250px;padding:5px;border-radius:14px;background:rgba(8,8,9,.96);
+  border:1px solid rgba(255,255,255,.06);animation:wo-up 160ms var(--ease)}
+.wo-cbox .wo-pr{width:340px}
+.wo-p{font-size:12.5px!important;line-height:1.35;color:var(--odim)!important;text-align:left!important;padding:6px 9px!important;border-radius:9px;
+  display:flex;gap:8px;align-items:baseline;overflow-wrap:anywhere;transition:color 160ms var(--ease),background-color 160ms var(--ease)}
+.wo-p:hover,.wo-p:focus-visible{color:var(--oink)!important;background:rgba(255,255,255,.04)}
+.wo-p.more::after{content:'…';color:var(--omute)}
+.wo-p.armed{color:var(--oink)!important;background:rgba(255,255,255,.05)}
+.wo-p .go{margin-left:auto;flex:none;font-size:10px;letter-spacing:.14em;color:var(--olit)}
+.wo-f{opacity:.34;font-size:12px;letter-spacing:.03em;padding:6px 8px;border-radius:999px}
+.wo-f.run{opacity:.55}
+.wo-f:hover,.wo-f:focus-visible{opacity:.95;color:var(--oink)}
+.wo-f:disabled{cursor:default}
+.wo-fresh{position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:7;display:flex;gap:14px;align-items:center;font-size:12px;color:var(--odim);
+  padding:6px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.07);background:rgba(10,10,11,.9);white-space:nowrap}
+.wo-fresh button{font-size:12px;color:var(--omute)}.wo-fresh button:hover{color:var(--oink)}.wo-fresh button.take{color:var(--olit)}
+@keyframes wo-up{from{opacity:0;transform:translateY(-3px)}}
 @keyframes wo-breath{50%{opacity:.45}}
 @keyframes wo-in{from{opacity:0;transform:translate(-50%,6px)}}
 @media(max-width:699px){
@@ -123,6 +142,9 @@ const CSS = `
   .wo-plus{position:static;transform:none;margin:22px auto 0}
   .wo-add{position:static;transform:none;width:100%;max-height:none;margin-top:14px;animation:none}
   .wo-empty{position:static;transform:none;margin:8px 0 0}
+  .wo-bw{align-items:stretch}.wo-pr,.wo-cbox .wo-pr{width:100%}
+  .wo-f{padding:9px 2px;border-radius:0}
+  .wo-fresh{position:static;transform:none;margin:0 auto 18px;white-space:normal;flex-wrap:wrap;justify-content:center}
 }
 @media(hover:none){.wo-box{opacity:.6}}
 @media(prefers-reduced-motion:reduce){.wo *{animation:none!important;transition:none!important}}
@@ -134,18 +156,51 @@ const ICON = {
 }
 const Svg = ({ k }) => <svg viewBox="0 0 16 16" aria-hidden="true">{ICON[k]}</svg>
 
-function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill }) {
+// The prompts to continue (WALL-4): quiet lines under a focused box, nothing at rest. A press puts the line in the
+// box; a second press on the same line sends it, unless it ends in ":" (it waits for him to finish it). Enter sends
+// whatever the box holds, as always.
+function Prompts({ list, armed, onPress }) {
+  if (!list.length) return null
+  return (
+    <div className="wo-pr" role="group" aria-label="prompts to continue">
+      {list.map(p => (
+        <button key={p} type="button" className={'wo-p' + (armed === p ? ' armed' : '') + (waitsForMore(p) ? ' more' : '')}
+          onMouseDown={e => e.preventDefault()} onClick={() => onPress(p)}
+          title={waitsForMore(p) ? 'puts it in the box; you finish it' : armed === p ? 'press again to send it' : 'puts it in the box; a second press sends it'}>
+          {p.trim()}{armed === p && !waitsForMore(p) ? <span className="go">send</span> : null}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill, prompts }) {
   const [text, setText] = useState('')
+  const [armed, setArmed] = useState(null)
+  const [inside, setInside] = useState(false)
   const inp = useRef(null)
-  // the tree's Talk puts its ask here (WALL-3); he finishes and sends it, nothing is sent for him
-  useEffect(() => { if (fill && fill.text) { setText(fill.text); if (inp.current) inp.current.focus() } }, [fill && fill.n])   // eslint-disable-line react-hooks/exhaustive-deps
+  const wrap = useRef(null)
+  // the tree's Talk and the layer's prompts put their ask here (WALL-3, WALL-4); he finishes and sends it
+  useEffect(() => { if (fill && fill.text) { setText(fill.text); setArmed(fill.text); if (inp.current) inp.current.focus() } }, [fill && fill.n])   // eslint-disable-line react-hooks/exhaustive-deps
   const recording = rec === 'rec'
   const busy = rec === 'busy'
+  const send = (v) => { onSend(sid, v); setText(''); setArmed(null) }
   const key = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && text.trim()) { e.preventDefault(); onSend(sid, text); setText('') }
+    if (e.key === 'Enter' && !e.shiftKey && text.trim()) { e.preventDefault(); send(text) }
   }
+  const press = (p) => {
+    const r = promptPress(armed && text === armed ? armed : null, p)
+    if (r.send) { send(r.text); return }
+    setText(r.text); setArmed(p)
+    const el = inp.current
+    if (el) { el.focus(); try { el.setSelectionRange(r.text.length, r.text.length) } catch {} }
+  }
+  const list = promptsOf({ prompts })
   const who = sid === CENTRE ? 'the brain' : sid
   return (
+    <div className={'wo-bw' + (inside ? ' in' : '')} ref={wrap}
+      onFocus={() => setInside(true)}
+      onBlur={e => { if (!wrap.current || !wrap.current.contains(e.relatedTarget)) setInside(false) }}>
     <div className={'wo-box' + (recording || text ? ' on' : '')}>
       <input ref={inp} className="wo-in" value={text} onChange={e => setText(e.target.value)} onKeyDown={key} autoFocus={autoFocus}
         placeholder={recording ? 'listening' : busy ? 'hearing it' : wide ? 'say it to the brain' : 'say'}
@@ -156,6 +211,8 @@ function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill }) {
         title={recording ? 'tap to stop and send, Esc drops it' : `speak to ${who}`}>
         <Svg k={recording ? 'stop' : 'mic'} />
       </button>
+    </div>
+    {inside && !recording && !busy ? <Prompts list={list} armed={armed && text === armed ? armed : null} onPress={press} /> : null}
     </div>
   )
 }
@@ -216,7 +273,7 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
       {inst ? <span className="wo-op">{kindOf(t) === 'site' ? 'a site · press to open' : 'an instrument · press to open'}</span> : (
         <>
           {speaks(ln) ? <Line ln={ln} /> : null}
-          <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} />
+          <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} prompts={t.prompts} />
         </>
       )}
     </section>
@@ -224,7 +281,7 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
 }
 
 export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready,
-  depth, onDepth, waits, onRoute }) {
+  depth, onDepth, waits, onRoute, faint, fresh, onFresh }) {
   const [adding, setAdding] = useState(false)
   const [centre, setCentre] = useState(false)
   const [fills, setFills] = useState({})       // sid -> {text, n}: the tree's Talk, put in that system's box
@@ -232,7 +289,7 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
   deepRef.current = depth
   const byId = Object.fromEntries((tiles || []).map(t => [t.id, t]))
   const kept = (set || []).filter(id => byId[id])
-  const dots = rimDots(tiles, kept)
+  const dots = ringOf(tiles, kept, faint)
   const rest = (tiles || []).filter(t => t.id !== CENTRE && !kept.includes(t.id))
   const world = byId[CENTRE] || { id: CENTRE }
   const wln = cellLine(world, sentOf(CENTRE))
@@ -274,6 +331,13 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
   return (
     <div className="wo" aria-label="the orbit: the systems you keep, around the brain">
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      {fresh ? (
+        <div className="wo-fresh" role="status" data-fresh="1">
+          <span>new set from the brain</span>
+          <button type="button" className="take" onClick={() => onFresh(true)} title={(fresh.set || []).map(short).join(', ')}>take it</button>
+          <button type="button" onClick={() => onFresh(false)} title="keep your own arrangement">keep mine</button>
+        </div>
+      ) : null}
       <div className="wo-ring" aria-hidden="true" />
       <div className={'wo-c' + (lit ? ' lit' : '')} style={{ '--glow': glow }}>
         <button className="wo-sym" onClick={() => setCentre(c => !c)} aria-expanded={centre}
@@ -287,7 +351,7 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
         {centre ? (
           <div className="wo-cbox">
             {speaks(wln) ? <Line ln={wln} /> : null}
-            <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus fill={fills[CENTRE]} />
+            <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus fill={fills[CENTRE]} prompts={world.prompts} />
             <button className="wo-th" onClick={() => onName(CENTRE)}>{side === CENTRE ? 'close the thread' : 'the whole thread'}</button>
           </div>
         ) : (speaks(wln) ? <div className="wo-cbox"><Line ln={wln} /></div> : null)}
@@ -304,10 +368,18 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
       {dots.map((d, i) => {
         const at = rimPlace(i, dots.length, kept.length)
         return (
+          d.faint ? (
+            <button key={d.id} className={'wo-d wo-f' + (d.running || d.live ? ' run' : '')} style={{ '--x': at.x + '%', '--y': at.y + '%' }} data-faint={d.id}
+              onClick={() => onAdd(d.id)} disabled={kept.length >= SET_MAX}
+              title={`${d.id}: worked on in other threads${d.running ? `, ${d.running} running now` : ''}; press to bring it into the orbit`}>
+              {d.running || d.live ? <span className="wo-lt" aria-hidden="true" /> : null}{short(d.id)}{d.running ? <span className="wo-n">{d.running}</span> : null}
+            </button>
+          ) : (
           <button key={d.id} className="wo-d" style={{ '--x': at.x + '%', '--y': at.y + '%' }} onClick={() => onName(d.id)}
             title={`${d.id} runs ${d.running || 'a turn'} outside the orbit: press to open its thread; + keeps it`}>
             <span className="wo-lt" aria-hidden="true" />{short(d.id)}{d.running ? <span className="wo-n">{d.running}</span> : null}
           </button>
+          )
         )
       })}
       {ready && !kept.length ? <p className="wo-empty">nothing kept in the orbit yet; + brings a system in</p> : null}

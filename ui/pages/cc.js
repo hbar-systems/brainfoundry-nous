@@ -29,6 +29,7 @@ import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
 import SurfaceCard, { SURFACE_CSS } from '../components/SurfaceCard'
 import { sayMatch, keyIndex } from '../lib/surfaces'
+import { isWallWord } from '../lib/wall'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
 import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont, cachedLook, cacheLook, childLook, knownThread, THREAD_KEY } from '../lib/skin'
 
@@ -3298,6 +3299,8 @@ function CC() {
     }
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    // "wall" alone (WALL-4): the day opens on the wall; the brain is not asked
+    if (typeof forced !== 'string' && files.length === 0 && !block && !paneMode && isWallWord(text)) { setDraft(''); window.location.href = '/wall'; return }
     // a system's say-word alone (SURFACES-1): its card in the thread, the brain is not asked
     if (typeof forced !== 'string' && files.length === 0 && !block) {
       const sf = sayMatch(text, surfacesRef.current)

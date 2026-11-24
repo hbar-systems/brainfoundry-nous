@@ -117,6 +117,9 @@ function homeButtons(layout, pages) {
   const out = []
   if (surfaceOn(layout, 'decisions') && pg.decisions) out.push({ id: 'decisions', label: 'decisions', route: pg.decisions })
   if (surfaceOn(layout, 'systems')) out.push({ id: 'systems', label: 'systems', route: '/systems' })
+  // WALL-4 (2026-11-24, hbar: "i want a clear way to open and start the system up again in this new manner"): the
+  // wall is the systems' other way of working, so it rides on the same pick
+  if (surfaceOn(layout, 'systems')) out.push({ id: 'wall', label: 'wall', route: '/wall' })
   if (surfaceOn(layout, 'talkthrough') && pg.tape) out.push({ id: 'talkthrough', label: 'talk through', route: pg.tape })
   if (surfaceOn(layout, 'phone') && pg.tape && !surfaceOn(layout, 'talkthrough')) out.push({ id: 'phone', label: 'tape', route: pg.tape })
   return out

@@ -216,6 +216,16 @@ WALL_SET_MAX = 16
 _WALL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
+def validate_wall_meta(obj) -> dict:
+    """WALL-4: {"at": number|None, "seen": number|None, "home": bool|None}; a missing or odd value is None."""
+    o = obj if isinstance(obj, dict) else {}
+    num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None  # noqa: E731
+    home = o.get("home")
+    taken = o.get("taken")
+    return {"at": num(o.get("at")), "seen": num(o.get("seen")), "home": home if isinstance(home, bool) else None,
+            "taken": taken[:200] if isinstance(taken, str) and taken else None}
+
+
 def validate_wall(obj) -> dict:
     """The wall's setting (WALL-2): look in WALL_LOOKS or None; set a list of distinct system ids (at most
     WALL_SET_MAX) or None. Which ids exist is the bridge's check (the registry), not this file's."""
@@ -515,6 +525,30 @@ class Store:
             cur = validate_wall(d.get("wall") or {}) if isinstance(d.get("wall"), dict) else {"look": None, "set": None}
             nxt = validate_wall({**cur, **{k: patch[k] for k in ("look", "set") if k in patch}})
             d["wall"] = nxt
+            if "set" in patch:
+                d["wall_meta"] = {**validate_wall_meta(d.get("wall_meta")), "at": round(time.time(), 3)}
+            self._write(d)
+        return nxt
+
+    # WALL-4 (2026-11-24): beside the wall's setting, its bookkeeping, so the setting itself keeps its two keys:
+    #   at    when the owner last saved his own set (epoch seconds), stamped by set_wall
+    #   seen  the stamp (mtime) of the world's seed he last answered ("take it" or "keep mine")
+    #   home  the console's home opens on the wall: True, False, or None (unset: the world's seed decides)
+    #   taken the seed's "take" word the bridge has already applied once (see cc-bridge.py _wall_view)
+    def wall_meta(self) -> dict:
+        try:
+            return validate_wall_meta(self._read().get("wall_meta"))
+        except LayoutError:
+            return validate_wall_meta(None)
+
+    def set_wall_meta(self, patch) -> dict:
+        if not isinstance(patch, dict) or not ({"seen", "home", "taken"} & set(patch)):
+            raise LayoutError("wall: give seen and/or home")
+        with self.lock:
+            d = self._read()
+            cur = validate_wall_meta(d.get("wall_meta"))
+            nxt = validate_wall_meta({**cur, **{k: patch[k] for k in ("seen", "home", "taken") if k in patch}})
+            d["wall_meta"] = nxt
             self._write(d)
         return nxt
 
