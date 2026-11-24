@@ -32,6 +32,8 @@ Endpoints (JSON):
   POST /cc/seat/private   {"on": true|false} -> {"ok","local"}: the person chooses the private brain (SEAT-3)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
+  GET  /cc/threads/style?brain=<id>  {"ok","style"}: one thread's look by id, archived or not, whatever the list shows (SKIN-4)
+  GET  /cc/skin  POST /cc/skin {"skin"?,"font"?}  the console default skin and font, one per box (SKIN-4, cc_skin.py)
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
@@ -532,6 +534,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
+import cc_skin  # noqa: E402   a thread's skin and the console default, on the box (SKIN-4)
 import cc_presses  # noqa: E402
 import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
@@ -699,6 +702,7 @@ def _report_to_parent(status: int, payload: dict, parent: str | None = None, lab
         child = payload.get("thread")
         if parent and child:
             REPORTS.link(child, parent, label)
+            _inherit_style(child, parent)
         state = cc_reports.state_of(error=status != 200 or bool(payload.get("error")), stopped=bool(payload.get("stopped")),
                                     card=payload.get("proposal"), reply=payload.get("reply") or "")
         card = REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
@@ -2482,34 +2486,37 @@ def _threads_order(items: list) -> list:
     return sorted(by_last, key=lambda x: not x.get("pinned"))
 
 
-_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl", "dusk", "ocean", "rose", "sage", "sand")
-_STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_STYLE_SKINS = cc_skin.SKINS
 # the thread's own font (SKIN-3, 2026-11-23): the [data-font] tokens of ui/lib/skin.js FONT_SHAPES
-_STYLE_FONTS = ("system", "inter", "lora", "crimson", "dm-mono", "jetbrains")
+_STYLE_FONTS = cc_skin.FONTS
+# the console default skin and font (SKIN-4): one per box, the page caches it in bf-theme / bf-font
+SKIN_DEFAULT_PATH = STATE_DIR / "skin.json"
 
 
 def _thread_style(raw) -> dict | None:
-    """The look of one thread (2026-10-13, the tool line): accent colour, tint strength, text
-    size, density, skin, font (SKIN-3), learning mode. Unknown keys and bad values are dropped, never stored;
-    an empty dict clears the look. None when the value is not a dict at all."""
-    if not isinstance(raw, dict):
-        return None
-    out = {}
-    if isinstance(raw.get("accent"), str) and _STYLE_HEX.match(raw["accent"]):
-        out["accent"] = raw["accent"].lower()
-    if isinstance(raw.get("tint"), (int, float)) and not isinstance(raw.get("tint"), bool):
-        out["tint"] = max(0, min(30, int(raw["tint"])))
-    if raw.get("text") in ("14px", "16px", "18px"):
-        out["text"] = raw["text"]
-    if raw.get("density") in ("compact", "comfortable"):
-        out["density"] = raw["density"]
-    if raw.get("skin") in _STYLE_SKINS:
-        out["skin"] = raw["skin"]
-    if raw.get("font") in _STYLE_FONTS:
-        out["font"] = raw["font"]
-    if raw.get("learn") is True:
-        out["learn"] = True
-    return out
+    """The look of one thread (2026-10-13, the tool line); the rules live in cc_skin.thread_style (SKIN-4)."""
+    return cc_skin.thread_style(raw)
+
+
+def _thread_style_of(brain: str) -> dict | None:
+    """One thread's look by id (SKIN-4): any thread the register knows, archived, side or past the list's 200,
+    whatever the list is filtered by. None when the thread is unknown."""
+    th = next((x for x in _threads_load() if x.get("brain") == brain), None)
+    return None if th is None else (cc_skin.thread_style(th.get("style")) or {})
+
+
+def _inherit_style(child: str, parent: str) -> None:
+    """A thread started from another thread is born in its parent's skin and font (SKIN-4), copied once: only a
+    child with no look of its own is written, the parent never."""
+    threads = _threads_load()
+    ch = next((x for x in threads if x.get("brain") == child), None)
+    pa = next((x for x in threads if x.get("brain") == parent), None)
+    if not ch or not pa or ch.get("style"):
+        return
+    st = cc_skin.child_style(pa.get("style"))
+    if st:
+        ch["style"] = st
+        _threads_save(threads)
 
 
 def _threads_update(brain: str, title=None, pinned=None, archived=None, style=None) -> dict | None:
@@ -6027,6 +6034,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _local_status())
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
+        elif route == "/threads/style":
+            # SKIN-4: one thread's look by id, never through the filtered list
+            st = _thread_style_of(str(self._query().get("brain") or "").strip()[:120])
+            if st is None:
+                self._send(404, {"ok": False, "error": "no such thread"})
+            else:
+                self._send(200, {"ok": True, "style": st})
+        elif route == "/skin":
+            # SKIN-4: the console default skin and font, one per box
+            self._send(200, {"ok": True, **cc_skin.load_default(SKIN_DEFAULT_PATH)})
         elif route == "/threads":
             _threads_sweep()
             a = self._query().get("archived")
@@ -6658,6 +6675,12 @@ class Handler(BaseHTTPRequestHandler):
                 _env_file_unset("CC_MODEL"); os.environ.pop("CC_MODEL", None)
             print(f"model set to {m or 'default'}", flush=True)
             self._send(200, {"ok": True, "model": m or None})
+            return
+        if route == "/skin":
+            if not cc_skin.default_skin(req):
+                self._send(400, {"ok": False, "error": "skin or font: one of the console's skins or fonts"})
+                return
+            self._send(200, {"ok": True, **cc_skin.save_default(SKIN_DEFAULT_PATH, req)})
             return
         if route == "/threads/update":
             want = str(req.get("brain", "")).strip()

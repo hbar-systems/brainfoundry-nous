@@ -137,6 +137,8 @@ FAKE = {
         # the quiet footer line on every page (INLINE-1, 2026-11-23); SKIN-3 found the fake lacked it
         "/cc/sides/count": {"ready": 0, "items": []},
         "/cc/sides/seen": {"ok": True},
+        "/cc/skin": {"ok": True},                      # SKIN-4: the console default skin, on the box
+        "/cc/threads/style": {"ok": True, "style": {}},  # SKIN-4: one thread's look by id
     },
     "term": {},
 }
