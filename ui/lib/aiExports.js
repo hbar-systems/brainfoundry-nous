@@ -17,8 +17,8 @@ export const AI_EXPORTS = [
   {
     key: 'claude', name: 'Claude', verified: true, url: 'https://claude.ai/settings/data-privacy-controls',
     steps: {
-      en: 'claude.ai: Settings > Privacy > Export data. The zip comes by email; drop it here as it came.',
-      ru: 'claude.ai: Настройки > Конфиденциальность (Privacy) > Экспорт данных. Архив придёт на почту, положите его сюда как есть.',
+      en: 'claude.ai: Settings > Privacy > Export data. The link in the email opens one zip or a list of downloads. Drop the conversations zip here (conversations-000.zip, every part if there are several); frames and the other zips hold no chats.',
+      ru: 'claude.ai: Настройки > Конфиденциальность (Privacy) > Экспорт данных. Ссылка в письме открывает один архив или список загрузок. Положите сюда архив conversations (conversations-000.zip, все части, если их несколько); в frames и других архивах разговоров нет.',
     },
   },
   {
