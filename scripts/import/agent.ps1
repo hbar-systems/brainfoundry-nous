@@ -22,7 +22,7 @@
 
 & {
 $ErrorActionPreference = 'Stop'
-$AgentVersion = 'agent-ps1/0.1.0'
+$AgentVersion = 'agent-ps1/0.2.0'
 $W = @{
 @@WORDS@@
 }
@@ -49,6 +49,9 @@ $base = if ($env:BRAIN_BASE) { $env:BRAIN_BASE } else { '@@BASE@@' }
 $base = $base.TrimEnd('/')
 $homeDir = if ($env:BRAIN_AGENT_HOME) { $env:BRAIN_AGENT_HOME } else { [Environment]::GetFolderPath('UserProfile') }
 $poll = if ($env:BRAIN_AGENT_POLL) { [double]$env:BRAIN_AGENT_POLL } else { 3 }
+# IMPORT-PACE-1: a busy brain answers "wait" (503); the file goes again after 2, 4, 8 ... 60 s, up to 8 times
+$tries = if ($env:BRAIN_AGENT_TRIES) { [int]$env:BRAIN_AGENT_TRIES } else { 8 }
+$retryWait = if ($env:BRAIN_AGENT_RETRY_WAIT) { [int]$env:BRAIN_AGENT_RETRY_WAIT } else { 600 }
 Remove-Item Env:BRAIN_TOKEN -ErrorAction SilentlyContinue
 
 if ($token -notmatch '^imp_[A-Za-z0-9_-]{32,64}$') { Say BADTOKEN; return }
@@ -276,42 +279,95 @@ try {
     Write-Host ''
     Say CHOSE $send.Count (Human $sendTotal)
     if ($miss) { Say IGNORED $miss }
-    $i = 0; $sent = 0; $refused = 0
-    foreach ($item in $send) {
-        $i++
-        $kind = $item[0]; $name = $item[1]; $path = $places[$name]
+    function ReasonOf([int]$code) {  # the brain's reasons (api/import_pace.py refusal_reason)
+        switch ($code) { 413 { 'too_big' } 415 { 'type' } 404 { 'gone' } { $_ -in 0, 429, 502, 503, 504 } { 'busy' } default { 'other' } }
+    }
+    function SendOne($kind, $name) {
+        $path = $places[$name]
         $keep = ''
         if ($kind -eq 'files' -and $Images.Contains(" $(Ext $name) ")) { $keep = 'file' }
-        $fi = New-Object System.IO.FileInfo $path
-        if (-not $fi.Exists -or (IsLink $fi)) {
-            $r = @{ code = 404; body = '{"detail":"not on this computer any more"}' }
-        } else {
-            $stream = $null
-            try {
-                $stream = [IO.File]::OpenRead($path)
-                $form = New-Object System.Net.Http.MultipartFormDataContent
-                $form.Add((New-Object System.Net.Http.StringContent $name), 'path')
-                $form.Add((New-Object System.Net.Http.StringContent $keep), 'keep')
-                $fc = New-Object System.Net.Http.StreamContent $stream
-                $fc.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue 'application/octet-stream'
-                $form.Add($fc, 'file', $fi.Name)
-                $r = Call 'POST' '/documents/import-laptop/file' $form
-            } catch {
-                $r = @{ code = 0; body = $_.Exception.Message }
-            } finally {
-                if ($stream) { $stream.Dispose() }
+        $try = 1; $pause = 2
+        while ($true) {
+            $fi = New-Object System.IO.FileInfo $path
+            if (-not $fi.Exists -or (IsLink $fi)) {
+                $r = @{ code = 404; body = '{"detail":"not on this computer any more"}' }
+            } else {
+                $stream = $null
+                try {
+                    $stream = [IO.File]::OpenRead($path)
+                    $form = New-Object System.Net.Http.MultipartFormDataContent
+                    $form.Add((New-Object System.Net.Http.StringContent $name), 'path')
+                    $form.Add((New-Object System.Net.Http.StringContent $keep), 'keep')
+                    $fc = New-Object System.Net.Http.StreamContent $stream
+                    $fc.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue 'application/octet-stream'
+                    $form.Add($fc, 'file', $fi.Name)
+                    $r = Call 'POST' '/documents/import-laptop/file' $form
+                } catch {
+                    $r = @{ code = 0; body = $_.Exception.Message }
+                } finally {
+                    if ($stream) { $stream.Dispose() }
+                }
             }
+            if ((ReasonOf $r.code) -ne 'busy' -or $r.code -eq 404 -or $try -ge $tries) { return $r }
+            Write-Host ($W.WAITBRAIN -f $pause)
+            Start-Sleep -Seconds $pause
+            $try++; $pause = [Math]::Min(60, $pause * 2)
         }
-        if ($r.code -eq 200) {
-            $sent++
-            $mark = if ($r.body -match '"where"') { $W.KEPT } else { $W.OK }
-        } else {
-            $refused++
-            $mark = $W.REFUSEDONE -f "$($r.code) $(Detail $r)"
-        }
-        Write-Host ("[{0}/{1}] {2}  {3}" -f $i, $send.Count, $name, $mark)
-        if ($r.code -eq 401) { Say STOPPED; break }
     }
+    $script:sent = 0; $script:refused = 0; $stop = $false
+    function SendList($list) {
+        $failed = New-Object System.Collections.ArrayList
+        $i = 0
+        foreach ($item in $list) {
+            $i++
+            $r = SendOne $item[0] $item[1]
+            if ($r.code -eq 200) {
+                $script:sent++
+                $mark = if ($r.body -match '"where"') { $W.KEPT } else { $W.OK }
+            } else {
+                $script:refused++
+                $mark = $W.REFUSEDONE -f "$($r.code) $(Detail $r)"
+                [void]$failed.Add(@($item[0], $item[1], [int]$r.code, (ReasonOf $r.code)))
+            }
+            Write-Host ("[{0}/{1}] {2}  {3}" -f $i, $list.Count, $item[1], $mark)
+            if ($r.code -eq 401) { Say STOPPED; $script:stopNow = $true; break }
+        }
+        return ,$failed
+    }
+    $script:stopNow = $false
+    $failed = SendList $send
+    # IMPORT-PACE-1: what did not come in, by reason; the list goes to the home; "send these again" (Enter
+    # here, or the button on the home) sends only those that can come (brain busy, other)
+    while (-not $script:stopNow -and $failed.Count -gt 0) {
+        Write-Host ''
+        $by = ($failed | Group-Object { $_[3] } | ForEach-Object { "$($W.('REASON_' + $_.Name)) $($_.Count)" }) -join ', '
+        Write-Host ($W.REFUSEDBY -f $by)
+        $lines_ = ($failed | ForEach-Object { "$($_[2])`t$($_[1])" }) -join "`n"
+        [void](Call 'POST' '/documents/import-laptop/refused' (New-Object System.Net.Http.StringContent $lines_))
+        $again = @($failed | Where-Object { $_[3] -eq 'busy' -or $_[3] -eq 'other' } | ForEach-Object { ,@($_[0], $_[1]) })
+        if ($again.Count -eq 0) { break }
+        Write-Host ($W.RETRYASK -f $again.Count)
+        $go = $false; $waited = 0
+        while ($waited -lt $retryWait) {
+            try { if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Enter') { $go = $true; break } } catch {}
+            Start-Sleep -Milliseconds ([int]($poll * 1000)); $waited += $poll
+            $r = Call 'GET' '/documents/import-laptop/check?form=lines' $null
+            if ($r.code -eq 200 -and (($r.body -split "`n")[0].Trim() -eq 'state retry')) { $go = $true; break }
+            if ($r.code -eq 401) { break }
+        }
+        if (-not $go) { break }
+        Write-Host ($W.RETRYING -f $again.Count)
+        $script:refused -= $again.Count
+        $keepRows = @($failed | Where-Object { $_[3] -ne 'busy' -and $_[3] -ne 'other' })
+        $failed = SendList $again
+        foreach ($k in $keepRows) { [void]$failed.Add($k) }
+        if (@($failed | Where-Object { $_[3] -eq 'busy' -or $_[3] -eq 'other' }).Count -eq 0) {
+            $lines_ = ($failed | ForEach-Object { "$($_[2])`t$($_[1])" }) -join "`n"
+            if ($lines_) { [void](Call 'POST' '/documents/import-laptop/refused' (New-Object System.Net.Http.StringContent $lines_)) }
+            break
+        }
+    }
+    $sent = $script:sent; $refused = $script:refused
     [void](Call 'POST' '/documents/import-laptop/finish' $null)
     $finished = $true
     Write-Host ''

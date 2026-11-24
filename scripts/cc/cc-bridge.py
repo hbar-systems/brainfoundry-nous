@@ -2264,9 +2264,15 @@ def _pending_live() -> int | None:
         return None
     if time.time() - _PENDING_CACHE["at"] < 20:
         return _PENDING_CACHE["n"]
-    d = _brain_api("GET", "/memory/proposals?status=PENDING&limit=200")
-    items = d if isinstance(d, list) else ((d or {}).get("proposals") or (d or {}).get("items") or []) if d is not None else None
-    n = len(items) if items is not None else None
+    # IMPORT-PACE-1: the brain's one true count (the card and its button read the same); the old page
+    # of 200 showed "200 wait" beside 1,825 in a member's sitting. An older api: that page, as before.
+    w = _brain_api("GET", "/documents/waiting")
+    if isinstance(w, dict) and isinstance(w.get("total"), int):
+        n = w["total"]
+    else:
+        d = _brain_api("GET", "/memory/proposals?status=PENDING&limit=100000")
+        items = d if isinstance(d, list) else ((d or {}).get("proposals") or (d or {}).get("items") or []) if d is not None else None
+        n = len([x for x in items if not isinstance(x, dict) or x.get("memory_type", "document_embedding") == "document_embedding"]) if items is not None else None
     _PENDING_CACHE.update({"at": time.time(), "n": n})
     return n
 

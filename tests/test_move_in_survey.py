@@ -147,7 +147,9 @@ def test_choose_caps_and_take(tmp_path):
     assert st.take(key) is None
     caps = {"max_files": 10, "max_bytes": 1000, "files": 0, "bytes": 0}
     t = st.choose(key, "proposed", caps)
-    assert t == {"groups": 2, "files": 2, "bytes": 110}
+    # IMPORT-PACE-1: the choice also carries the first pass's estimate (tests/test_import_pace.py)
+    assert {k: t[k] for k in ("groups", "files", "bytes")} == {"groups": 2, "files": 2, "bytes": 110}
+    assert t["estimate"]["first_files"] == 1
     take = st.take(key)
     assert sorted(take["paths"]) == [["Documents/x.md", "knowledge"], ["Music/a.wav", "files"]] and take["files"] == 2
     with pytest.raises(ValueError, match="over this run's caps"):

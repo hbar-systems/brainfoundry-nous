@@ -148,6 +148,11 @@ class TokenStore:
             arrived = rec.setdefault("arrived", [])
             arrived.append(dict(entry, at=int(time.time())))
             del arrived[:-ARRIVALS_KEPT]
+            # IMPORT-PACE-1: the exact counts beside the capped list (the card read the list: "479 wait,
+            # 21 kept" when 1,825 had arrived)
+            counts = rec.setdefault("counts", {})
+            k = entry.get("kind") or "knowledge"
+            counts[k] = counts.get(k, 0) + 1
             self._save(data)
 
     def latest(self) -> dict | None:
@@ -160,7 +165,7 @@ class TokenStore:
         now = time.time()
         return {"created": int(rec["created"]), "expires_at": int(rec["expires"]),
                 "open": not rec.get("closed") and now <= rec["expires"],
-                "files": rec["files"], "bytes": rec["bytes"], "arrived": rec.get("arrived", []),
+                "files": rec["files"], "bytes": rec["bytes"], "arrived": rec.get("arrived", []), "counts": rec.get("counts") or {},
                 "survey": bool(rec.get("survey")), "max_files": rec["max_files"], "max_bytes": rec["max_bytes"]}
 
     def latest_hash(self) -> str | None:

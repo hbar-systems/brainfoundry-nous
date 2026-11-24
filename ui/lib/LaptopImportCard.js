@@ -4,6 +4,7 @@
 // files in the member's in/<date>/import/. The token is shown once and lives only in this page.
 import { useState, useEffect, useRef } from "react";
 import { importWords } from "./importText";
+import { arrivedCounts } from "./moveInPlan";
 
 const API_BASE = "/api/bf";
 const SURFACE = "#161310";
@@ -45,7 +46,7 @@ export default function LaptopImportCard({ btn, onArrived, lang = "en" }) {
       const j = await r.json();
       setAudioTo(j.audio_to || "in");
       setRun(j.run || null);
-      const n = (j.run && j.run.arrived) ? j.run.arrived.filter((a) => a.kind === "knowledge").length : 0;
+      const n = arrivedCounts(j.run).docs;
       if (n > seen.current && onArrived) onArrived();
       seen.current = n;
     } catch (e) {
@@ -94,6 +95,9 @@ export default function LaptopImportCard({ btn, onArrived, lang = "en" }) {
   const arrived = (run && run.arrived) || [];
   const docs = arrived.filter((a) => a.kind === "knowledge");
   const music = arrived.filter((a) => a.kind === "audio");
+  // IMPORT-PACE-1: the exact counts of the run (the list above keeps only the newest 500)
+  const nDocs = arrivedCounts(run).docs;
+  const nMusic = arrivedCounts(run).audio;
   const tab = (key, label) => (
     <button type="button" onClick={() => { setOs(key); setCopied(false); }}
       style={{ background: "none", border: "none", padding: "4px 10px 4px 0", cursor: "pointer", fontSize: 13,
@@ -144,14 +148,14 @@ export default function LaptopImportCard({ btn, onArrived, lang = "en" }) {
       {arrived.length > 0 && (
         <div style={{ fontSize: 13, color: TEXT, marginTop: 14, lineHeight: 1.6 }}>
           <div style={{ color: run && run.open ? ACCENT : MUTED }}>
-            {run && run.open ? T.lapNow : T.lapLast}: {T.lapDocs(docs.length)}
-            {music.length ? T.lapMusic(music.length) : ""}.
+            {run && run.open ? T.lapNow : T.lapLast}: {T.lapDocs(nDocs)}
+            {nMusic ? T.lapMusic(nMusic) : ""}.
           </div>
           {docs.length > 0 && (
             <div style={{ marginTop: 6 }}>
               <div style={{ color: MUTED }}>{T.lapWaiting}</div>
               {docs.slice(-12).reverse().map((a) => <div key={a.proposal_id || a.path}>{a.path}</div>)}
-              {docs.length > 12 && <div style={{ color: MUTED }}>{T.lapMore(docs.length - 12)}</div>}
+              {nDocs > 12 && <div style={{ color: MUTED }}>{T.lapMore(nDocs - 12)}</div>}
             </div>
           )}
           {music.length > 0 && (
@@ -162,7 +166,7 @@ export default function LaptopImportCard({ btn, onArrived, lang = "en" }) {
                   : T.lapKept}
               </div>
               {music.slice(-12).reverse().map((a) => <div key={a.where || a.path} style={{ color: APPROVE }}>{a.where || a.path}</div>)}
-              {music.length > 12 && <div style={{ color: MUTED }}>{T.lapMore(music.length - 12)}</div>}
+              {nMusic > 12 && <div style={{ color: MUTED }}>{T.lapMore(nMusic - 12)}</div>}
             </div>
           )}
         </div>

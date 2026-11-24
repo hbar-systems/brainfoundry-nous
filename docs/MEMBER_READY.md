@@ -19,5 +19,8 @@ Check: `bash scripts/member-ready.sh <handle> <lang> [<start-page-sha12>]` on a 
 | 9 | move-in doors | /laptop/agent.sh answers and Caddy opens the import-laptop token paths for their console | without the Caddy lines the "Bring in this computer" line hits the login and fails |
 | 10 | AI history | the move-in carries Codex and Claude Code sessions | many members work in Codex or Claude Code; that history should come along |
 | 11 | used | the console has turns | the member has the link and the password and has opened it |
+| 12 | onboarding time | from the pasted line to the first real answer from their own material under 30 minutes on a 2-vCPU brain (IMPORT-PACE-1, 2026-11-24) | a member's move-in of 1,825 files ran over two days; the first pass (docs/IMPORT.md "Pace") makes the brain useful inside 15 minutes of reading and leaves the rest to the night |
+
+Item 12 is measured, not checked by member-ready.sh: `python3 scripts/import/onboarding_time.py --estimate` (the model at the measured rates: 21 minutes, GREEN) and `--brain <url> --key-file <file>` on a local brain or the rehearsal slot only (synthetic home, the real agent, a planted fact asked back). The live mode has not been run yet.
 
 Items only a person can judge, checked by a render, not by the script: the first screen at 390 and 1440 read as the member would; "what do you know about me" answered with real things; the list of what the operator said about them counted said against shown (kept by the operator, outside this repo).

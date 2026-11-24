@@ -23,6 +23,7 @@ import threading
 import time
 from pathlib import Path, PurePosixPath
 
+from api import import_pace as pace
 from api import laptop_import as li
 
 # A survey run carries larger caps than a folder-by-folder run (the whole computer in one sitting).
@@ -151,7 +152,7 @@ def plan(inv: dict, now: float | None = None) -> list:
         g = groups.get(key)
         if g is None:
             g = groups[key] = {"folder": key[0], "kind": kind, "files": 0, "bytes": 0, "types": {},
-                               "newest": 0, "oldest": mtime, "code": 0, "paths": []}
+                               "newest": 0, "oldest": mtime, "code": 0, "paths": [], "meta": {}}
         g["files"] += 1
         g["bytes"] += size
         g["types"][ext] = g["types"].get(ext, 0) + 1
@@ -159,6 +160,7 @@ def plan(inv: dict, now: float | None = None) -> list:
         g["oldest"] = min(g["oldest"], mtime)
         g["code"] += ext in CODE_EXT
         g["paths"].append(rel)
+        g["meta"][rel] = [size, mtime]
     out = []
     for (folder, kind), g in groups.items():
         top = folder.split("/")[0].lower()
@@ -180,7 +182,12 @@ def plan(inv: dict, now: float | None = None) -> list:
         types = sorted(g["types"].items(), key=lambda x: (-x[1], x[0]))[:6]
         out.append({"id": gid, "folder": folder, "kind": kind, "files": g["files"], "bytes": g["bytes"],
                     "types": [[e, n] for e, n in types], "newest": g["newest"], "oldest": g["oldest"],
-                    "proposal": proposal, "why": why, "paths": sorted(g["paths"])})
+                    "proposal": proposal, "why": why, "paths": sorted(g["paths"]),
+                    # IMPORT-PACE-1: the books in it (long PDF or DOCX), flagged at the choosing step
+                    "big": sum(1 for p in g["paths"] if kind == "knowledge" and pace.is_big(p, g["meta"][p][0])),
+                    "big_bytes": sum(g["meta"][p][0] for p in g["paths"] if kind == "knowledge" and pace.is_big(p, g["meta"][p][0])),
+                    "read_seconds": round(sum(pace.read_seconds(p, g["meta"][p][0]) for p in g["paths"]) if kind == "knowledge" else 0),
+                    "meta": g["meta"]})
     # unique ids (two folders that slug the same)
     seen = {}
     for g in out:
@@ -203,7 +210,7 @@ def public(groups: list) -> list:
     """The plan as the console sees it: no path lists, only the group, its numbers and a few names."""
     out = []
     for g in groups:
-        x = {k: v for k, v in g.items() if k != "paths"}
+        x = {k: v for k, v in g.items() if k not in ("paths", "meta")}
         x["sample"] = [p.split("/")[-1] for p in g["paths"][:3]]
         out.append(x)
     return out
@@ -245,9 +252,12 @@ class SurveyStore:
         except (FileNotFoundError, ValueError):
             return None
 
-    def choose(self, token_hash: str, ids, caps: dict) -> dict:
+    def choose(self, token_hash: str, ids, caps: dict, named=(), big_now: bool = False) -> dict:
         """The owner's yes: these group ids (or 'proposed' for every group not proposed to leave).
-        Refused (ValueError) when the choice is over the run's caps; the message says the numbers."""
+        Refused (ValueError) when the choice is over the run's caps; the message says the numbers.
+        IMPORT-PACE-1: the first pass is made here (api/import_pace.py first_pass): the files read first,
+        inside about 15 minutes of reading, and the order the helper sends them in. named: folders the
+        person named (first); big_now: the books come in the first pass too (else overnight)."""
         with self._lock:
             data = self.get(token_hash)
             if data is None:
@@ -264,8 +274,17 @@ class SurveyStore:
                                  f"{left_files} files, {left_bytes} bytes left")
             data["chosen"] = ids
             data["chosen_at"] = int(time.time())
+            rows = []
+            for g in data["groups"]:
+                if g["id"] in set(ids):
+                    meta = g.get("meta") or {}
+                    rows += [(p, *(meta.get(p) or [0, 0]), g["kind"]) for p in g["paths"]]
+            first, order, est = pace.first_pass(rows, named=named, big_now=big_now)
+            data["first"] = sorted(first)
+            data["order"] = order
+            data["estimate"] = dict(est, big_now=bool(big_now))
             self._write(self._file(token_hash), data)
-            return t
+            return dict(t, estimate=data["estimate"])
 
     def take(self, token_hash: str) -> dict | None:
         """For the helper: the chosen paths ([path, kind]) and their totals, or None while the owner has not chosen."""
@@ -273,11 +292,54 @@ class SurveyStore:
         if not data or data.get("chosen") is None:
             return None
         ids = set(data["chosen"])
-        out = []
+        kind = {}
         for g in data["groups"]:
             if g["id"] in ids:
-                out += [[p, g["kind"]] for p in g["paths"]]
-        return {**totals(data["groups"], ids), "paths": out}
+                for p in g["paths"]:
+                    kind[p] = g["kind"]
+        # the first pass first (IMPORT-PACE-1), then what is kept as files, then the rest, smallest first
+        order = [p for p in (data.get("order") or []) if p in kind]
+        seen = set(order)
+        order += sorted(p for p in kind if p not in seen)
+        return {**totals(data["groups"], ids), "paths": [[p, kind[p]] for p in order]}
+
+    def refused(self, token_hash: str, rows: list) -> dict:
+        """The files this run's helper could not bring, by reason ({path, reason, code}); for the home's
+        list and its one "send these again". Only paths the run listed are kept."""
+        with self._lock:
+            data = self.get(token_hash)
+            if data is None:
+                raise LookupError("no survey for this run yet")
+            known = {p for g in data["groups"] for p in g["paths"]}
+            keep = []
+            for r in rows[:20000]:
+                if isinstance(r, dict) and r.get("path") in known:
+                    keep.append({"path": r["path"], "reason": pace.refusal_reason(r.get("code"), ""),
+                                 "code": int(r.get("code") or 0) if str(r.get("code") or "0").isdigit() else 0})
+            data["refused"] = keep
+            data["retry"] = False
+            self._write(self._file(token_hash), data)
+            return pace.tally_refused(keep)
+
+    def ask_retry(self, token_hash: str) -> int:
+        """The owner's "send these again": the helper, still waiting, sends only the retryable refused."""
+        with self._lock:
+            data = self.get(token_hash)
+            if data is None:
+                raise LookupError("no survey for this run yet")
+            n = sum(1 for r in data.get("refused") or [] if r["reason"] in pace.RETRYABLE)
+            data["retry"] = bool(n)
+            self._write(self._file(token_hash), data)
+            return n
+
+    def retry_take(self, token_hash: str) -> list | None:
+        """For the helper after its run: the retryable refused paths once the owner asked, else None."""
+        data = self.get(token_hash)
+        if not data or not data.get("retry"):
+            return None
+        kind = {p: g["kind"] for g in data["groups"] for p in g["paths"]}
+        return [[r["path"], kind.get(r["path"], "knowledge")] for r in data.get("refused") or []
+                if r["reason"] in pace.RETRYABLE]
 
     def _prune(self, now: float) -> None:
         for p in self.dir.glob("*.json"):
