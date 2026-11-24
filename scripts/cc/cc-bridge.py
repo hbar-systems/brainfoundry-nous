@@ -46,6 +46,8 @@ Endpoints (JSON):
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
   GET  /cc/tape/file?path=<p>  /cc/tape/stat?path=<p>   a file in the tape folder only (byte ranges honoured)
   POST /cc/tape/write {path,text,mtime?}   the /tape page's own files only: bits.json, replies, inbox markers, a take's slice list
+  GET  /cc/booth          {ok, dir, takes:[{file,path,name,day,made,seconds,rate,channels,bits,sha256,over}]}: the /sing booth's takes (SING-FREE-1, cc_booth.py)
+  GET  /cc/booth/file?path=<p>  a take's wav   POST /cc/booth/take  body = wav, X-Booth-Meta {name?,over?}   POST /cc/booth/name {file,name}
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
@@ -541,6 +543,7 @@ import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
+import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -666,6 +669,9 @@ BIG_UPLOADS = cc_extras.BigUploads(IN_DIR)
 # the name a sign-off on the page records (default "owner").
 TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "memos"),
                     signer=os.environ.get("CC_TAPE_SIGNER", "").strip() or "owner")
+# The booth (SING-FREE-1, 2026-11-24, scripts/cc/cc_booth.py): /sing records the microphone and keeps one WAV per take
+# here, one folder per day, named afterwards; CC_BOOTH_DIR overrides <out>/studio/booth.
+BOOTH = cc_booth.Booth(os.environ.get("CC_BOOTH_DIR", "").strip() or str(OUT_DIR / "studio" / "booth"))
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
 LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
@@ -6184,6 +6190,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if d.get("ok") else 404, d)
         elif route == "/tape/file":
             TAPE.serve(self, self._query().get("path"))
+        elif route == "/booth":
+            self._send(200, BOOTH.state())
+        elif route == "/booth/file":
+            BOOTH.serve(self, self._query().get("path"))
         elif route == "/actions":
             self._send(200, _actions())
         elif route == "/agents":
@@ -6412,6 +6422,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/listening/read":
             self._send(*LISTENING.start())
             return
+        if route == "/booth/name":
+            body = self._json(limit=2000) or {}
+            self._send(*BOOTH.rename(body.get("file"), body.get("name")))
+            return
         if route == "/tape/write":
             # the /tape page's own files only (cc_tape.WRITABLE): rulings, replies, markers, a take's slice list
             body = self._json(limit=cc_tape.WRITE_MAX + 4096)
@@ -6466,6 +6480,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:   # noqa: BLE001  an answer, not a dead thread
                 code, d = 500, {"ok": False, "error": f"could not take the piece: {type(e).__name__}"}
             self._send(code, d)
+            return
+        if route == "/booth/take":
+            # one sung take, the WAV as the body (SING-FREE-1): kept as sent, never rewritten
+            self._send(*BOOTH.save(self))
             return
         if route == "/upload":
             try:
@@ -6784,7 +6802,8 @@ class Handler(BaseHTTPRequestHandler):
             if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
                 self._send(403, {"ok": False, "error": "not the reasoner or the console"})
                 return
-            body = self._json(limit=4000) or {}
+            # the body was read once above (req); reading it again blocked every caller until it gave up (SING-FREE-1)
+            body = req if isinstance(req, dict) else {}
             self._send(*_send_file(str(body.get("path") or ""), str(body.get("caption") or "")))
             return
         if route == "/ask-peer":
