@@ -72,6 +72,20 @@ function JobsLight({ jobs, size = 8, fontSize = '10px' }) {
   )
 }
 
+// PANES-FIX-1 (2026-11-24): one /cc/health per page. /systems opens five chat frames at once and each asked the
+// bridge itself (5.8 s for one, 3 to 4 s each with five). The frames on one page share one request held by the
+// same-origin host window (made with the host's fetch, so a closed pane cannot strand the others), kept 5 s.
+function sharedHealth(fresh) {
+  let host = window
+  try { if (window.parent !== window && window.parent.location.origin === window.location.origin) host = window.parent } catch {}
+  const url = fresh === true ? '/cc/health?fresh=1' : '/cc/health'
+  const c = host.__ccHealth
+  if (fresh !== true && c && Date.now() - c.at < 5000) return c.p
+  const p = host.fetch(url, { cache: 'no-store' }).then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+  host.__ccHealth = { at: Date.now(), p }
+  p.catch(() => { if (host.__ccHealth && host.__ccHealth.p === p) host.__ccHealth = null })
+  return p
+}
 function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '') }
 function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
 // The panel above the composer (hbar 2026-10-24): fixed asks, so the organizer thread needs no typing for the three daily questions.
@@ -1887,6 +1901,7 @@ function CC() {
   const chooseRef = useRef(null)
   const switchRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
+  const [opened, setOpened] = useState(false)    // the first health answer has set the thread (PANES-FIX-1)
   const activity = useActivity()                // the activity lights (2026-10-25): /cc/activity every 5 s while visible
   const lightOf = (brain) => (activity && activity.threads && activity.threads[brain]) || null
   const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
@@ -1980,6 +1995,7 @@ function CC() {
   // (localStorage cc.draft.<thread>, cleared when the box empties on send). A brand new conversation's
   // draft moves with it when the bridge names the thread.
   const draftKeyRef = useRef(null)
+  const earlyTypedRef = useRef(false)
   const draftCurRef = useRef(null)
   useEffect(() => {
     const key = draftKey(cur)
@@ -1990,6 +2006,8 @@ function CC() {
     let stored = ''
     try { stored = localStorage.getItem(key) || '' } catch {}
     if (wasSending && key !== DRAFT_NEW && !stored) { setDraft(d => { try { if (d) localStorage.setItem(key, d); localStorage.removeItem(DRAFT_NEW) } catch {} return d }); return }
+    // PANES-FIX-1: words typed into a pane while it was still opening stay, after the thread's kept draft
+    if (earlyTypedRef.current) { earlyTypedRef.current = false; setDraft(d => (d && d !== stored ? (stored ? stored + '\n' + d : d) : stored)); return }
     setDraft(stored)
   }, [cur])
   useEffect(() => {
@@ -2207,11 +2225,15 @@ function CC() {
   }, [health && health.cards_waiting])
   const loadUsage = () => fetch('/cc/usage', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setUsage(d) }).catch(() => {})
   // fresh: the bridge reads both sign-ins again instead of its 20 s caches (a sign-in panel closed, recheck pressed; 2026-11-08)
+  // a pane keeps what it knew when one check fails and asks again in 3 s (PANES-FIX-1): a failed call is not a "no"
+  const healthRetry = useRef(null)
   const loadHealth = (fresh) =>
-    fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+    sharedHealth(fresh)
       .then(setHealth)
-      .catch(() => setHealth(false))
+      .catch(() => {
+        if (!paneModeRef.current) { setHealth(false); return }
+        if (!healthRetry.current) healthRetry.current = setTimeout(() => { healthRetry.current = null; loadHealth() }, 3000)
+      })
   // the sign-in screen's own look (step 3): a fresh check, kept stable for its timer
   const recheckSignIn = useCallback(() => { loadHealth(true) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const loadPending = () =>
@@ -2395,10 +2417,9 @@ function CC() {
         window.history.replaceState(window.history.state, '', u.href)
       }
     } catch {}
-    fetch('/cc/health', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+    const firstHealth = () => sharedHealth()
       .then(h => {
-        setHealth(h)
+        setHealth(h); setOpened(true)
         // the bare console opens a NEW thread (hbar 2026-11-04); an old one opens from threads or ?thread=<id>
         if (pin === 'new' || (!pin && !paneModeRef.current)) { freshRef.current = true }
         else if (pin) {
@@ -2410,7 +2431,8 @@ function CC() {
           if ((h.runs || []).some(r => r.thread === h.brain_session_id)) attach(h.brain_session_id)
         }
       })
-      .catch(() => setHealth(false))
+      .catch(() => { if (paneModeRef.current) setTimeout(firstHealth, 3000); else setHealth(false) })
+    firstHealth()
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
     // ?ask= prefills; from the brain's own desk pages (same origin, /cc/files/raw/: the court, the board)
     // it is sent on arrival, so one press there acts (hbar 2026-11-12 "i got sent back"). Any other
@@ -2815,6 +2837,18 @@ function CC() {
 
   // Any signed-in reasoner opens the chat: Claude, Codex (ChatGPT) or a configured local model (2026-11-07).
   const loggedIn = claudeIn || codexIn || localIn
+  // PANES-FIX-1: a pane's box is open while the first check is out; what is sent meanwhile is held and goes
+  // the moment the check says a reasoner is in. "connect a reasoner first" only after the check really said no.
+  const healthKnown = !!(health && typeof health === 'object')
+  const checking = !!paneMode && !healthKnown
+  const canType = loggedIn || checking
+  const [held, setHeld] = useState(null)
+  useEffect(() => {
+    if (!held || !healthKnown || !opened) return   // opened: the pane's thread is set, so it goes to the right thread
+    const q = held; setHeld(null)
+    if (loggedIn && sendRef.current) sendRef.current(q)
+    else setDraft(d => (d ? q + '\n' + d : q))   // the check said no: the words go back into the box, never lost
+  }, [held, healthKnown, loggedIn, opened])  // eslint-disable-line react-hooks/exhaustive-deps
   const firstOn = showFirstRun(signinOrder, quietHome) && !paneMode && turns.length === 0
   const firstStep = firstOn ? currentStep(signinOrder, loggedIn) : null
   // the start that waited for the sign-in runs once a reasoner is in (MEMBERS-14)
@@ -3187,6 +3221,13 @@ function CC() {
     if (thoughts && typeof forced !== 'string' && !text.startsWith('/')) text = ('just thoughts: ' + text).trim()
     const block = typeof forced === 'string' ? '' : notesBlock()
     if (!text && files.length === 0 && !block) return
+    if (paneMode && !(health && typeof health === 'object')) {
+      let h = text
+      if (block) { h = (h ? h + '\n\n' : '') + block; setNotes([]) }
+      if (!h) return
+      setHeld(x => (x ? x + '\n\n' + h : h)); if (typeof forced !== 'string') setDraft('')
+      return
+    }
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
     // before any sign-in: the start waits for it instead of failing (MEMBERS-14 2026-11-23)
@@ -3748,9 +3789,9 @@ function CC() {
         )}
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
-          <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
-            placeholder={thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : W.ask}
-            disabled={!loggedIn}
+          <textarea ref={boxRef} value={draft} onChange={e => { if (checking && !curRef.current) earlyTypedRef.current = true; setDraft(e.target.value) }} onKeyDown={onKey} rows={paneMode ? 1 : 2}
+            placeholder={checking && !listening ? (health === false ? 'your brain has not answered yet; type, it sends when it does' : 'opening; type now, it sends when your brain answers') : thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? (healthKnown ? 'connect a reasoner first' : health === false ? 'the bridge is not answering yet' : 'opening') : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : W.ask}
+            disabled={!canType}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             onPaste={e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); setFiles(f => [...f, ...fs]) } }}
             style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
@@ -3771,7 +3812,7 @@ function CC() {
             {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">{W.stop}</Btn>}
             {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
             {/* the "fix the brain" button left the send row 2026-10-23 (hbar: never used); /fix does the same */}
-            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : W.send}</Btn>
+            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !canType}>{active && draft.trim() ? 'queue' : W.send}</Btn>
           </div>
           )}
           {paneMode && !hidden.inputbuttons && (
@@ -3780,11 +3821,16 @@ function CC() {
               <IconBtn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} on={listening}
                 title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}><IcoMic /></IconBtn>
               {active && <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>}
-              <IconBtn primary onClick={active && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}
+              <IconBtn primary onClick={active && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !canType}
                 title={active ? 'Stop the answer and send this now (Cmd/Ctrl+Enter); Enter alone queues it' : 'Send (Enter)'}><IcoSend /></IconBtn>
             </div>
           )}
         </div>
+        {held && (
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0' }} title={held}>
+            held: sends when your brain answers · <a onClick={() => { setDraft(d => (d ? held + '\n' + d : held)); setHeld(null) }} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>take it back</a>
+          </p>
+        )}
         {(listening || transcribing || talkNote) && (
           <p style={{ ...mono, color: listening ? C.gold : C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>
             {listening ? (
