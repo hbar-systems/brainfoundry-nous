@@ -211,7 +211,7 @@ def test_pasted_text_becomes_one_pending_document(env):
     assert r.status_code == 200, r.text
     j = r.json()
     assert set(j) == {"conversations", "projects", "selected", "proposed", "flagged", "sources", "newest",
-                      "manifest_id", "stopped"}
+                      "manifest_id", "stopped", "ignored"}
     assert (j["conversations"], j["proposed"], j["sources"]) == (1, 1, ["gemini"])
     name = env.proposals[0]["refs"]["filename"]
     assert name.startswith("gemini_") and "_qubits_" in name

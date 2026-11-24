@@ -40,7 +40,21 @@ def tool():
 
 
 class NotAnExport(ValueError):
-    """The upload is not an export this can read; the message is for the person."""
+    """The upload is not an export this can read; the message is for the person.
+    code and info let the card answer in its own words: 'claude_manifest' (info: the
+    conversations downloads, claude.ai links only) or 'claude_part' (info: the category)."""
+
+    def __init__(self, message, code="", info=None):
+        super().__init__(message)
+        self.code = code
+        self.info = info or {}
+
+
+def manifest_message(info):
+    """The next step for a dropped Claude manifest, in English (the card has its own words)."""
+    names = ", ".join(c["filename"] for c in info.get("conversations") or [] if c.get("filename")) or "conversations-000.zip"
+    return ("This is Claude's list of downloads, not the chats themselves. Open the link named "
+            f"conversations ({names}), then drop that zip here.")
 
 
 _SUFFIXES = (".zip", ".jsonl", ".json", ".csv", ".html", ".htm", ".txt", ".md", ".markdown", ".pdf")
@@ -73,12 +87,25 @@ def run(fileobj, runtime_dir, propose, newest=NEWEST_DEFAULT, filename=None, tex
                 src = src.rename(work / "export.zip")
             else:
                 src = src.rename(work / ("upload" + (_suffix(filename) or ".txt")))
+        notes = {}
+        part = ic.part_category(filename)
+
+        def not_chats_part():
+            return NotAnExport(f"This is the {part} part of Claude's export ({filename}); it holds no chats. "
+                               "Drop the conversations zip (conversations-000.zip) here instead.",
+                               code="claude_part", info={"category": part, "filename": (filename or "")[:120]})
         try:
-            rows = ic.prep(src, work / "prep", title=title or None)
+            rows = ic.prep(src, work / "prep", title=title or None, notes=notes)
+        except ic.ClaudeManifest as e:
+            raise NotAnExport(manifest_message(e.info), code="claude_manifest", info=e.info)
         except (ValueError, KeyError, zipfile.BadZipFile) as e:
+            if part and part != "conversations":
+                raise not_chats_part()
             raise NotAnExport("The file could not be read as an AI chat export or as text "
                               f"({e.__class__.__name__}). Upload the export as it came, or paste the conversation.")
         convs = [r for r in rows if r["kind"] == "conversation"]
+        if not convs and part and part != "conversations":
+            raise not_chats_part()
         if not convs:
             raise NotAnExport("No conversations found. Upload the export as it came (the zip, or the "
                               "conversations file inside it), or paste the conversation as text.")
@@ -104,6 +131,7 @@ def run(fileobj, runtime_dir, propose, newest=NEWEST_DEFAULT, filename=None, tex
             "newest": newest,
             "manifest_id": ic.manifest_id(selected),
             "stopped": stopped,
+            "ignored": sorted(set(notes.get("ignored") or [])),
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)

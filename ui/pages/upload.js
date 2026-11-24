@@ -4,6 +4,7 @@ import LaptopImportCard from "../lib/LaptopImportCard";
 import useConsoleLang from "../lib/useConsoleLang";
 import { importWords } from "../lib/importText";
 import { continueHref } from "../lib/moveInPlan";
+import { importAnswer, moveWords } from "../lib/moveIn";
 import { AI_EXPORTS } from "../lib/aiExports";
 // An imported conversation (scripts/import_chats.py names; api/chat_continue.py CHAT_DOC): "Continue here".
 const CHAT_CONT = /^(claude-code|codex|chatgpt|claude|gemini|deepseek|grok|copilot|perplexity|lechat|pasted)_/;
@@ -324,7 +325,8 @@ export default function Upload() {
       const r = await fetch(`${API_BASE}/documents/import-chats`, { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setChatImport({ error: (j.error && j.error.message) || j.detail || IW.chatFailed(r.status) });
+        const a = importAnswer(j, { ...moveWords(lang), failed: IW.chatFailed(r.status) });
+        setChatImport({ error: a.message, links: a.links, noLink: a.noLink });
         return;
       }
       setChatImport({ result: j });
@@ -746,6 +748,12 @@ export default function Upload() {
         {chatImport && chatImport.error && (
           <div style={{ fontSize: 13, color: REJECT, marginTop: 10, lineHeight: 1.6 }}>{chatImport.error}</div>
         )}
+        {chatImport && chatImport.links && chatImport.links.length > 0 && (
+          <div style={{ fontSize: 13, marginTop: 6, lineHeight: 1.8 }}>
+            {chatImport.links.map(l => <div key={l.url}><a href={l.url} target="_blank" rel="noreferrer noopener" style={{ color: TEXT, textDecoration: "underline", overflowWrap: "anywhere" }}>{l.name}</a></div>)}
+          </div>
+        )}
+        {chatImport && chatImport.noLink && <div style={{ fontSize: 13, color: TEXT, marginTop: 6, lineHeight: 1.6 }}>{chatImport.noLink}</div>}
       </section>
 
       <div id="laptop"><LaptopImportCard btn={BTN} onArrived={loadPending} lang={lang} /></div>

@@ -97,6 +97,10 @@ const EN = {
   foldedMore: 'bring more',
   failed: 'That did not work.',
   notZip: 'This card takes the .zip from the export email.',
+  claudeManifest: (names) => `This is Claude's list of downloads, not the chats themselves. Open the link named conversations (${names || 'conversations-000.zip'}), then drop that zip here.`,
+  claudeManifestNoLink: 'The link is in the email from Claude, next to that name.',
+  claudePart: (cat, file) => `This is the ${cat} part of Claude's export${file ? ` (${file})` : ''}; it holds no chats. Drop the conversations zip (conversations-000.zip) here instead.`,
+  chatIgnored: (names) => `Left aside, no chats in them: ${names}.`,
 }
 
 const RU = {
@@ -130,9 +134,39 @@ const RU = {
   foldedMore: 'добавить ещё',
   failed: 'Не получилось.',
   notZip: 'Сюда нужен архив .zip из письма с экспортом.',
+  claudeManifest: (names) => `Это список загрузок Claude, а не сами разговоры. Откройте ссылку с названием conversations (${names || 'conversations-000.zip'}) и положите сюда этот архив.`,
+  claudeManifestNoLink: 'Ссылка есть в письме от Claude, рядом с этим названием.',
+  claudePart: (cat, file) => `Это часть ${cat} экспорта Claude${file ? ` (${file})` : ''}; разговоров в ней нет. Положите сюда архив conversations (conversations-000.zip).`,
+  chatIgnored: (names) => `Отложено, разговоров в них нет: ${names}.`,
+}
+
+// What the import route answered when it could not take the file (IMPORT-MANIFEST-1, 2026-11-24):
+// { message, code, links: [{ name, url }] }. code 'claude_manifest' carries the conversations downloads
+// of Claude's export manifest; only https links on claude.ai are kept, the card never fetches them.
+function importAnswer(j, W) {
+  const env = (j && j.error) || {}
+  const imp = (env.details && env.details.import) || null
+  const message = env.message || (j && typeof j.detail === 'string' ? j.detail : '') || W.failed
+  if (!imp || !imp.code) return { message, code: '', links: [] }
+  if (imp.code === 'claude_manifest') {
+    const parts = Array.isArray(imp.conversations) ? imp.conversations : []
+    const names = parts.map(c => String(c.filename || '')).filter(Boolean).join(', ')
+    const links = parts.map(c => ({ name: String(c.filename || 'conversations'), url: claudeLink(c.url) })).filter(l => l.url)
+    return { message: W.claudeManifest(names), code: imp.code, links, noLink: parts.length > 0 && links.length < parts.length ? W.claudeManifestNoLink : '' }
+  }
+  if (imp.code === 'claude_part') return { message: W.claudePart(String(imp.category || ''), String(imp.filename || '')), code: imp.code, links: [] }
+  return { message, code: imp.code, links: [] }
+}
+
+function claudeLink(url) {
+  try {
+    const u = new URL(String(url || ''))
+    const h = u.hostname.toLowerCase()
+    return u.protocol === 'https:' && (h === 'claude.ai' || h.endsWith('.claude.ai')) ? u.href : ''
+  } catch { return '' }
 }
 
 const MOVE_TEXT = { en: EN, ru: RU }
 const moveWords = (lang) => MOVE_TEXT[lang === 'ru' ? 'ru' : 'en']
 
-module.exports = { CHAT_DOC, HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, ruPlural, MOVE_TEXT, moveWords }
+module.exports = { CHAT_DOC, HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, ruPlural, MOVE_TEXT, moveWords, importAnswer, claudeLink }

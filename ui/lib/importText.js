@@ -21,6 +21,7 @@ const EN = {
     l += `${j.proposed} wait below under Pending memory proposals; nothing is remembered until you approve.`
     if (j.flagged) l += ` ${j.flagged} look like they carry instructions to a model; read those before approving.`
     if (j.stopped) l += ` Stopped early: ${j.stopped}`
+    if (j.ignored && j.ignored.length) l += ` Left aside, no chats in them: ${j.ignored.join(', ')}.`
     return l
   },
   lapTitle: 'Bring files from your computer',
@@ -61,6 +62,7 @@ const RU = {
     l += `${j.proposed} ${ruPlural(j.proposed, ['ждёт', 'ждут', 'ждут'])} ниже вашего «да»; без него ничего не запоминается.`
     if (j.flagged) l += ` ${j.flagged} похожи на указания для модели; прочитайте их перед «да».`
     if (j.stopped) l += ` Остановлено раньше: ${j.stopped}`
+    if (j.ignored && j.ignored.length) l += ` Отложено, разговоров в них нет: ${j.ignored.join(', ')}.`
     return l
   },
   lapTitle: 'Перенести файлы с компьютера',
