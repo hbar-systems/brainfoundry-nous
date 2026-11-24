@@ -36,10 +36,10 @@ Endpoints (JSON):
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
-  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
+  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail,said}],built} (BOARD-3/4, cc_systems.py; said: WALL-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
-  POST /cc/threads/<id>/say {"message","from"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
+  POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
@@ -5582,7 +5582,42 @@ def _systems_view() -> dict:
     static = cc_systems.load_static(SYSTEMS_BOARD, _SYSTEMS_STATIC)
     d = cc_systems.board(WORLD_DIR or None, JOBS.list(SYSTEMS_JOBS_SEEN), SYSTEMS_THREADS.threads(), static=static)
     d["world"] = bool(WORLD_DIR)
+    rows = {x.get("brain"): x for x in _threads_load() if isinstance(x, dict) and x.get("brain")}
+    for t in d["tiles"]:
+        t["said"] = _systems_said(t["thread"], rows.get(t["thread"])) if t.get("thread") else None
     return d
+
+
+# WALL-1 (2026-11-24, hbar: "all I need is that text box to speak into it I don't even have to see the entire
+# text"): each tile carries `said`, the ONE line its standing thread said last: {text, live, waiting, at}. While
+# a turn runs it is the run's own last line (its tool step or the sentence being written, live: true); else the
+# last sentence of the thread's last answer, from the brain's record, asked again only when the thread's "last"
+# stamp moves (a failed ask is tried again after SYSTEMS_SAID_RETRY seconds), so the three-second poll stays light.
+SYSTEMS_SAID_RETRY = 30
+_SYSTEMS_SAID: dict = {}    # thread -> (stamp, text, ok, asked_at)
+
+
+def _systems_said(tid: str, row: dict | None) -> dict:
+    r = _run_for_thread(tid)
+    if r is not None:
+        v = _run_view(r)
+        return {"text": str(v.get("last") or ""), "live": True, "waiting": bool(v.get("waiting")), "at": None}
+    stamp = str((row or {}).get("last") or "")
+    got = _SYSTEMS_SAID.get(tid)
+    if got and got[0] == stamp and (got[2] or time.time() - got[3] < SYSTEMS_SAID_RETRY):
+        return {"text": got[1], "live": False, "waiting": False, "at": stamp or None}
+    text, ok = "", False
+    d = _brain_api("GET", f"/sessions/{tid}/messages")
+    if isinstance(d, dict):
+        ok = True
+        for m in reversed(d.get("messages") or []):
+            if isinstance(m, dict) and m.get("role") == "assistant" and str(m.get("content") or "").strip():
+                text = cc_extras.last_sentence(str(m["content"])[-6000:], 200)
+                break
+    if len(_SYSTEMS_SAID) > 400:
+        _SYSTEMS_SAID.clear()
+    _SYSTEMS_SAID[tid] = (stamp, text, ok, time.time())
+    return {"text": text, "live": False, "waiting": False, "at": stamp or None}
 
 
 # The steer door (BOARD-5, 2026-11-23, hbar 2026-11-22: "We are getting way too disorganised we have so many threads
@@ -5626,7 +5661,9 @@ def _steer(tid: str, body: dict, start=None) -> tuple[int, dict]:
         if _run_for_thread(tid) or QUEUES.get(tid):
             return 409, {"ok": False, "busy": True, "system": sid,
                          "error": f"{sid} is answering now; send it again when it is free"}
-    text = f"(Steered from the central chat.) {message}"
+    # the wall (WALL-1) says it was typed or spoken on the wall, so the thread is not told a central chat steered it
+    text = (f"(Said on the wall.) {message}" if str((body or {}).get("via") or "") == "wall"
+            else f"(Steered from the central chat.) {message}")
     if _duplicate(tid, text):
         return 202, {"ok": True, "duplicate": True, "system": sid, "thread": tid}
     if frm:
