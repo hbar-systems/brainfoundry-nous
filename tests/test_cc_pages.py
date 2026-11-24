@@ -195,3 +195,22 @@ def test_film_page_listed_and_serves_its_draft(monkeypatch, tmp_path):
     assert h.code == 200 and h.sent["Content-Type"].startswith("application/json")
     h = _H(); pg.serve(h, "film", "v1.html")
     assert "sandbox" in h.sent["Content-Security-Policy"]
+
+
+def test_rooms_page_serves_each_track_room_on_the_console_origin(monkeypatch, tmp_path):
+    """ART-1 (2026-11-23): /cc/page/rooms/<track>/ is a track's room (K2, Control) on the console origin, so it reads
+    the console skin; its media stays under /cc/files/raw (two folders down is never served from here)."""
+    monkeypatch.delenv("CC_PAGES", raising=False)
+    out = tmp_path / "out"
+    (out / "rooms" / "k2" / "media").mkdir(parents=True)
+    (out / "rooms" / "index.html").write_text("<p>rooms</p>")
+    (out / "rooms" / "skins.css").write_text(":root{}")
+    (out / "rooms" / "k2" / "index.html").write_text("<script>localStorage.getItem('bf-theme')</script>")
+    (out / "rooms" / "k2" / "media" / "a.mp3").write_bytes(b"x")
+    pg = X.Pages(out)
+    assert "rooms" in pg.names
+    assert pg.path("rooms", "k2/") == (out / "rooms" / "k2" / "index.html").resolve()
+    assert pg.path("rooms", "skins.css") == (out / "rooms" / "skins.css").resolve()
+    assert pg.path("rooms", "k2/media/a.mp3") is None and pg.path("rooms", "k2/media") is None
+    h = _H(); pg.serve(h, "rooms", "k2/")
+    assert h.code == 200 and "sandbox" not in h.sent.get("Content-Security-Policy", "")

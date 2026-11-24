@@ -71,6 +71,9 @@ const CSS = `
 .sg-p{padding:6px 12px;border-radius:999px;background:var(--bg);font-size:14px;color:var(--dim)}
 .sg-p.on{background:var(--rust);color:var(--bg)}
 .sg-note{color:var(--muted);font-size:14px;margin:8px 12px}
+.sg-hp{font:500 clamp(22px,2.6vw,30px)/1.2 Lora,Georgia,serif;color:var(--ink);margin:0 0 14px}
+.sg-words{background:var(--surface);border-radius:18px;padding:20px 22px;margin:0 0 18px;max-height:70vh;overflow:auto}
+.sg-words pre{white-space:pre-wrap;margin:0;font:400 clamp(22px,2.4vw,30px)/1.5 Lora,Georgia,serif;color:var(--ink)}
 @media(max-width:899px){
   .sg-wrap{display:block;padding:16px 12px 60px}
   .sg-booth{position:static;margin-bottom:18px;padding:18px 14px}
@@ -81,6 +84,10 @@ const CSS = `
 
 const raw = (p) => `/cc/files/raw?path=${encodeURIComponent(p)}`
 const stampNow = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
+// ART-1 (2026-11-23), hbar on VOCAL-1: the headphones line "clear and remembered on page", before every count-in.
+const HEADPHONES = 'Wired headphones on: only your voice is recorded'
+// A loop may name its lyrics (a .md in the world, "lyrics" in the catalogue): shown large beside the booth.
+const words = (t) => String(t || '').replace(/^---[\s\S]*?\n---\n/, '').split('\n').filter(l => !/^\s*(#|<!--)/.test(l)).join('\n').trim()
 const fmtMs = (ms) => `${ms > 0 ? '+' : ''}${Math.round(ms)} ms`
 
 // ---- signal helpers (pure)
@@ -163,6 +170,7 @@ export default function Sing() {
   const [nudge, setNudge] = useState(0)
   const [lat, setLat] = useState(null)          // { ms, source }
   const [kept, setKept] = useState(null)        // { files, placed }
+  const [lyrics, setLyrics] = useState('')      // the chosen loop's words, when it names a lyrics file
   const A = useRef({})                          // the audio state: ctx, buffers, stream, recorder, times
 
   useEffect(() => {
@@ -172,7 +180,7 @@ export default function Sing() {
       setCat({ ...d, path })
       let first = null
       try { first = new URLSearchParams(window.location.search).get('loop') || localStorage.getItem(LS_LOOP) } catch {}
-      const l = (d.loops || []).find(x => x.id === first)
+      const l = (d.loops || []).find(x => x.id === first) || ((d.loops || []).length === 1 ? d.loops[0] : null)
       if (l) { setLoop(l); setOpen(l.track) }
     }).catch(() => setCat(false))
     try { const v = JSON.parse(localStorage.getItem(LS_LAT) || 'null'); if (v && typeof v.ms === 'number') setLat(v) } catch {}
@@ -181,6 +189,14 @@ export default function Sing() {
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const say = (text, err = false) => setMsg({ text, err })
+
+  useEffect(() => {
+    setLyrics('')
+    if (!loop || !loop.lyrics) return
+    let live = true
+    fetch(raw(loop.lyrics)).then(r => (r.ok ? r.text() : '')).then(t => { if (live) setLyrics(words(t)) }).catch(() => {})
+    return () => { live = false }
+  }, [loop])
 
   function teardown() {
     const a = A.current
@@ -432,6 +448,7 @@ export default function Sing() {
       <div className="sg">
         <div className="sg-wrap">
           <section className="sg-booth" aria-label="booth">
+            <p className="sg-hp">{HEADPHONES}</p>
             <div className="sg-loop">{loop ? `${loop.track.replace(/_/g, ' ')}` : 'Pick a loop'}</div>
             <div className="sg-meta">{loop ? `${loop.label} · ${loop.bars} bars · ${loop.key} · ${loop.bpm} BPM` : 'then press the ring and sing'}</div>
             <button type="button" className={'sg-ring' + (busy ? ' rec' : '')} disabled={!loop || phase === 'loading' || phase === 'sending'}
@@ -467,6 +484,7 @@ export default function Sing() {
           <main className="sg-list" aria-label="loops">
             <h1 className="sg-h">Sing</h1>
             <p className="sg-sub">A loop, one bar of clicks, your voice. Stop when you are done.</p>
+            {lyrics ? <div className="sg-words" aria-label="lyrics"><pre>{lyrics}</pre></div> : null}
             {cat === false ? <p className="sg-note">The loop list did not load. It is a file in the world (ops/sing/loops.json); the box writes it with sing_place.py catalog.</p> : null}
             {cat === null ? <p className="sg-note">loading the loops</p> : null}
             {tracks.map(t => (
