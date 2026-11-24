@@ -204,7 +204,8 @@ function keptSet(setting, tiles, local) {
   }
   if (setting && Array.isArray(setting.set)) return clean(setting.set)
   if (local && Array.isArray(local.set)) return clean(local.set)
-  const used = (tiles || []).filter(t => t && t.id !== CENTRE && (t.thread || cellState(t).running))
+  // the orbit starts with areas of work only (WALL-3): an instrument or a site joins only when he adds it
+  const used = (tiles || []).filter(t => t && t.id !== CENTRE && kindOf(t) === 'work' && (t.thread || cellState(t).running))
   used.sort((a, b) => cellState(b).running - cellState(a).running)
   return clean(used.map(t => t.id)).slice(0, START_MAX)
 }
@@ -269,7 +270,84 @@ async function saveWall(f, storage, patch) {
   }
 }
 
+// ---- depth (WALL-3, 2026-11-24) ----
+// hbar: "will i be satisfied with the number of information i can get about the system ... how many jobs are going,
+// maybe agentic substructure of each job or info, clear summary, this thing too [the thread tree] ... everything is
+// hidden, and i can gain access some easy way WITHOUT interfering with production and the main focus". And: "dont
+// confuse systems with surfaces". A registry row is work (you talk into it), an instrument (you open it) or a site.
+//
+//   kindOf(tile)              'work' | 'instrument' | 'site' (a tile without the field is work)
+//   openOf(tile)              where an instrument or site opens: {route} beside on the console, else {href} outside
+//   depthOf(tile)             the four one-line rows of the quiet layer: summary, jobs, tree, the thread
+//   jobLines(job)             one job's substructure, as short lines: brief, steps, files made, who pushes it
+//   jobsBySystem(tiles)       the centre's layer: every running job, grouped by system, busiest first
+//   addGroups(tiles)          the "+" list: systems first, then instruments, then sites
+//   systemsUrl(depth)         the poll's address; with a layer open it asks for that system's tree too
+
+const KINDS = ['work', 'instrument', 'site']
+const kindOf = (t) => (t && KINDS.includes(t.kind) ? t.kind : 'work')
+
+function openOf(t) {
+  if (!t) return null
+  if (typeof t.open === 'string' && /^\/(?!\/)/.test(t.open)) return { route: t.open }
+  if (typeof t.domain === 'string' && /^[a-z0-9.-]+$/.test(t.domain) && t.domain.includes('.')) return { href: 'https://' + t.domain }
+  return null
+}
+
+function minsText(m) {
+  if (typeof m !== 'number' || !(m >= 0)) return ''
+  if (m < 1) return 'just started'
+  if (m < 60) return m + ' min'
+  return Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0')
+}
+
+function jobLines(j) {
+  if (!j) return []
+  const out = []
+  if (j.brief) out.push({ k: 'brief', text: j.brief })
+  for (const s of (j.steps || []).slice(-3)) out.push({ k: 'step', text: squash(s) })
+  if ((j.made || []).length) out.push({ k: 'made', text: j.made.slice(0, 4).join(', ') })
+  if (j.waiter && j.waiter.title) out.push({ k: 'pushed by', text: j.waiter.title })
+  return out
+}
+
+function treeSize(raw) {
+  let n = 0
+  const walk = (l) => { for (const x of Array.isArray(l) ? l : []) { if (x && typeof x === 'object') { n += 1; walk(x.children) } } }
+  walk(raw && raw.nodes)
+  return n
+}
+
+function depthOf(t) {
+  const jobs = (t && Array.isArray(t.jobs)) ? t.jobs : []
+  const sum = t && t.summary && t.summary.text ? squash(t.summary.text) : ''
+  const said = t && t.said && t.said.text ? squash(t.said.text) : ''
+  const n = jobs.length
+  const first = n ? jobs[0] : null
+  const treeN = (t && typeof t.tree_n === 'number') ? t.tree_n : treeSize(t && t.tree)
+  return {
+    summary: { text: sum || said || (t && t.description ? squash(t.description) : '') || 'nothing said here yet', from: sum ? (t.summary.from || 'thread') : said ? 'thread' : 'registry' },
+    jobs: { n, line: n ? (n + ' running' + (first ? ': ' + squash(first.title).replace(/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\s*/, '') + (first.mins != null ? ', ' + minsText(first.mins) : '') : '')) : 'nothing running', list: jobs },
+    tree: { n: treeN, line: treeN ? treeN + ' branches' : 'no tree yet' },
+    thread: !!(t && t.thread),
+  }
+}
+
+function jobsBySystem(tiles) {
+  return (tiles || []).filter(t => t && Array.isArray(t.jobs) && t.jobs.length)
+    .map(t => ({ id: t.id, jobs: t.jobs }))
+    .sort((a, b) => b.jobs.length - a.jobs.length || String(a.id).localeCompare(String(b.id)))
+}
+
+function addGroups(rest) {
+  const label = { work: 'systems', instrument: 'instruments', site: 'sites' }
+  return KINDS.map(k => ({ kind: k, label: label[k], items: (rest || []).filter(t => kindOf(t) === k) })).filter(g => g.items.length)
+}
+
+const systemsUrl = (depth) => '/cc/systems' + (depth ? '?depth=' + encodeURIComponent(depth) : '')
+
 module.exports = {
+  KINDS, kindOf, openOf, minsText, jobLines, depthOf, jobsBySystem, addGroups, systemsUrl, treeSize,
   cellLine, cellState, sentOver, sendText, sendClip, Recorder, clipName,
   CENTRE, LOOKS, START_MAX, SET_MAX, LOCAL_KEY, pickLook, keptSet, addTo, removeFrom, rimDots, orbitPlace, rimPlace, loadWall, saveWall,
 }

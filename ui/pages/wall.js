@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall } from '../lib/wall'
+import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl } from '../lib/wall'
 import WallOrbit from '../components/WallOrbit'
 
 // The wall (WALL-1, 2026-11-24). hbar, verbatim: "I still want to apply this view board where I see in parallel on
@@ -28,6 +28,12 @@ import WallOrbit from '../components/WallOrbit'
 // one: true black, the kept systems around the brain's own symbol. Which one a brain opens on, and which systems
 // its orbit keeps, is that brain's setting (GET/POST /cc/wall, localStorage when the bridge is away); ?look= wins
 // for one visit. The look switch sits quietly in a corner.
+//
+// Depth (WALL-3, 2026-11-24, hbar: "everything is hidden, and i can gain access some easy way WITHOUT interfering
+// with production and the main focus"): in the orbit, a press on a system's light or count opens its quiet layer in
+// place (ui/components/WallDepth.js); the centre's count opens the brain's. While a layer is open the same
+// three-second poll asks for that system's tree too (GET /cc/systems?depth=<id>); nothing is sent, nothing
+// navigates, nothing that streams is touched. Pages the layer opens (tasks, court, an instrument) open beside.
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -166,6 +172,22 @@ function Side({ sid, thread, err, onClose }) {
   )
 }
 
+// A page beside (WALL-3): the tasks, the court, an instrument; on the console origin only (openOf / the layer).
+function Beside({ route, onClose }) {
+  const safe = /^\/(?!\/)/.test(route.route) ? route.route : null
+  return (
+    <aside className="wl-side" aria-label={`${route.title || 'page'} beside`}>
+      <div className="wl-sh">
+        <span className="wl-nm">{route.title || route.route}</span>
+        {safe ? <a href={safe} title="open it in full">full</a> : null}
+        <button className="wl-x" onClick={onClose} aria-label={`close ${route.title || 'the page'}`} title="close">close</button>
+      </div>
+      {safe ? <iframe key={safe} className="wl-fr" title={route.title || 'page'} src={safe} allow="microphone; clipboard-write" />
+        : <div className="wl-hold">only a page of this console opens here</div>}
+    </aside>
+  )
+}
+
 export default function Wall() {
   const [data, setData] = useState(null)       // null: not read yet; false: the bridge did not answer
   const [sent, setSent] = useState({})         // sid -> {text, state, at, before}
@@ -176,11 +198,14 @@ export default function Wall() {
   const [look, setLookState] = useState(null)  // 'grid' | 'orbit'
   const [set, setSet] = useState(null)         // the orbit's kept systems (null: not chosen yet, start from use)
   const [note, setNote] = useState(null)       // {text, undo}
+  const [depth, setDepthState] = useState(null) // the system whose depth layer is open (WALL-3), CENTRE for the brain
+  const [route, setRoute] = useState(null)      // {route, title}: a page open beside (tasks, court, an instrument)
+  const depthRef = useRef(null)
   const timer = useRef(null)
   const noteTimer = useRef(null)
   const recorder = useRef(null)
 
-  const load = () => fetch('/cc/systems', { cache: 'no-store' })
+  const load = () => fetch(systemsUrl(depthRef.current), { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
     .then(d => setData(d && Array.isArray(d.tiles) ? d : false))
     .catch(() => setData(d => (d ? d : false)))
@@ -200,7 +225,8 @@ export default function Wall() {
     const onKey = (e) => {
       if (e.key !== 'Escape') return
       if (recorder.current && recorder.current.busy) { recorder.current.drop(); setMic({ sid: null, state: null, secs: 0 }); return }
-      setSide(null)
+      if (depthRef.current) { depthRef.current = null; setDepthState(null); return }   // the layer first, the thread beside stays
+      setSide(null); setRoute(null)
     }
     document.addEventListener('keydown', onKey)
     return () => {
@@ -244,7 +270,14 @@ export default function Wall() {
     setMic({ sid: null, state: null, secs: 0 })
     done(sid, '', res)
   }
+  const onDepth = (sid) => {
+    depthRef.current = sid || null
+    setDepthState(sid || null)
+    if (sid) load()          // its tree at once, then with every poll; a read, never a send
+  }
+  const onRoute = (r) => { setSide(null); setRoute(r && r.route ? r : null) }
   const onName = async (sid) => {
+    setRoute(null)
     if (side === sid) { setSide(null); return }
     setSide(sid); setSideErr('')
     if (threadOf(sid)) return
@@ -272,6 +305,7 @@ export default function Wall() {
     const before = kept
     keep(removeFrom(kept, sid))
     if (side === sid) setSide(null)
+    if (depthRef.current === sid) onDepth(null)
     tell(`${sid.replace(/^hbar\./, '')} left the orbit`, () => { keep(before); setNote(null) })
   }
   const onLook = (k) => {
@@ -288,12 +322,12 @@ export default function Wall() {
     <>
       <Head><title>Wall</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
-      <div className={'wl' + (side ? ' with' : '') + (look === 'orbit' ? ' orbit' : '')}>
+      <div className={'wl' + (side || route ? ' with' : '') + (look === 'orbit' ? ' orbit' : '')}>
         {look === 'orbit' ? (
           <main className="wl-orb" aria-label="the orbit">
             <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
               sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
-              onAdd={onAdd} onLeave={onLeave} />
+              onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute} />
             {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
             <LookSwitch look={look} onLook={onLook} className="wl-lkf" />
             {note ? (
@@ -322,6 +356,7 @@ export default function Wall() {
         </main>
         ) : <main className="wl-main" aria-label="the wall" />}
         {side ? <Side sid={side} thread={threadOf(side)} err={sideErr} onClose={() => setSide(null)} /> : null}
+        {!side && route ? <Beside route={route} onClose={() => setRoute(null)} /> : null}
       </div>
     </>
   )

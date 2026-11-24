@@ -38,7 +38,8 @@ Endpoints (JSON):
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
-  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail,said}],built} (BOARD-3/4, cc_systems.py; said: WALL-1)
+  GET  /cc/systems        the systems board's tiles {tiles:[{id,kind,moving,lines,more,extra,thread,counts,detail,said,summary,jobs,tree_n}],built,waits}
+                          (BOARD-3/4, cc_systems.py; said: WALL-1; kind, summary, jobs, tree_n, waits: WALL-3); ?depth=<system> adds that tile's tree
   GET  /cc/surfaces       the surfaces register {surfaces:[{name,system,say,hue,line,mark,count_to?,actions}],skipped} from
                           <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
@@ -5589,7 +5590,8 @@ def _dashboard_view() -> dict:
     return cc_dashboard.view(WORLD_DIR or None, threads, JOBS.list(200))
 
 
-def _systems_view() -> dict:
+def _systems_view(depth: str | None = None) -> dict:
+    """GET /cc/systems[?depth=<system>]: the tiles; with depth, that one tile also carries its thread's last tree."""
     try:
         SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
     except OSError as e:
@@ -5602,7 +5604,100 @@ def _systems_view() -> dict:
     rows = {x.get("brain"): x for x in _threads_load() if isinstance(x, dict) and x.get("brain")}
     for t in d["tiles"]:
         t["said"] = _systems_said(t["thread"], rows.get(t["thread"])) if t.get("thread") else None
+    _systems_depth(d, depth)
     return d
+
+
+# The depth layer (WALL-3, 2026-11-24, hbar: "everything is hidden, and i can gain access some easy way WITHOUT
+# interfering with production and the main focus"). Each tile also carries, from what the poll already holds:
+#   summary  {text, from: "card" | "thread"}: one sentence of where the system stands, from its state card when the
+#            owner maps one (<world>/ops/wall/states.json, cc_systems.state_cards), else the first line of the
+#            standing thread's last answer (read in the same ask as `said`, so no second ask of the brain);
+#   jobs     the running jobs with minutes, brief, the waiter that will push it, and `steps`/`made` (the log's and
+#            the output file's last lines, the files it made so far), read at most every SYSTEMS_STEPS_TTL seconds;
+#   tree_n   how many branches the thread's last <tree> block has; `tree` itself only on ?depth=<that system>.
+# And the whole: waits {court, tasks_today}: open court items and tasks due today or before (asked of the brain at
+# most every SYSTEMS_TASKS_TTL seconds).
+SYSTEMS_STEPS_TTL = 15
+SYSTEMS_TASKS_TTL = 30
+_SYSTEMS_DEPTH: dict = {}   # thread -> {"first", "tree"} from the same read as _SYSTEMS_SAID
+_SYSTEMS_STEPS: dict = {}   # job id -> (asked_at, {"steps", "made"})
+_SYSTEMS_CARDS: dict = {}   # path -> (mtime, line)
+_SYSTEMS_TASKS: list = [0.0, None]
+_SYSTEMS_OPEN: list = [0.0, {}]   # system -> the console page its surface card opens first (cc_surfaces), 30 s
+
+
+def _systems_opens() -> dict:
+    now = time.time()
+    if now - _SYSTEMS_OPEN[0] < SYSTEMS_TASKS_TTL:
+        return _SYSTEMS_OPEN[1]
+    out = {}
+    try:
+        reg = cc_surfaces.load(WORLD_DIR or None, host=os.environ.get("CC_CONSOLE_HOST", ""))
+    except Exception:  # noqa: BLE001  (a register that does not read opens nothing)
+        reg = {}
+    for sf in reg.get("surfaces") or []:
+        page = next((a.get("open") for a in sf.get("actions") or [] if a.get("open") and a.get("kind") == "page"), None)
+        if page and sf.get("system") not in out:
+            out[sf["system"]] = page
+    _SYSTEMS_OPEN[0], _SYSTEMS_OPEN[1] = now, out
+    return out
+
+
+def _systems_card(rel: str) -> str:
+    p = Path(WORLD_DIR) / rel
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return ""
+    got = _SYSTEMS_CARDS.get(str(p))
+    if got and got[0] == mt:
+        return got[1]
+    try:
+        line = cc_systems.card_line(p.read_text(errors="replace")[:8000])
+    except OSError:
+        line = ""
+    _SYSTEMS_CARDS[str(p)] = (mt, line)
+    return line
+
+
+def _systems_tasks_today():
+    now = time.time()
+    if now - _SYSTEMS_TASKS[0] < SYSTEMS_TASKS_TTL:
+        return _SYSTEMS_TASKS[1]
+    d = _brain_api("GET", "/tasks")
+    n = cc_systems.due_today(d.get("tasks"), time.strftime("%Y-%m-%d", time.gmtime())) if isinstance(d, dict) else None
+    _SYSTEMS_TASKS[0], _SYSTEMS_TASKS[1] = now, n
+    return n
+
+
+def _systems_depth(d: dict, depth: str | None = None) -> None:
+    cards = cc_systems.state_cards(Path(WORLD_DIR)) if WORLD_DIR else {}
+    recs = {str(r.get("id") or ""): r for r in JOBS.list(SYSTEMS_JOBS_SEEN) if isinstance(r, dict)}
+    now = time.time()
+    live = set()
+    opens = _systems_opens()
+    for t in d["tiles"]:
+        t["open"] = opens.get(t["id"]) or None   # an instrument's own page: the wall opens it beside, never a thread
+        dep = _SYSTEMS_DEPTH.get(t.get("thread") or "") or {}
+        card = _systems_card(cards[t["id"]]) if t["id"] in cards else ""
+        first = dep.get("first") or ""
+        t["summary"] = {"text": card, "from": "card"} if card else ({"text": first, "from": "thread"} if first else None)
+        t["tree_n"] = cc_systems.tree_size(dep.get("tree"))
+        if depth and t["id"] == depth:
+            t["tree"] = dep.get("tree")
+        for j in t.get("jobs") or []:
+            live.add(j["id"])
+            got = _SYSTEMS_STEPS.get(j["id"])
+            if not got or now - got[0] >= SYSTEMS_STEPS_TTL:
+                r = recs.get(j["id"]) or {}
+                got = (now, cc_systems.job_steps(str(r.get("log") or ""), str(r.get("out_file") or ""), OUT_DIR,
+                                                 j.get("brief") or "", r.get("started")))
+                _SYSTEMS_STEPS[j["id"]] = got
+            j.update(got[1])
+    for k in [k for k in _SYSTEMS_STEPS if k not in live]:
+        _SYSTEMS_STEPS.pop(k, None)
+    d.setdefault("waits", {})["tasks_today"] = _systems_tasks_today()
 
 
 # The wall's setting (WALL-2, 2026-11-24, hbar: "dont START WITH ALL 44 ... if i need to add a system to the page i
@@ -5671,6 +5766,13 @@ def _systems_said(tid: str, row: dict | None) -> dict:
             if isinstance(m, dict) and m.get("role") == "assistant" and str(m.get("content") or "").strip():
                 text = cc_extras.last_sentence(str(m["content"])[-6000:], 200)
                 break
+        # WALL-3: the same read gives the depth layer the last answer's first line and the thread's last tree
+        last = next((m for m in reversed(d.get("messages") or []) if isinstance(m, dict) and m.get("role") == "assistant"
+                     and str(m.get("content") or "").strip()), None)
+        if len(_SYSTEMS_DEPTH) > 400:
+            _SYSTEMS_DEPTH.clear()
+        _SYSTEMS_DEPTH[tid] = {"first": cc_systems.first_line(cc_systems.TREE_RE.sub("", str((last or {}).get("content") or ""))[:6000]),
+                               "tree": cc_systems.last_tree(d.get("messages"))}
     if len(_SYSTEMS_SAID) > 400:
         _SYSTEMS_SAID.clear()
     _SYSTEMS_SAID[tid] = (stamp, text, ok, time.time())
@@ -6193,7 +6295,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/board":
             self._send(200, _board())
         elif route == "/systems":
-            self._send(200, _systems_view())
+            self._send(200, _systems_view(self._query().get("depth") or None))
         elif route == "/wall":
             self._send(200, _wall_view())
         elif route == "/surfaces":

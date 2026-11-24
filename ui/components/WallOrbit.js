@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots } from '../lib/wall'
+import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots, kindOf, openOf, addGroups } from '../lib/wall'
+import WallDepth from './WallDepth'
 
 // The orbit (WALL-2, 2026-11-24): the wall's personal look. hbar, verbatim: "it should be a full black screen as
 // space, feeling and only say 10 systems visible and spaced out and around , in center is hbar symbol which should
@@ -16,6 +17,11 @@ import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots } f
 // press and hold a name, or the "leave" mark while its thread is open. A system outside the ring that runs
 // something shows as a faint dot on the outer ring with its count, so nothing running is hidden.
 // Phone: the same set as a calm vertical list on black, the symbol on top.
+//
+// Depth (WALL-3, 2026-11-24): a press on a body's light or count opens its quiet layer in place (WallDepth); the
+// centre's count opens the brain's. Nothing else changes at rest. Systems and surfaces are told apart: a body whose
+// registry kind is "instrument" or "site" is opened, never talked into, so it has no box; its press opens its page
+// beside (or its own address outside). Work on an instrument is said to its parent system or to the centre.
 
 const HOLD_MS = 650
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -59,6 +65,15 @@ const CSS = `
 .wo-b.open .wo-nm{color:var(--olit)}
 .wo-b.hold .wo-nm{color:#e07a5f}
 .wo-n{font-size:12px;color:var(--olit);font-variant-numeric:tabular-nums}
+.wo-dp{display:inline-flex;align-items:center;padding:7px;margin:-7px -7px -7px -7px;border-radius:999px}
+.wo-dpn{padding:4px 6px!important;margin:-4px -6px!important;border-radius:999px}.wo-dpn:hover{color:var(--oink)!important}
+.wo-dp:hover .wo-lt{opacity:1;background:var(--odim)}.wo-b.lit .wo-dp:hover .wo-lt{background:var(--olit)}
+.wo-dp[aria-expanded=true] .wo-lt{box-shadow:0 0 0 3px rgba(255,255,255,.08)}
+.wo-cn{padding:4px 10px;border-radius:999px}button.wo-cn:hover{color:var(--oink)}
+.wo-b.inst .wo-nm{font-style:italic}
+.wo-op{font-size:11px;color:var(--omute);letter-spacing:.06em}
+.wo-add .g{width:100%;display:flex;flex-wrap:wrap;justify-content:center;gap:4px 18px;margin-top:6px}
+.wo-add .g p{margin:6px 0 2px}
 .wo-lv{font-size:11px;color:var(--omute);letter-spacing:.06em}.wo-lv:hover{color:#e07a5f}
 .wo-ln{font-size:12px;line-height:1.4;color:var(--odim);max-width:190px;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .wo-ln.live,.wo-ln.waits{color:var(--oink)}.wo-ln.sent{color:var(--olit)}.wo-ln.error{color:#e07a5f}
@@ -119,8 +134,11 @@ const ICON = {
 }
 const Svg = ({ k }) => <svg viewBox="0 0 16 16" aria-hidden="true">{ICON[k]}</svg>
 
-function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus }) {
+function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill }) {
   const [text, setText] = useState('')
+  const inp = useRef(null)
+  // the tree's Talk puts its ask here (WALL-3); he finishes and sends it, nothing is sent for him
+  useEffect(() => { if (fill && fill.text) { setText(fill.text); if (inp.current) inp.current.focus() } }, [fill && fill.n])   // eslint-disable-line react-hooks/exhaustive-deps
   const recording = rec === 'rec'
   const busy = rec === 'busy'
   const key = (e) => {
@@ -129,7 +147,7 @@ function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus }) {
   const who = sid === CENTRE ? 'the brain' : sid
   return (
     <div className={'wo-box' + (recording || text ? ' on' : '')}>
-      <input className="wo-in" value={text} onChange={e => setText(e.target.value)} onKeyDown={key} autoFocus={autoFocus}
+      <input ref={inp} className="wo-in" value={text} onChange={e => setText(e.target.value)} onKeyDown={key} autoFocus={autoFocus}
         placeholder={recording ? 'listening' : busy ? 'hearing it' : wide ? 'say it to the brain' : 'say'}
         aria-label={`say to ${who}`} disabled={busy} maxLength={8000} />
       {recording ? <span className="wo-t">{fmt(secs)}</span> : null}
@@ -155,8 +173,9 @@ function Line({ ln }) {
 // not repeated at rest.
 const speaks = (ln) => ['live', 'waits', 'sent', 'error', 'job'].includes(ln.kind) && !!ln.text
 
-function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave }) {
+function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, deep, onDepth, fill, onOpen }) {
   const st = cellState(t)
+  const inst = kindOf(t) !== 'work'
   const ln = cellLine(t, sent)
   const hold = useRef(null)
   const hold2 = useRef(null)
@@ -172,29 +191,45 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave }) 
     hold2.current = setTimeout(() => { held.current = true; setHolding(false); onLeave(t.id) }, HOLD_MS)
   }
   const up = () => { clearTimeout(hold.current); clearTimeout(hold2.current); setHolding(false) }
-  const click = () => { if (held.current) { held.current = false; return } onName(t.id) }
+  const click = () => { if (held.current) { held.current = false; return } if (inst) onOpen(t); else onName(t.id) }
   useEffect(() => () => { clearTimeout(hold.current); clearTimeout(hold2.current) }, [])
   return (
-    <section className={'wo-b' + (st.on ? ' lit' : '') + (open ? ' open' : '') + (holding ? ' hold' : '')} style={{ '--x': at.x + '%', '--y': at.y + '%' }}
+    <section className={'wo-b' + (st.on ? ' lit' : '') + (open ? ' open' : '') + (holding ? ' hold' : '') + (inst ? ' inst' : '')} style={{ '--x': at.x + '%', '--y': at.y + '%' }}
       aria-label={t.id}>
       <div className="wo-h">
-        <span className="wo-lt" aria-hidden="true" />
+        {inst ? <span className="wo-lt" aria-hidden="true" /> : (
+          <button type="button" className="wo-dp" data-depth-for={t.id} onClick={() => onDepth(t.id)} aria-expanded={!!deep}
+            aria-label={`${t.id} in depth: where it stands, its jobs, its tree`} title="where it stands, its jobs, its tree (nothing is sent)">
+            <span className="wo-lt" aria-hidden="true" />
+          </button>
+        )}
         <button className="wo-nm" onClick={click} onPointerDown={down} onPointerUp={up} onPointerLeave={up} onPointerCancel={up}
-          onContextMenu={e => e.preventDefault()} title={`${t.id}: press to open the whole thread beside; hold to let it leave the orbit`}>
+          onContextMenu={e => e.preventDefault()} title={inst ? `${t.id}: an instrument; press to open it, hold to let it leave the orbit` : `${t.id}: press to open the whole thread beside; hold to let it leave the orbit`}>
           {short(t.id)}
         </button>
-        {st.running ? <span className="wo-n" title={`${st.running} running now`}>{st.running}</span> : null}
+        {st.running ? (inst ? <span className="wo-n" title={`${st.running} running now`}>{st.running}</span> : (
+          <button type="button" className="wo-n wo-dpn" data-depth-for={t.id} onClick={() => onDepth(t.id)} aria-expanded={!!deep}
+            aria-label={`${st.running} running in ${t.id}: open its depth`} title={`${st.running} running now; press for what each is doing`}>{st.running}</button>
+        )) : null}
         {open ? <button className="wo-lv" onClick={() => onLeave(t.id)} title={`take ${t.id} out of the orbit; + brings it back`}>leave</button> : null}
       </div>
-      {speaks(ln) ? <Line ln={ln} /> : null}
-      <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} />
+      {inst ? <span className="wo-op">{kindOf(t) === 'site' ? 'a site · press to open' : 'an instrument · press to open'}</span> : (
+        <>
+          {speaks(ln) ? <Line ln={ln} /> : null}
+          <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} />
+        </>
+      )}
     </section>
   )
 }
 
-export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready }) {
+export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready,
+  depth, onDepth, waits, onRoute }) {
   const [adding, setAdding] = useState(false)
   const [centre, setCentre] = useState(false)
+  const [fills, setFills] = useState({})       // sid -> {text, n}: the tree's Talk, put in that system's box
+  const deepRef = useRef(depth)
+  deepRef.current = depth
   const byId = Object.fromEntries((tiles || []).map(t => [t.id, t]))
   const kept = (set || []).filter(id => byId[id])
   const dots = rimDots(tiles, kept)
@@ -204,13 +239,38 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
   const lit = running > 0 || cellState(world).on
   const glow = Math.min(0.12 + running * 0.035, 0.42)
   useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape') { setAdding(false); setCentre(false) } }
+    const k = (e) => { if (e.key === 'Escape' && !deepRef.current) { setAdding(false); setCentre(false) } }   // Esc closes the layer first
     document.addEventListener('keydown', k)
     return () => document.removeEventListener('keydown', k)
   }, [])
   const micOf = (sid) => (mic.sid === sid ? mic.state : null)
   const secsOf = (sid) => (mic.sid === sid ? mic.secs : 0)
   const plus = orbitPlace(0, kept.length)
+  const onTalk = (sid, text) => {
+    setFills(f => ({ ...f, [sid]: { text, n: ((f[sid] || {}).n || 0) + 1 } }))
+    if (sid === CENTRE) setCentre(true)
+    onDepth(null)
+  }
+  const onOpen = (t) => {
+    const o = openOf(t)
+    if (o && o.route) onRoute({ route: o.route, title: short(t.id) })
+    else if (o && o.href && typeof window !== 'undefined') window.open(o.href, '_blank', 'noopener')
+  }
+  // where the layer sits: under its body, or above it in the lower half; kept inside the sky
+  const placeOf = (sid) => {
+    if (sid === CENTRE) return { left: '50%', top: 'calc(50% + 96px)', transform: 'translateX(-50%)' }
+    const i = kept.indexOf(sid)
+    if (i < 0) return { left: '50%', top: '18%', transform: 'translateX(-50%)' }
+    const at = orbitPlace(i + 1, kept.length)
+    const x = Math.min(Math.max(at.x, 16), 84)
+    return at.y > 52 ? { left: x + '%', bottom: (100 - at.y + 4) + '%', transform: 'translateX(-50%)' }
+      : { left: x + '%', top: 'calc(' + at.y + '% + 34px)', transform: 'translateX(-50%)' }
+  }
+  const layer = depth && (depth === CENTRE || kept.includes(depth)) ? (
+    <WallDepth t={depth === CENTRE ? world : byId[depth]} tiles={tiles} waits={waits} style={placeOf(depth)}
+      onClose={() => onDepth(null)} onRead={(sid) => { onDepth(null); onName(sid) }} onTalk={onTalk}
+      onRoute={(r) => { onDepth(null); onRoute(r) }} />
+  ) : null
   return (
     <div className="wo" aria-label="the orbit: the systems you keep, around the brain">
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
@@ -220,18 +280,26 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
           title={centre ? 'close the box; the brain keeps going' : 'speak or type to the brain as a whole (the central thread)'}>
           <span className="g">{symbol}</span>
         </button>
-        <span className="wo-cn" aria-live="polite">{running ? `${running} running` : ready ? 'quiet' : ''}</span>
+        {ready ? (
+          <button type="button" className="wo-cn" data-depth-for={CENTRE} onClick={() => onDepth(CENTRE)} aria-expanded={depth === CENTRE}
+            aria-live="polite" title="every job running, and what waits for you (nothing is sent)">{running ? `${running} running` : 'quiet'}</button>
+        ) : <span className="wo-cn" />}
         {centre ? (
           <div className="wo-cbox">
             {speaks(wln) ? <Line ln={wln} /> : null}
-            <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus />
+            <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus fill={fills[CENTRE]} />
             <button className="wo-th" onClick={() => onName(CENTRE)}>{side === CENTRE ? 'close the thread' : 'the whole thread'}</button>
           </div>
         ) : (speaks(wln) ? <div className="wo-cbox"><Line ln={wln} /></div> : null)}
       </div>
+      {depth === CENTRE ? <div className="wo-phl">{layer}</div> : null}
       {kept.map((id, i) => (
-        <Body key={id} t={byId[id]} at={orbitPlace(i + 1, kept.length)} sent={sentOf(id)} open={side === id}
-          rec={micOf(id)} secs={secsOf(id)} onSend={onSend} onMic={onMic} onName={onName} onLeave={onLeave} />
+        <React.Fragment key={id}>
+          <Body t={byId[id]} at={orbitPlace(i + 1, kept.length)} sent={sentOf(id)} open={side === id}
+            rec={micOf(id)} secs={secsOf(id)} onSend={onSend} onMic={onMic} onName={onName} onLeave={onLeave}
+            deep={depth === id} onDepth={(sid) => onDepth(depth === sid ? null : sid)} fill={fills[id]} onOpen={onOpen} />
+          {depth === id ? <div className="wo-phl">{layer}</div> : null}
+        </React.Fragment>
       ))}
       {dots.map((d, i) => {
         const at = rimPlace(i, dots.length, kept.length)
@@ -249,9 +317,13 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
       ) : null}
       {adding ? (
         <div className="wo-add" role="group" aria-label="systems outside the orbit">
-          <p>bring one in</p>
-          {rest.map(t => (
-            <button key={t.id} className={cellState(t).on ? 'lit' : ''} onClick={() => { onAdd(t.id); if (kept.length + 1 >= SET_MAX) setAdding(false) }}>{short(t.id)}</button>
+          {addGroups(rest).map(g => (
+            <div key={g.kind} className="g" role="group" aria-label={g.label}>
+              <p>{g.kind === 'work' ? 'bring one in' : g.kind === 'instrument' ? 'instruments · they open, you do not talk into them' : 'sites · they open'}</p>
+              {g.items.map(t => (
+                <button key={t.id} className={cellState(t).on ? 'lit' : ''} onClick={() => { onAdd(t.id); if (kept.length + 1 >= SET_MAX) setAdding(false) }}>{short(t.id)}</button>
+              ))}
+            </div>
           ))}
         </div>
       ) : null}

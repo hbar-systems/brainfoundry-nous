@@ -231,7 +231,7 @@ class B { constructor(parts, o) { this.parts = parts.length; this.type = o.type 
 
 def test_wall_page_wiring_and_systems_untouched():
     w = (ROOT / "ui" / "pages" / "wall.js").read_text()
-    assert "from '../lib/wall'" in w and "fetch('/cc/systems', { cache: 'no-store' })" in w
+    assert "from '../lib/wall'" in w and "fetch(systemsUrl(depthRef.current), { cache: 'no-store' })" in w   # /cc/systems; ?depth= while a layer is open (WALL-3)
     assert "setInterval(load, 3000)" in w and "document.visibilityState === 'visible'" in w       # none while hidden
     assert "sendText(fetch, sid, text, threadOf(sid))" in w and "sendClip(fetch, sid, blob, threadOf(sid))" in w
     assert "/talk?pane=wall-" in w and "router" not in w and "location.href" not in w             # never navigates

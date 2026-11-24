@@ -49,9 +49,9 @@ function openLink(link) {
   else if (typeof window !== 'undefined') window.open(link.href, '_blank', 'noopener')
 }
 
-function Card({ node, cur, title }) {
+function Card({ node, cur, title, onTalk }) {
   const s = STATE[node.state] || STATE.unknown
-  const key = treeKey(cur, node)
+  const key = onTalk ? null : treeKey(cur, node)
   const [talk, setTalk] = useState(false)
   const word = node.state === 'unknown' ? (node.raw || '') : s.word
   return (
@@ -68,7 +68,9 @@ function Card({ node, cur, title }) {
         </div>
       ) : null}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
-        {key
+        {onTalk
+          ? <Door accent onClick={() => onTalk(treeAsk(node))} title="Puts this in the system's box; you finish and send it">talk</Door>
+          : key
           ? <Door accent onClick={() => setTalk(t => !t)} title="A small box right here: ask, clarify or send an agent; the answer comes back in it">{talk ? 'fold' : 'talk'}</Door>
           : <Door accent onClick={() => emit('cc-fill-text', treeAsk(node))} title="Puts this in the chat box; you finish and send it">talk</Door>}
         {node.link ? <Door onClick={() => openLink(node.link)} title={node.link.href}>open</Door> : null}
@@ -79,7 +81,7 @@ function Card({ node, cur, title }) {
   )
 }
 
-function Row({ node, depth, open, toggle, shut, fold, cur, title }) {
+function Row({ node, depth, open, toggle, shut, fold, cur, title, onTalk }) {
   const kids = node.children || []
   const isOpen = open === node.id
   const folded = shut.has(node.id)
@@ -105,13 +107,15 @@ function Row({ node, depth, open, toggle, shut, fold, cur, title }) {
             style={{ ...mono, flex: '0 0 auto', fontSize: '11px', color: 'var(--muted)', padding: '1px 6px', cursor: 'pointer' }}>{folded ? '+' + kids.length : '−'}</a>
         ) : null}
       </div>
-      {isOpen ? <Card node={node} cur={cur} title={title} /> : null}
-      {!folded ? kids.map((k) => <Row key={k.id} node={k} depth={depth + 1} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={title} />) : null}
+      {isOpen ? <Card node={node} cur={cur} title={title} onTalk={onTalk} /> : null}
+      {!folded ? kids.map((k) => <Row key={k.id} node={k} depth={depth + 1} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={title} onTalk={onTalk} />) : null}
     </div>
   )
 }
 
-export default function ThreadTree({ tree, cur }) {
+// onTalk (WALL-3, 2026-11-24): the wall's depth layer draws a system's tree read-only; Talk hands the ask to the
+// wall, which puts it in that system's box. Without it, Talk works as above.
+export default function ThreadTree({ tree, cur, onTalk }) {
   const [open, setOpen] = useState(null)
   const [shut, setShut] = useState(() => new Set())
   if (!tree || !tree.nodes || tree.nodes.length === 0) return null
@@ -124,7 +128,7 @@ export default function ThreadTree({ tree, cur }) {
       <div style={{ ...mono, fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted)', padding: '0 6px 6px', overflowWrap: 'anywhere' }}>
         {tree.title || 'This thread'}{line ? <span style={{ textTransform: 'none', letterSpacing: 0 }}>{'  ·  ' + line}</span> : null}
       </div>
-      {tree.nodes.map((n) => <Row key={n.id} node={n} depth={0} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={tree.title} />)}
+      {tree.nodes.map((n) => <Row key={n.id} node={n} depth={0} open={open} toggle={toggle} shut={shut} fold={fold} cur={cur} title={tree.title} onTalk={onTalk} />)}
     </div>
   )
 }
