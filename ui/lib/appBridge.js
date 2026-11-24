@@ -80,6 +80,20 @@
 //                        result -> { path, text }; errors 'not_found' (404), 'forbidden' (403),
 //                        'no_files_door' on a brain without CC, 'bad_name', 'too_large'.
 //
+// Added 2026-11-23 for the finance board (brain-app-finance 0.2.0, FINANCE-BOARD-1). One permission,
+// 'ledgers.read', reads this brain's own three ledgers. Read only; each reply carries fixed fields.
+//   harmonics.read    -> {}  standing + the signed exchange receipts (GET /harmonics/standing, /harmonics/ledger).
+//                        result -> { standing, half_life_days, events: [{ id, role, score, at, peer, signed }] }
+//                        (peer = the first 16 characters of the peer's public key)
+//   meter.read        -> { window? }  'today' | '7d' (default) | '30d' | 'all'; tokens used by this brain's
+//                        reasoner (GET /meter/usage). Tokens only: the meter's euro estimate is not passed on,
+//                        so no app shows tokens converted into money.
+//                        result -> { window, totals: { prompt_tokens, completion_tokens, total_tokens, events,
+//                        estimated_events }, by_model: [{ model, ...same }] }
+//   records.read      -> {}  payment records through the record door (GET /v1/federation/records), kinds
+//                        'pay.*' only. result -> { exists, records: [{ dir, kind, rid, from, to, body, answer,
+//                        receipted, at }] }; exists false on a brain without the door (404).
+//
 // Reserved-but-unimplemented intents (will land when first app needs them):
 //   federation.query  -> { peer, path, body? }
 //   federation.send   -> { peer, message }
@@ -492,6 +506,51 @@ function makeBridge({ appInfo, fetch, ls, brainName, theme, navigate, toChat }) 
           return { ok: true, result: { text: b.text || '' } }
         })
         .catch(e => ({ ok: false, error: { code: 'transcribe_network_error', detail: String(e) } }))
+    }
+
+    // ---- this brain's own ledgers (2026-11-23, FINANCE-BOARD-1) ----
+    if (type === 'harmonics.read') {
+      if (!perms.includes('ledgers.read')) return denied('ledgers.read')
+      const get = (u) => fetch(u, { method: 'GET' }).then(r => r.json().catch(() => ({})).then(b => ({ ok: r.ok, status: r.status, b })))
+      return Promise.all([get('/api/bf/harmonics/standing'), get('/api/bf/harmonics/ledger?limit=200')])
+        .then(([st, lg]) => {
+          if (!st.ok && !lg.ok) return { ok: false, error: { code: 'harmonics_failed', status: st.status, detail: (st.b && st.b.detail) || `HTTP ${st.status}` } }
+          const n = (v) => (typeof v === 'number' && isFinite(v) ? v : null)
+          const events = ((lg.ok && lg.b && lg.b.events) || []).map(e => ({
+            id: e.id, role: String(e.role || ''), score: n(e.score), at: n(e.event_timestamp),
+            peer: String(e.peer_pubkey || '').slice(0, 16), signed: !!e.sig,
+          }))
+          return { ok: true, result: { standing: st.ok ? n(st.b.standing) : null, half_life_days: st.ok ? n(st.b.half_life_days) : null, events } }
+        })
+        .catch(e => ({ ok: false, error: { code: 'harmonics_network_error', detail: String(e) } }))
+    }
+    if (type === 'meter.read') {
+      if (!perms.includes('ledgers.read')) return denied('ledgers.read')
+      const window = ['today', '7d', '30d', 'all'].includes(payload.window) ? payload.window : '7d'
+      const tok = (x) => ({
+        prompt_tokens: Number(x.prompt_tokens) || 0, completion_tokens: Number(x.completion_tokens) || 0,
+        total_tokens: Number(x.total_tokens) || 0, events: Number(x.events) || 0, estimated_events: Number(x.estimated_events) || 0,
+      })
+      return call(`/api/bf/meter/usage?window=${window}`, { method: 'GET' }, 'meter_failed', b => ({
+        window, totals: tok(b.totals || {}),
+        by_model: (b.by_model || []).map(m => Object.assign({ model: String(m.model || '') }, tok(m))),
+      }))
+    }
+    if (type === 'records.read') {
+      if (!perms.includes('ledgers.read')) return denied('ledgers.read')
+      return fetch('/api/bf/v1/federation/records', { method: 'GET' })
+        .then(r => r.json().catch(() => ({})).then(b => ({ status: r.status, ok: r.ok, b })))
+        .then(({ status, ok, b }) => {
+          if (status === 404) return { ok: true, result: { exists: false, records: [] } }
+          if (!ok) return { ok: false, error: { code: 'records_failed', status, detail: (b && (b.detail || b.error)) || `HTTP ${status}` } }
+          const records = (b.records || []).filter(x => /^pay\./.test(String(x.kind || ''))).map(x => ({
+            dir: x.dir, kind: x.kind, rid: x.rid, from: x.from, to: x.to,
+            body: x.body && typeof x.body === 'object' ? x.body : {}, answer: x.answer || null,
+            receipted: !!x.receipted, at: x.at || null,
+          }))
+          return { ok: true, result: { exists: true, records } }
+        })
+        .catch(e => ({ ok: false, error: { code: 'records_network_error', detail: String(e) } }))
     }
 
     return Promise.resolve({ ok: false, error: { code: 'unknown_intent', type } })

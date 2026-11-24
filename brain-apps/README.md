@@ -21,7 +21,7 @@ Worked example: `registry/schema/brain/app.example.yaml`.
 
 ## Bridge intents
 
-_(intent catalog — last updated 2026-11-10, adds `files.read` and `/talk` in `ui.open`; 2026-10-16 added `storage.*`; 2026-05-18 added `llm.complete`)_
+_(intent catalog — last updated 2026-11-23, adds `harmonics.read`, `meter.read`, `records.read` under `ledgers.read`; 2026-11-10 adds `files.read` and `/talk` in `ui.open`; 2026-10-16 added `storage.*`; 2026-05-18 added `llm.complete`)_
 
 An installed app talks to the brain by `postMessage`-ing an intent to its host
 shell (`ui/pages/apps/[id].js`) and awaiting a `reply`. The wire shape:
@@ -54,6 +54,9 @@ enforcement at the brain API is the durable gate.
 | `files.save` | `files.write` | `{ name, text }` or `{ name, base64, mime? }` | `{ path, route }` in the Files desk (`out/<date>/`, CC bridge `POST /files/save`); `no_files_door` without CC |
 | `files.read` | `files.read` | `{ name }`, a name on the desk such as `week/index.html` (no `..`, not absolute) | `{ path, text }` from the Files desk (`out/`), at most 2,000,000 characters; `not_found` (404), `forbidden` (403), `no_files_door` without CC (2026-11-10) |
 | `audio.transcribe` | `audio.transcribe` | `{ base64, mime?, name? }` | `{ text }` through the CC bridge's speech door; `no_speech_door` when not set up |
+| `harmonics.read` | `ledgers.read` | — | `{ standing, half_life_days, events: [{ id, role, score, at, peer, signed }] }` from `GET /harmonics/standing` and `/harmonics/ledger` (2026-11-23) |
+| `meter.read` | `ledgers.read` | `{ window? }` (`today`, `7d` default, `30d`, `all`) | `{ window, totals, by_model }` in tokens from `GET /meter/usage`; the meter's euro estimate is not passed on (2026-11-23) |
+| `records.read` | `ledgers.read` | — | `{ exists, records: [{ dir, kind, rid, from, to, body, answer, receipted, at }] }`, kinds `pay.*` only, from `GET /v1/federation/records`; `exists: false` without the record door (2026-11-23) |
 
 The base shelf (2026-10-22) builds on these through one design kit, `brain-app-kit` (a sibling repo; each app vendors `kit/`).
 
