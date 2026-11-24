@@ -130,6 +130,8 @@ FAKE = {
         "/cc/activity": {"threads": {}},
         "/cc/jobs": {"finished": [], "others": []},
         "/cc/system": {"warnings": []},
+        # the surfaces register the chat reads on arrival (SURFACES-1, 2026-11-24)
+        "/cc/surfaces": {"surfaces": [], "skipped": []},
         # the usage log (USAGE-1, 2026-11-22): every page POSTs its press here (SKIN-2 2026-11-23 found the fake lacked it)
         "/cc/presses": {"logged": True},
         # the quiet footer line on every page (INLINE-1, 2026-11-23); SKIN-3 found the fake lacked it
