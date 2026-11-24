@@ -7,9 +7,8 @@ import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import SidesFooter from '../components/SidesFooter'
 import HelpButton from '../components/HelpButton'
-import { applyStyle, clearStyle } from '../lib/layout'
 import { watchWall } from '../lib/wallpaper'
-import { watchSkin } from '../lib/skin'
+import { watchSkin, setLayoutLook, PREPAINT } from '../lib/skin'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -107,7 +106,8 @@ export default function App({ Component, pageProps }) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const root = document.documentElement
-    const put = (resolved) => { clearStyle(root, document.body); if (resolved) applyStyle(resolved, root, document.body) }
+    // SKIN-4: through lib/skin.js, so the layout's colours stay off a thread that wears its own skin
+    const put = (resolved) => setLayoutLook(resolved || null, root)
     try { const c = localStorage.getItem('cc.layout.resolved'); if (c) put(JSON.parse(c)) } catch {}
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
       if (!d) return
@@ -120,6 +120,8 @@ export default function App({ Component, pageProps }) {
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* SKIN-4: the skin before the first paint (the thread's own on a thread page), so a reload never flashes the default */}
+        <script key="bf-prepaint" dangerouslySetInnerHTML={{ __html: PREPAINT }} />
         <meta name="theme-color" content="#0e0c0b" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

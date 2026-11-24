@@ -221,3 +221,39 @@ def test_tool_line_has_font_chips_and_shares_the_skin_list():
     assert "showOwn({ skin: look.skin, font: look.font }, document.documentElement)" in cc
     assert ">this thread</Chip>" in cc and ">default</Chip>" in cc
     assert "showTheme" not in cc and "bf-theme-now" not in cc
+
+
+# SKIN-4 (2026-11-24): the thread id is the key everywhere; the page only caches what the box keeps.
+def test_skin4_prepaint_wears_the_threads_own_cached_skin():
+    out = _node(r"""
+const s = require('./skin.js');
+localStorage.setItem('bf-theme', 'gold'); localStorage.setItem('bf-font', 'system');
+s.cacheLook('t-a', { skin: 'rose', font: 'lora', accent: '#a1b2c3' });
+const run = (search) => { const attrs = {}; global.location = { search }; global.document = { documentElement: { setAttribute: (k, v) => { attrs[k] = v } } }; eval(s.PREPAINT); return attrs };
+console.log(JSON.stringify({ a: run('?thread=t-a'), other: run('?thread=t-b'), none: run(''), fresh: run('?thread=new:1'),
+  keyA: localStorage.getItem('bf-skin.t-a') !== null, keyB: s.cachedLook('t-b'), newKey: (s.cacheLook('new:3', { skin: 'fox' }), localStorage.getItem('bf-skin.new:3')) }));
+""")
+    assert out["a"] == {"data-theme": "rose", "data-font": "lora"}
+    assert out["other"] == out["none"] == out["fresh"] == {"data-theme": "gold", "data-font": "system"}
+    assert out["keyA"] and out["keyB"] is None and out["newKey"] is None
+
+
+def test_skin4_scope_switch_retired_and_layout_colours_only_at_default_level():
+    out = _node(r"""
+const s = require('./skin.js');
+localStorage.setItem('cc.skinScope', 'default');
+const props = {};
+const r = { dataset: {}, style: { setProperty: (k, v) => { props[k] = v }, removeProperty: k => { delete props[k] }, zoom: '' } };
+global.window.location = { search: '' };
+s.watchSkin(r);
+const scope = localStorage.getItem('cc.skinScope');
+s.setLayoutLook({ vars: { '--bg': '#000000' }, zoom: 1 }, r);
+const plain = props['--bg'] || null;
+s.showOwn({ skin: 'rose' }, r);
+const own = props['--bg'] || null;
+s.showOwn(null, r);
+console.log(JSON.stringify({ scope, plain, own, back: props['--bg'] || null, child: s.childLook({ skin: 'rose', font: 'lora', accent: '#a1b2c3', text: '18px', learn: true }) }));
+""")
+    assert out["scope"] is None
+    assert out["plain"] == "#000000" and out["own"] is None and out["back"] == "#000000"
+    assert out["child"] == {"skin": "rose", "font": "lora", "accent": "#a1b2c3"}
