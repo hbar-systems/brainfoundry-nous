@@ -509,6 +509,37 @@ def test_thread_style_is_checked_and_kept_on_the_thread(monkeypatch, tmp_path):
     assert "style" not in m._threads_update("b1", style={})
 
 
+def test_skin4_thread_look_by_id_child_inherits_default_on_box(monkeypatch, tmp_path):
+    # SKIN-4 (2026-11-24): the look is read by id, whatever the list is filtered by; a thread started from a thread
+    # is born in its parent's skin and font (copied once, the parent never written); the default lives on the box.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m._threads_save([
+        {"claude": None, "brain": "pa", "title": "Deck pass", "started": "2026-11-24T08:00:00Z",
+         "style": {"skin": "rose", "font": "lora", "accent": "#a1b2c3", "text": "18px"}},
+        {"claude": None, "brain": "old", "title": "Loops", "started": "2026-11-01T08:00:00Z", "archived": True,
+         "style": {"skin": "fox"}},
+        {"claude": None, "brain": "ch", "title": "CC: walk the deck", "started": "2026-11-24T10:00:00Z"},
+        {"claude": None, "brain": "own", "title": "Has its own", "started": "2026-11-24T10:00:00Z", "style": {"skin": "sage"}},
+    ])
+    assert m._thread_style_of("old") == {"skin": "fox"}            # archived: not in the list, still its own
+    assert "old" not in [t["brain"] for t in m._threads_view(q="deck")["threads"]]
+    assert m._thread_style_of("ch") == {} and m._thread_style_of("nope") is None
+    m._inherit_style("ch", "pa")
+    by = {t["brain"]: t for t in m._threads_load()}
+    assert by["ch"]["style"] == {"skin": "rose", "font": "lora", "accent": "#a1b2c3"}   # not its text size
+    assert by["pa"]["style"] == {"skin": "rose", "font": "lora", "accent": "#a1b2c3", "text": "18px"}
+    m._inherit_style("own", "pa")                                   # a child with its own look keeps it
+    assert {t["brain"]: t for t in m._threads_load()}["own"]["style"] == {"skin": "sage"}
+    # the console default: one file on the box, merged, bad values dropped
+    m.SKIN_DEFAULT_PATH = tmp_path / "skin.json"
+    assert m.cc_skin.load_default(m.SKIN_DEFAULT_PATH) == {}
+    assert m.cc_skin.save_default(m.SKIN_DEFAULT_PATH, {"skin": "ocean"}) == {"skin": "ocean"}
+    assert m.cc_skin.save_default(m.SKIN_DEFAULT_PATH, {"font": "inter", "skin": "<b>"}) == {"skin": "ocean", "font": "inter"}
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    assert 'route == "/threads/style"' in src and src.count('route == "/skin"') == 2
+    assert "_inherit_style(child, parent)" in src
+
+
 def test_learning_deck_spaced_recall(monkeypatch, tmp_path):
     # 2026-10-13, learning mode: saved cards come due after 1, 3, 7, 21 days; a miss starts over.
     m = _load(monkeypatch, tmp_path, with_key=False)

@@ -27,8 +27,10 @@ import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
+import SurfaceCard, { SURFACE_CSS } from '../components/SurfaceCard'
+import { sayMatch, keyIndex } from '../lib/surfaces'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
-import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont } from '../lib/skin'
+import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont, cachedLook, cacheLook, childLook, knownThread, THREAD_KEY } from '../lib/skin'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -1565,6 +1567,8 @@ const HL_OK = () => { try { return !!(window.CSS && CSS.highlights && window.Hig
 function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
+  const surfacesRef = useRef([])                    // the surfaces register (GET /cc/surfaces, SURFACES-1 2026-11-24)
+  const [surfHit, setSurfHit] = useState(null)      // {turn, i}: the pad a number key just pressed, for its flash
   const [files, setFiles] = useState([])            // attachments chosen for the next message
   const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
@@ -1879,9 +1883,10 @@ function CC() {
   // the default font: the console's, and the conversation font of this browser cleared so it follows the default
   const pickFont = (v) => { setSkinFont(v, document.documentElement); setFontSaved('') }
   const pickDefaultSkin = (t) => setConsoleTheme(t, document.documentElement)
-  const [skinScope, setSkinScopeState] = useState('thread')
-  useEffect(() => { try { if (localStorage.getItem('cc.skinScope') === 'default') setSkinScopeState('default') } catch {} }, [])
-  const setSkinScope = (v) => { setSkinScopeState(v); try { if (v === 'default') localStorage.setItem('cc.skinScope', 'default'); else localStorage.removeItem('cc.skinScope') } catch {} }
+  // SKIN-4: "this thread" every time a page opens or another thread shows; "default" lasts only while it is on
+  // screen. SKIN-3 remembered it in the browser, so once set, a press in any thread changed every thread without
+  // its own skin (hbar 2026-11-24: changing one thread's colour changed other threads).
+  const [skinScope, setSkinScope] = useState('thread')
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
   const [sysWarn, setSysWarn] = useState([])
@@ -2310,37 +2315,97 @@ function CC() {
   const pickSeat = (s) => setSeatPick({ key: seatKey, seat: SEATS.includes(s) ? s : 'claude' })
   const recheckCodex = () => fetch('/cc/codex/status?fresh=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
     .then(cx => { if (cx) setHealth(h => (h ? { ...h, codex: cx } : h)) }).catch(() => {})
-  // The thread's look (the tool line, 2026-10-13): read from the thread record on the box, changed here
-  // at once, written back a moment after the last touch so a drag round the wheel is one write.
-  const [look, setLookState] = useState({})
-  const lookSave = useRef(null)
-  const curStyle = JSON.stringify((curThread && curThread.style) || {})
+  // The thread's look (the tool line, 2026-10-13): kept on the box with the thread, changed here at once, written
+  // back a moment after the last touch so a drag round the wheel is one write.
+  // SKIN-4 (2026-11-24): the thread id is the key everywhere. The look is read by id (GET /cc/threads/style), never
+  // from the thread list: a searched list, the archive, a slow or failed list no longer turn the thread gold. This
+  // browser caches it under bf-skin.<thread> so a reload or a switch paints it at once. A new conversation opened
+  // from a thread (the new button) keeps that thread's skin, font and accent; a thread started by a choices button
+  // gets its parent's on the box (cc_skin.child_style). The parent is never written.
+  const [look, setLookState] = useState(() => cachedLook(cur) || {})
+  const lookSave = useRef(null)      // { brain, go, timer }: the write waiting for the last touch
+  const lookWrote = useRef({})       // brain -> when this page last wrote it: a list read before that is stale
+  const lookCarry = useRef(null)     // { brain, look }: a look picked before the first message, waiting for its thread
+  const curStyle = curThread ? JSON.stringify(curThread.style || {}) : null
   // A look picked before the first message (no thread yet) is kept and saved onto the thread the
   // message creates; before 2026-10-18 it was dropped there and the page fell back to gold.
   const lookRef = useRef({}); lookRef.current = look
   const lookCur = useRef(cur)
+  const flushLook = () => { const p = lookSave.current; if (p) { clearTimeout(p.timer); p.go() } }
+  // a page opened on ?thread=<id> wears that thread's cached skin from the first frame (lib/skin.js PREPAINT,
+  // watchSkin); nothing here draws the default over it while the bridge is still naming the thread
+  const pinWaiting = useRef(typeof window !== 'undefined' && (() => { try { return knownThread(new URLSearchParams(window.location.search).get('thread')) } catch { return false } })())
+  // the look shown, drawn in the same step (the effect below runs only when the skin or font value changes)
+  const showLook = (x) => { setLookState(x); showOwn({ skin: x.skin, font: x.font }, document.documentElement) }
   useEffect(() => {
     const was = lookCur.current; lookCur.current = cur
-    if (lookSave.current) return
+    flushLook()   // a touch in the thread just left is written to that thread, never carried to this one
+    setSkinScope('thread')
     const pending = lookRef.current
-    // carried when the page moves from no thread, or from a thread record that is gone (renamed on its first answer)
-    const gone = !was || !threads.some(t => t.brain === was)
-    if (gone && cur && curStyle === '{}' && Object.keys(pending).length) { saveLook(pending, cur); return }
-    setLookState(JSON.parse(curStyle))
-  }, [cur, curStyle])
+    if (cur) pinWaiting.current = false
+    if (!cur) { if (!pinWaiting.current) showLook(knownThread(was) ? childLook(pending) : {}); return undefined }
+    if (!knownThread(cur)) return undefined   // a new conversation being named: keep what is on screen
+    // carried when the page moves from no thread, or from a conversation the bridge just named
+    const carry = (!was || !knownThread(was)) && Object.keys(pending).length > 0
+    lookCarry.current = carry ? { brain: cur, look: pending } : null
+    const cached = cachedLook(cur)
+    if (!carry) showLook(cached || (curThread && curThread.style) || {})
+    let on = true
+    fetch('/cc/threads/style?brain=' + encodeURIComponent(cur), { cache: 'no-store' })
+      .then(r => (r.status === 404 ? null : r.ok ? r.json() : undefined))
+      .then(d => {
+        if (!on || lookCur.current !== cur || lookSave.current || d === undefined) return   // gone, touched, or no answer: keep what is drawn
+        const st = (d && d.style && typeof d.style === 'object') ? d.style : null
+        if (!st) return   // the box has not registered this thread yet: a carried look waits for the list (below)
+        if (carry && lookCarry.current && !Object.keys(st).length) { lookCarry.current = null; saveLook(pending, cur); return }
+        lookCarry.current = null
+        cacheLook(cur, st)
+        showLook(st)
+      })
+      .catch(() => {})
+    return () => { on = false }
+  }, [cur])
+  // another device changed this thread's look: the 20 s thread list carries it, when the list holds this thread
+  useEffect(() => {
+    if (curStyle === null || !knownThread(cur) || lookSave.current) return
+    const c = lookCarry.current
+    if (c && c.brain === cur) {
+      lookCarry.current = null
+      if (curStyle === '{}') { saveLook(c.look, cur); return }
+    }
+    if (Date.now() - (lookWrote.current[cur] || 0) < 25000) return
+    if (curStyle === JSON.stringify(lookRef.current)) return
+    const st = JSON.parse(curStyle)
+    cacheLook(cur, st)
+    showLook(st)
+  }, [curStyle])
+  // the same thread open in another tab or pane of this browser: follow its change at once (only this thread's key)
+  useEffect(() => {
+    if (!knownThread(cur)) return undefined
+    const on = (e) => { if (e.key === THREAD_KEY + cur && !lookSave.current) { const c = cachedLook(cur); if (c) showLook(c) } }
+    window.addEventListener('storage', on)
+    return () => window.removeEventListener('storage', on)
+  }, [cur])
   const setLook = (n) => {
     setLookState(n)
     if (cur) saveLook(n, cur)
   }
   function saveLook(n, brain) {
-    clearTimeout(lookSave.current)
-    lookSave.current = setTimeout(() => {
-      lookSave.current = null
+    if (lookSave.current) clearTimeout(lookSave.current.timer)
+    if (!knownThread(brain)) { lookSave.current = null; return }
+    cacheLook(brain, n)
+    const go = () => {
+      if (lookSave.current && lookSave.current.go === go) lookSave.current = null
+      lookWrote.current[brain] = Date.now()
       fetch('/cc/threads/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain, style: n }) })
-        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.thread) setThreads(ts => ts.map(t => (t.brain === brain ? { ...t, style: d.thread.style } : t))) }).catch(() => {})
-    }, 500)
+        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.thread) { lookWrote.current[brain] = Date.now(); setThreads(ts => ts.map(t => (t.brain === brain ? { ...t, style: d.thread.style } : t))) } }).catch(() => {})
+    }
+    lookSave.current = { brain, go, timer: setTimeout(go, 500) }
   }
+  // a page opened on ?thread=<id> wears that thread's cached skin from the first frame (lib/skin.js PREPAINT,
+  // watchSkin); nothing here draws the default over it while the bridge is still naming the thread
   useEffect(() => {
+    if (!cur && pinWaiting.current) return
     // this thread's own skin and font, drawn in this document only (SKIN-3): another tab or pane is untouched
     showOwn({ skin: look.skin, font: look.font }, document.documentElement)
   }, [look.skin, look.font])
@@ -2434,6 +2499,9 @@ function CC() {
       .catch(() => { if (paneModeRef.current) setTimeout(firstHealth, 3000); else setHealth(false) })
     firstHealth()
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
+    // SURFACES-1: a message that is only a system's say-word shows its card, with no model turn
+    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) surfacesRef.current = d.surfaces }).catch(() => {})
     // ?ask= prefills; from the brain's own desk pages (same origin, /cc/files/raw/: the court, the board)
     // it is sent on arrival, so one press there acts (hbar 2026-11-12 "i got sent back"). Any other
     // origin, or no referrer (Telegram, typed), keeps prefill only.
@@ -3230,6 +3298,11 @@ function CC() {
     }
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    // a system's say-word alone (SURFACES-1): its card in the thread, the brain is not asked
+    if (typeof forced !== 'string' && files.length === 0 && !block) {
+      const sf = sayMatch(text, surfacesRef.current)
+      if (sf) { setDraft(''); setTurns(t => [...t, { who: 'me', text }, { who: 'surface', surface: sf }]); return }
+    }
     // before any sign-in: the start waits for it instead of failing (MEMBERS-14 2026-11-23)
     if (health && !loggedIn && typeof forced === 'string' && !paneMode) { setPendingStart(text); return }
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
@@ -3411,6 +3484,7 @@ function CC() {
   }
 
   function onKey(e) {
+    if (!draft && !e.metaKey && !e.ctrlKey && !e.altKey && surfaceKey(e.key)) { e.preventDefault(); return }
     if (e.key === 'Escape' && active) { e.preventDefault(); stopTurn(); return }
     if (e.key === 'Escape' && listening) { e.preventDefault(); stopListening(false); return }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && active && draft.trim()) { e.preventDefault(); sendNow(); return }
@@ -3420,6 +3494,32 @@ function CC() {
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
+
+  // SURFACES-1: a card's pad. An address opens beside the chat (the pane); an ask goes into the box, not sent.
+  const surfaceOpen = (s, a) => openPane({ route: a.open, title: `${s.name} · ${a.label}` })
+  const surfaceAsk = (a) => { setDraft(a.ask); setTimeout(() => { const b = boxRef.current; if (b) { b.focus(); try { b.setSelectionRange(a.ask.length, a.ask.length) } catch {} } }, 0) }
+  // keys 1 to 5 press the newest card's pads while the box is empty and that card is the last thing in the thread
+  const surfaceKey = (key) => {
+    const n = turns.length - 1, t = turns[n]
+    if (!t || t.who !== 'surface') return false
+    const i = keyIndex(key, t.surface.actions.length)
+    if (i < 0) return false
+    const a = t.surface.actions[i]
+    setSurfHit({ turn: n, i }); setTimeout(() => setSurfHit(h => (h && h.turn === n && h.i === i ? null : h)), 220)
+    if (a.kind === 'ask') surfaceAsk(a); else surfaceOpen(t.surface, a)
+    return true
+  }
+  const surfaceKeyRef = useRef(surfaceKey); surfaceKeyRef.current = surfaceKey
+  useEffect(() => {
+    const k = (e) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = e.target, tag = el && el.tagName
+      if (el && (el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return
+      if (surfaceKeyRef.current(e.key)) e.preventDefault()
+    }
+    document.addEventListener('keydown', k)
+    return () => document.removeEventListener('keydown', k)
+  }, [])
 
   const slimHero = !paneMode && !hidden.hero && !heroShow && turns.length > 2
   // A card waits: open its conversation, or the board beside the chat for a thread still starting.
@@ -3508,7 +3608,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS + ' ' + SURFACE_CSS }} />
       {/* as raw html: a '>' in the css text is escaped by the server and not by the client, a hydration mismatch (BOARD-4) */}
       <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
@@ -3667,7 +3767,14 @@ function CC() {
               {health.session ? ' The previous thread continues.' : ''}
             </p>
           )}
-          {turns.map((t, i) => (t.who === 'note' ? (
+          {turns.map((t, i) => (t.who === 'surface' ? (
+            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '6px 0' : '10px 0' }}>
+              <div style={{ width: '100%', maxWidth: paneMode ? '100%' : '560px' }}>
+                <SurfaceCard s={t.surface} keys={i === turns.length - 1} hit={surfHit && surfHit.turn === i ? surfHit.i : -1}
+                  onOpen={(a) => surfaceOpen(t.surface, a)} onAsk={surfaceAsk} />
+              </div>
+            </div>
+          ) : t.who === 'note' ? (
             <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '3px 0' : '4px 0' }}>
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>

@@ -32,13 +32,18 @@ Endpoints (JSON):
   POST /cc/seat/private   {"on": true|false} -> {"ok","local"}: the person chooses the private brain (SEAT-3)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
+  GET  /cc/threads/style?brain=<id>  {"ok","style"}: one thread's look by id, archived or not, whatever the list shows (SKIN-4)
+  GET  /cc/skin  POST /cc/skin {"skin"?,"font"?}  the console default skin and font, one per box (SKIN-4, cc_skin.py)
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
   GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail,said}],built} (BOARD-3/4, cc_systems.py; said: WALL-1)
+  GET  /cc/surfaces       the surfaces register {surfaces:[{name,system,say,hue,line,mark,count_to?,actions}],skipped} from
+                          <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
+  GET  /cc/wall  POST /cc/wall {"look"?,"set"?}  the wall's look (grid | orbit) and the systems kept in the orbit (WALL-2)
   POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
@@ -529,6 +534,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
+import cc_skin  # noqa: E402   a thread's skin and the console default, on the box (SKIN-4)
 import cc_presses  # noqa: E402
 import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
@@ -539,6 +545,7 @@ import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_private  # noqa: E402   the private seat's lean engine (SEAT-3, 2026-11-23): Ollama direct, three read-only tools
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_surfaces  # noqa: E402   the surfaces register: a system's name -> its card (SURFACES-1, 2026-11-24)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
@@ -695,6 +702,7 @@ def _report_to_parent(status: int, payload: dict, parent: str | None = None, lab
         child = payload.get("thread")
         if parent and child:
             REPORTS.link(child, parent, label)
+            _inherit_style(child, parent)
         state = cc_reports.state_of(error=status != 200 or bool(payload.get("error")), stopped=bool(payload.get("stopped")),
                                     card=payload.get("proposal"), reply=payload.get("reply") or "")
         card = REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
@@ -2478,34 +2486,37 @@ def _threads_order(items: list) -> list:
     return sorted(by_last, key=lambda x: not x.get("pinned"))
 
 
-_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl", "dusk", "ocean", "rose", "sage", "sand")
-_STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_STYLE_SKINS = cc_skin.SKINS
 # the thread's own font (SKIN-3, 2026-11-23): the [data-font] tokens of ui/lib/skin.js FONT_SHAPES
-_STYLE_FONTS = ("system", "inter", "lora", "crimson", "dm-mono", "jetbrains")
+_STYLE_FONTS = cc_skin.FONTS
+# the console default skin and font (SKIN-4): one per box, the page caches it in bf-theme / bf-font
+SKIN_DEFAULT_PATH = STATE_DIR / "skin.json"
 
 
 def _thread_style(raw) -> dict | None:
-    """The look of one thread (2026-10-13, the tool line): accent colour, tint strength, text
-    size, density, skin, font (SKIN-3), learning mode. Unknown keys and bad values are dropped, never stored;
-    an empty dict clears the look. None when the value is not a dict at all."""
-    if not isinstance(raw, dict):
-        return None
-    out = {}
-    if isinstance(raw.get("accent"), str) and _STYLE_HEX.match(raw["accent"]):
-        out["accent"] = raw["accent"].lower()
-    if isinstance(raw.get("tint"), (int, float)) and not isinstance(raw.get("tint"), bool):
-        out["tint"] = max(0, min(30, int(raw["tint"])))
-    if raw.get("text") in ("14px", "16px", "18px"):
-        out["text"] = raw["text"]
-    if raw.get("density") in ("compact", "comfortable"):
-        out["density"] = raw["density"]
-    if raw.get("skin") in _STYLE_SKINS:
-        out["skin"] = raw["skin"]
-    if raw.get("font") in _STYLE_FONTS:
-        out["font"] = raw["font"]
-    if raw.get("learn") is True:
-        out["learn"] = True
-    return out
+    """The look of one thread (2026-10-13, the tool line); the rules live in cc_skin.thread_style (SKIN-4)."""
+    return cc_skin.thread_style(raw)
+
+
+def _thread_style_of(brain: str) -> dict | None:
+    """One thread's look by id (SKIN-4): any thread the register knows, archived, side or past the list's 200,
+    whatever the list is filtered by. None when the thread is unknown."""
+    th = next((x for x in _threads_load() if x.get("brain") == brain), None)
+    return None if th is None else (cc_skin.thread_style(th.get("style")) or {})
+
+
+def _inherit_style(child: str, parent: str) -> None:
+    """A thread started from another thread is born in its parent's skin and font (SKIN-4), copied once: only a
+    child with no look of its own is written, the parent never."""
+    threads = _threads_load()
+    ch = next((x for x in threads if x.get("brain") == child), None)
+    pa = next((x for x in threads if x.get("brain") == parent), None)
+    if not ch or not pa or ch.get("style"):
+        return
+    st = cc_skin.child_style(pa.get("style"))
+    if st:
+        ch["style"] = st
+        _threads_save(threads)
 
 
 def _threads_update(brain: str, title=None, pinned=None, archived=None, style=None) -> dict | None:
@@ -5594,6 +5605,46 @@ def _systems_view() -> dict:
     return d
 
 
+# The wall's setting (WALL-2, 2026-11-24, hbar: "dont START WITH ALL 44 ... if i need to add a system to the page i
+# just have ability to add"). GET /cc/wall {look, set, seed, max}: the look /wall opens on and the systems kept in
+# its orbit. The owner's own choice (POST /cc/wall, kept beside the layout in layout.json) wins; else the world's
+# seed <world>/ops/wall/wall.json {"look","set"} (the brain's measured first set); else the generic grid and no set
+# (the page then starts from the systems in use). Ids not in the registry are dropped on the way out.
+WALL_SEED = Path(os.environ.get("CC_WALL_SEED", "").strip() or str(Path(WORLD_DIR or "/nonexistent") / "ops" / "wall" / "wall.json"))
+
+
+def _wall_seed() -> dict:
+    try:
+        return cc_layout.validate_wall({k: v for k, v in json.loads(WALL_SEED.read_text()).items() if k in ("look", "set")})
+    except (OSError, ValueError, AttributeError, cc_layout.LayoutError):
+        return {"look": None, "set": None}
+
+
+def _wall_view() -> dict:
+    own, seed = LAYOUT.wall(), _wall_seed()
+    known = _systems_known()
+    ids = own["set"] if own["set"] is not None else seed["set"]
+    return {"look": own["look"] or seed["look"] or "grid",
+            "set": [x for x in ids if x in known] if ids is not None else None,
+            "seed": own["set"] is None and seed["set"] is not None, "max": cc_layout.WALL_SET_MAX,
+            "looks": list(cc_layout.WALL_LOOKS)}
+
+
+def _wall_save(body) -> tuple[int, dict]:
+    if not isinstance(body, dict):
+        return 400, {"ok": False, "error": "give look and/or set"}
+    if isinstance(body.get("set"), list):
+        known = _systems_known()
+        bad = [x for x in body["set"] if x not in known]
+        if bad:
+            return 400, {"ok": False, "error": f"not a system here: {str(bad[0])[:64]}"}
+    try:
+        LAYOUT.set_wall(body)
+    except cc_layout.LayoutError as e:
+        return 400, {"ok": False, "error": str(e)}
+    return 200, {"ok": True, **_wall_view()}
+
+
 # WALL-1 (2026-11-24, hbar: "all I need is that text box to speak into it I don't even have to see the entire
 # text"): each tile carries `said`, the ONE line its standing thread said last: {text, live, waiting, at}. While
 # a turn runs it is the run's own last line (its tool step or the sentence being written, live: true); else the
@@ -5983,6 +6034,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _local_status())
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
+        elif route == "/threads/style":
+            # SKIN-4: one thread's look by id, never through the filtered list
+            st = _thread_style_of(str(self._query().get("brain") or "").strip()[:120])
+            if st is None:
+                self._send(404, {"ok": False, "error": "no such thread"})
+            else:
+                self._send(200, {"ok": True, "style": st})
+        elif route == "/skin":
+            # SKIN-4: the console default skin and font, one per box
+            self._send(200, {"ok": True, **cc_skin.load_default(SKIN_DEFAULT_PATH)})
         elif route == "/threads":
             _threads_sweep()
             a = self._query().get("archived")
@@ -6133,6 +6194,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view())
+        elif route == "/wall":
+            self._send(200, _wall_view())
+        elif route == "/surfaces":
+            # a system's card (SURFACES-1): read fresh each time (a few small files), so a register edit shows at once
+            _host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip().split(":")[0]
+            self._send(200, cc_surfaces.load(WORLD_DIR or None, host=os.environ.get("CC_CONSOLE_HOST", "") or _host))
         elif route == "/dashboard":
             self._send(200, _dashboard_view())
         elif route == "/listening":
@@ -6393,6 +6460,9 @@ class Handler(BaseHTTPRequestHandler):
             d = TAPE.write(body.get("path"), body.get("text"), mt if isinstance(mt, int) and not isinstance(mt, bool) else None)
             self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
             return
+        if route == "/wall":
+            self._send(*_wall_save(self._json(limit=4000)))
+            return
         if route == "/systems/thread":
             body = self._json(limit=2000)
             sid = _systems_id((body or {}).get("system"))
@@ -6605,6 +6675,12 @@ class Handler(BaseHTTPRequestHandler):
                 _env_file_unset("CC_MODEL"); os.environ.pop("CC_MODEL", None)
             print(f"model set to {m or 'default'}", flush=True)
             self._send(200, {"ok": True, "model": m or None})
+            return
+        if route == "/skin":
+            if not cc_skin.default_skin(req):
+                self._send(400, {"ok": False, "error": "skin or font: one of the console's skins or fonts"})
+                return
+            self._send(200, {"ok": True, **cc_skin.save_default(SKIN_DEFAULT_PATH, req)})
             return
         if route == "/threads/update":
             want = str(req.get("brain", "")).strip()

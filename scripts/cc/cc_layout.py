@@ -211,6 +211,34 @@ def _surfaces(v, where) -> list:
     return [x for x in SURFACES if x in picked]
 
 
+WALL_LOOKS = ("grid", "orbit")
+WALL_SET_MAX = 16
+_WALL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def validate_wall(obj) -> dict:
+    """The wall's setting (WALL-2): look in WALL_LOOKS or None; set a list of distinct system ids (at most
+    WALL_SET_MAX) or None. Which ids exist is the bridge's check (the registry), not this file's."""
+    if not isinstance(obj, dict):
+        raise LayoutError("wall: an object")
+    _only(obj, {"look", "set"}, "wall")
+    look = obj.get("look")
+    if look is not None:
+        look = _enum(look, WALL_LOOKS, "wall.look")
+    ids = obj.get("set")
+    if ids is not None:
+        if not isinstance(ids, list) or len(ids) > WALL_SET_MAX:
+            raise LayoutError(f"wall.set: a list of at most {WALL_SET_MAX} systems")
+        seen = []
+        for x in ids:
+            if not isinstance(x, str) or not _WALL_ID.match(x):
+                raise LayoutError("wall.set: system ids only")
+            if x not in seen:
+                seen.append(x)
+        ids = seen
+    return {"look": look, "set": ids}
+
+
 def resolve(layout: dict) -> dict:
     """What the page applies: the preset's variables with the layout's own on top, the zoom for the
     size, the font weight. Computed here so the page holds no second copy of the presets."""
@@ -468,6 +496,27 @@ class Store:
             d["arrangement"] = arr
             self._write(d)
         return arr
+
+    # The wall (WALL-2, 2026-11-24): which look /wall opens on (grid, the generic one; orbit, the personal one) and
+    # the systems kept in the orbit. Beside the layout like the arrangement, so a shared pack never carries it.
+    def wall(self) -> dict:
+        """{"look": str|None, "set": [ids]|None}; None where the owner has not chosen (the page then uses the seed)."""
+        try:
+            return validate_wall(self._read().get("wall") or {})
+        except LayoutError:
+            return {"look": None, "set": None}
+
+    def set_wall(self, patch) -> dict:
+        """Change the look and/or the kept set; keys not in the patch stay as they are."""
+        if not isinstance(patch, dict) or not ({"look", "set"} & set(patch)):
+            raise LayoutError("wall: give look and/or set")
+        with self.lock:
+            d = self._read()
+            cur = validate_wall(d.get("wall") or {}) if isinstance(d.get("wall"), dict) else {"look": None, "set": None}
+            nxt = validate_wall({**cur, **{k: patch[k] for k in ("look", "set") if k in patch}})
+            d["wall"] = nxt
+            self._write(d)
+        return nxt
 
     def answers(self) -> dict:
         try:
