@@ -100,6 +100,54 @@ export function buildQueue(actions, tasks) {
   return q
 }
 
+// The structure of what is sent (MAP-AGENTS-1, hbar 2026-11-24: "image of /map should have also visible
+// the structure-of-agents that are sent, and more info on whats happening"). One small tree per live
+// conversation: the conversation, the subagents its turn fanned out to (the board's agents count),
+// and every job or agent it started with its state, its running time and its last line.
+export function buildTree(lanes, now) {
+  const live = (t) => t.state === 'answering' || t.state === 'waiting'
+  return lanes.filter(l => live(l.head) || l.subs.some(live)).map(l => ({
+    key: l.key, head: l.head, agents: Number(l.head.agents) || 0,
+    subs: [...l.subs].sort((a, b) => (live(b) - live(a)) || (span(b, now).end - span(a, now).end)).slice(0, 6),
+    more: Math.max(0, l.subs.length - 6),
+  }))
+}
+
+function Tree({ tree, now, sel, onPick, kindWord }) {
+  if (!tree.length) return <p style={{ ...mono, fontSize: 11, color: C.dim, margin: '2px 14px 8px' }}>nothing sent right now: no conversation is answering and no agent is running</p>
+  const run = (t) => { const { begin, end, live } = span(t, now); return live ? `${clock((now - begin) / 1000)}` : `ended ${ago((now - end) / 1000)}` }
+  return (
+    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '2px 14px 10px', flexShrink: 0 }}>
+      {tree.map(n => (
+        <div key={n.key} onClick={(e) => { e.stopPropagation(); onPick(n.head.key) }}
+             style={{ minWidth: 230, maxWidth: 320, flexShrink: 0, border: `1px solid ${sel === n.head.key ? C.ink : C.line}`, borderRadius: 10, padding: '8px 10px', backgroundColor: C.surface, cursor: 'pointer' }}>
+          <div style={{ fontSize: 13, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={n.head.title}>
+            <StateDot state={tileState(n.head)} size={7} style={{ marginRight: 6 }} />{n.head.title}
+          </div>
+          <div style={{ ...mono, fontSize: 10, color: (STATE[n.head.state] || STATE.done).color, margin: '2px 0 0 13px' }}>{(STATE[n.head.state] || STATE.done).word} · {run(n.head)}</div>
+          {n.head.last && <div style={{ fontSize: 11.5, lineHeight: 1.4, color: C.dim, margin: '4px 0 0 13px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>{n.head.last}</div>}
+          {n.agents > 0 && (
+            <div style={{ ...mono, fontSize: 11, color: C.ink, margin: '6px 0 0 4px' }}>
+              <span style={{ color: C.dim }}>{n.subs.length ? '├ ' : '└ '}</span>{n.agents} subagent{n.agents === 1 ? '' : 's'} sent
+              <span style={{ marginLeft: 6 }}>{Array.from({ length: Math.min(n.agents, 12) }).map((_, i) => <span key={i} className={n.head.state === 'answering' ? 'lane-now' : undefined} style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, marginRight: 3, backgroundColor: C.gold }} />)}</span>
+            </div>
+          )}
+          {n.subs.map((s, i) => (
+            <div key={s.key} onClick={(e) => { e.stopPropagation(); onPick(s.key) }} style={{ margin: '5px 0 0 4px' }} title={s.title}>
+              <div style={{ ...mono, fontSize: 11, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span style={{ color: C.dim }}>{i === n.subs.length - 1 && !n.more ? '└ ' : '├ '}</span>
+                <StateDot state={tileState(s)} size={6} style={{ marginRight: 5 }} />{kindWord(s)} · {s.title}
+              </div>
+              <div style={{ ...mono, fontSize: 10, color: C.dim, marginLeft: 26, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(STATE[s.state] || STATE.done).word} · {run(s)}{s.last ? ` · ${s.last}` : ''}</div>
+            </div>
+          ))}
+          {n.more > 0 && <div style={{ ...mono, fontSize: 10, color: C.dim, margin: '4px 0 0 4px' }}>└ {n.more} more below in the lanes</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Bar({ t, now, from, win, thin, sel, onPick }) {
   const { begin, end, live } = span(t, now)
   if (end < from) return null
@@ -130,6 +178,7 @@ export default function MapPage() {
   const [win, setWin] = useState(3600)
   const [busy, setBusy] = useState(null)
   const [note, setNote] = useState(null)
+  const [showTree, setShowTree] = useState(true)   // the structure of what is sent, open by default (MAP-AGENTS-1)
   const [legend, setLegend] = useState(false)   // the colour words, one press away (THREADS-1)
   const timer = useRef(null)
 
@@ -155,6 +204,7 @@ export default function MapPage() {
   const lanesAll = useMemo(() => buildLanes(board, now), [board, now])
   const lanes = lanesAll.filter(l => [...l.bars, ...l.subs].some(t => span(t, now).end >= from))
   const earlier = lanesAll.length - lanes.length
+  const tree = buildTree(lanesAll, now)
   const queue = useMemo(() => buildQueue(actions, tasks), [actions, tasks])
   const items = {}
   lanesAll.forEach(l => [...l.bars, ...l.subs].forEach(t => { items[t.key] = t }))
@@ -210,9 +260,13 @@ export default function MapPage() {
                              border: `1px solid ${win === s ? C.gold : C.line}`, color: win === s ? C.gold : C.dim }}>{label}</button>
           ))}
           <span onClick={(e) => e.stopPropagation()} style={{ display: 'contents' }}><Legend open={legend} onToggle={() => setLegend(o => !o)} mono={mono} faint={C.dim} ink={C.ink} /></span>
+          <button onClick={(e) => { e.stopPropagation(); setShowTree(o => !o) }}
+                  style={{ ...mono, fontSize: 11, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', backgroundColor: 'transparent',
+                           border: `1px solid ${showTree ? C.gold : C.line}`, color: showTree ? C.gold : C.dim }}>sent {tree.reduce((a, n) => a + n.agents + n.subs.filter(x => x.state === 'answering' || x.state === 'waiting').length, 0)}</button>
           <a href="/board" style={{ ...mono, fontSize: 11, color: C.dim }}>board</a>
           <a href="/talk?thread=new" style={{ ...mono, fontSize: 11, color: C.gold }}>+ new</a>
         </div>
+        {showTree && <Tree tree={tree} now={now} sel={sel} onPick={setSel} kindWord={kindWord} />}
         {note && <p style={{ ...mono, fontSize: 12, color: C.bad, margin: '0 14px 6px' }}>{note}</p>}
 
         {/* the time axis */}
@@ -246,6 +300,7 @@ export default function MapPage() {
                                       fontSize: r.thin ? 11 : 13, color: r.thin ? C.dim : l.head.state === 'done' ? C.dim : C.ink, ...(r.thin ? mono : {}) }} title={r.label}>
                           {!r.thin && <><StateDot state={tileState(l.head)} size={7} style={{ marginRight: 6 }} /><LaneMark lane={l.head.lane} size={6} style={{ marginRight: 7 }} /></>}
                           {r.label}
+                          {!r.thin && Number(l.head.agents) > 0 && <span style={{ ...mono, fontSize: 10, color: C.gold, marginLeft: 6 }}>+{l.head.agents} sent</span>}
                         </div>
                         <div style={{ position: 'relative', flex: 1, height: '100%', marginRight: 14 }}>
                           {r.bars.map(t => <Bar key={t.key} t={t} now={now} from={from} win={winMs} thin={r.thin} sel={sel === t.key} onPick={setSel} />)}
