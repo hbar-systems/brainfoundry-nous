@@ -1,6 +1,7 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { cellLine, cellState, sentOver, sendText, sendClip, Recorder } from '../lib/wall'
+import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall } from '../lib/wall'
+import WallOrbit from '../components/WallOrbit'
 
 // The wall (WALL-1, 2026-11-24). hbar, verbatim: "I still want to apply this view board where I see in parallel on
 // a dark screen every single system operating and then I can write into the small little box, whatever it is, I
@@ -20,6 +21,13 @@ import { cellLine, cellState, sentOver, sendText, sendClip, Recorder } from '../
 // (the /systems pane: /talk?pane=...&thread=... in a frame), for when the whole text is wanted.
 // Updates: one light request every three seconds, none while the tab is hidden (the /board pattern).
 // Look: dark on his word for this page; the console's own accent and font; few words at rest.
+//
+// Two looks (WALL-2, 2026-11-24, hbar: "concept good and design is nice, but in this case lets do more slick (so
+// maybe what you have is the generic one, and the personalized one is what I'm asking to be built for me"): the
+// grid above is the generic look, kept at /wall?look=grid; the orbit (ui/components/WallOrbit.js) is the personal
+// one: true black, the kept systems around the brain's own symbol. Which one a brain opens on, and which systems
+// its orbit keeps, is that brain's setting (GET/POST /cc/wall, localStorage when the bridge is away); ?look= wins
+// for one visit. The look switch sits quietly in a corner.
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -41,6 +49,15 @@ const CSS = `
 .wl-main{padding:14px 14px 20px;min-width:0}
 .wl-top{display:flex;align-items:baseline;gap:14px;padding:0 4px 10px;color:var(--wmute);font-size:12px;letter-spacing:.06em}
 .wl-top b{font-weight:500;color:var(--wdim)}.wl-top .on{color:var(--wlit)}
+.wl-top .wl-lk{margin-left:auto}
+.wl-lk{display:flex;gap:12px;font-size:11px;letter-spacing:.14em;color:var(--wmute,#4f4d49);text-transform:lowercase}
+.wl-lk button{color:inherit;opacity:.8}.wl-lk button:hover{color:var(--wink,#ecebe6)}.wl-lk button[aria-pressed=true]{color:var(--wdim,#8f8c85);cursor:default}
+.wl-lkf{position:absolute;left:22px;bottom:18px;z-index:6}
+.wl-orb{position:relative;min-width:0}
+.wl.orbit{background:#000}
+.wl-toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:7;display:flex;gap:14px;align-items:center;font-size:12px;color:var(--wdim,#8f8c85);
+  background:rgba(14,14,15,.92);border:1px solid rgba(255,255,255,.07);border-radius:999px;padding:7px 16px}
+.wl-toast button{color:var(--wlit);font-size:12px}
 .wl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(166px,1fr));gap:8px}
 .wl.with .wl-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .wl-c{background:var(--wcell);border-radius:12px;padding:9px 10px 8px;display:flex;flex-direction:column;gap:5px;min-width:0;
@@ -122,11 +139,22 @@ function Cell({ t, sent, rec, secs, open, onSend, onMic, onName }) {
   )
 }
 
+function LookSwitch({ look, onLook, className }) {
+  return (
+    <div className={'wl-lk ' + (className || '')} role="group" aria-label="the wall's look">
+      {['orbit', 'grid'].map(k => (
+        <button key={k} type="button" aria-pressed={look === k} onClick={() => look !== k && onLook(k)}
+          title={k === 'orbit' ? 'the kept systems around the brain' : 'every system at once'}>{k}</button>
+      ))}
+    </div>
+  )
+}
+
 function Side({ sid, thread, err, onClose }) {
   return (
     <aside className="wl-side" aria-label={`${sid} thread`}>
       <div className="wl-sh">
-        <span className="wl-nm">{sid}</span>
+        <span className="wl-nm">{sid === CENTRE ? 'the brain (central thread)' : sid}</span>
         {thread ? <a href={`/talk?thread=${encodeURIComponent(thread)}`} title="open the thread in full">full</a> : null}
         <button className="wl-x" onClick={onClose} aria-label={`close ${sid}`} title="close; it keeps running">close</button>
       </div>
@@ -145,7 +173,11 @@ export default function Wall() {
   const [side, setSide] = useState(null)       // the system whose whole thread is open beside
   const [sideErr, setSideErr] = useState('')
   const [mic, setMic] = useState({ sid: null, state: null, secs: 0 })
+  const [look, setLookState] = useState(null)  // 'grid' | 'orbit'
+  const [set, setSet] = useState(null)         // the orbit's kept systems (null: not chosen yet, start from use)
+  const [note, setNote] = useState(null)       // {text, undo}
   const timer = useRef(null)
+  const noteTimer = useRef(null)
   const recorder = useRef(null)
 
   const load = () => fetch('/cc/systems', { cache: 'no-store' })
@@ -155,6 +187,11 @@ export default function Wall() {
 
   useEffect(() => {
     recorder.current = new Recorder({ mediaDevices: navigator.mediaDevices, MediaRecorder: window.MediaRecorder })
+    const store = (() => { try { return window.localStorage } catch { return null } })()
+    loadWall(fetch, store).then(w => {
+      setLookState(pickLook(new URLSearchParams(window.location.search).get('look'), w))
+      if (Array.isArray(w.set)) setSet(w.set)
+    })
     const start = () => { if (!timer.current) { load(); timer.current = setInterval(load, 3000) } }
     const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
     const onVis = () => (document.visibilityState === 'visible' ? start() : stop())
@@ -168,6 +205,7 @@ export default function Wall() {
     document.addEventListener('keydown', onKey)
     return () => {
       stop(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('keydown', onKey)
+      clearTimeout(noteTimer.current)
       if (recorder.current) recorder.current.drop()
     }
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -218,6 +256,29 @@ export default function Wall() {
     } catch { setSideErr('the bridge did not answer') }
   }
 
+  const store = () => { try { return window.localStorage } catch { return null } }
+  const kept = keptSet(set === null ? null : { set }, tiles, null)
+  const tell = (text, undo) => {
+    clearTimeout(noteTimer.current)
+    setNote({ text, undo })
+    noteTimer.current = setTimeout(() => setNote(null), 6000)
+  }
+  const keep = (next) => {
+    setSet(next)
+    saveWall(fetch, store(), { set: next }).then(r => { if (r.kept !== 'bridge') tell('kept in this browser only: ' + (r.error || 'the bridge is away')) })
+  }
+  const onAdd = (sid) => keep(addTo(kept, sid))
+  const onLeave = (sid) => {
+    const before = kept
+    keep(removeFrom(kept, sid))
+    if (side === sid) setSide(null)
+    tell(`${sid.replace(/^hbar\./, '')} left the orbit`, () => { keep(before); setNote(null) })
+  }
+  const onLook = (k) => {
+    setLookState(k)
+    saveWall(fetch, store(), { look: k })
+  }
+
   // "sent" gives way to the thread's own line once it answers (or after a minute)
   const now = Date.now()
   const shownSent = (sid) => { const s = sent[sid]; return s && !sentOver(s, tileOf(sid), now) ? s : null }
@@ -227,13 +288,26 @@ export default function Wall() {
     <>
       <Head><title>Wall</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
-      <div className={'wl' + (side ? ' with' : '')}>
+      <div className={'wl' + (side ? ' with' : '') + (look === 'orbit' ? ' orbit' : '')}>
+        {look === 'orbit' ? (
+          <main className="wl-orb" aria-label="the orbit">
+            <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
+              sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
+              onAdd={onAdd} onLeave={onLeave} />
+            {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
+            <LookSwitch look={look} onLook={onLook} className="wl-lkf" />
+            {note ? (
+              <div className="wl-toast" role="status">{note.text}{note.undo ? <button onClick={note.undo}>undo</button> : null}</div>
+            ) : null}
+          </main>
+        ) : look === 'grid' ? (
         <main className="wl-main" aria-label="every system, live">
           {tiles.length ? (
             <div className="wl-top" aria-live="polite">
               <span className={lit ? 'on' : ''}><b>{lit}</b> active</span>
               <span><b>{running}</b> jobs running</span>
               <span><b>{tiles.length}</b> systems</span>
+              <LookSwitch look={look} onLook={onLook} />
             </div>
           ) : null}
           {data === false ? <p className="wl-note">The bridge is not answering at /cc/systems. The wall fills by itself once it does.</p> : null}
@@ -246,6 +320,7 @@ export default function Wall() {
             ))}
           </div>
         </main>
+        ) : <main className="wl-main" aria-label="the wall" />}
         {side ? <Side sid={side} thread={threadOf(side)} err={sideErr} onClose={() => setSide(null)} /> : null}
       </div>
     </>

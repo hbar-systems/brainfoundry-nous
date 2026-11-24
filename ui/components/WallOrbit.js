@@ -1,0 +1,260 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots } from '../lib/wall'
+
+// The orbit (WALL-2, 2026-11-24): the wall's personal look. hbar, verbatim: "it should be a full black screen as
+// space, feeling and only say 10 systems visible and spaced out and around , in center is hbar symbol which should
+// do what... not sure. decide. because 44 at once is too much, most wont be used. rather if i need to add a system
+// to the page i just have ability to add. but dont START WITH ALL 44."
+//
+// True black, a few fixed stars. The kept systems sit as bodies on one wide ring around the brain's own symbol.
+// A body at rest is its name, a light when something runs, the job count, and its one live line only when it has
+// something to say. Nothing moves on its own except the light. Each body keeps its one small box (type and Enter,
+// or the mic), sent in place exactly as the grid sends; a press on the name opens the whole thread beside.
+// The centre is the central thread (the world's standing thread): it glows with the total of jobs running; a press
+// opens its one box to speak or type to the brain as a whole.
+// Adding: the quiet "+" at the bottom of the ring opens the remaining systems as plain names, in place. Leaving:
+// press and hold a name, or the "leave" mark while its thread is open. A system outside the ring that runs
+// something shows as a faint dot on the outer ring with its count, so nothing running is hidden.
+// Phone: the same set as a calm vertical list on black, the symbol on top.
+
+const HOLD_MS = 650
+const short = (id) => String(id || '').replace(/^hbar\./, '')
+const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
+const CSS = `
+.wo{--obg:#000;--oink:#ecebe6;--odim:#8f8c85;--omute:#4f4d49;--olit:var(--accent,#c9a96e);--ease:cubic-bezier(.2,.7,.2,1);
+  position:relative;background:var(--obg);color:var(--oink);height:calc(100vh - var(--top, 52px));min-height:560px;overflow:hidden;
+  font:300 14px/1.4 var(--font-body,system-ui,sans-serif);
+  background-image:
+    radial-gradient(1px 1px at 8% 12%,rgba(255,255,255,.28),transparent 60%),radial-gradient(1px 1px at 23% 64%,rgba(255,255,255,.16),transparent 60%),
+    radial-gradient(1px 1px at 37% 9%,rgba(255,255,255,.2),transparent 60%),radial-gradient(1px 1px at 61% 88%,rgba(255,255,255,.18),transparent 60%),
+    radial-gradient(1px 1px at 72% 18%,rgba(255,255,255,.24),transparent 60%),radial-gradient(1px 1px at 91% 41%,rgba(255,255,255,.15),transparent 60%),
+    radial-gradient(1.5px 1.5px at 84% 76%,rgba(255,255,255,.22),transparent 60%),radial-gradient(1px 1px at 4% 83%,rgba(255,255,255,.14),transparent 60%),
+    radial-gradient(1px 1px at 49% 31%,rgba(255,255,255,.1),transparent 60%),radial-gradient(1px 1px at 15% 38%,rgba(255,255,255,.12),transparent 60%),
+    radial-gradient(1px 1px at 96% 7%,rgba(255,255,255,.2),transparent 60%),radial-gradient(1px 1px at 57% 55%,rgba(255,255,255,.08),transparent 60%)}
+.wo *{box-sizing:border-box}
+.wo :where(button){font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer}
+.wo :focus-visible{outline:1px solid var(--olit);outline-offset:4px;border-radius:8px}
+.wo-ring{position:absolute;left:13%;top:15%;width:74%;height:70%;border-radius:50%;border:1px solid rgba(255,255,255,.03);pointer-events:none}
+.wo-c{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:10px;z-index:3}
+.wo-sym{position:relative;width:112px;height:112px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.wo-sym .g{font:400 68px/1 var(--font-display,Georgia,serif);color:var(--odim);transition:color 900ms var(--ease),text-shadow 900ms var(--ease)}
+.wo-sym::before{content:'';position:absolute;inset:-14px;border-radius:50%;background:radial-gradient(circle,var(--olit) 0%,transparent 66%);opacity:0;transition:opacity 900ms var(--ease);pointer-events:none}
+.wo-c.lit .wo-sym .g{color:var(--olit)}
+.wo-c.lit .wo-sym::before{opacity:var(--glow,.12);animation:wo-breath 5.5s ease-in-out infinite}
+.wo-sym:hover .g{color:var(--oink)}
+.wo-cn{font-size:12px;letter-spacing:.14em;color:var(--omute);text-transform:lowercase;font-variant-numeric:tabular-nums;min-height:17px}
+.wo-c.lit .wo-cn{color:var(--odim)}
+.wo-cbox{display:flex;flex-direction:column;align-items:center;gap:8px;width:340px}
+.wo-cbox .wo-ln{max-width:340px;text-align:center}
+.wo-th{font-size:12px;color:var(--omute);letter-spacing:.06em}.wo-th:hover{color:var(--olit)}
+.wo-b{position:absolute;left:var(--x);top:var(--y);transform:translate(-50%,-26px);width:214px;padding:12px 12px 14px;display:flex;flex-direction:column;align-items:center;gap:6px;z-index:2;
+  background:radial-gradient(closest-side,#000 72%,rgba(0,0,0,0))}
+.wo-h{display:flex;align-items:center;gap:8px;max-width:100%}
+.wo-lt{width:6px;height:6px;border-radius:50%;flex:none;background:var(--omute);opacity:.6;transition:background-color 600ms var(--ease),box-shadow 600ms var(--ease)}
+.wo-b.lit .wo-lt,.wo-d .wo-lt{background:var(--olit);opacity:1;box-shadow:0 0 10px var(--olit);animation:wo-breath 3.2s ease-in-out infinite}
+.wo-nm{font-size:17px;letter-spacing:.02em;color:var(--odim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;
+  user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:color 300ms var(--ease)}
+.wo-b.lit .wo-nm,.wo-b:hover .wo-nm,.wo-b:focus-within .wo-nm,.wo-b.open .wo-nm{color:var(--oink)}
+.wo-b.open .wo-nm{color:var(--olit)}
+.wo-b.hold .wo-nm{color:#e07a5f}
+.wo-n{font-size:12px;color:var(--olit);font-variant-numeric:tabular-nums}
+.wo-lv{font-size:11px;color:var(--omute);letter-spacing:.06em}.wo-lv:hover{color:#e07a5f}
+.wo-ln{font-size:12px;line-height:1.4;color:var(--odim);max-width:190px;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.wo-ln.live,.wo-ln.waits{color:var(--oink)}.wo-ln.sent{color:var(--olit)}.wo-ln.error{color:#e07a5f}
+.wo-ln .k{color:var(--omute);margin-right:5px}
+.wo-box{display:flex;align-items:center;gap:2px;width:160px;height:28px;padding:0 2px 0 12px;border-radius:999px;border:1px solid rgba(255,255,255,.07);
+  opacity:.32;transition:opacity 300ms var(--ease),border-color 300ms var(--ease)}
+.wo-b:hover .wo-box,.wo-b:focus-within .wo-box,.wo-b.open .wo-box,.wo-box.on,.wo-cbox .wo-box{opacity:1;border-color:rgba(255,255,255,.14)}
+.wo-cbox .wo-box{width:340px;height:36px}
+.wo-in{flex:1;min-width:0;background:none;border:0;outline:none;color:var(--oink);font:inherit;font-size:13px;padding:0}
+.wo-in::placeholder{color:var(--omute)}
+.wo-m{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:50%;color:var(--omute);flex:none}
+.wo-m:hover{color:var(--olit)}
+.wo-m svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}
+.wo-m.rec{color:#e07a5f;animation:wo-breath 1.2s ease-in-out infinite}.wo-m.busy{opacity:.5;cursor:default}
+.wo-t{font-size:11px;color:#e07a5f;font-variant-numeric:tabular-nums}
+.wo-d{position:absolute;left:var(--x);top:var(--y);transform:translate(-50%,-50%);display:flex;align-items:center;gap:6px;opacity:.5;z-index:1;
+  font-size:11px;color:var(--odim);transition:opacity 300ms var(--ease)}
+.wo-d .wo-lt{width:4px;height:4px}
+.wo-d:hover,.wo-d:focus-visible{opacity:1}
+.wo-d .wo-n{font-size:11px}
+.wo-plus{position:absolute;left:var(--x);top:var(--y);transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.1);color:var(--omute);display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;z-index:2;
+  transition:color 300ms var(--ease),border-color 300ms var(--ease)}
+.wo-plus:hover,.wo-plus.on{color:var(--oink);border-color:rgba(255,255,255,.24)}
+.wo-add{position:absolute;left:50%;bottom:calc(15% + 34px);transform:translateX(-50%);width:min(620px,84%);max-height:46%;overflow:auto;z-index:5;
+  display:flex;flex-wrap:wrap;justify-content:center;gap:4px 18px;padding:18px 22px;border-radius:18px;background:#0b0b0c;box-shadow:0 0 0 40px rgba(0,0,0,.55);
+  border:1px solid rgba(255,255,255,.07);animation:wo-in 220ms var(--ease)}
+.wo-add button{font-size:14px;color:var(--odim);padding:4px 2px;transition:color 200ms var(--ease)}
+.wo-add button:hover,.wo-add button:focus-visible{color:var(--oink)}
+.wo-add button.lit{color:var(--oink)}.wo-add button.lit::after{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--olit);margin-left:6px;vertical-align:middle}
+.wo-add p{width:100%;text-align:center;margin:0 0 6px;font-size:11px;letter-spacing:.14em;color:var(--omute);text-transform:lowercase}
+.wo-empty{position:absolute;left:50%;top:calc(50% + 120px);transform:translateX(-50%);color:var(--omute);font-size:13px;text-align:center}
+@keyframes wo-breath{50%{opacity:.45}}
+@keyframes wo-in{from{opacity:0;transform:translate(-50%,6px)}}
+@media(max-width:699px){
+  .wo{height:auto;min-height:calc(100vh - var(--top, 52px));overflow:visible;display:flex;flex-direction:column;align-items:stretch;padding:28px 18px 40px;gap:0}
+  .wo-ring{display:none}
+  .wo-c{position:static;transform:none;margin:0 auto 26px}
+  .wo-sym{width:84px;height:84px}.wo-sym .g{font-size:52px}
+  .wo-cbox,.wo-cbox .wo-box,.wo-cbox .wo-ln{width:100%;max-width:none}
+  .wo-b{position:static;transform:none;width:auto;background:none;display:grid;grid-template-columns:minmax(0,1fr);gap:7px;align-items:stretch;padding:15px 2px;border-top:1px solid rgba(255,255,255,.05)}
+  .wo-h{justify-content:flex-start}
+  .wo-nm{max-width:none;font-size:17px}
+  .wo-ln{text-align:left;max-width:none}
+  .wo-box{width:100%;opacity:.6;height:34px}
+  .wo-d{position:static;transform:none;padding:9px 2px;border-top:1px solid rgba(255,255,255,.04)}
+  .wo-plus{position:static;transform:none;margin:22px auto 0}
+  .wo-add{position:static;transform:none;width:100%;max-height:none;margin-top:14px;animation:none}
+  .wo-empty{position:static;transform:none;margin:8px 0 0}
+}
+@media(hover:none){.wo-box{opacity:.6}}
+@media(prefers-reduced-motion:reduce){.wo *{animation:none!important;transition:none!important}}
+`
+
+const ICON = {
+  mic: <><rect x="6" y="2" width="4" height="8" rx="2" /><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14.5" /></>,
+  stop: <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" />,
+}
+const Svg = ({ k }) => <svg viewBox="0 0 16 16" aria-hidden="true">{ICON[k]}</svg>
+
+function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus }) {
+  const [text, setText] = useState('')
+  const recording = rec === 'rec'
+  const busy = rec === 'busy'
+  const key = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && text.trim()) { e.preventDefault(); onSend(sid, text); setText('') }
+  }
+  const who = sid === CENTRE ? 'the brain' : sid
+  return (
+    <div className={'wo-box' + (recording || text ? ' on' : '')}>
+      <input className="wo-in" value={text} onChange={e => setText(e.target.value)} onKeyDown={key} autoFocus={autoFocus}
+        placeholder={recording ? 'listening' : busy ? 'hearing it' : wide ? 'say it to the brain' : 'say'}
+        aria-label={`say to ${who}`} disabled={busy} maxLength={8000} />
+      {recording ? <span className="wo-t">{fmt(secs)}</span> : null}
+      <button type="button" className={'wo-m' + (recording ? ' rec' : busy ? ' busy' : '')} onClick={() => onMic(sid)} disabled={busy}
+        aria-label={recording ? 'stop and send' : busy ? 'sending the recording' : `speak to ${who}`}
+        title={recording ? 'tap to stop and send, Esc drops it' : `speak to ${who}`}>
+        <Svg k={recording ? 'stop' : 'mic'} />
+      </button>
+    </div>
+  )
+}
+
+function Line({ ln }) {
+  const lead = ln.kind === 'sent' ? 'sent' : ln.kind === 'job' ? 'job' : ln.kind === 'waits' ? 'waits' : ''
+  return (
+    <p className={'wo-ln ' + ln.kind} title={ln.text || undefined}>
+      {lead ? <span className="k">{lead}</span> : null}{ln.text}
+    </p>
+  )
+}
+
+// A line only when it has something to say: live, just sent, an error, or a running job. A finished answer is
+// not repeated at rest.
+const speaks = (ln) => ['live', 'waits', 'sent', 'error', 'job'].includes(ln.kind) && !!ln.text
+
+function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave }) {
+  const st = cellState(t)
+  const ln = cellLine(t, sent)
+  const hold = useRef(null)
+  const hold2 = useRef(null)
+  const held = useRef(false)
+  const [holding, setHolding] = useState(false)
+  const down = (e) => {
+    if (e.button && e.button !== 0) return
+    held.current = false
+    setHolding(false)
+    clearTimeout(hold.current)
+    hold.current = setTimeout(() => setHolding(true), 220)
+    clearTimeout(hold2.current)
+    hold2.current = setTimeout(() => { held.current = true; setHolding(false); onLeave(t.id) }, HOLD_MS)
+  }
+  const up = () => { clearTimeout(hold.current); clearTimeout(hold2.current); setHolding(false) }
+  const click = () => { if (held.current) { held.current = false; return } onName(t.id) }
+  useEffect(() => () => { clearTimeout(hold.current); clearTimeout(hold2.current) }, [])
+  return (
+    <section className={'wo-b' + (st.on ? ' lit' : '') + (open ? ' open' : '') + (holding ? ' hold' : '')} style={{ '--x': at.x + '%', '--y': at.y + '%' }}
+      aria-label={t.id}>
+      <div className="wo-h">
+        <span className="wo-lt" aria-hidden="true" />
+        <button className="wo-nm" onClick={click} onPointerDown={down} onPointerUp={up} onPointerLeave={up} onPointerCancel={up}
+          onContextMenu={e => e.preventDefault()} title={`${t.id}: press to open the whole thread beside; hold to let it leave the orbit`}>
+          {short(t.id)}
+        </button>
+        {st.running ? <span className="wo-n" title={`${st.running} running now`}>{st.running}</span> : null}
+        {open ? <button className="wo-lv" onClick={() => onLeave(t.id)} title={`take ${t.id} out of the orbit; + brings it back`}>leave</button> : null}
+      </div>
+      {speaks(ln) ? <Line ln={ln} /> : null}
+      <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} />
+    </section>
+  )
+}
+
+export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready }) {
+  const [adding, setAdding] = useState(false)
+  const [centre, setCentre] = useState(false)
+  const byId = Object.fromEntries((tiles || []).map(t => [t.id, t]))
+  const kept = (set || []).filter(id => byId[id])
+  const dots = rimDots(tiles, kept)
+  const rest = (tiles || []).filter(t => t.id !== CENTRE && !kept.includes(t.id))
+  const world = byId[CENTRE] || { id: CENTRE }
+  const wln = cellLine(world, sentOf(CENTRE))
+  const lit = running > 0 || cellState(world).on
+  const glow = Math.min(0.12 + running * 0.035, 0.42)
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape') { setAdding(false); setCentre(false) } }
+    document.addEventListener('keydown', k)
+    return () => document.removeEventListener('keydown', k)
+  }, [])
+  const micOf = (sid) => (mic.sid === sid ? mic.state : null)
+  const secsOf = (sid) => (mic.sid === sid ? mic.secs : 0)
+  const plus = orbitPlace(0, kept.length)
+  return (
+    <div className="wo" aria-label="the orbit: the systems you keep, around the brain">
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <div className="wo-ring" aria-hidden="true" />
+      <div className={'wo-c' + (lit ? ' lit' : '')} style={{ '--glow': glow }}>
+        <button className="wo-sym" onClick={() => setCentre(c => !c)} aria-expanded={centre}
+          title={centre ? 'close the box; the brain keeps going' : 'speak or type to the brain as a whole (the central thread)'}>
+          <span className="g">{symbol}</span>
+        </button>
+        <span className="wo-cn" aria-live="polite">{running ? `${running} running` : ready ? 'quiet' : ''}</span>
+        {centre ? (
+          <div className="wo-cbox">
+            {speaks(wln) ? <Line ln={wln} /> : null}
+            <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus />
+            <button className="wo-th" onClick={() => onName(CENTRE)}>{side === CENTRE ? 'close the thread' : 'the whole thread'}</button>
+          </div>
+        ) : (speaks(wln) ? <div className="wo-cbox"><Line ln={wln} /></div> : null)}
+      </div>
+      {kept.map((id, i) => (
+        <Body key={id} t={byId[id]} at={orbitPlace(i + 1, kept.length)} sent={sentOf(id)} open={side === id}
+          rec={micOf(id)} secs={secsOf(id)} onSend={onSend} onMic={onMic} onName={onName} onLeave={onLeave} />
+      ))}
+      {dots.map((d, i) => {
+        const at = rimPlace(i, dots.length, kept.length)
+        return (
+          <button key={d.id} className="wo-d" style={{ '--x': at.x + '%', '--y': at.y + '%' }} onClick={() => onName(d.id)}
+            title={`${d.id} runs ${d.running || 'a turn'} outside the orbit: press to open its thread; + keeps it`}>
+            <span className="wo-lt" aria-hidden="true" />{short(d.id)}{d.running ? <span className="wo-n">{d.running}</span> : null}
+          </button>
+        )
+      })}
+      {ready && !kept.length ? <p className="wo-empty">nothing kept in the orbit yet; + brings a system in</p> : null}
+      {kept.length < SET_MAX && rest.length ? (
+        <button className={'wo-plus' + (adding ? ' on' : '')} style={{ '--x': plus.x + '%', '--y': plus.y + '%' }} onClick={() => setAdding(a => !a)}
+          aria-expanded={adding} aria-label="add a system to the orbit" title={adding ? 'close' : 'add a system'}>{adding ? '×' : '+'}</button>
+      ) : null}
+      {adding ? (
+        <div className="wo-add" role="group" aria-label="systems outside the orbit">
+          <p>bring one in</p>
+          {rest.map(t => (
+            <button key={t.id} className={cellState(t).on ? 'lit' : ''} onClick={() => { onAdd(t.id); if (kept.length + 1 >= SET_MAX) setAdding(false) }}>{short(t.id)}</button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}

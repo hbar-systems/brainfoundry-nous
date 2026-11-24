@@ -167,4 +167,109 @@ class Recorder {
   }
 }
 
-module.exports = { cellLine, cellState, sentOver, sendText, sendClip, Recorder, clipName }
+// ---- the orbit (WALL-2, 2026-11-24) ----
+// hbar: "it should be a full black screen as space ... only say 10 systems visible and spaced out and around, in
+// center is hbar symbol ... dont START WITH ALL 44 ... if i need to add a system to the page i just have ability to
+// add". The grid above stays the generic look (/wall?look=grid); the orbit is the personal one. Its kept set lives
+// on the bridge (GET/POST /cc/wall, beside the layout) with localStorage as the fallback when the bridge is away.
+//
+//   pickLook(query, setting)    ?look= wins, else the brain's setting, else the grid
+//   keptSet(setting, tiles, local)  the systems in the orbit, in order: the bridge's set, else the browser's, else
+//                               the ones in use (a standing thread or something running), at most START_MAX
+//   addTo / removeFrom          a new set, never the same array
+//   rimDots(tiles, set)         systems outside the orbit that run something now: nothing running is hidden
+//   orbitPlace(k, n)            where body k of n sits, in % of the sky; slot 0 (the bottom) is the "+"
+//   rimPlace(i, m, n)           where outside dot i of m sits, on the outer ring between the bodies
+//   loadWall / saveWall         the setting from the bridge, kept in localStorage too
+
+const CENTRE = 'world'          // the central thread: the world's standing thread is the symbol in the middle
+const LOOKS = ['grid', 'orbit']
+const START_MAX = 10
+const SET_MAX = 16
+const LOCAL_KEY = 'cc.wall'
+
+function pickLook(query, setting) {
+  const q = String(query || '').toLowerCase()
+  if (LOOKS.includes(q)) return q
+  const s = setting && setting.look
+  return LOOKS.includes(s) ? s : 'grid'
+}
+
+function keptSet(setting, tiles, local) {
+  const have = new Set((tiles || []).map(t => t && t.id).filter(Boolean))
+  const clean = (ids) => {
+    const out = []
+    for (const x of ids || []) if (typeof x === 'string' && x !== CENTRE && have.has(x) && !out.includes(x)) out.push(x)
+    return out.slice(0, SET_MAX)
+  }
+  if (setting && Array.isArray(setting.set)) return clean(setting.set)
+  if (local && Array.isArray(local.set)) return clean(local.set)
+  const used = (tiles || []).filter(t => t && t.id !== CENTRE && (t.thread || cellState(t).running))
+  used.sort((a, b) => cellState(b).running - cellState(a).running)
+  return clean(used.map(t => t.id)).slice(0, START_MAX)
+}
+
+const addTo = (set, id) => (!id || id === CENTRE || (set || []).includes(id) || (set || []).length >= SET_MAX ? [...(set || [])] : [...(set || []), id])
+const removeFrom = (set, id) => (set || []).filter(x => x !== id)
+
+function rimDots(tiles, set) {
+  const kept = new Set(set || [])
+  return (tiles || []).filter(t => t && t.id !== CENTRE && !kept.has(t.id) && cellState(t).on)
+    .map(t => ({ id: t.id, running: cellState(t).running, live: !!(t.said && t.said.live) }))
+}
+
+const RX = 37, RY = 35, ORX = 47, ORY = 45
+const rnd = (v) => Math.round(v * 100) / 100
+function orbitPlace(k, n) {
+  const slots = (n || 0) + 1
+  const a = Math.PI / 2 + (k * 2 * Math.PI) / slots
+  return { x: rnd(50 + RX * Math.cos(a)), y: rnd(50 + RY * Math.sin(a)) }
+}
+function rimPlace(i, m, n) {
+  const slots = Math.max((n || 0) + 1, m || 1)
+  const a = Math.PI / 2 + ((i + 0.5) * 2 * Math.PI) / slots
+  return { x: rnd(50 + ORX * Math.cos(a)), y: rnd(50 + ORY * Math.sin(a)) }
+}
+
+function readLocal(storage) {
+  try { const v = JSON.parse((storage && storage.getItem(LOCAL_KEY)) || 'null'); return v && typeof v === 'object' ? v : null } catch { return null }
+}
+function writeLocal(storage, v) {
+  try { if (storage) storage.setItem(LOCAL_KEY, JSON.stringify(v)) } catch {}
+}
+
+// {look, set, from: 'bridge' | 'browser' | 'none'}
+async function loadWall(f, storage) {
+  const local = readLocal(storage)
+  try {
+    const r = await f('/cc/wall', { cache: 'no-store' })
+    if (r.ok) {
+      const d = await json(r)
+      if (d && (d.look || d.set !== undefined)) {
+        const v = { look: d.look || null, set: Array.isArray(d.set) ? d.set : null }
+        if (v.set) writeLocal(storage, v)
+        return { ...v, from: 'bridge' }
+      }
+    }
+  } catch {}
+  return local ? { look: local.look || null, set: Array.isArray(local.set) ? local.set : null, from: 'browser' } : { look: null, set: null, from: 'none' }
+}
+
+// Keeps it in the browser at once, then on the bridge; {ok, kept: 'bridge' | 'browser', error?}
+async function saveWall(f, storage, patch) {
+  const v = { ...(readLocal(storage) || {}), ...patch }
+  writeLocal(storage, v)
+  try {
+    const r = await post(f, '/cc/wall', patch)
+    const d = await json(r)
+    if (r.ok && d.ok !== false) return { ok: true, kept: 'bridge' }
+    return { ok: true, kept: 'browser', error: d.error || `the bridge answered ${r.status}` }
+  } catch {
+    return { ok: true, kept: 'browser', error: 'the bridge did not answer' }
+  }
+}
+
+module.exports = {
+  cellLine, cellState, sentOver, sendText, sendClip, Recorder, clipName,
+  CENTRE, LOOKS, START_MAX, SET_MAX, LOCAL_KEY, pickLook, keptSet, addTo, removeFrom, rimDots, orbitPlace, rimPlace, loadWall, saveWall,
+}

@@ -36,6 +36,7 @@ Endpoints (JSON):
   GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail,said}],built} (BOARD-3/4, cc_systems.py; said: WALL-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
+  GET  /cc/wall  POST /cc/wall {"look"?,"set"?}  the wall's look (grid | orbit) and the systems kept in the orbit (WALL-2)
   POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
@@ -5583,6 +5584,46 @@ def _systems_view() -> dict:
     return d
 
 
+# The wall's setting (WALL-2, 2026-11-24, hbar: "dont START WITH ALL 44 ... if i need to add a system to the page i
+# just have ability to add"). GET /cc/wall {look, set, seed, max}: the look /wall opens on and the systems kept in
+# its orbit. The owner's own choice (POST /cc/wall, kept beside the layout in layout.json) wins; else the world's
+# seed <world>/ops/wall/wall.json {"look","set"} (the brain's measured first set); else the generic grid and no set
+# (the page then starts from the systems in use). Ids not in the registry are dropped on the way out.
+WALL_SEED = Path(os.environ.get("CC_WALL_SEED", "").strip() or str(Path(WORLD_DIR or "/nonexistent") / "ops" / "wall" / "wall.json"))
+
+
+def _wall_seed() -> dict:
+    try:
+        return cc_layout.validate_wall({k: v for k, v in json.loads(WALL_SEED.read_text()).items() if k in ("look", "set")})
+    except (OSError, ValueError, AttributeError, cc_layout.LayoutError):
+        return {"look": None, "set": None}
+
+
+def _wall_view() -> dict:
+    own, seed = LAYOUT.wall(), _wall_seed()
+    known = _systems_known()
+    ids = own["set"] if own["set"] is not None else seed["set"]
+    return {"look": own["look"] or seed["look"] or "grid",
+            "set": [x for x in ids if x in known] if ids is not None else None,
+            "seed": own["set"] is None and seed["set"] is not None, "max": cc_layout.WALL_SET_MAX,
+            "looks": list(cc_layout.WALL_LOOKS)}
+
+
+def _wall_save(body) -> tuple[int, dict]:
+    if not isinstance(body, dict):
+        return 400, {"ok": False, "error": "give look and/or set"}
+    if isinstance(body.get("set"), list):
+        known = _systems_known()
+        bad = [x for x in body["set"] if x not in known]
+        if bad:
+            return 400, {"ok": False, "error": f"not a system here: {str(bad[0])[:64]}"}
+    try:
+        LAYOUT.set_wall(body)
+    except cc_layout.LayoutError as e:
+        return 400, {"ok": False, "error": str(e)}
+    return 200, {"ok": True, **_wall_view()}
+
+
 # WALL-1 (2026-11-24, hbar: "all I need is that text box to speak into it I don't even have to see the entire
 # text"): each tile carries `said`, the ONE line its standing thread said last: {text, live, waiting, at}. While
 # a turn runs it is the run's own last line (its tool step or the sentence being written, live: true); else the
@@ -6122,6 +6163,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view())
+        elif route == "/wall":
+            self._send(200, _wall_view())
         elif route == "/dashboard":
             self._send(200, _dashboard_view())
         elif route == "/listening":
@@ -6373,6 +6416,9 @@ class Handler(BaseHTTPRequestHandler):
             mt = body.get("mtime")
             d = TAPE.write(body.get("path"), body.get("text"), mt if isinstance(mt, int) and not isinstance(mt, bool) else None)
             self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
+            return
+        if route == "/wall":
+            self._send(*_wall_save(self._json(limit=4000)))
             return
         if route == "/systems/thread":
             body = self._json(limit=2000)
