@@ -147,6 +147,9 @@ const CC_PHONE_CSS = `.cc-chips button { white-space: nowrap; }
   .cc-chips { position: static !important; justify-content: flex-start !important; }
   .cc-threads-pop { white-space: normal; }
   .cc-conv { min-height: 140px !important; }
+  /* iOS zooms the page into any text box under 16 px and leaves it zoomed (hbar 2026-11-25, "always slightly adjusting size"):
+     the composer was 15 px in a pane and followed a smaller saved text size. Every box holds 16 px or more on a phone. */
+  textarea, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]) { font-size: max(16px, 1em) !important; }
 }`
 
 function Btn({ children, onClick, disabled, primary, small, title, accent }) {
