@@ -7,6 +7,7 @@ import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import SidesFooter from '../components/SidesFooter'
 import HelpButton from '../components/HelpButton'
+import ListenStrip from '../components/ListenStrip'
 import { watchWall } from '../lib/wallpaper'
 import { watchSkin, setLayoutLook, PREPAINT } from '../lib/skin'
 
@@ -525,6 +526,8 @@ export default function App({ Component, pageProps }) {
       {!embedded && <SidesFooter />}
       {/* ask hbar (MEMBERS-14): one fixed corner button on every top-level screen, never inside a pane */}
       {!embedded && <HelpButton />}
+      {/* the radio (LISTEN-1): the console's one audio owner, top-level only, so a page or pane change never stops it */}
+      {!embedded && <ListenStrip />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',

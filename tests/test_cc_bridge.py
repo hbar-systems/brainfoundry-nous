@@ -1416,7 +1416,7 @@ def test_activity_lights_shape(monkeypatch, tmp_path):
 
 def test_radio_link_returns_the_brain_link(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=True)
-    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: {"url": "https://orfeo.music/radio?token=t.t.t", "taste": "afro house", "event": {"score": 0.21}} if path == "/v1/radio/subscribe-token" and body == {"station": "https://orfeo.music"} else None)
+    monkeypatch.setattr(m, "_brain_api_why", lambda method, path, body=None: {"url": "https://orfeo.music/radio?token=t.t.t", "taste": "afro house", "event": {"score": 0.21}} if path == "/v1/radio/subscribe-token" and body == {"station": "https://orfeo.music"} else None)
     code, out = m._radio_link({})
     assert code == 200 and out["ok"] and out["url"].startswith("https://orfeo.music/radio?token=")
     assert out["event"]["score"] == 0.21
@@ -1424,11 +1424,40 @@ def test_radio_link_returns_the_brain_link(monkeypatch, tmp_path):
 
 def test_radio_link_refuses_without_token_or_https(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=True)
-    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: None)
+    monkeypatch.setattr(m, "_brain_api_why", lambda method, path, body=None: None)
     code, out = m._radio_link({"station": "https://orfeo.music"})
     assert code == 503 and not out["ok"]
     code, out = m._radio_link({"station": "http://orfeo.music"})
     assert code == 400
+
+
+def test_radio_link_names_the_apis_own_reason(monkeypatch, tmp_path):
+    # LISTEN-1: the api's 503 detail reaches `cc-job radio`, instead of the four setting names
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            assert self.headers.get("X-API-Key") == "k"
+            body = b'{"detail": "no public https base URL: set BRAIN_PUBLIC_URL"}'
+            self.send_response(503); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    monkeypatch.setattr(m, "BRAIN_API_KEY", "k")
+    monkeypatch.setattr(m, "BRAIN_API_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+    code, out = m._radio_link({})
+    srv.shutdown()
+    assert code == 503 and out["error"] == "the brain's api said (503): no public https base URL: set BRAIN_PUBLIC_URL"
+    monkeypatch.setattr(m, "BRAIN_API_KEY", "")
+    code, out = m._radio_link({})
+    assert code == 503 and "BRAIN_API_KEY" in out["error"]
 
 
 def test_notify_rate_limit_and_flood_line(monkeypatch, tmp_path):
