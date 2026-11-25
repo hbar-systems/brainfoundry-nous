@@ -263,3 +263,16 @@ def test_tick_and_run_refuse_a_rewritten_charter(ag):
     b = ag.update(a["id"], {"every_minutes": 60})
     assert ag.tick(opener=lambda a, c, w: seen.append(a) or "J1790000001", seals={b["id"]: ag.seal_of(b)})
     assert len(seen) == 1
+
+
+def test_non_agent_files_in_the_folder_are_not_agents(ag):
+    """AGENTS-FIX-1 (2026-11-25): permissions.json in ~/agents made list fail with KeyError 'id', so the
+    bridge's first-use seal migration sealed nothing and every tick refused every agent."""
+    a = ag.create(BODY)
+    (ag.AGENTS_DIR / "permissions.json").write_text(json.dumps({"_about": "x", "read_dirs": [], "bash_allow": []}))
+    (ag.AGENTS_DIR / "stray.json").write_text(json.dumps({"id": "someone-else", "name": "n"}))
+    (ag.AGENTS_DIR / "list.json").write_text(json.dumps(["not", "a", "dict"]))
+    v = ag.view()
+    assert [x["id"] for x in v["agents"]] == [a["id"]] and all(x.get("seal") for x in v["agents"])
+    assert [x["id"] for x in ag.load_all()] == [a["id"]]
+    assert ag.main(["cc_agents.py", "list"]) == 0
