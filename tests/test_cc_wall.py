@@ -234,8 +234,15 @@ def test_wall_page_wiring_and_systems_untouched():
     assert "from '../lib/wall'" in w and "fetch(systemsUrl(depthRef.current), { cache: 'no-store' })" in w   # /cc/systems; ?depth= while a layer is open (WALL-3)
     assert "setInterval(load, 3000)" in w and "document.visibilityState === 'visible'" in w       # none while hidden
     assert "sendText(fetch, sid, text, threadOf(sid))" in w and "sendClip(fetch, sid, blob, threadOf(sid))" in w
-    assert "/talk?pane=wall-" in w and "router" not in w and "location.href" not in w             # never navigates
+    # LINE-TALK-1 (2026-11-25): the corner switch to the columns is the one navigation (asked for); sending never navigates
+    SWITCH = ("    window.location.href = columnsUrl(look === 'orbit' ? kept : [], side)\n",
+              "    if (readView(store) === 'columns' && q.get('view') !== 'wall' && !q.get('look')) { window.location.replace('/systems'); return }\n")
+    assert all(x in w for x in SWITCH)
+    w0 = w
+    for x in SWITCH:
+        w0 = w0.replace(x, "")
+    assert "/talk?pane=wall-" in w and "router" not in w0 and "location.href" not in w0 and "location.replace" not in w0   # never navigates
     assert "<Head><title>Wall</title></Head>" in w
     assert not (ROOT / "ui" / "pages" / "wall").exists()                                         # one /wall route
     sy = (ROOT / "ui" / "pages" / "systems" / "index.js").read_text()
-    assert "lib/wall" not in sy
+    assert [ln for ln in sy.splitlines() if "lib/wall" in ln] == ["import { switchView } from '../../lib/wall'"]   # LINE-TALK-1: only the switch back

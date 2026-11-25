@@ -8524,13 +8524,28 @@ def _remember_follow(p: Dict[str, Any], raw: str) -> None:
     _approve_start([p], cont=True)
 
 
-def _pending_document_proposals() -> List[Dict[str, Any]]:
-    # IMPORT-PACE-1: every pending one (the 1000 cap here showed "Remember all 1000" of 1,825)
-    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": PENDING_LIST_MAX},
+def _document_proposals(status: str) -> List[Dict[str, Any]]:
+    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": status, "limit": PENDING_LIST_MAX},
                      headers=_nodeos_headers(), timeout=30)
     r.raise_for_status()
     items = r.json().get("proposals") or []
     return [p for p in items if p.get("memory_type") == "document_embedding" and p.get("proposal_id")]
+
+
+def _pending_document_proposals() -> List[Dict[str, Any]]:
+    # IMPORT-PACE-1: every pending one (the 1000 cap here showed "Remember all 1000" of 1,825)
+    return _document_proposals("PENDING")
+
+
+def _approved_unstored_proposals() -> List[Dict[str, Any]]:
+    """MEMBERS-16: proposals already APPROVED whose text is still kept: the worker decides before it reads,
+    and a stored document's text is deleted, so these were mid-read when the api stopped (1 of 4 test notes
+    on Elena's and Alexander's brains, 2026-11-25). Each comes back marked so it is not decided twice."""
+    out = []
+    for p in _document_proposals("APPROVED"):
+        if (PROPOSAL_TEXT_DIR / f"{p['proposal_id']}.txt").exists():
+            out.append({**p, "approved": True})
+    return out
 
 
 def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
@@ -8549,9 +8564,10 @@ def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
         name = (p.get("source_refs") or {}).get("filename") or pid
         _APPROVE_ALL["current"] = name
         try:
-            d = _nodeos_decide_memory(pid, "APPROVE", "operator (approve all)")
-            if not d or str(d.get("status", "APPROVED")).upper() not in ("APPROVED", "OK"):
-                raise RuntimeError(f"decide returned {d}")
+            if not p.get("approved"):   # MEMBERS-16: one already approved before a restart is read, not decided again
+                d = _nodeos_decide_memory(pid, "APPROVE", "operator (approve all)")
+                if not d or str(d.get("status", "APPROVED")).upper() not in ("APPROVED", "OK"):
+                    raise RuntimeError(f"decide returned {d}")
             saved = _load_proposal_text(pid)
             if not saved:
                 raise RuntimeError("no persisted text (re-propose it)")
@@ -8673,30 +8689,56 @@ def documents_approve_all_status(api_key: str = Depends(get_api_key)):
     return dict(_APPROVE_ALL)
 
 
+# MEMBERS-16: on a shared box the hourly disk check (scripts/member_limits.py disk --write-share, root) writes
+# the brain's measured use and its share here, in the api's own runtime volume: {quota_gb, used_bytes, at}.
+_DISK_SHARE_FILE = RUNTIME_DIR / "disk_share.json"
+
+
+def _disk_share() -> Dict[str, Any]:
+    """The brain's disk share on a shared box: the quota (the check's file, else BRAIN_LIMIT_DISK_GB) and,
+    when measured, what is left of it. {share_gb, left_bytes, measured_at}; all None on a box of its own."""
+    q, used, at = None, None, None
+    try:
+        j = json.loads(_DISK_SHARE_FILE.read_text(encoding="utf-8"))
+        q = float(j.get("quota_gb") or 0) or None
+        used = int(j["used_bytes"]) if j.get("used_bytes") is not None else None
+        at = j.get("at")
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    if q is None:
+        try:
+            q = float(os.environ.get("BRAIN_LIMIT_DISK_GB") or 0) or None
+        except ValueError:
+            q = None
+    if q is None:
+        return {"share_gb": None, "left_bytes": None, "measured_at": None}
+    left = int(q * 1024 ** 3) - (used or 0)
+    return {"share_gb": q, "left_bytes": max(0, left), "measured_at": at}
+
+
 def _survey_cap() -> int:
-    """The byte cap of one whole-computer run on this box now (laptop_survey.survey_max_bytes)."""
+    """The byte cap of one whole-computer run on this box now (laptop_survey.survey_max_bytes): the smaller of
+    the fixed cap, the free disk less a tenth, and (MEMBERS-16) what is left of the brain's share."""
     import shutil as _shutil
     try:
         du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
         free, total = du.free, du.total
     except OSError:
         free, total = None, None
-    return _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+    return _laptop_survey.survey_max_bytes(dict(os.environ), free, total, _disk_share()["left_bytes"])
 
 
 def _room() -> Dict[str, Any]:
     """MEMBERS-15 (Anne's question 2026-11-25: "do we have limits?"): the plain limits the home states
     beside the import: one run's file and byte cap, and the brain's disk share on a shared box
-    (BRAIN_LIMIT_DISK_GB, docs/MEMBER_LIMITS.md) when the admin set one."""
-    try:
-        q = float(os.environ.get("BRAIN_LIMIT_DISK_GB") or 0) or None
-    except ValueError:
-        q = None
+    (docs/MEMBER_LIMITS.md) when the admin set one; MEMBERS-16: and what is left of it."""
+    sh = _disk_share()
     try:
         cap = _survey_cap()
     except Exception:  # noqa: BLE001
         cap = None
-    return {"run_files": _laptop_survey.SURVEY_MAX_FILES, "run_bytes": cap, "share_gb": q}
+    return {"run_files": _laptop_survey.SURVEY_MAX_FILES, "run_bytes": cap, "share_gb": sh["share_gb"],
+            "share_left_bytes": sh["left_bytes"], "share_measured_at": sh["measured_at"]}
 
 
 @app.get("/documents/waiting")
@@ -8740,18 +8782,32 @@ def _resume_remember_all() -> None:
         return
 
     def _go():
-        from api import chat_continue as _cc
         time.sleep(20)   # NodeOS and the database come up beside the api
         try:
-            items = _pending_document_proposals()
+            items = _resume_items(intent)
         except Exception as e:  # noqa: BLE001
             print(f"[approve-all] resume: could not list pending: {type(e).__name__}", flush=True)
             return
-        items = [p for p in items if _pace.kind_matches((p.get("source_refs") or {}).get("filename") or "", intent.get("kind") or "all", _cc.CHAT_DOC)
-                 and _remember_covers(intent, p) and _proposal_scan_risk(p["proposal_id"]) != "high"]
-        print(f"[approve-all] resume after restart: {len(items)} waiting", flush=True)
+        mid = sum(1 for p in items if p.get("approved"))
+        print(f"[approve-all] resume after restart: {len(items)} waiting ({mid} were mid-read)", flush=True)
         _approve_start(items)
     threading.Thread(target=_go, name="approve-all-resume", daemon=True).start()
+
+
+def _resume_items(intent: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """What a kept yes still owes after a restart: the pending files it covers and (MEMBERS-16) the ones it
+    covers that were approved but not yet stored when the api stopped. Mid-read ones first."""
+    from api import chat_continue as _cc
+    pending = _pending_document_proposals()
+    try:
+        mid = _approved_unstored_proposals()
+    except Exception as e:  # noqa: BLE001
+        print(f"[approve-all] resume: could not list approved: {type(e).__name__}", flush=True)
+        mid = []
+    seen = {p["proposal_id"] for p in pending}
+    items = [p for p in mid if p["proposal_id"] not in seen] + pending
+    return [p for p in items if _pace.kind_matches((p.get("source_refs") or {}).get("filename") or "", intent.get("kind") or "all", _cc.CHAT_DOC)
+            and _remember_covers(intent, p) and _proposal_scan_risk(p["proposal_id"]) != "high"]
 
 
 @app.post("/admin/prune-images")

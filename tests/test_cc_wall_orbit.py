@@ -191,7 +191,9 @@ def test_page_wiring_both_looks_and_the_switch():
     assert "look === 'orbit' ?" in w and "look === 'grid' ?" in w and "<LookSwitch" in w
     assert "process.env.NEXT_PUBLIC_BRAIN_SYMBOL" in w                                           # the brain's own mark
     assert "sendText(fetch, sid, text, threadOf(sid))" in w and "sendClip(fetch, sid, blob, threadOf(sid))" in w
-    for src in (w, o):
+    # LINE-TALK-1 (2026-11-25): the corner switch to the columns is the page's one navigation (asked for)
+    w0 = w.replace("    window.location.href = columnsUrl(look === 'orbit' ? kept : [], side)\n", "")
+    for src in (w0, o):
         assert "router" not in src and "location.href" not in src and "<select" not in src         # never navigates; no native controls
     assert "\u210f" not in o and "'hbar'" not in o and "{symbol}" in o                              # the symbol is the brain's, handed in
     assert "ringOf(tiles, kept, faint)" in o and "orbitPlace(i + 1, kept.length)" in o and "onLeave" in o and "HOLD_MS" in o

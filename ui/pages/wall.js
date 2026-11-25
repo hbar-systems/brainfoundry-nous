@@ -1,7 +1,9 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl, cleanPinned, togglePin } from '../lib/wall'
+import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl, cleanPinned, togglePin, readView, columnsUrl, switchView } from '../lib/wall'
 import WallOrbit from '../components/WallOrbit'
+import WallRead from '../components/WallRead'
+import ViewSwitch, { VIEW_CSS } from '../components/ViewSwitch'
 
 // The wall (WALL-1, 2026-11-24). hbar, verbatim: "I still want to apply this view board where I see in parallel on
 // a dark screen every single system operating and then I can write into the small little box, whatever it is, I
@@ -44,6 +46,14 @@ import WallOrbit from '../components/WallOrbit'
 // Instruments (WALL-5, 2026-11-24, hbar: "where is my musical surfaces tho those i wanted actually"): the register
 // (GET /cc/surfaces, read once) gives a system its instruments; the orbit fans them out on a press of its name and
 // opens one beside. The ones he pins stay out, kept with the set (POST /cc/wall {pinned}, localStorage when away).
+//
+// Reading (LINE-TALK-1, 2026-11-25, hbar: "how can we read thread thru wall? like something pop out? maybe we should
+// try that parallel-systems verticle production surface?"): a press on a system's line (or the centre's) opens that
+// thread's last answer as a card over the wall (ui/components/WallRead.js): no navigation, nothing sent, Esc closes;
+// a press on a point line in it opens a reply slot, Enter sends into that system's thread. The live line says plain
+// words while a thread works ("reading the handoff"; the bridge's cc_extras.tool_plain, never the raw command). The
+// switch in the top corner (ui/components/ViewSwitch.js) goes to the columns of /systems with the same systems and
+// threads and back; the choice is kept (cc.view) and a /wall visit with "columns" kept goes on to the columns.
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -69,6 +79,7 @@ const CSS = `
 .wl-lk{display:flex;gap:12px;font-size:11px;letter-spacing:.14em;color:var(--wmute,#4f4d49);text-transform:lowercase}
 .wl-lk button{color:inherit;opacity:.8}.wl-lk button:hover{color:var(--wink,#ecebe6)}.wl-lk button[aria-pressed=true]{color:var(--wdim,#8f8c85);cursor:default}
 .wl-lkf{position:absolute;left:22px;bottom:18px;z-index:6}
+.wl-sws{display:flex;align-items:center;gap:14px}.wl-top .wl-sws{margin-left:auto}
 .wl-orb{position:relative;min-width:0}
 .wl.orbit{background:#000}
 .wl-toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:7;display:flex;gap:14px;align-items:center;font-size:12px;color:var(--wdim,#8f8c85);
@@ -89,6 +100,7 @@ const CSS = `
 .wl-ln{font-size:12px;line-height:1.35;color:var(--wdim);min-height:2.7em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .wl-ln.live,.wl-ln.waits{color:var(--wink)}.wl-ln.sent{color:var(--wlit)}.wl-ln.error{color:#e07a5f}
 .wl-ln .k{color:var(--wmute);margin-right:5px}
+.wl-ln.rd{width:100%;cursor:pointer}.wl-ln.rd:hover{color:var(--wink)}
 .wl-box{display:flex;align-items:center;gap:4px;background:var(--wbg);border-radius:999px;padding:0 3px 0 10px;height:28px}
 .wl-in{flex:1;min-width:0;background:none;border:0;outline:none;color:var(--wink);font:inherit;font-size:13px;padding:0}
 .wl-in::placeholder{color:var(--wmute)}
@@ -120,7 +132,7 @@ const ICON = {
 }
 const Svg = ({ k }) => <svg viewBox="0 0 16 16" aria-hidden="true">{ICON[k]}</svg>
 
-function Cell({ t, sent, rec, secs, open, onSend, onMic, onName }) {
+function Cell({ t, sent, rec, secs, open, onSend, onMic, onName, onRead }) {
   const [text, setText] = useState('')
   const st = cellState(t)
   const ln = cellLine(t, sent)
@@ -138,9 +150,15 @@ function Cell({ t, sent, rec, secs, open, onSend, onMic, onName }) {
         <button className="wl-nm" onClick={() => onName(t.id)} title={`${t.id}: open the whole thread beside`}>{short(t.id)}</button>
         {st.running ? <span className="wl-n" title={`${st.running} running now`}>{st.running}</span> : null}
       </div>
-      <p className={'wl-ln ' + ln.kind} title={ln.text || undefined}>
-        {lead ? <span className="k">{lead}</span> : null}{ln.text || ' '}
-      </p>
+      {ln.text && onRead ? (
+        <button type="button" className={'wl-ln rd ' + ln.kind} onClick={() => onRead(t.id)} title={`read ${t.id}'s last answer here`} data-read-for={t.id}>
+          {lead ? <span className="k">{lead}</span> : null}{ln.text}
+        </button>
+      ) : (
+        <p className={'wl-ln ' + ln.kind} title={ln.text || undefined}>
+          {lead ? <span className="k">{lead}</span> : null}{ln.text || ' '}
+        </p>
+      )}
       <div className="wl-box">
         <input className="wl-in" value={text} onChange={e => setText(e.target.value)} onKeyDown={key}
           placeholder={recording ? 'listening' : busy ? 'hearing it' : 'say'} aria-label={`say to ${t.id}`} disabled={busy} maxLength={8000} />
@@ -214,6 +232,7 @@ export default function Wall() {
   const [pinned, setPinned] = useState([])      // the instruments kept out on the orbit
   const [faint, setFaint] = useState([])        // WALL-4: systems worked on in other threads, dim on the outer ring
   const [fresh, setFresh] = useState(null)      // WALL-4: {set, stamp} when the brain's seed is newer than his own set
+  const [reading, setReading] = useState(null)  // LINE-TALK-1: the system whose last answer is open as a card
   const depthRef = useRef(null)
   const timer = useRef(null)
   const noteTimer = useRef(null)
@@ -227,6 +246,9 @@ export default function Wall() {
   useEffect(() => {
     recorder.current = new Recorder({ mediaDevices: navigator.mediaDevices, MediaRecorder: window.MediaRecorder })
     const store = (() => { try { return window.localStorage } catch { return null } })()
+    // LINE-TALK-1: "columns" kept from the last switch goes on to /systems, unless this visit asks for the wall
+    const q = new URLSearchParams(window.location.search)
+    if (readView(store) === 'columns' && q.get('view') !== 'wall' && !q.get('look')) { window.location.replace('/systems'); return }
     loadWall(fetch, store).then(w => {
       setLookState(pickLook(new URLSearchParams(window.location.search).get('look'), w))
       if (Array.isArray(w.set)) setSet(w.set)
@@ -294,6 +316,12 @@ export default function Wall() {
     if (sid) load()          // its tree at once, then with every poll; a read, never a send
   }
   const onRoute = (r) => { setSide(null); setRoute(r && r.route ? r : null) }
+  const onRead = (sid) => setReading(sid || null)
+  const toColumns = async () => {
+    const store = (() => { try { return window.localStorage } catch { return null } })()
+    await switchView(fetch, store, 'columns', 'wall')
+    window.location.href = columnsUrl(look === 'orbit' ? kept : [], side)
+  }
   const onName = async (sid) => {
     setRoute(null)
     if (side === sid) { setSide(null); return }
@@ -359,16 +387,16 @@ export default function Wall() {
   return (
     <>
       <Head><title>Wall</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + VIEW_CSS }} />
       <div className={'wl' + (side || route ? ' with' : '') + (look === 'orbit' ? ' orbit' : '')}>
         {look === 'orbit' ? (
           <main className="wl-orb" aria-label="the orbit">
             <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
               sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
               onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute}
-              faint={faint} fresh={fresh} onFresh={onFresh} surfaces={surfaces} pinned={pinned} onPin={onPin} />
+              faint={faint} fresh={fresh} onFresh={onFresh} surfaces={surfaces} pinned={pinned} onPin={onPin} onRead={onRead} />
             {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
-            <LookSwitch look={look} onLook={onLook} className="wl-lkf" />
+            <div className="wl-lkf wl-sws"><LookSwitch look={look} onLook={onLook} /><ViewSwitch view="wall" onPick={(v) => { if (v === 'columns') toColumns() }} /></div>
             {note ? (
               <div className="wl-toast" role="status">{note.text}{note.undo ? <button onClick={note.undo}>undo</button> : null}</div>
             ) : null}
@@ -380,7 +408,7 @@ export default function Wall() {
               <span className={lit ? 'on' : ''}><b>{lit}</b> active</span>
               <span><b>{running}</b> jobs running</span>
               <span><b>{tiles.length}</b> systems</span>
-              <LookSwitch look={look} onLook={onLook} />
+              <span className="wl-sws"><LookSwitch look={look} onLook={onLook} /><ViewSwitch view="wall" onPick={(v) => { if (v === 'columns') toColumns() }} /></span>
             </div>
           ) : null}
           {data === false ? <p className="wl-note">The bridge is not answering at /cc/systems. The wall fills by itself once it does.</p> : null}
@@ -389,7 +417,7 @@ export default function Wall() {
             {tiles.map(t => (
               <Cell key={t.id} t={t} sent={shownSent(t.id)} open={side === t.id}
                 rec={mic.sid === t.id ? mic.state : null} secs={mic.sid === t.id ? mic.secs : 0}
-                onSend={onSend} onMic={onMic} onName={onName} />
+                onSend={onSend} onMic={onMic} onName={onName} onRead={onRead} />
             ))}
           </div>
         </main>
@@ -397,6 +425,12 @@ export default function Wall() {
         {side ? <Side sid={side} thread={threadOf(side)} err={sideErr} onClose={() => setSide(null)} /> : null}
         {!side && route ? <Beside route={route} onClose={() => setRoute(null)} /> : null}
       </div>
+      {reading ? (
+        <WallRead key={reading} sid={reading} thread={threadOf(reading)} title={reading === CENTRE ? 'the brain (central thread)' : reading}
+          now={(() => { const tl = tileOf(reading); return tl && tl.said && tl.said.live ? cellLine(tl, null).text : '' })()}
+          recorder={recorder.current} onClose={() => setReading(null)} onSend={onSend}
+          onWhole={() => { const sid = reading; setReading(null); if (side !== sid) onName(sid) }} />
+      ) : null}
     </>
   )
 }

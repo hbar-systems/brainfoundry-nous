@@ -2092,6 +2092,74 @@ def job_report_asks(tail: str):
     return {"status": st.group(1).lower(), "line": st.group(2).strip()[:300], "options": options[:6]}
 
 
+# ---- plain words for a tool call (LINE-TALK-1, 2026-11-25) ----
+# hbar 2026-11-25: the wall's centre showed "ran: python3 scripts/continue.py ...", which tells him nothing. The wall's
+# and the board's live line say what the step is for, from the tool's own description ("Read the handoff" ->
+# "reading the handoff"), never the raw command. Same rules as ui/lib/linetalk.js plainStep.
+_IRREGULAR = {"run": "running", "get": "getting", "set": "setting", "put": "putting", "stop": "stopping", "cut": "cutting",
+              "see": "seeing", "be": "being", "go": "going", "do": "doing", "map": "mapping", "tag": "tagging", "pin": "pinning",
+              "plan": "planning", "ship": "shipping", "drop": "dropping", "grep": "searching", "cat": "reading", "ls": "listing",
+              "rm": "removing", "cd": "going", "mv": "moving", "cp": "copying", "curl": "fetching", "wait": "waiting",
+              "open": "opening", "visit": "visiting", "edit": "editing", "audit": "auditing", "admit": "admitting",
+              "commit": "committing", "submit": "submitting", "permit": "permitting", "begin": "beginning", "omit": "omitting",
+              "emit": "emitting", "rerun": "rerunning"}
+
+
+def _gerund(w: str) -> str | None:
+    v = (w or "").lower()
+    if not re.fullmatch(r"[a-z]+", v):
+        return None
+    if v in _IRREGULAR:
+        return _IRREGULAR[v]
+    if v.endswith("ing"):
+        return v
+    if v.endswith("ie"):
+        return v[:-2] + "ying"
+    if re.search(r"[^aeiou]e$", v) or re.search(r"[^e]ue$", v):
+        return v[:-1] + "ing"
+    return v + "ing"
+
+
+def plain_words(desc: str) -> str:
+    s = re.sub(r"\s+", " ", str(desc or "")).strip()[:120].rstrip(".:")
+    if not s:
+        return ""
+    m = re.match(r"^([A-Za-z]+)(\b.*)$", s)
+    if not m:
+        return s
+    g = _gerund(m.group(1))
+    verbish = bool(re.fullmatch(r"[A-Z][a-z]+|[a-z]+", m.group(1)))
+    return (g if g and verbish else m.group(1).lower()) + m.group(2)
+
+
+def tool_plain(name: str, inp) -> str:
+    """One step in plain words for the live line: what it is for, never the command or the full path."""
+    i = inp if isinstance(inp, dict) else {}
+    n = str(name or "")
+    base = str(i.get("file_path") or "").rstrip("/").split("/")[-1]
+    if n == "Bash":
+        return plain_words(i.get("description")) if i.get("description") else "running a command"
+    if n == "Read":
+        return "reading " + (base or "a file")
+    if n in ("Edit", "MultiEdit"):
+        return "editing " + (base or "a file")
+    if n == "Write":
+        return "writing " + (base or "a file")
+    if n in ("Grep", "Glob"):
+        return "searching the files"
+    if n in ("Agent", "Task"):
+        return "a helper: " + (plain_words(i.get("description")) if i.get("description") else "started")
+    if n == "WebFetch":
+        return "reading a web page"
+    if n == "WebSearch":
+        return "searching the web"
+    if n == "TodoWrite":
+        return "updating the plan"
+    if n.startswith("mcp__") and len(n.split("__")) > 1:
+        return "using " + re.sub(r"[_-]+", " ", n.split("__")[1])
+    return plain_words(i.get("description")) if i.get("description") else ("using " + n if n else "working")
+
+
 def last_sentence(text: str, n: int = 180) -> str:
     """The last meaningful line of a piece of prose: its final sentence, without markdown noise."""
     s = re.sub(r"```.*?```", " ", text or "", flags=re.S)

@@ -45,6 +45,9 @@ The bridge's drop-in names it as a second `EnvironmentFile`, read after the brid
 **Disk.** On ext4 a docker volume cannot be given a size, and the containers' files belong to container uids that every member shares, so a user quota cannot tell members apart inside `/var/lib/docker`.
 The realistic mechanism is measure and alarm: `sudo python3 scripts/member_limits.py disk` adds up each member's checkout, its two homes and its compose project's volumes, compares them to the quota (`BRAIN_LIMIT_DISK_GB`, 15 GB) and checks that the root disk keeps 10 percent free; it exits 1 on either.
 A timer runs it hourly (the operator installs it; see the apply notes in the hbar.world record).
+`--only a,b,c` measures only those members; `--write-share` also writes each one's measured use and its share to `disk_share.json` in the member's `api_runtime` volume (root, 644, numbers only).
+The api reads it: one bring-in from a computer never takes more than what is left of the share, and the home says so (MEMBERS-16, 2026-11-25).
+The timer's unit, as on friends-1 since MEMBERS-16: `ExecStart=/usr/bin/python3 <a nous checkout>/scripts/member_limits.py disk --only <members> --write-share`, `OnUnitActiveSec=1h`; exit 1 (a member over its share, or the disk under 10 percent free) leaves the unit failed, which is the alarm.
 A hard cap on the homes is possible with ext4 user quotas (`usrquota` on `/`) for `<m>-cc` and `<m>-hands`; that is a remount, the admin's call.
 A hard cap on volumes needs an XFS filesystem with project quotas under `/var/lib/docker` (a new volume and a migration), not done here.
 

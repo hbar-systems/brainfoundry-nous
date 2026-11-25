@@ -85,6 +85,7 @@ const CSS = `
 .wo-ln{font-size:12px;line-height:1.4;color:var(--odim);max-width:190px;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .wo-ln.live,.wo-ln.waits{color:var(--oink)}.wo-ln.sent{color:var(--olit)}.wo-ln.error{color:#e07a5f}
 .wo-ln .k{color:var(--omute);margin-right:5px}
+button.wo-ln.rd{font:inherit;font-size:12px;background:none;border:0;padding:0;margin:0;cursor:pointer}button.wo-ln.rd:hover{color:var(--oink)}
 .wo-box{display:flex;align-items:center;gap:2px;width:160px;height:28px;padding:0 2px 0 12px;border-radius:999px;border:1px solid rgba(255,255,255,.07);
   opacity:.32;transition:opacity 300ms var(--ease),border-color 300ms var(--ease)}
 .wo-b:hover .wo-box,.wo-b:focus-within .wo-box,.wo-b.open .wo-box,.wo-box.on,.wo-cbox .wo-box{opacity:1;border-color:rgba(255,255,255,.14)}
@@ -226,8 +227,16 @@ function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill, prompts, up
   )
 }
 
-function Line({ ln }) {
+// LINE-TALK-1: with onRead the line is a press that opens the thread's last answer as a card over the wall
+function Line({ ln, onRead, sid }) {
   const lead = ln.kind === 'sent' ? 'sent' : ln.kind === 'job' ? 'job' : ln.kind === 'waits' ? 'waits' : ''
+  if (onRead) {
+    return (
+      <button type="button" className={'wo-ln rd ' + ln.kind} onClick={onRead} title="read the last answer here" data-read-for={sid}>
+        {lead ? <span className="k">{lead}</span> : null}{ln.text}
+      </button>
+    )
+  }
   return (
     <p className={'wo-ln ' + ln.kind} title={ln.text || undefined}>
       {lead ? <span className="k">{lead}</span> : null}{ln.text}
@@ -239,7 +248,7 @@ function Line({ ln }) {
 // not repeated at rest.
 const speaks = (ln) => ['live', 'waits', 'sent', 'error', 'job'].includes(ln.kind) && !!ln.text
 
-function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, deep, onDepth, fill, onOpen, tools, pinned, fanned, onFan, onTool, onPin }) {
+function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, deep, onDepth, fill, onOpen, tools, pinned, fanned, onFan, onTool, onPin, onRead }) {
   const st = cellState(t)
   const inst = kindOf(t) !== 'work'
   const ln = cellLine(t, sent)
@@ -291,7 +300,7 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
       </div>
       {inst ? <span className="wo-op">{kindOf(t) === 'site' ? 'a site · press to open' : 'an instrument · press to open'}</span> : (
         <>
-          {speaks(ln) ? <Line ln={ln} /> : null}
+          {speaks(ln) ? <Line ln={ln} sid={t.id} onRead={onRead ? () => onRead(t.id) : null} /> : null}
           <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} prompts={t.prompts} up={at.y > 52} />
         </>
       )}
@@ -301,7 +310,7 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
 }
 
 export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready,
-  depth, onDepth, waits, onRoute, faint, fresh, onFresh, surfaces, pinned, onPin }) {
+  depth, onDepth, waits, onRoute, faint, fresh, onFresh, surfaces, pinned, onPin, onRead }) {
   const [adding, setAdding] = useState(false)
   const [fan, setFan] = useState(null)         // {sid, how: 'press' | 'hover'}: the system whose instruments are out
   const fanOff = useRef(null)
@@ -385,11 +394,11 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
         ) : <span className="wo-cn" />}
         {centre ? (
           <div className="wo-cbox">
-            {speaks(wln) ? <Line ln={wln} /> : null}
+            {speaks(wln) ? <Line ln={wln} sid={CENTRE} onRead={onRead ? () => onRead(CENTRE) : null} /> : null}
             <Box sid={CENTRE} rec={micOf(CENTRE)} secs={secsOf(CENTRE)} onSend={onSend} onMic={onMic} wide autoFocus fill={fills[CENTRE]} prompts={world.prompts} />
             <button className="wo-th" onClick={() => onName(CENTRE)}>{side === CENTRE ? 'close the thread' : 'the whole thread'}</button>
           </div>
-        ) : (speaks(wln) ? <div className="wo-cbox"><Line ln={wln} /></div> : null)}
+        ) : (speaks(wln) ? <div className="wo-cbox"><Line ln={wln} sid={CENTRE} onRead={onRead ? () => onRead(CENTRE) : null} /></div> : null)}
       </div>
       {depth === CENTRE ? <div className="wo-phl">{layer}</div> : null}
       {kept.map((id, i) => (
@@ -397,7 +406,7 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
           <Body t={byId[id]} at={orbitPlace(i + 1, kept.length)} sent={sentOf(id)} open={side === id}
             rec={micOf(id)} secs={secsOf(id)} onSend={onSend} onMic={onMic} onName={onName} onLeave={onLeave}
             deep={depth === id} onDepth={(sid) => { setFan(null); onDepth(depth === sid ? null : sid) }} fill={fills[id]} onOpen={onOpen}
-            tools={toolsOf(id)} pinned={pinned} fanned={!!fan && fan.sid === id} onFan={onFan} onTool={onTool} onPin={onPin || (() => {})} />
+            tools={toolsOf(id)} pinned={pinned} fanned={!!fan && fan.sid === id} onFan={onFan} onTool={onTool} onPin={onPin || (() => {})} onRead={onRead} />
           {depth === id ? <div className="wo-phl">{layer}</div> : null}
         </React.Fragment>
       ))}

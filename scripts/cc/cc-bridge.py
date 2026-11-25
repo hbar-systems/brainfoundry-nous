@@ -3960,7 +3960,8 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
                 for blk in ((ev.get("message") or {}).get("content") or []):
                     if blk.get("type") == "tool_use":
                         in_tool[0] = True
-                        on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input"))})
+                        on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input")),
+                                          "plain": cc_extras.tool_plain(blk.get("name"), blk.get("input"))})
             elif kind == "user":
                 # A hand-back: a background subagent finished and the reasoner starts another
                 # step on its own ("Another Claude session sent a message" / <task-notification>).
@@ -5515,7 +5516,8 @@ def _run_view(r: Run) -> dict:
     last = ""
     for k, pl in reversed(events):
         if k == "tool":
-            last = pl.get("brief") or pl.get("name") or ""
+            # LINE-TALK-1: the live line says what the step is for ("reading the handoff"), never the raw command
+            last = pl.get("plain") or pl.get("brief") or pl.get("name") or ""
             break
         if k == "text":
             last = cc_extras.last_sentence(partial)
@@ -5850,6 +5852,33 @@ def _wall_view() -> dict:
             "faint": [x for x in extra["faint"] if x in known and x not in (kept or [])],
             "fresh": fresh,
             "home": meta["home"] if meta["home"] is not None else bool(extra["home"])}
+
+
+# The corner switch between the wall and the columns (LINE-TALK-1, 2026-11-25, hbar: "maybe we should try that
+# parallel-systems verticle production surface?"). POST /cc/view {"view": "wall" | "columns", "from"?}: one line per
+# switch in <out>/board/views.jsonl ({"ts", "view", "from"}; beside the board, where the hands can read it), which the
+# observer (the world's scripts/observe.py) counts as a "view" event. The choice itself is kept in the browser
+# (cc.view); nothing here changes what a page shows.
+VIEWS_LOG = Path(os.environ.get("CC_VIEWS_LOG", "").strip() or str(OUT_DIR / "board" / "views.jsonl"))
+
+
+def _view_note(body) -> tuple[int, dict]:
+    view = (body or {}).get("view") if isinstance(body, dict) else None
+    frm = (body or {}).get("from") if isinstance(body, dict) else None
+    if view not in ("wall", "columns"):
+        return 400, {"ok": False, "error": "view: wall or columns"}
+    row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "view": view,
+           "from": frm if frm in ("wall", "columns") else None}
+    try:
+        VIEWS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        new = not VIEWS_LOG.exists()
+        with VIEWS_LOG.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        if new:
+            os.chmod(VIEWS_LOG, 0o664)     # the observer runs as the hands and only reads it
+    except OSError as e:
+        return 500, {"ok": False, "error": f"could not note it: {type(e).__name__}"}
+    return 200, {"ok": True, **row}
 
 
 def _wall_save(body) -> tuple[int, dict]:
@@ -6726,6 +6755,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/wall":
             self._send(*_wall_save(self._json(limit=4000)))
+            return
+        if route == "/view":
+            self._send(*_view_note(self._json(limit=1000)))
             return
         if route == "/systems/thread":
             body = self._json(limit=2000)
