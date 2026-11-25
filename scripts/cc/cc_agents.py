@@ -182,9 +182,13 @@ def load_all() -> list[dict]:
     out = []
     for p in sorted(AGENTS_DIR.glob("*.json")):
         try:
-            out.append(json.loads(p.read_text()))
+            a = json.loads(p.read_text())
         except Exception:  # noqa: BLE001  a broken file is skipped, never a dead page
             continue
+        # Only an agent is an agent: a dict whose id names its own file. permissions.json (the owner's
+        # permissions, no id) sits in the same folder and broke list since 2026-10-23 (AGENTS-FIX-1).
+        if isinstance(a, dict) and isinstance(a.get("id"), str) and a["id"] and a["id"] == p.stem:
+            out.append(a)
     return sorted(out, key=lambda a: (int(a.get("serial") or 0), a.get("created") or "", a.get("id") or ""))
 
 
