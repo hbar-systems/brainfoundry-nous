@@ -97,3 +97,24 @@ def test_api_sends_key_on_every_nodeos_call():
     assert len(calls) >= 7
     for call in calls:
         assert "headers=_nodeos_headers()" in call, call
+
+
+def test_a_connection_opened_in_one_thread_closes_in_another(nodeos):
+    """MEMBERS-16: FastAPI may run get_db's setup and teardown on two threadpool threads when requests overlap;
+    sqlite's same-thread check raised on close and the request answered 500 (a decide during the home's poll
+    failed one file of an import on Christos's brain, 2026-11-25)."""
+    import threading
+    gen = nodeos.get_db()
+    conn = next(gen)
+    conn.execute("SELECT 1").fetchone()
+    err = []
+
+    def close():
+        try:
+            gen.close()
+        except Exception as e:  # noqa: BLE001
+            err.append(e)
+
+    t = threading.Thread(target=close)
+    t.start(); t.join()
+    assert err == []

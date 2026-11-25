@@ -251,8 +251,13 @@ def startup_event():
 
 
 def get_db():
-    """Get database connection"""
-    conn = sqlite3.connect(DB_PATH)
+    """Get database connection.
+
+    MEMBERS-16: FastAPI may open this in one threadpool thread and close it in another when requests overlap;
+    sqlite's same-thread check then raised on close and the request answered 500 (a decide during the home's
+    poll failed a file of an import on Christos's brain, 2026-11-25). One connection per request, used by one
+    request at a time, so the check is off."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
