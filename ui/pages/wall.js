@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl } from '../lib/wall'
+import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl, cleanPinned, togglePin } from '../lib/wall'
 import WallOrbit from '../components/WallOrbit'
 
 // The wall (WALL-1, 2026-11-24). hbar, verbatim: "I still want to apply this view board where I see in parallel on
@@ -34,6 +34,10 @@ import WallOrbit from '../components/WallOrbit'
 // place (ui/components/WallDepth.js); the centre's count opens the brain's. While a layer is open the same
 // three-second poll asks for that system's tree too (GET /cc/systems?depth=<id>); nothing is sent, nothing
 // navigates, nothing that streams is touched. Pages the layer opens (tasks, court, an instrument) open beside.
+//
+// Instruments (WALL-5, 2026-11-24, hbar: "where is my musical surfaces tho those i wanted actually"): the register
+// (GET /cc/surfaces, read once) gives a system its instruments; the orbit fans them out on a press of its name and
+// opens one beside. The ones he pins stay out, kept with the set (POST /cc/wall {pinned}, localStorage when away).
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -200,6 +204,8 @@ export default function Wall() {
   const [note, setNote] = useState(null)       // {text, undo}
   const [depth, setDepthState] = useState(null) // the system whose depth layer is open (WALL-3), CENTRE for the brain
   const [route, setRoute] = useState(null)      // {route, title}: a page open beside (tasks, court, an instrument)
+  const [surfaces, setSurfaces] = useState([])  // the register (WALL-5): which instruments fan around which system
+  const [pinned, setPinned] = useState([])      // the instruments kept out on the orbit
   const depthRef = useRef(null)
   const timer = useRef(null)
   const noteTimer = useRef(null)
@@ -216,7 +222,10 @@ export default function Wall() {
     loadWall(fetch, store).then(w => {
       setLookState(pickLook(new URLSearchParams(window.location.search).get('look'), w))
       if (Array.isArray(w.set)) setSet(w.set)
+      if (Array.isArray(w.pinned)) setPinned(cleanPinned(w.pinned))
     })
+    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) setSurfaces(d.surfaces) }).catch(() => {})
     const start = () => { if (!timer.current) { load(); timer.current = setInterval(load, 3000) } }
     const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
     const onVis = () => (document.visibilityState === 'visible' ? start() : stop())
@@ -308,6 +317,11 @@ export default function Wall() {
     if (depthRef.current === sid) onDepth(null)
     tell(`${sid.replace(/^hbar\./, '')} left the orbit`, () => { keep(before); setNote(null) })
   }
+  const onPin = (name) => {
+    const next = togglePin(pinned, name)
+    setPinned(next)
+    saveWall(fetch, store(), { pinned: next }).then(r => { if (r.kept !== 'bridge') tell('kept in this browser only: ' + (r.error || 'the bridge is away')) })
+  }
   const onLook = (k) => {
     setLookState(k)
     saveWall(fetch, store(), { look: k })
@@ -327,7 +341,8 @@ export default function Wall() {
           <main className="wl-orb" aria-label="the orbit">
             <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
               sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
-              onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute} />
+              onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute}
+              surfaces={surfaces} pinned={pinned} onPin={onPin} />
             {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
             <LookSwitch look={look} onLook={onLook} className="wl-lkf" />
             {note ? (

@@ -44,7 +44,8 @@ Endpoints (JSON):
                           <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
-  GET  /cc/wall  POST /cc/wall {"look"?,"set"?}  the wall's look (grid | orbit) and the systems kept in the orbit (WALL-2)
+  GET  /cc/wall  POST /cc/wall {"look"?,"set"?,"pinned"?}  the wall's look (grid | orbit), the systems kept in the orbit
+                          (WALL-2) and the instruments kept out beside them (WALL-5)
   POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
@@ -5710,9 +5711,9 @@ WALL_SEED = Path(os.environ.get("CC_WALL_SEED", "").strip() or str(Path(WORLD_DI
 
 def _wall_seed() -> dict:
     try:
-        return cc_layout.validate_wall({k: v for k, v in json.loads(WALL_SEED.read_text()).items() if k in ("look", "set")})
+        return cc_layout.validate_wall({k: v for k, v in json.loads(WALL_SEED.read_text()).items() if k in ("look", "set", "pinned")})
     except (OSError, ValueError, AttributeError, cc_layout.LayoutError):
-        return {"look": None, "set": None}
+        return {"look": None, "set": None, "pinned": None}
 
 
 def _wall_view() -> dict:
@@ -5722,12 +5723,15 @@ def _wall_view() -> dict:
     return {"look": own["look"] or seed["look"] or "grid",
             "set": [x for x in ids if x in known] if ids is not None else None,
             "seed": own["set"] is None and seed["set"] is not None, "max": cc_layout.WALL_SET_MAX,
-            "looks": list(cc_layout.WALL_LOOKS)}
+            "looks": list(cc_layout.WALL_LOOKS),
+            # WALL-5: the instruments kept out on the orbit; his own list wins, else the seed's
+            "pinned": own.get("pinned") if own.get("pinned") is not None else (seed.get("pinned") or []),
+            "pinned_seed": own.get("pinned") is None and seed.get("pinned") is not None}
 
 
 def _wall_save(body) -> tuple[int, dict]:
     if not isinstance(body, dict):
-        return 400, {"ok": False, "error": "give look and/or set"}
+        return 400, {"ok": False, "error": "give look, set and/or pinned"}
     if isinstance(body.get("set"), list):
         known = _systems_known()
         bad = [x for x in body["set"] if x not in known]

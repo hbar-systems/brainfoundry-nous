@@ -7,7 +7,7 @@ import { daysLeft } from '../lib/surfaces'
 // Colours follow the console's skin (var(--text), var(--surface), var(--muted)); the hue only tints and draws the mark,
 // so every system has its own character and none of them fights the skin.
 
-const MARK = {
+export const MARK = {
   dot: () => <circle cx="32" cy="32" r="14" />,
   wave: () => <path d="M4 32c5-14 9-14 14 0s9 14 14 0 9-14 14 0 9 14 14 0" fill="none" strokeWidth="5" strokeLinecap="round" />,
   frames: () => (

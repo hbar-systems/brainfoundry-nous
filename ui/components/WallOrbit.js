@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots, kindOf, openOf, addGroups } from '../lib/wall'
+import { CENTRE, SET_MAX, cellLine, cellState, orbitPlace, rimPlace, rimDots, kindOf, openOf, addGroups, instrumentsOf } from '../lib/wall'
 import WallDepth from './WallDepth'
+import WallFan, { FAN_CSS } from './WallFan'
 
 // The orbit (WALL-2, 2026-11-24): the wall's personal look. hbar, verbatim: "it should be a full black screen as
 // space, feeling and only say 10 systems visible and spaced out and around , in center is hbar symbol which should
@@ -22,6 +23,10 @@ import WallDepth from './WallDepth'
 // centre's count opens the brain's. Nothing else changes at rest. Systems and surfaces are told apart: a body whose
 // registry kind is "instrument" or "site" is opened, never talked into, so it has no box; its press opens its page
 // beside (or its own address outside). Work on an instrument is said to its parent system or to the centre.
+//
+// Instruments (WALL-5, 2026-11-24): a system the register gives instruments to (GET /cc/surfaces) fans them out
+// around its body on a press of its name (on a laptop, on hover); a second press opens the thread as before. A pinned
+// one stays out at rest. The box stays where it is. ui/components/WallFan.js draws them.
 
 const HOLD_MS = 650
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -71,6 +76,8 @@ const CSS = `
 .wo-dp[aria-expanded=true] .wo-lt{box-shadow:0 0 0 3px rgba(255,255,255,.08)}
 .wo-cn{padding:4px 10px;border-radius:999px}button.wo-cn:hover{color:var(--oink)}
 .wo-b.inst .wo-nm{font-style:italic}
+.wo-b.fan{z-index:4}
+.wo-b.has .wo-nm::after{content:'';display:inline-block;width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.45;margin-left:6px;vertical-align:middle}
 .wo-op{font-size:11px;color:var(--omute);letter-spacing:.06em}
 .wo-add .g{width:100%;display:flex;flex-wrap:wrap;justify-content:center;gap:4px 18px;margin-top:6px}
 .wo-add .g p{margin:6px 0 2px}
@@ -173,7 +180,7 @@ function Line({ ln }) {
 // not repeated at rest.
 const speaks = (ln) => ['live', 'waits', 'sent', 'error', 'job'].includes(ln.kind) && !!ln.text
 
-function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, deep, onDepth, fill, onOpen }) {
+function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, deep, onDepth, fill, onOpen, tools, pinned, fanned, onFan, onTool, onPin }) {
   const st = cellState(t)
   const inst = kindOf(t) !== 'work'
   const ln = cellLine(t, sent)
@@ -191,11 +198,19 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
     hold2.current = setTimeout(() => { held.current = true; setHolding(false); onLeave(t.id) }, HOLD_MS)
   }
   const up = () => { clearTimeout(hold.current); clearTimeout(hold2.current); setHolding(false) }
-  const click = () => { if (held.current) { held.current = false; return } if (inst) onOpen(t); else onName(t.id) }
+  const has = !inst && Array.isArray(tools) && tools.length > 0
+  const click = () => {
+    if (held.current) { held.current = false; return }
+    if (inst) { onOpen(t); return }
+    if (has && !fanned) { onFan(t.id, 'press'); return }   // first press: its instruments; the next opens the thread
+    if (has) onFan(null)
+    onName(t.id)
+  }
+  const hover = (on) => (e) => { if (has && e.pointerType === 'mouse') onFan(on ? t.id : null, 'hover', t.id) }
   useEffect(() => () => { clearTimeout(hold.current); clearTimeout(hold2.current) }, [])
   return (
-    <section className={'wo-b' + (st.on ? ' lit' : '') + (open ? ' open' : '') + (holding ? ' hold' : '') + (inst ? ' inst' : '')} style={{ '--x': at.x + '%', '--y': at.y + '%' }}
-      aria-label={t.id}>
+    <section className={'wo-b' + (st.on ? ' lit' : '') + (open ? ' open' : '') + (holding ? ' hold' : '') + (inst ? ' inst' : '') + (has ? ' has' : '') + (fanned ? ' fan' : '')}
+      style={{ '--x': at.x + '%', '--y': at.y + '%' }} aria-label={t.id} onPointerEnter={hover(true)} onPointerLeave={hover(false)}>
       <div className="wo-h">
         {inst ? <span className="wo-lt" aria-hidden="true" /> : (
           <button type="button" className="wo-dp" data-depth-for={t.id} onClick={() => onDepth(t.id)} aria-expanded={!!deep}
@@ -204,7 +219,8 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
           </button>
         )}
         <button className="wo-nm" onClick={click} onPointerDown={down} onPointerUp={up} onPointerLeave={up} onPointerCancel={up}
-          onContextMenu={e => e.preventDefault()} title={inst ? `${t.id}: an instrument; press to open it, hold to let it leave the orbit` : `${t.id}: press to open the whole thread beside; hold to let it leave the orbit`}>
+          onContextMenu={e => e.preventDefault()} aria-expanded={has ? !!fanned : undefined}
+          title={inst ? `${t.id}: an instrument; press to open it, hold to let it leave the orbit` : has ? (fanned ? `${t.id}: press to open the whole thread beside; Esc folds its instruments` : `${t.id}: press for its instruments, again for the whole thread; hold to let it leave the orbit`) : `${t.id}: press to open the whole thread beside; hold to let it leave the orbit`}>
           {short(t.id)}
         </button>
         {st.running ? (inst ? <span className="wo-n" title={`${st.running} running now`}>{st.running}</span> : (
@@ -219,13 +235,16 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
           <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} />
         </>
       )}
+      {has ? <WallFan host={t.id} items={tools} pinned={pinned} open={!!fanned} at={at} onOpen={(i) => onTool(t.id, i)} onPin={onPin} /> : null}
     </section>
   )
 }
 
 export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, side, onSend, onMic, onName, onAdd, onLeave, ready,
-  depth, onDepth, waits, onRoute }) {
+  depth, onDepth, waits, onRoute, surfaces, pinned, onPin }) {
   const [adding, setAdding] = useState(false)
+  const [fan, setFan] = useState(null)         // {sid, how: 'press' | 'hover'}: the system whose instruments are out
+  const fanOff = useRef(null)
   const [centre, setCentre] = useState(false)
   const [fills, setFills] = useState({})       // sid -> {text, n}: the tree's Talk, put in that system's box
   const deepRef = useRef(depth)
@@ -239,9 +258,9 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
   const lit = running > 0 || cellState(world).on
   const glow = Math.min(0.12 + running * 0.035, 0.42)
   useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape' && !deepRef.current) { setAdding(false); setCentre(false) } }   // Esc closes the layer first
+    const k = (e) => { if (e.key === 'Escape' && !deepRef.current) { setAdding(false); setCentre(false); setFan(null) } }   // Esc closes the layer first
     document.addEventListener('keydown', k)
-    return () => document.removeEventListener('keydown', k)
+    return () => { document.removeEventListener('keydown', k); clearTimeout(fanOff.current) }
   }, [])
   const micOf = (sid) => (mic.sid === sid ? mic.state : null)
   const secsOf = (sid) => (mic.sid === sid ? mic.secs : 0)
@@ -251,6 +270,19 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
     if (sid === CENTRE) setCentre(true)
     onDepth(null)
   }
+  // a hover opens and its leave folds (after a breath, so the pointer can reach an instrument); a press holds it open
+  const onFan = (sid, how, from) => {
+    clearTimeout(fanOff.current)
+    if (sid) { setFan(f => (f && f.sid === sid && f.how === 'press' ? f : { sid, how: how || 'press' })); return }
+    if (how === 'hover') fanOff.current = setTimeout(() => setFan(f => (f && f.how === 'hover' && f.sid === from ? null : f)), 380)
+    else setFan(null)
+  }
+  const onTool = (sid, i) => {
+    setFan(null)
+    if (i.open) onRoute({ route: i.open, title: i.label })
+    else if (i.ask) onTalk(sid, i.ask)
+  }
+  const toolsOf = (sid) => instrumentsOf(sid, surfaces)
   const onOpen = (t) => {
     const o = openOf(t)
     if (o && o.route) onRoute({ route: o.route, title: short(t.id) })
@@ -273,7 +305,7 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
   ) : null
   return (
     <div className="wo" aria-label="the orbit: the systems you keep, around the brain">
-      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + FAN_CSS }} />
       <div className="wo-ring" aria-hidden="true" />
       <div className={'wo-c' + (lit ? ' lit' : '')} style={{ '--glow': glow }}>
         <button className="wo-sym" onClick={() => setCentre(c => !c)} aria-expanded={centre}
@@ -297,7 +329,8 @@ export default function WallOrbit({ tiles, set, running, symbol, sentOf, mic, si
         <React.Fragment key={id}>
           <Body t={byId[id]} at={orbitPlace(i + 1, kept.length)} sent={sentOf(id)} open={side === id}
             rec={micOf(id)} secs={secsOf(id)} onSend={onSend} onMic={onMic} onName={onName} onLeave={onLeave}
-            deep={depth === id} onDepth={(sid) => onDepth(depth === sid ? null : sid)} fill={fills[id]} onOpen={onOpen} />
+            deep={depth === id} onDepth={(sid) => { setFan(null); onDepth(depth === sid ? null : sid) }} fill={fills[id]} onOpen={onOpen}
+            tools={toolsOf(id)} pinned={pinned} fanned={!!fan && fan.sid === id} onFan={onFan} onTool={onTool} onPin={onPin || (() => {})} />
           {depth === id ? <div className="wo-phl">{layer}</div> : null}
         </React.Fragment>
       ))}

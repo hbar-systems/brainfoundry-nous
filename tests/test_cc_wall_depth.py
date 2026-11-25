@@ -222,7 +222,7 @@ def test_page_wiring_the_layer_only_reads():
     tt = (ROOT / "ui" / "components" / "ThreadTree.js").read_text()
     assert "fetch(systemsUrl(depthRef.current)" in w and "if (depthRef.current) { depthRef.current = null; setDepthState(null); return }" in w
     assert "import WallDepth from './WallDepth'" in o and "data-depth-for={t.id}" in o and "data-depth-for={CENTRE}" in o
-    assert "kindOf(t) !== 'work'" in o and "if (inst) onOpen(t)" in o            # an instrument opens, it has no box
+    assert "kindOf(t) !== 'work'" in o and "if (inst) { onOpen(t); return }" in o            # an instrument opens, it has no box
     assert "fill={fills[id]}" in o and "onDepth(null)" in o
     for bad in ("fetch(", "method:", "sendText", "sendClip", "router", "location.href", "<select"):
         assert bad not in dp, bad                                                   # the layer itself never sends or navigates

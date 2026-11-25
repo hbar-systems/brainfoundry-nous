@@ -239,7 +239,7 @@ function writeLocal(storage, v) {
   try { if (storage) storage.setItem(LOCAL_KEY, JSON.stringify(v)) } catch {}
 }
 
-// {look, set, from: 'bridge' | 'browser' | 'none'}
+// {look, set, pinned, from: 'bridge' | 'browser' | 'none'} (pinned: WALL-5, the instruments kept out on the orbit)
 async function loadWall(f, storage) {
   const local = readLocal(storage)
   try {
@@ -247,13 +247,14 @@ async function loadWall(f, storage) {
     if (r.ok) {
       const d = await json(r)
       if (d && (d.look || d.set !== undefined)) {
-        const v = { look: d.look || null, set: Array.isArray(d.set) ? d.set : null }
+        const v = { look: d.look || null, set: Array.isArray(d.set) ? d.set : null, pinned: Array.isArray(d.pinned) ? d.pinned : null }
         if (v.set) writeLocal(storage, v)
         return { ...v, from: 'bridge' }
       }
     }
   } catch {}
-  return local ? { look: local.look || null, set: Array.isArray(local.set) ? local.set : null, from: 'browser' } : { look: null, set: null, from: 'none' }
+  return local ? { look: local.look || null, set: Array.isArray(local.set) ? local.set : null, pinned: Array.isArray(local.pinned) ? local.pinned : null, from: 'browser' }
+    : { look: null, set: null, pinned: null, from: 'none' }
 }
 
 // Keeps it in the browser at once, then on the bridge; {ok, kept: 'bridge' | 'browser', error?}
@@ -346,7 +347,84 @@ function addGroups(rest) {
 
 const systemsUrl = (depth) => '/cc/systems' + (depth ? '?depth=' + encodeURIComponent(depth) : '')
 
+// ---- instruments (WALL-5, 2026-11-24) ----
+// hbar: "where is my musical surfaces tho those i wanted actually -- i want to create more". A system carries the
+// instruments the register names for it (GET /cc/surfaces, a file's "instruments": [{name, label, open | ask, on, hue,
+// mark}]). At rest nothing new; a press on the name (a hover on a laptop) fans them out around the body; a pinned one
+// stays out, as a small body beside its system, kept with the set (GET/POST /cc/wall "pinned").
+//
+//   instrumentsOf(sid, surfaces)   the instruments that fan around a system: the ones of its own file first, then the
+//                                  ones other files lend it, register order, each name once
+//   allInstruments(surfaces)       name -> instrument, across the register
+//   pinnedOut(kept, pinned, surfaces)  the pinned ones that show: [{inst, host}], host = the first of its systems kept
+//   togglePin(pinned, name)        a new list, never the same array
+//   fanPlace(k, n, at)             slot k of n beside a body at {x, y} (% of the sky): {dx, dy, side}, px from its name
+//   pinFirst(items, pinned)        the pinned ones first, each part in register order
+//   cleanPinned(v)                 a list of instrument names, at most PIN_MAX
+
+const PIN_MAX = 12
+const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+
+function allInstruments(surfaces) {
+  const out = {}
+  for (const s of Array.isArray(surfaces) ? surfaces : []) {
+    for (const i of (s && Array.isArray(s.instruments)) ? s.instruments : []) {
+      if (i && NAME_RE.test(String(i.name || '')) && !out[i.name] && (i.open || i.ask)) out[i.name] = { ...i, surface: s.name, home: s.system }
+    }
+  }
+  return out
+}
+
+function instrumentsOf(sid, surfaces) {
+  if (!sid) return []
+  const all = Object.values(allInstruments(surfaces)).filter(i => Array.isArray(i.on) && i.on.includes(sid))
+  return [...all.filter(i => i.home === sid), ...all.filter(i => i.home !== sid)]   // its own first, then the lent ones
+}
+
+function cleanPinned(v) {
+  const out = []
+  for (const x of Array.isArray(v) ? v : []) if (typeof x === 'string' && NAME_RE.test(x) && !out.includes(x)) out.push(x)
+  return out.slice(0, PIN_MAX)
+}
+
+function pinnedOut(kept, pinned, surfaces) {
+  const all = allInstruments(surfaces)
+  const ks = kept || []
+  const out = []
+  for (const n of cleanPinned(pinned)) {
+    const i = all[n]
+    if (!i) continue
+    const host = (i.on || []).find(x => ks.includes(x))
+    if (host) out.push({ inst: i, host })
+  }
+  return out
+}
+
+const togglePin = (pinned, name) => {
+  const p = cleanPinned(pinned)
+  if (!NAME_RE.test(String(name || ''))) return p
+  return p.includes(name) ? p.filter(x => x !== name) : (p.length >= PIN_MAX ? p : [...p, name])
+}
+
+// A short column beside the body, on the side that faces the symbol (a body left of centre puts it to its right), so
+// it never runs off the screen or over the body's own box; slot k of n, centred on the name's row. Pinned ones take
+// the first slots (pinFirst), so the ones out at rest keep their places when the rest fan out.
+const FAN_X = 118
+const FAN_STEP = 34
+function fanPlace(k, n, at) {
+  const x = at && typeof at.x === 'number' ? at.x : 50
+  const side = x > 50.5 ? -1 : 1
+  const m = Math.max(n || 1, 1)
+  return { dx: side * FAN_X, dy: Math.round((k - (m - 1) / 2) * FAN_STEP), side }
+}
+const pinFirst = (items, pinned) => {
+  const p = Array.isArray(pinned) ? pinned : []
+  const l = Array.isArray(items) ? items : []
+  return [...l.filter(i => p.includes(i.name)), ...l.filter(i => !p.includes(i.name))]
+}
+
 module.exports = {
+  PIN_MAX, allInstruments, instrumentsOf, cleanPinned, pinnedOut, togglePin, fanPlace, pinFirst,
   KINDS, kindOf, openOf, minsText, jobLines, depthOf, jobsBySystem, addGroups, systemsUrl, treeSize,
   cellLine, cellState, sentOver, sendText, sendClip, Recorder, clipName,
   CENTRE, LOOKS, START_MAX, SET_MAX, LOCAL_KEY, pickLook, keptSet, addTo, removeFrom, rimDots, orbitPlace, rimPlace, loadWall, saveWall,

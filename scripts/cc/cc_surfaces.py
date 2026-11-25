@@ -18,7 +18,13 @@ is checked here, so the page renders what it gets:
   - actions: one to five; each has a label and exactly one of `open` (a path on the console origin, "/..." but never
     "//", or an https address on the console's own host when CC_CONSOLE_HOST is set) or `ask` (text for the
     composer); kind is page, thread or ask;
-  - count_to: an ISO date, shown as days left.
+  - count_to: an ISO date, shown as days left;
+  - instruments (WALL-5, optional): up to eight things you open, fanned out around a system on the wall
+    [{"name": "sing", "label": "sing", "open": "/sing", "on": ["hbar.music"], "hue": "#..", "mark": "wave", "note": ".."}]
+    name: a registry-style id, unique across the register (a second one is dropped and told in `skipped`); label: one
+    short word shown (default the name); exactly one of `open` (console origin, as above) or `ask` (text put in the
+    host system's box, nothing sent); on: the systems it fans around (default the file's system); hue and mark
+    default to the file's.
 A file that fails is skipped whole, never half shown.
 """
 from __future__ import annotations
@@ -36,6 +42,8 @@ SAY_RE = re.compile(r"^[a-z0-9][a-z0-9 ._-]{0,39}$")
 MARKS = ("dot", "wave", "frames", "stroke", "ring", "grain", "count", "scales")
 KINDS = ("page", "thread", "ask")
 MAX_ACTIONS = 5
+MAX_INSTRUMENTS = 8
+MAX_ON = 6
 MAX_FILES = 64
 MAX_BYTES = 64 * 1024
 
@@ -58,6 +66,46 @@ def _open_ok(addr: str, host: str) -> str | None:
     if u.scheme == "https" and host and (u.hostname or "").lower() == host.lower() and u.path.startswith("/"):
         return u.path + (f"?{u.query}" if u.query else "")
     return None
+
+
+def _instruments(v, system: str, hue: str, mark: str, host: str) -> tuple[list | None, str]:
+    """A file's instruments checked (WALL-5), or (None, why)."""
+    if not isinstance(v, list) or len(v) > MAX_INSTRUMENTS:
+        return None, f"instruments: a list of at most {MAX_INSTRUMENTS}"
+    out, names = [], set()
+    for a in v:
+        if not isinstance(a, dict):
+            return None, "instrument"
+        name = a.get("name")
+        if not (isinstance(name, str) and ID_RE.match(name)) or name in names:
+            return None, "instrument name"
+        label = _text(a.get("label"), 16) or name
+        has_open, has_ask = "open" in a, "ask" in a
+        if has_open == has_ask:
+            return None, f"instrument {name}: open or ask, one of them"
+        item = {"name": name, "label": label, "note": _text(a.get("note"), 80)}
+        if has_open:
+            o = _open_ok(a.get("open"), host)
+            if o is None:
+                return None, f"instrument {name}: address off the console"
+            item["open"] = o
+        else:
+            ask = a.get("ask")
+            if not isinstance(ask, str) or not ask.strip() or len(ask) > 400:
+                return None, f"instrument {name}: ask"
+            item["ask"] = ask if ask.endswith(" ") else ask.strip()
+        on = a.get("on", [system])
+        if not isinstance(on, list) or not on or len(on) > MAX_ON or not all(isinstance(x, str) and ID_RE.match(x) for x in on):
+            return None, f"instrument {name}: on"
+        item["on"] = list(dict.fromkeys(on))
+        h = a.get("hue", hue)
+        if not (isinstance(h, str) and HUE_RE.match(h)):
+            return None, f"instrument {name}: hue"
+        item["hue"] = h.lower()
+        item["mark"] = a.get("mark") if a.get("mark") in MARKS else mark
+        names.add(name)
+        out.append(item)
+    return out, ""
 
 
 def surface(d, host: str = "") -> tuple[dict | None, str]:
@@ -113,6 +161,11 @@ def surface(d, host: str = "") -> tuple[dict | None, str]:
     mark = d.get("mark") if d.get("mark") in MARKS else "dot"
     s = {"name": name, "system": system, "say": words, "hue": hue.lower(), "line": _text(d.get("line"), 60),
          "mark": mark, "actions": out}
+    if "instruments" in d:
+        ins, why = _instruments(d.get("instruments"), system, s["hue"], mark, host)
+        if ins is None:
+            return None, why
+        s["instruments"] = ins
     ct = d.get("count_to")
     if ct is not None:
         try:
@@ -133,6 +186,7 @@ def load(world: str | os.PathLike | None, host: str | None = None) -> dict:
         return {"surfaces": [], "skipped": []}
     seen: dict[str, str] = {}
     names: set[str] = set()
+    tools: dict[str, str] = {}   # instrument name -> the file that has it (WALL-5)
     got, skipped = [], []
     for p in files:
         try:
@@ -154,6 +208,14 @@ def load(world: str | os.PathLike | None, host: str | None = None) -> dict:
             continue
         for w in s["say"]:
             seen[w] = s["name"]
+        if s.get("instruments"):
+            keep = []
+            for i in s["instruments"]:
+                if i["name"] in tools:
+                    skipped.append({"file": p.name, "why": f"instrument '{i['name']}' is {tools[i['name']]}'s"})
+                else:
+                    tools[i["name"]] = s["name"]; keep.append(i)
+            s["instruments"] = keep
         names.add(s["name"])
         got.append(s)
     return {"surfaces": got, "skipped": skipped}

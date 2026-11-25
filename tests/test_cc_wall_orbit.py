@@ -30,9 +30,9 @@ import cc_layout  # noqa: E402
 # ---- the setting ----
 def test_layout_store_keeps_the_wall_beside_the_layout(tmp_path):
     st = cc_layout.Store(tmp_path)
-    assert st.wall() == {"look": None, "set": None}
-    assert st.set_wall({"look": "orbit"}) == {"look": "orbit", "set": None}
-    assert st.set_wall({"set": ["hbar.music", "hbar.film", "hbar.music"]}) == {"look": "orbit", "set": ["hbar.music", "hbar.film"]}
+    assert st.wall() == {"look": None, "set": None, "pinned": None}
+    assert st.set_wall({"look": "orbit"}) == {"look": "orbit", "set": None, "pinned": None}
+    assert st.set_wall({"set": ["hbar.music", "hbar.film", "hbar.music"]}) == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "pinned": None}
     assert st.get() is None                                                    # the layout itself untouched
     for bad in ({"look": "wild"}, {"set": "hbar.music"}, {"set": ["Bad Id"]}, {"set": [f"s{i}" for i in range(17)]}, {"x": 1}, {}):
         try:
@@ -40,7 +40,7 @@ def test_layout_store_keeps_the_wall_beside_the_layout(tmp_path):
         except cc_layout.LayoutError:
             continue
         raise AssertionError(bad)
-    assert st.wall() == {"look": "orbit", "set": ["hbar.music", "hbar.film"]}
+    assert st.wall() == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "pinned": None}
 
 
 def _bridge(monkeypatch, tmp_path, seed=None):
@@ -160,12 +160,12 @@ const down = async () => { throw new Error('away') }
   console.log(JSON.stringify({ a, s1, b, s2, c, e }))
 })()
 """)
-    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "from": "bridge"}
+    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "pinned": None, "from": "bridge"}
     assert d["s1"]["ok"] and d["s1"]["kept"] == "browser"
-    assert d["b"] == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "from": "browser"}
+    assert d["b"] == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "pinned": None, "from": "browser"}
     assert d["s2"] == {"ok": True, "kept": "bridge"}
     assert d["c"]["look"] == "grid" and d["c"]["set"] == ["hbar.music", "hbar.film"]
-    assert d["e"] == {"look": None, "set": None, "from": "none"}
+    assert d["e"] == {"look": None, "set": None, "pinned": None, "from": "none"}
 
 
 def test_the_centre_sends_in_place_into_the_central_thread():
