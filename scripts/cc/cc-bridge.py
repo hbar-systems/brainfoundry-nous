@@ -56,6 +56,9 @@ Endpoints (JSON):
   GET  /cc/booth/file?path=<p>  a take's wav   POST /cc/booth/take  body = wav, X-Booth-Meta {name?,over?}   POST /cc/booth/name {file,name}
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
+  GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
+  GET  /cc/listen/station?id=<pl:..|likes|own|mix>  {ok,id,name,kind,items:[{k:yt,id,title,artist,dur?}|{k:file,n,...}]}
+  GET  /cc/listen/file?n=<id>  an own track named in own.tsv (byte ranges)   POST /cc/listen/event {event,station,kind,item,...} -> one row in the play log
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -551,6 +554,7 @@ import cc_surfaces  # noqa: E402   the surfaces register: a system's name -> its
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
+import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks played in the console (LISTEN-1, 2026-11-24)
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
@@ -682,6 +686,10 @@ TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "m
 BOOTH = cc_booth.Booth(os.environ.get("CC_BOOTH_DIR", "").strip() or str(OUT_DIR / "studio" / "booth"))
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
+# /listen (LISTEN-1, 2026-11-24, scripts/cc/cc_listen.py): stations from the world's listening tables; the play log
+# stays on the box (CC_LISTEN_LOG, default <out>/listen/plays.tsv).
+LISTEN = cc_listen.Listen(WORLD_DIR or None, STATE_DIR,
+                          os.environ.get("CC_LISTEN_LOG", "").strip() or str(OUT_DIR / "listen" / "plays.tsv"))
 LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
@@ -2770,6 +2778,32 @@ def _brain_api(method: str, path: str, body: dict | None = None):
         return None
 
 
+def _brain_api_why(method: str, path: str, body: dict | None = None):
+    """_brain_api, but when the api refuses with an HTTP error its own reason comes back as {"detail": ...}
+    (LISTEN-1, 2026-11-24: `cc-job radio` said four setting names when the api had named the one missing)."""
+    if not BRAIN_API_KEY:
+        return {"detail": "the bridge has no BRAIN_API_KEY, so it cannot ask the brain's api"}
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{BRAIN_API_URL}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json", "X-API-Key": BRAIN_API_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read(4000) or b"{}")
+            why = d.get("detail") if isinstance(d, dict) else None
+        except ValueError:
+            why = None
+        print(f"brain api {method} {path} refused: {e.code}", flush=True)
+        return {"detail": f"the brain's api said ({e.code}): {why}" if isinstance(why, str) and why else None}
+    except Exception as e:
+        print(f"brain api {method} {path} failed: {type(e).__name__}", flush=True)
+        return None
+
+
 # Asking a peer brain (2026-10-20): `cc-job ask <https://peer> "<question>"` (or the console, with the
 # operator token) posts here; the bridge calls the brain's owner route POST /v1/ask-peer with its key,
 # and the brain signs with its own federation key. Agents and the reasoner never hold either key.
@@ -2856,7 +2890,7 @@ def _radio_link(body: dict) -> tuple[int, dict]:
     station = str((body or {}).get("station") or "https://orfeo.music").strip()
     if not station.startswith("https://"):
         return 400, {"ok": False, "error": "station must be https"}
-    r = _brain_api("POST", "/v1/radio/subscribe-token", {"station": station})
+    r = _brain_api_why("POST", "/v1/radio/subscribe-token", {"station": station})
     if not r or not isinstance(r, dict) or not r.get("url"):
         reason = (r or {}).get("detail") if isinstance(r, dict) else None
         return 503, {"ok": False, "error": reason or "the brain's api issued no token (BRAIN_API_KEY on the bridge; BRAIN_PUBLIC_URL, BRAIN_PRIVATE_KEY and BRAIN_ID on the brain)"}
@@ -6399,6 +6433,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if d.get("ok") else 404, d)
         elif route == "/tape/file":
             TAPE.serve(self, self._query().get("path"))
+        elif route == "/listen":
+            self._send(200, LISTEN.state())
+        elif route == "/listen/station":
+            self._send(*LISTEN.station(self._query().get("id")))
+        elif route == "/listen/file":
+            LISTEN.serve(self, self._query().get("n"), cc_extras.Files)
         elif route == "/booth":
             self._send(200, BOOTH.state())
         elif route == "/booth/file":
@@ -6630,6 +6670,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/listening/read":
             self._send(*LISTENING.start())
+            return
+        if route == "/listen/event":
+            self._send(*LISTEN.event(self._json(limit=4000) or {}))
             return
         if route == "/booth/name":
             body = self._json(limit=2000) or {}
