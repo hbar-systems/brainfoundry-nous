@@ -56,6 +56,10 @@ EXTRA = (("world", "Across systems: the box, the console, the way of working."),
          ("self", "The owner's own state: the day, health, feelings."),
          ("unfiled", "What the chopper could not place."))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+# What a registry row is (WALL-3, 2026-11-24, hbar: "dont confuse systems with surfaces"): "work" is an area of work
+# you talk into (its own standing thread, jobs, state); "instrument" is a thing you open and use (a page, a tool),
+# even when it has a repo; "site" is a public address that shows work. A row without the field is work.
+KINDS = ("work", "instrument", "site")
 THREAD_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f-]{27,}$")
 
 
@@ -201,10 +205,12 @@ def load_systems(world: Path) -> list[dict]:
         d = json.loads((world / "registry" / "systems.json").read_text())
     except (OSError, ValueError):
         d = {}
-    out = [{"id": str(s["id"]), "status": s.get("status", ""), "description": _clean(s.get("description"), 200)}
+    out = [{"id": str(s["id"]), "status": s.get("status", ""), "description": _clean(s.get("description"), 200),
+            "kind": s.get("kind") if s.get("kind") in KINDS else "work",
+            "domain": next((str(x) for x in (s.get("domains") or []) if isinstance(x, str) and re.match(r"^[a-z0-9.-]+$", x)), "")}
            for s in d.get("systems", []) if isinstance(s, dict) and s.get("id")]
     have = {s["id"] for s in out}
-    out += [{"id": i, "status": "active", "description": d0} for i, d0 in EXTRA if i not in have]
+    out += [{"id": i, "status": "active", "description": d0, "kind": "work", "domain": ""} for i, d0 in EXTRA if i not in have]
     return out
 
 
@@ -290,16 +296,35 @@ def named_first(text: str, known: set) -> str | None:
 BRIEF_RE = re.compile(r"ops/jobs/briefs/([\w.-]+\.md)")
 
 
+_BRIEF_SYSTEMS: dict = {}   # (world, brief name) -> (mtime, registry size, system): kept between polls (WALL-3)
+
+
 def _brief_system(world: Path, command: str, known: set, cache: dict) -> str | None:
+    """The first registry id a job's brief names. Read once per brief and kept across polls until the brief's mtime
+    or the registry's size moves (WALL-3: re-reading every brief made each three-second poll cost over a second)."""
     m = BRIEF_RE.search(command or "")
     if not m:
         return None
     name = m.group(1)
     if name not in cache:
+        p = world / "ops" / "jobs" / "briefs" / name
         try:
-            cache[name] = named_first((world / "ops" / "jobs" / "briefs" / name).read_text(errors="replace")[:3000], known)
+            mt = p.stat().st_mtime
         except OSError:
             cache[name] = None
+            return None
+        key = (str(world), name)
+        got = _BRIEF_SYSTEMS.get(key)
+        if got and got[0] == mt and got[1] == len(known):
+            cache[name] = got[2]
+        else:
+            try:
+                cache[name] = named_first(p.read_text(errors="replace")[:3000], known)
+            except OSError:
+                cache[name] = None
+            if len(_BRIEF_SYSTEMS) > 2000:
+                _BRIEF_SYSTEMS.clear()
+            _BRIEF_SYSTEMS[key] = (mt, len(known), cache[name])
     return cache[name]
 
 
@@ -329,7 +354,7 @@ def _jobs(jobs: list, known: set, filing: dict, world: Path | None = None, job_s
                      3 if j.get("ended") is None else 1, ended or started, j.get("ended") is None)
         if j.get("ended") is not None and isinstance(j.get("result"), dict):
             line["result"] = _result(j["result"])
-        out.append({"system": sid, "ended": ended, "line": line, "running": j.get("ended") is None})
+        out.append({"system": sid, "ended": ended, "line": line, "running": j.get("ended") is None, "rec": j})
     return out
 
 
@@ -443,7 +468,7 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
     now = now or datetime.now(timezone.utc)
     world = Path(world) if world else None
     if world is None or not world.is_dir():
-        systems = [{"id": i, "status": "active", "description": d0} for i, d0 in EXTRA]
+        systems = [{"id": i, "status": "active", "description": d0, "kind": "work", "domain": ""} for i, d0 in EXTRA]
         world = Path("/nonexistent")
     else:
         systems = load_systems(world)
@@ -451,22 +476,32 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
     filing = load_filing(world)
     per = {s["id"]: {"run": [], "court": [], "fresh": [], "done": [], "old": [], "next": [], "today": [], "task": []}
            for s in systems}
+    running_recs = {s["id"]: [] for s in systems}
 
     def put(sid, bucket, line):
         per.get(sid if sid in per else "world", per.get("world"))[bucket].append(line)
 
     today = now.strftime("%Y-%m-%d")
     static = static if isinstance(static, dict) and isinstance(static.get("court"), list) else None
+    kind_of = {s["id"]: s.get("kind", "work") for s in systems}
     for j in _jobs(jobs, known, filing, world, (static or {}).get("job_system")):
+        # WALL-3: an instrument or a site is opened, not worked in; a job lands there only when it names that row
+        # as its own system, else it goes to the centre (a brief that mentions hbar.ink is not ink's job)
+        if kind_of.get(j["system"], "work") != "work" and str(j["rec"].get("system") or "") != j["system"]:
+            j["system"] = "world"
         put(j["system"], "run" if j["running"] else "done", j["line"])
+        if j["running"]:
+            running_recs.get(j["system"] if j["system"] in running_recs else "world", running_recs.get("world", [])).append(j["rec"])
         if not j["running"] and j["ended"][:10] == today:
             put(j["system"], "today", j["line"])
     if static is not None:
         court_rows, thoughts, next_rows = _from_static(static, world, known, now)
     else:
         court_rows, thoughts, next_rows = None, _thoughts(world, known, now), None
+    court_n = 0
     for c in _court(world, known, filing, court_rows):
         put(c["system"], "court", c["line"])
+        court_n += 1
     for t in thoughts:
         put(t["system"], "fresh" if t["fresh"] else "old", t["line"])
         if t["line"]["group"] == "tasks":
@@ -494,14 +529,274 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
         total = len(order)
         if s["id"] == "unfiled" and not total:
             continue
-        tiles.append({"id": s["id"], "status": s.get("status", ""), "description": s.get("description", ""),
+        tiles.append({"id": s["id"], "status": s.get("status", ""), "description": s.get("description", ""), "kind": s.get("kind", "work"),
+                      "domain": s.get("domain", ""), "jobs": job_briefs(running_recs[s["id"]], jobs, now, world),
                       "moving": moving, "total": total, "lines": lines, "more": more, "extra": len(rest),
                       "thread": threads.get(s["id"]), "detail": detail,
                       "counts": {k: v["count"] for k, v in detail.items()}})
     tiles.sort(key=lambda t: (-t["counts"]["running"], -t["moving"], -t["total"], t["id"]))
     return {"tiles": tiles, "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "moving": sum(t["moving"] for t in tiles),
             "running": sum(t["counts"]["running"] for t in tiles), "source": "board.json" if static else "world",
-            "static_built": (static or {}).get("built") or None}
+            "static_built": (static or {}).get("built") or None, "waits": {"court": court_n}}
+
+
+# ---------------------------------------------------------------- depth (WALL-3) ----
+# hbar 2026-11-24 on the orbit: "will i be satisfied with the number of information i can get about the system (and
+# talkign to it: ex: how many jobs are going, maybe agentic substructure of each job or info, clear summary, this
+# thing too [the thread tree] ... but like everything is hidden, and i can gain access some easy way WITHOUT
+# interfering with production and the main focus". The wall's quiet layer reads these; every one is pure and cheap.
+
+TREE_RE = re.compile(r"<tree>\s*([{\[][\s\S]*?)\s*</tree>")
+TREE_MAX_BYTES = 64 * 1024
+SUMMARY_MAX = 220
+_BRIEF_HEADS: dict = {}     # brief name -> (mtime, first 3000 chars): the waiter search reads a brief once
+
+
+def _sentence(text: str, n: int = SUMMARY_MAX) -> str:
+    s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(text or ""))        # [words](link) -> words
+    s = re.sub(r"[*_`]+", "", s)
+    s = re.sub(r"^\s*(?:[-+>]|\d+[.)])\s+", "", s)
+    s = _clean(s)
+    first = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])", s, maxsplit=1)[0]
+    return _clean(first, n)
+
+
+def first_line(text: str) -> str:
+    """The first sentence of an answer that says something: no heading, fence, table, rule or block marker."""
+    fence = False
+    for ln in str(text or "").splitlines():
+        t = ln.strip()
+        if t.startswith("```"):
+            fence = not fence
+            continue
+        if fence or not t or t.startswith(("#", "|", "<", "---", "***")):
+            continue
+        out = _sentence(t)
+        if out:
+            return out
+    return ""
+
+
+def card_line(text: str) -> str:
+    """Where a system stands, from its state card (a markdown file): a "Goal:", "State:", "Now:" or "Scope:" line
+    first, else the first prose line after the title. Front matter and headings are skipped."""
+    body = str(text or "")
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        body = body[end + 4:] if end > 0 else body
+    m = re.search(r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:Now|State|Goal|Scope|Where it stands)(?:\*\*)?:\s*(.+)$", body, re.M | re.I)
+    if m:
+        return _sentence(m.group(1))
+    return first_line(body)
+
+
+PROMPTS_MAX = 5
+PROMPT_MAX = 300
+_CONT_RE = re.compile(r"^#{1,4}\s*Continue\b", re.I)
+
+
+def card_prompts(text: str, n: int = PROMPTS_MAX) -> list:
+    """WALL-4 (hbar 2026-11-24: "fill it with ... prompts to continue"): the lines under a card's "## Continue" heading,
+    each a prompt for that system's box, at most n, in the card's order. A leading "pin:" (kept by
+    scripts/wall_cards.py when it rewrites the card) is not part of the prompt. A line ending in ": " keeps its
+    trailing space: the wall waits for him to finish it."""
+    out, on = [], False
+    for ln in str(text or "").splitlines():
+        t = ln.strip()
+        if t.startswith("#"):
+            if on:
+                break
+            on = bool(_CONT_RE.match(t))
+            continue
+        if not on:
+            continue
+        m = re.match(r"^[-*+]\s+(.*)$", ln.strip("\r"))
+        if not m:
+            continue
+        p = re.sub(r"^pin:\s*", "", m.group(1), flags=re.I)
+        open_end = bool(re.search(r":\s*$", p))
+        p = re.sub(r"\s+", " ", p).strip()[:PROMPT_MAX]
+        if not p:
+            continue
+        out.append(p + " " if open_end and p.endswith(":") else p)
+        if len(out) >= n:
+            break
+    return out
+
+
+def wall_card(world: Path | None, sid: str) -> str | None:
+    """The system's wall card in the world, <world>/ops/wall/cards/<id>.md, when there is one (relative path)."""
+    if world is None or not isinstance(sid, str) or not ID_RE.match(sid):
+        return None
+    rel = f"ops/wall/cards/{sid}.md"
+    return rel if (Path(world) / rel).is_file() else None
+
+
+def state_cards(world: Path | None) -> dict:
+    """The owner's map system -> state card, <world>/ops/wall/states.json {"states": {"<system>": "<path in world>"}}.
+    Paths stay inside the world; anything else is dropped."""
+    if world is None:
+        return {}
+    try:
+        d = json.loads((Path(world) / "ops" / "wall" / "states.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for sid, rel in ((d or {}).get("states") or {}).items() if isinstance(d, dict) else ():
+        if isinstance(sid, str) and ID_RE.match(sid) and isinstance(rel, str) and rel and not rel.startswith("/") \
+                and ".." not in Path(rel).parts:
+            out[sid] = rel
+    return out
+
+
+def last_tree(messages) -> dict | None:
+    """The last <tree> block the thread's answers carry (newest answer first; within one, its last block that
+    parses), as the raw object the page's ui/lib/tree.js cleans. None when there is none or it is too big."""
+    for m in reversed(messages or []):
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        text = str(m.get("content") or "")
+        if "<tree>" not in text:
+            continue
+        for raw in reversed(TREE_RE.findall(text)):
+            if len(raw) > TREE_MAX_BYTES:
+                continue
+            try:
+                v = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(v, list):
+                v = {"nodes": v}
+            if isinstance(v, dict) and isinstance(v.get("nodes"), list) and v["nodes"]:
+                return v
+    return None
+
+
+def tree_size(tree) -> int:
+    n = 0
+    stack = list((tree or {}).get("nodes") or []) if isinstance(tree, dict) else []
+    while stack and n < 1000:
+        x = stack.pop()
+        if isinstance(x, dict):
+            n += 1
+            kids = x.get("children")
+            stack.extend(kids if isinstance(kids, list) else [])
+    return n
+
+
+def brief_of(command: str) -> str:
+    m = BRIEF_RE.search(command or "")
+    return m.group(1) if m else ""
+
+
+def _brief_head(world: Path | None, name: str) -> str:
+    if not name or world is None:
+        return ""
+    p = Path(world) / "ops" / "jobs" / "briefs" / name
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return ""
+    got = _BRIEF_HEADS.get(name)
+    if got and got[0] == mt:
+        return got[1]
+    try:
+        head = p.read_text(errors="replace")[:3000]
+    except OSError:
+        head = ""
+    if len(_BRIEF_HEADS) > 300:
+        _BRIEF_HEADS.clear()
+    _BRIEF_HEADS[name] = (mt, head)
+    return head
+
+
+def _mentions(text: str, tag: str, jid: str) -> bool:
+    if jid and jid in (text or ""):
+        return True
+    return bool(tag) and re.search(r"(?<![A-Z0-9-])" + re.escape(tag) + r"(?![0-9])", text or "") is not None
+
+
+def waiter_of(rec: dict, jobs: list, world: Path | None = None) -> dict | None:
+    """The running job that waits for this one (to gate and push it): another running job whose title or brief
+    names this job's tag or id; one that pushes or waits is preferred."""
+    tag, jid = _tag(str(rec.get("title") or "")), str(rec.get("id") or "")
+    best = None
+    for o in jobs or []:
+        if not isinstance(o, dict) or o.get("ended") is not None or str(o.get("id") or "") == jid:
+            continue
+        otitle = str(o.get("title") or "")
+        if _tag(otitle) == tag and tag:
+            continue
+        text = otitle + "\n" + _brief_head(world, brief_of(str(o.get("command") or "")))
+        if not _mentions(text, tag, jid):
+            continue
+        rank = 0 if re.search(r"push|wait|gate", otitle, re.I) else 1
+        if best is None or rank < best[0]:
+            best = (rank, {"id": str(o.get("id") or ""), "title": _clean(otitle, 120)})
+    return best[1] if best else None
+
+
+def job_briefs(recs: list, jobs: list, now: datetime, world: Path | None = None) -> list:
+    """The running jobs of one system for the depth layer: id, title, minutes running, its brief, the waiter."""
+    out = []
+    t_now = now.timestamp()
+    for r in sorted(recs or [], key=lambda x: x.get("started") or 0):
+        try:
+            mins = max(0, int((t_now - float(r.get("started"))) // 60))
+        except (TypeError, ValueError):
+            mins = None
+        out.append({"id": str(r.get("id") or ""), "title": _clean(r.get("title") or r.get("command"), 120),
+                    "tag": _tag(str(r.get("title") or "")), "mins": mins, "brief": brief_of(str(r.get("command") or "")),
+                    "waiter": waiter_of(r, jobs, world), "thread": str(r.get("thread") or "") if THREAD_RE.match(str(r.get("thread") or "")) else ""})
+    return out
+
+
+def _tail_lines(path, n: int = 3, nbytes: int = 4096) -> list:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - nbytes))
+            raw = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = [_clean(x, 160) for x in raw.splitlines()]
+    lines = [x for x in lines if x and not re.match(r"^# J\d+ |^# ", x)]
+    return lines[-n:]
+
+
+def job_steps(log: str, out_file: str, out_dir: Path | None, brief: str, started, n_files: int = 4) -> dict:
+    """What a running job shows of its inside: the last lines of its log and of the file it writes to, and the
+    files it made so far in its own folder out/<date>/<name>/ (the brief's name without the date)."""
+    steps = _tail_lines(log) if log else []
+    if out_file:
+        steps = (steps + _tail_lines(out_file))[-3:]
+    made = []
+    slug = re.sub(r"^\d{4}-\d{2}-\d{2}_", "", brief or "").removesuffix(".md")
+    if out_dir and slug and ID_RE.match(slug):
+        try:
+            lo = float(started or 0)
+        except (TypeError, ValueError):
+            lo = 0.0
+        day = time.strftime("%Y-%m-%d", time.gmtime(lo or time.time()))
+        d = Path(out_dir) / day / slug
+        try:
+            got = [(e.name, e.stat().st_mtime) for e in os.scandir(d) if e.is_file(follow_symlinks=False) and not e.name.startswith(".")]
+        except OSError:
+            got = []
+        got = [g for g in got if g[1] >= lo - 2]
+        got.sort(key=lambda g: -g[1])
+        made = [g[0] for g in got[:n_files]]
+    return {"steps": steps, "made": made}
+
+
+def due_today(tasks, today: str) -> int:
+    """Open tasks due today or before (an overdue task is due today too); today is YYYY-MM-DD."""
+    n = 0
+    for t in tasks or []:
+        if isinstance(t, dict) and not t.get("done") and isinstance(t.get("due"), str) and t["due"][:10] and t["due"][:10] <= today:
+            n += 1
+    return n
 
 
 # ---------------------------------------------------------------- voice ----

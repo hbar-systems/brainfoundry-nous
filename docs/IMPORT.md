@@ -270,6 +270,24 @@ The Caddy lines of every member gain `/api/bf/documents/import-laptop/refused` (
 - agent.ps1 was not run (no PowerShell on the build box).
 - A faster embedder for 2-core member brains (bge-small, or the embedding spoke) would change the first pass from about 56 notes to several hundred; not changed here, it re-indexes.
 
+## Claude's export in parts: the manifest (IMPORT-MANIFEST-1, 2026-11-24)
+
+Seen in a member's sitting (2026-11-23/24, photos): Claude's export email can now open a list of downloads instead of one zip, and that list can be saved as a manifest: JSON `{"version": "1.0", "batches": [{"batch_index", "export_url", "category", "part", "filename"}, ...]}`, categories such as `conversations` and `frames`, file names such as `conversations-000.zip`. Dropping the manifest used to answer "No conversations found". No public description of this format exists (Anthropic's export help page, read 2026-11-24, describes only the email link, valid 24 hours); everything below rests on the fields in the photos.
+
+- **The manifest dropped on the card** (`scripts/import_chats.py` `claude_manifest`, `ClaudeManifest`): recognised, nothing imported, a 400 whose envelope carries `details.import = {"code": "claude_manifest", "conversations": [{"part", "filename", "url"}], "other": [categories]}`. The card says: "This is Claude's list of downloads, not the chats themselves. Open the link named conversations (conversations-000.zip), then drop that zip here", and lists every conversations part as a link. Only `https` links on `claude.ai` or a subdomain are passed on, checked on the server and again in the card (`ui/lib/moveIn.js` `importAnswer`); the server never fetches them. A part without such a link is named, and the card says the link is in the email.
+- **A part that holds no chats** (`frames-000.zip`, or any `<category>-NNN.zip` other than conversations) with nothing readable in it: `details.import = {"code": "claude_part", "category", "filename"}`, and the card says to drop the conversations zip instead.
+- **The conversations zip**: read as before. Assumed, not seen: its inside may be the old `conversations.json`, shards `conversations-000.json`, one conversation per line (`.jsonl`, lines carrying `chat_messages`), or one conversation per `.json` file; all four are read. A zip holding the part zips themselves (all downloads zipped together) reads every `conversations-*.zip` inside and lists the others in the answer's new `ignored` field; the card shows one line "Left aside, no chats in them: frames-000.zip."
+- The Claude chip's words (`ui/lib/aiExports.js`, en and ru): Settings > Privacy > Export data; the email's link opens one zip or a list of downloads; drop the conversations zip, every part if there are several; frames and the other zips hold no chats.
+- Tests: `tests/test_import_claude_manifest.py` (synthetic manifest and zips only). Not verified: a real new-format export; whether a conversations part's inner layout is one of the four above; whether `export_url` is on claude.ai at all (if it is on a storage host, the card shows the names without links and points at the email).
+
+### Proposal, not built: a lighter first bring-in (2026-11-24)
+
+The same sitting: the survey's default "bring all proposed" took 1,865 files into a small brain, which then sat reading them while the person waited, with no sign of progress. Proposed:
+
+1. First pass by default: the recent and study folders only. Recent = files modified in the last 12 months; study = areas whose name or content says courses, lectures, thesis, notes, papers (Documents/Uni, Desktop/Thesis, Google Drive/Courses ...). Cap the first pass at about 300 knowledge files. Everything else the plan proposes stays ticked as a **second pass**, offered by the card once the first pass is read ("Bring the rest: 1,560 files").
+2. A visible line on the home while documents are still being read: "Your brain is still reading: N of M" (N = documents embedded, M = documents approved in this run), from the existing status the card already polls, gone when N = M.
+3. Measure before choosing the cap: time per document on the smallest member box (embedding throughput), so 300 is a number with a reason. Owner of the ruling: hbar (taste of the first sitting).
+
 ## Codex and Claude Code history (MEMBERS-11, 2026-11-23)
 
 hbar 2026-11-23: "An easy way to do import from the Claude and the Codex of the individual, this was one of our main onboarding issues." The coding agents keep their history on the computer, not in an account export: Codex (CLI, IDE extension and desktop app) in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, Claude Code in `~/.claude/projects/<folder slug>/<session>.jsonl`. Both are hidden folders, which every walk skips by rule, and `.jsonl` is not a type Knowledge reads, so before this none of it came in.

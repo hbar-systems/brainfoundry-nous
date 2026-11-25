@@ -501,10 +501,43 @@ def test_thread_style_is_checked_and_kept_on_the_thread(monkeypatch, tmp_path):
                          "learn": True, "evil": "x", "font": "url(javascript:1)"})
     assert s == {"accent": "#a1b2c3", "tint": 30, "text": "18px", "skin": "owl", "learn": True}
     assert m._thread_style({"accent": "red; background:url(x)"}) == {}
+    # SKIN-3: a thread keeps its own font, one of the six console shapes
+    assert m._thread_style({"font": "lora", "skin": "fox"}) == {"font": "lora", "skin": "fox"}
     assert m._thread_style("no") is None
     assert m._threads_update("b1", style=s)["style"]["accent"] == "#a1b2c3"
     assert m._threads_view()["threads"][0]["style"]["skin"] == "owl"
     assert "style" not in m._threads_update("b1", style={})
+
+
+def test_skin4_thread_look_by_id_child_inherits_default_on_box(monkeypatch, tmp_path):
+    # SKIN-4 (2026-11-24): the look is read by id, whatever the list is filtered by; a thread started from a thread
+    # is born in its parent's skin and font (copied once, the parent never written); the default lives on the box.
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    m._threads_save([
+        {"claude": None, "brain": "pa", "title": "Deck pass", "started": "2026-11-24T08:00:00Z",
+         "style": {"skin": "rose", "font": "lora", "accent": "#a1b2c3", "text": "18px"}},
+        {"claude": None, "brain": "old", "title": "Loops", "started": "2026-11-01T08:00:00Z", "archived": True,
+         "style": {"skin": "fox"}},
+        {"claude": None, "brain": "ch", "title": "CC: walk the deck", "started": "2026-11-24T10:00:00Z"},
+        {"claude": None, "brain": "own", "title": "Has its own", "started": "2026-11-24T10:00:00Z", "style": {"skin": "sage"}},
+    ])
+    assert m._thread_style_of("old") == {"skin": "fox"}            # archived: not in the list, still its own
+    assert "old" not in [t["brain"] for t in m._threads_view(q="deck")["threads"]]
+    assert m._thread_style_of("ch") == {} and m._thread_style_of("nope") is None
+    m._inherit_style("ch", "pa")
+    by = {t["brain"]: t for t in m._threads_load()}
+    assert by["ch"]["style"] == {"skin": "rose", "font": "lora", "accent": "#a1b2c3"}   # not its text size
+    assert by["pa"]["style"] == {"skin": "rose", "font": "lora", "accent": "#a1b2c3", "text": "18px"}
+    m._inherit_style("own", "pa")                                   # a child with its own look keeps it
+    assert {t["brain"]: t for t in m._threads_load()}["own"]["style"] == {"skin": "sage"}
+    # the console default: one file on the box, merged, bad values dropped
+    m.SKIN_DEFAULT_PATH = tmp_path / "skin.json"
+    assert m.cc_skin.load_default(m.SKIN_DEFAULT_PATH) == {}
+    assert m.cc_skin.save_default(m.SKIN_DEFAULT_PATH, {"skin": "ocean"}) == {"skin": "ocean"}
+    assert m.cc_skin.save_default(m.SKIN_DEFAULT_PATH, {"font": "inter", "skin": "<b>"}) == {"skin": "ocean", "font": "inter"}
+    src = (ROOT / "scripts" / "cc" / "cc-bridge.py").read_text()
+    assert 'route == "/threads/style"' in src and src.count('route == "/skin"') == 2
+    assert "_inherit_style(child, parent)" in src
 
 
 def test_learning_deck_spaced_recall(monkeypatch, tmp_path):
@@ -1383,7 +1416,7 @@ def test_activity_lights_shape(monkeypatch, tmp_path):
 
 def test_radio_link_returns_the_brain_link(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=True)
-    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: {"url": "https://orfeo.music/radio?token=t.t.t", "taste": "afro house", "event": {"score": 0.21}} if path == "/v1/radio/subscribe-token" and body == {"station": "https://orfeo.music"} else None)
+    monkeypatch.setattr(m, "_brain_api_why", lambda method, path, body=None: {"url": "https://orfeo.music/radio?token=t.t.t", "taste": "afro house", "event": {"score": 0.21}} if path == "/v1/radio/subscribe-token" and body == {"station": "https://orfeo.music"} else None)
     code, out = m._radio_link({})
     assert code == 200 and out["ok"] and out["url"].startswith("https://orfeo.music/radio?token=")
     assert out["event"]["score"] == 0.21
@@ -1391,11 +1424,40 @@ def test_radio_link_returns_the_brain_link(monkeypatch, tmp_path):
 
 def test_radio_link_refuses_without_token_or_https(monkeypatch, tmp_path):
     m = _load(monkeypatch, tmp_path, with_key=True)
-    monkeypatch.setattr(m, "_brain_api", lambda method, path, body=None: None)
+    monkeypatch.setattr(m, "_brain_api_why", lambda method, path, body=None: None)
     code, out = m._radio_link({"station": "https://orfeo.music"})
     assert code == 503 and not out["ok"]
     code, out = m._radio_link({"station": "http://orfeo.music"})
     assert code == 400
+
+
+def test_radio_link_names_the_apis_own_reason(monkeypatch, tmp_path):
+    # LISTEN-1: the api's 503 detail reaches `cc-job radio`, instead of the four setting names
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            assert self.headers.get("X-API-Key") == "k"
+            body = b'{"detail": "no public https base URL: set BRAIN_PUBLIC_URL"}'
+            self.send_response(503); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    m = _load(monkeypatch, tmp_path, with_key=True)
+    monkeypatch.setattr(m, "BRAIN_API_KEY", "k")
+    monkeypatch.setattr(m, "BRAIN_API_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+    code, out = m._radio_link({})
+    srv.shutdown()
+    assert code == 503 and out["error"] == "the brain's api said (503): no public https base URL: set BRAIN_PUBLIC_URL"
+    monkeypatch.setattr(m, "BRAIN_API_KEY", "")
+    code, out = m._radio_link({})
+    assert code == 503 and "BRAIN_API_KEY" in out["error"]
 
 
 def test_notify_rate_limit_and_flood_line(monkeypatch, tmp_path):

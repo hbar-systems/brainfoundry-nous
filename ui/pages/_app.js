@@ -7,9 +7,9 @@ import 'highlight.js/styles/atom-one-dark.css'
 import Nav from '../components/Nav'
 import SidesFooter from '../components/SidesFooter'
 import HelpButton from '../components/HelpButton'
-import { applyStyle, clearStyle } from '../lib/layout'
+import ListenStrip from '../components/ListenStrip'
 import { watchWall } from '../lib/wallpaper'
-import { watchSkin } from '../lib/skin'
+import { watchSkin, setLayoutLook, PREPAINT } from '../lib/skin'
 
 // Theme palette tokens defined as CSS custom properties below. Each theme is a
 // [data-theme] block on :root; chat-header switcher writes localStorage and
@@ -91,8 +91,8 @@ export default function App({ Component, pageProps }) {
       document.documentElement.style.setProperty('--nav-h', `${navH}px`)
     }
   }, [])
-  // Skin and font (SKIN-2, 2026-11-23): the skin on screen (bf-theme-now, else bf-theme) and the console
-  // font, followed live when another tab or the conversation beside this pane changes them (lib/skin.js).
+  // Skin and font (SKIN-3, 2026-11-23): the console default (bf-theme, bf-font), followed live when another tab
+  // changes the default; a thread page draws its own skin and font over it in its own document (lib/skin.js).
   useEffect(() => watchSkin(document.documentElement), [])
 
   // Light was removed on 2026-10-18 (hbar: useless); clear a level a browser may still hold.
@@ -107,7 +107,8 @@ export default function App({ Component, pageProps }) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const root = document.documentElement
-    const put = (resolved) => { clearStyle(root, document.body); if (resolved) applyStyle(resolved, root, document.body) }
+    // SKIN-4: through lib/skin.js, so the layout's colours stay off a thread that wears its own skin
+    const put = (resolved) => setLayoutLook(resolved || null, root)
     try { const c = localStorage.getItem('cc.layout.resolved'); if (c) put(JSON.parse(c)) } catch {}
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
       if (!d) return
@@ -120,6 +121,8 @@ export default function App({ Component, pageProps }) {
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* SKIN-4: the skin before the first paint (the thread's own on a thread page), so a reload never flashes the default */}
+        <script key="bf-prepaint" dangerouslySetInnerHTML={{ __html: PREPAINT }} />
         <meta name="theme-color" content="#0e0c0b" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -523,6 +526,8 @@ export default function App({ Component, pageProps }) {
       {!embedded && <SidesFooter />}
       {/* ask hbar (MEMBERS-14): one fixed corner button on every top-level screen, never inside a pane */}
       {!embedded && <HelpButton />}
+      {/* the radio (LISTEN-1): the console's one audio owner, top-level only, so a page or pane change never stops it */}
+      {!embedded && <ListenStrip />}
       {updateReady && (
         <div role="status" style={{
           position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',

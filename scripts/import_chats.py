@@ -101,13 +101,91 @@ def _wanted(name):
             or base.lower().endswith(".csv"))
 
 
-def load_export(src):
+# ── Claude's export in parts (IMPORT-MANIFEST-1, 2026-11-24) ──
+# Claude's export can arrive as a manifest: {"version": "1.0", "batches": [{"batch_index",
+# "export_url", "category" ("conversations", "frames", ...), "part", "filename"
+# ("conversations-000.zip")}, ...]}. The manifest holds no chats: the person downloads each
+# zip from its export_url. Seen in a member's sitting (photos, 2026-11-23); no public
+# description of the format exists, so only the fields above are relied on. The links are
+# never fetched here; only https links on claude.ai (or a subdomain) are passed on.
+
+class ClaudeManifest(Exception):
+    """The upload is Claude's list of downloads, not the chats. .info is claude_manifest()."""
+
+    def __init__(self, info):
+        super().__init__("Claude export manifest")
+        self.info = info
+
+
+def _claude_link(url):
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(url or "").strip())
+    except ValueError:
+        return ""
+    host = (u.hostname or "").lower()
+    if u.scheme == "https" and (host == "claude.ai" or host.endswith(".claude.ai")):
+        return u.geturl()
+    return ""
+
+
+def claude_manifest(data):
+    """{'version', 'conversations': [{'part', 'filename', 'url'}], 'other': [category, ...]} when data
+    is Claude's export manifest, else None. url is '' unless it is https on claude.ai."""
+    if not isinstance(data, dict) or not isinstance(data.get("batches"), list):
+        return None
+    batches = [b for b in data["batches"] if isinstance(b, dict)]
+    if not batches or not all(("export_url" in b or "filename" in b) and "category" in b for b in batches):
+        return None
+    conv, other = [], set()
+    for b in sorted(batches, key=lambda b: (str(b.get("part", "")), str(b.get("batch_index", "")))):
+        cat = str(b.get("category") or "").strip().lower()
+        if cat == "conversations":
+            conv.append({"part": b.get("part", b.get("batch_index", "")),
+                         "filename": str(b.get("filename") or "")[:120],
+                         "url": _claude_link(b.get("export_url"))})
+        elif cat:
+            other.add(cat[:40])
+    return {"version": str(data.get("version") or ""), "conversations": conv, "other": sorted(other)}
+
+
+_PART_ZIP = re.compile(r"([a-z][a-z_]*)-\d+\.zip")
+
+
+def part_category(filename):
+    """'frames' for frames-000.zip (a part of Claude's export), '' otherwise."""
+    m = _PART_ZIP.fullmatch((filename or "").rsplit("/", 1)[-1].lower())
+    return m.group(1) if m else ""
+
+
+def _claude_jsonl(raw):
+    """Claude conversations one per line (a possible layout of the new zip; assumed, not seen)."""
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines() if isinstance(raw, bytes) else raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            return []  # not one JSON object per line: not this shape
+        if isinstance(d, dict) and isinstance(d.get("chat_messages"), list):
+            out.append(d)
+    return out
+
+
+def load_export(src, notes=None):
     """Return (conversations, projects) from a zip, a directory or one export file.
     ChatGPT may shard into conversations-000.json, ...; all shards are read. A zip or
     folder with none of the known names has every .json tried (Le Chat's file name
-    is not documented); normalize() drops what it does not recognise."""
+    is not documented); normalize() drops what it does not recognise.
+    Claude's export in parts (2026-11-24): a zip may hold the part zips themselves
+    (conversations-000.zip, frames-000.zip, ...): conversations parts are read, the others
+    are named in notes['ignored']. A Claude manifest with nothing else raises ClaudeManifest."""
     src = pathlib.Path(src).expanduser()
-    convs, projects = [], []
+    convs, projects, manifests = [], [], []
+    notes = notes if notes is not None else {}
+    notes.setdefault("ignored", [])
 
     def take(name, raw):
         base = name.rsplit("/", 1)[-1]
@@ -118,7 +196,14 @@ def load_export(src):
         if low.endswith((".html", ".htm")):
             convs.extend(gemini_html_conversations(raw))
             return
+        if low.endswith(".jsonl"):
+            convs.extend(_claude_jsonl(raw))
+            return
         data = json.loads(raw)
+        man = claude_manifest(data)
+        if man is not None:
+            manifests.append(man)
+            return
         if low == "myactivity.json" or _looks_like_gemini(data):
             convs.extend(gemini_conversations(data))
         elif base == "projects.json":
@@ -135,14 +220,25 @@ def load_export(src):
         return [n for n in names if not (n.lower().endswith("myactivity.html")
                                          and n.rsplit("/", 1)[0] in dirs_with_json)]
 
-    def read_all(names, read):
+    def read_all(names, read, depth=0):
         names = prefer_json([n for n in names if "__MACOSX" not in n])
+        for n in [n for n in names if n.lower().endswith(".zip")]:  # the parts, zipped together
+            cat = part_category(n)
+            if cat == "conversations" and depth == 0:
+                try:
+                    with zipfile.ZipFile(io.BytesIO(read(n))) as inner:
+                        read_all(sorted(x for x in inner.namelist() if not x.endswith("/")), inner.read, 1)
+                except zipfile.BadZipFile:
+                    notes["ignored"].append(n.rsplit("/", 1)[-1])
+            else:
+                notes["ignored"].append(n.rsplit("/", 1)[-1])
+        names = [n for n in names if not n.lower().endswith(".zip")]
         hits = [n for n in names if _wanted(n)]
         for n in hits:
             take(n, read(n))
         if not convs and not projects:
             for n in names:
-                if n.lower().endswith(".json") and n not in hits:
+                if n.lower().endswith((".json", ".jsonl")) and n not in hits:
                     try:
                         take(n, read(n))
                     except ValueError:
@@ -158,6 +254,8 @@ def load_export(src):
         take(src.name, src.read_bytes())
     else:
         raise SystemExit(f"not found: {src}")
+    if manifests and not convs and not projects:
+        raise ClaudeManifest(manifests[0])
     return convs, projects
 
 
@@ -928,7 +1026,7 @@ def conv_file_name(c):
     return f"{c['source']}_{c['date'] or 'undated'}_{_slug(c['title'])}_{str(c['id']).replace('-', '')[:8]}.md"
 
 
-def _load_or_paste(src, title=None):
+def _load_or_paste(src, title=None, notes=None):
     """An export file, else (a bare text, markdown, html or pdf file) one pasted conversation."""
     p = pathlib.Path(src).expanduser()
     if p.is_file() and not zipfile.is_zipfile(p) and not p.name.lower().endswith(".json"):
@@ -936,7 +1034,9 @@ def _load_or_paste(src, title=None):
         convs = []
         if p.name.lower().endswith(".jsonl"):  # one Codex or Claude Code session (MEMBERS-11)
             c = session_conversation(data, p.name)
-            return ([{"_norm": c}] if c else []), []
+            if c:
+                return [{"_norm": c}], []
+            return _claude_jsonl(data), []  # Claude conversations one per line (assumed shape, 2026-11-24)
         if p.name.lower().endswith(".csv"):
             convs = copilot_conversations(data)
         elif p.name.lower().endswith((".html", ".htm")):
@@ -947,13 +1047,14 @@ def _load_or_paste(src, title=None):
         if not text.strip():
             return [], []
         return [{"_norm": pasted_conversation(text, title or html_title)}], []
-    return load_export(p)
+    return load_export(p, notes)
 
 
-def prep(src, out_dir, title=None):
+def prep(src, out_dir, title=None, notes=None):
+    """notes (a dict, optional) gets 'ignored': the parts of a Claude export that hold no chats."""
     out = pathlib.Path(out_dir)
     (out / "docs").mkdir(parents=True, exist_ok=True)
-    convs, projects = _load_or_paste(src, title)
+    convs, projects = _load_or_paste(src, title, notes)
     rows = []
     for raw in convs:
         c = normalize(raw) if isinstance(raw, dict) else None

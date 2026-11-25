@@ -1,6 +1,12 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
 import { readOpen, toggleOpen, gridOf, OPEN_KEY } from '../../lib/steer'
+import SurfaceCard, { SURFACE_CSS } from '../../components/SurfaceCard'
+import { systemsFor } from '../../lib/surfaces'
+
+// SURFACES-1 (2026-11-24): a tile whose system has a card in the register (GET /cc/surfaces) carries the card's pads
+// under its name, in the card's hue; a card with no tile (a project, the court) is a tile of its own at the start.
+// A pad with an address goes to that page; an ask opens the system's thread beside the tiles with the ask in its box.
 
 // Several system threads at once, steered by a central chat (BOARD-5, 2026-11-23, hbar 2026-11-22: "We are getting
 // way too disorganised we have so many threads open"). A press on a tile's name opens its standing thread beside the
@@ -8,7 +14,7 @@ import { readOpen, toggleOpen, gridOf, OPEN_KEY } from '../../lib/steer'
 // closes the oldest. The choice survives a reload (localStorage cc.systems.open); /systems?open=a,b opens exactly those. The central chat is the world's
 // standing thread, first on the left: when its answer ends with a <steer> line (ui/lib/steer.js) the press sends
 // that turn into the named system's thread through POST /cc/threads/<id>/say, and the steered thread reports back
-// into the central chat (REPORT-1). The page before this one is kept at /systems/v1.
+// into the central chat (REPORT-1). The page before this one is kept at /systems/v1; the look before the SURFACES-1 pads at /systems/v2.
 // The systems page (BOARD-3 2026-11-12, BOARD-4 2026-11-13). hbar: "ON SINGLE PAGE I SEE EACH SYSTEM AND I CAN
 // DISCUSS IN THE CHAT IN A SYSTEM WHILE SEEING ALL THE SYSTEMS WHATS GOING ON AND FUNCTIONING", with "HOW MANY
 // AGENTS/TEAMS OF AGENTS ... CAN BE SEEN ACTIVE" per system.
@@ -101,6 +107,10 @@ const CSS = `
 .sy-hold{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--muted);font-size:15px;text-align:center}
 .sy-msg{margin:0 18px 10px;font-size:13px;color:var(--dim)}.sy-msg.err{color:var(--rust)}.sy-msg a{color:var(--rust)}
 .sy-note{color:var(--muted);font-size:14px;margin:8px 12px 18px}
+.sy-pads{padding:0 10px 10px}
+.sy .sf{--text:var(--ink);--surface:var(--bg)}
+.sy-t.has-sf{box-shadow:inset 3px 0 0 var(--sfh)}
+.sy-alone{margin:0 0 6px}
 @media(max-width:899px){
   .sy-split{display:block}.sy-left{padding:18px 12px 48px}.sy-grid{grid-template-columns:1fr;gap:2px}
   .sy-right{display:none;position:fixed;left:0;right:0;bottom:0;top:var(--top);height:auto;z-index:40}
@@ -147,7 +157,7 @@ function Line({ ln }) {
   )
 }
 
-function Tile({ t, open, kind, sel, onKind, onName, onTalk }) {
+function Tile({ t, open, kind, sel, onKind, onName, onTalk, surfs, onPad }) {
   const c = t.counts || {}
   const d = (t.detail || {})[kind] || { count: 0, lines: [] }
   const [all, setAll] = useState(false)
@@ -155,7 +165,8 @@ function Tile({ t, open, kind, sel, onKind, onName, onTalk }) {
   const busy = KINDS.some(([k]) => c[k])
   const shown = all ? d.lines : d.lines.slice(0, 7)
   return (
-    <section className={'sy-t' + (busy ? '' : ' sy-q') + (open ? ' open' : '') + (sel ? ' sel' : '')} id={t.id}>
+    <section className={'sy-t' + (busy ? '' : ' sy-q') + (open ? ' open' : '') + (sel ? ' sel' : '') + (surfs && surfs.length ? ' has-sf' : '')} id={t.id}
+      style={surfs && surfs.length ? { '--sfh': surfs[0].hue } : undefined}>
       <button className="sy-th" onClick={() => onName(t.id)} title={t.description || t.id} aria-pressed={sel ? 'true' : 'false'}>
         <span className="sy-nm">{t.id}</span>
       </button>
@@ -167,6 +178,11 @@ function Tile({ t, open, kind, sel, onKind, onName, onTalk }) {
           </button>
         ) : null))}
       </div>
+      {(surfs || []).map(sf => (
+        <div key={sf.name} className="sy-pads">
+          <SurfaceCard s={sf} small bare onOpen={(a) => onPad(t.id, sf, a)} onAsk={(a) => onPad(t.id, sf, a)} />
+        </div>
+      ))}
       <div className={'sy-fold' + (open ? ' on' : '')}><div className="sy-fi">
         <p className="sy-gh">{(KINDS.find(x => x[0] === kind) || KINDS[0])[1]}</p>
         {shown.length ? <ul className="sy-lines">{shown.map((ln, i) => <Line key={i} ln={ln} />)}</ul> : <p className="sy-empty">nothing</p>}
@@ -249,7 +265,7 @@ function Mic({ sid, onDone }) {
 
 // One open thread: its head (name, what it does now, the mic, open in full, close) over the live chat in a frame.
 // `tabs` is the phone's row of the other open threads, so one press moves between them.
-function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place, tabs }) {
+function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place, tabs, ask }) {
   const [state, setState] = useState(null)      // the frame's own report ('cc-pane-state')
   const [msg, setMsg] = useState(null)
   const frame = useRef(null)
@@ -283,7 +299,7 @@ function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place,
         </p>
       ) : null}
       {thread ? (
-        <iframe key={thread} ref={frame} className="sy-frame" title={`${name} thread`} src={`/talk?pane=sys-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}`}
+        <iframe key={thread + (ask ? ':' + ask.n : '')} ref={frame} className="sy-frame" title={`${name} thread`} src={`/talk?pane=sys-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}${ask ? `&ask=${encodeURIComponent(ask.text)}&n=${ask.n}` : ''}`}
           allow="microphone; clipboard-write" />
       ) : (
         <div className="sy-hold">{err ? err : sid ? `opening the ${name} thread` : 'press a system to talk in it'}</div>
@@ -302,6 +318,8 @@ export default function Systems() {
   const [errs, setErrs] = useState({})          // sid -> why its thread did not open
   const [show, setShow] = useState(false)       // phone: a thread over the tiles
   const [ready, setReady] = useState(false)     // the saved choice was read (no save before that)
+  const [surfs, setSurfs] = useState([])        // the surfaces register (SURFACES-1)
+  const [asks, setAsks] = useState({})          // sid -> {text, n}: a pad's ask, put in that thread's box
   const timer = useRef(null)
   const asked = useRef({})
 
@@ -329,6 +347,8 @@ export default function Systems() {
     const onVis = () => (document.visibilityState === 'visible' ? start() : stop())
     onVis()
     document.addEventListener('visibilitychange', onVis)
+    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) setSurfs(d.surfaces) }).catch(() => {})
     const onKey = (e) => { if (e.key === 'Escape') { setShow(false); setOpen({}) } }
     document.addEventListener('keydown', onKey)
     let l = [], c = true, q = null
@@ -385,6 +405,15 @@ export default function Systems() {
   }
 
   const tiles = (data && data.tiles) || []
+  const { bySystem, alone } = systemsFor(tiles, surfs)
+  // a pad: an address goes there; an ask opens the system's thread with the ask in its box (a card with no tile: the chat)
+  const onPad = (sid, sf, a) => {
+    if (a.kind !== 'ask') { window.location.assign(a.open); return }
+    if (!sid) { window.location.assign('/talk?ask=' + encodeURIComponent(a.ask)); return }
+    setAsks(m => ({ ...m, [sid]: { text: a.ask, n: ((m[sid] && m[sid].n) || 0) + 1 } }))
+    setList(l => (l.includes(sid) ? l : toggleOpen(l, sid)))
+    setFront(sid); if (phone()) setShow(true)
+  }
   const tileOf = (sid) => tiles.find(t => t.id === sid)
   const running = data && data.running
   const isOpen = (sid) => (sid === CENTRAL ? central : list.includes(sid))
@@ -411,7 +440,7 @@ export default function Systems() {
   return (
     <>
       <Head><title>Systems</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + SURFACE_CSS }} />
       <div className="sy">
         <div className={'sy-split' + (many ? ' many' : '')}>
           <main className="sy-left" aria-label={data && data.built ? `Systems, read ${data.built}` : 'Systems'}>
@@ -436,9 +465,14 @@ export default function Systems() {
               </div>
             ) : null}
             <div className="sy-grid">
+              {alone.map(sf => (
+                <div key={'sf-' + sf.name} className="sy-alone">
+                  <SurfaceCard s={sf} small onOpen={(a) => onPad(null, sf, a)} onAsk={(a) => onPad(null, sf, a)} />
+                </div>
+              ))}
               {tiles.map(t => (
                 <Tile key={t.id} t={t} open={!!open[t.id]} kind={open[t.id] || 'running'} sel={isOpen(t.id)}
-                  onKind={onKind} onName={onName} onTalk={onTalk} />
+                  onKind={onKind} onName={onName} onTalk={onTalk} surfs={bySystem[t.id]} onPad={onPad} />
               ))}
             </div>
           </main>
@@ -447,7 +481,7 @@ export default function Systems() {
               {shown.map(sid => (
                 <Thread key={sid} sid={sid} tile={tileOf(sid)} thread={threads[sid] || null} err={errs[sid] || ''}
                   central={sid === CENTRAL} place={placeOf(sid)} show={show && sid === frontSid} tabs={tabs}
-                  onBack={() => setShow(false)} onClose={() => toggle(sid)} />
+                  onBack={() => setShow(false)} onClose={() => toggle(sid)} ask={asks[sid] || null} />
               ))}
             </div>
           ) : (

@@ -47,7 +47,7 @@ def test_command_is_read_only_carries_the_provider_and_no_key():
         if not sid:
             assert cmd[cmd.index("-s") + 1] == "read-only"
         for c in ('model_provider="local"', 'model_providers.local.name="local"',
-                  f'model_providers.local.base_url="{BASE}"', 'model_providers.local.wire_api="chat"',
+                  f'model_providers.local.base_url="{BASE}"', 'model_providers.local.wire_api="responses"',
                   'model_providers.local.env_key="CC_LOCAL_API_KEY"'):
             assert c in cmd, c
         assert cmd[cmd.index("-m") + 1] == "qwen-72b" and cmd[-1] == "-"

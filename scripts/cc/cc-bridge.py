@@ -22,27 +22,43 @@ the bridge; the CLI keeps its own credentials in the brain user's home.
 
 Endpoints (JSON):
   GET  /cc/health         ok, session, reasoner version, memory on/off, auth {loggedIn, email, method} (?fresh=1 re-reads both sign-ins)
+  POST /cc/upload/big/start  {"name","size","key"} -> {"id","received","chunk"}  (a file over the 50 MB cap, VIDEO-DOOR-1)
+  POST /cc/upload/big/chunk?id=&offset=  raw bytes (one piece, up to 16 MB) -> {"received"}; 409 {"received"} when out of step
+  POST /cc/upload/big/status {"id"} -> {"received","size"};  POST /cc/upload/big/finish {"id"} -> {"files":[{"path","size","sha256"}]}
   POST /cc/chat           {"message", "reasoner"?: "claude"|"codex"|"local"} -> {"reply","session_id","ms","error","reasoner"}
                           with {"new": true, "parent": <thread>, "label"}: the new thread reports each finished turn to its
                           parent as a card, handed to the parent's page in GET /cc/jobs?take=1&thread=<parent> -> "reports"
-  GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line"}  (live GET <base>/models, 5 s)
+  GET  /cc/local/status   {"configured","reachable","model","host","mode","label","line","engine","private","chosen"}  (live GET <base>/models, 5 s)
+  POST /cc/seat/private   {"on": true|false} -> {"ok","local"}: the person chooses the private brain (SEAT-3)
   GET  /cc/codex/status   {"installed","signedIn","method","mode","label"}  (?fresh=1 skips the 20 s cache)
   POST /cc/new            fresh thread
+  GET  /cc/threads/style?brain=<id>  {"ok","style"}: one thread's look by id, archived or not, whatever the list shows (SKIN-4)
+  GET  /cc/skin  POST /cc/skin {"skin"?,"font"?}  the console default skin and font, one per box (SKIN-4, cc_skin.py)
   GET  /cc/state?thread=  {"running","run":{seconds,steps,agents,last},"queue":[...],"jobs_running":[{id,title,started}]}  the real busy state of a thread
   GET  /cc/activity       the activity lights: {"threads":{id:{state,via,since}},"jobs":{running,ids},"agents":{running:[...]}} (also on /cc/health)
   POST /cc/queue          {"thread","message"} -> 202 queued behind the running turn; 409 "idle" when nothing runs
   POST /cc/queue/cancel   {"thread","id"} -> {"ok","queue"}
-  GET  /cc/systems        the systems board's tiles {tiles:[{id,moving,lines,more,extra,thread,counts,detail}],built} (BOARD-3/4, cc_systems.py)
+  GET  /cc/systems        the systems board's tiles {tiles:[{id,kind,moving,lines,more,extra,thread,counts,detail,said,summary,jobs,tree_n}],built,waits}
+                          (BOARD-3/4, cc_systems.py; said: WALL-1; kind, summary, jobs, tree_n, waits: WALL-3); ?depth=<system> adds that tile's tree
+  GET  /cc/surfaces       the surfaces register {surfaces:[{name,system,say,hue,line,mark,count_to?,actions}],skipped} from
+                          <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
-  POST /cc/threads/<id>/say {"message","from"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
+  GET  /cc/wall  POST /cc/wall {"look"?,"set"?,"pinned"?}  the wall's look (grid | orbit), the systems kept in the orbit
+                          (WALL-2) and the instruments kept out beside them (WALL-5)
+  POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
   GET  /cc/tape/file?path=<p>  /cc/tape/stat?path=<p>   a file in the tape folder only (byte ranges honoured)
   POST /cc/tape/write {path,text,mtime?}   the /tape page's own files only: bits.json, replies, inbox markers, a take's slice list
+  GET  /cc/booth          {ok, dir, takes:[{file,path,name,day,made,seconds,rate,channels,bits,sha256,over}]}: the /sing booth's takes (SING-FREE-1, cc_booth.py)
+  GET  /cc/booth/file?path=<p>  a take's wav   POST /cc/booth/take  body = wav, X-Booth-Meta {name?,over?}   POST /cc/booth/name {file,name}
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
+  GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
+  GET  /cc/listen/station?id=<pl:..|likes|own|mix>  {ok,id,name,kind,items:[{k:yt,id,title,artist,dur?}|{k:file,n,...}]}
+  GET  /cc/listen/file?n=<id>  an own track named in own.tsv (byte ranges)   POST /cc/listen/event {event,station,kind,item,...} -> one row in the play log
   POST /cc/login/start    {"method": "claudeai"|"console"} -> {"ok","phase"}
   GET  /cc/login/state    {"phase","url","tail","loggedIn"}   phase: idle|starting|url|code_sent|done|error
   POST /cc/login/code     {"code"} -> {"ok"}
@@ -68,6 +84,7 @@ import select
 import signal
 import subprocess
 import tempfile
+import uuid
 import sys
 import threading
 import time
@@ -522,6 +539,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
+import cc_skin  # noqa: E402   a thread's skin and the console default, on the box (SKIN-4)
 import cc_presses  # noqa: E402
 import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
@@ -530,10 +548,14 @@ import cc_codex  # noqa: E402
 import cc_doors  # noqa: E402   the doors view (2026-11-08)
 import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-03, CC_CODEX_WRITE=1)
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
+import cc_private  # noqa: E402   the private seat's lean engine (SEAT-3, 2026-11-23): Ollama direct, three read-only tools
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_surfaces  # noqa: E402   the surfaces register: a system's name -> its card (SURFACES-1, 2026-11-24)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
+import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks played in the console (LISTEN-1, 2026-11-24)
+import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -652,13 +674,22 @@ def _job_thread(run_id: str | None) -> str | None:
     r = RUNS.get(run_id or "") if "RUNS" in globals() else None
     return getattr(r, "thread", None) or None
 UPLOADS = cc_extras.Uploads(IN_DIR)
+# files over the 50 MB cap, in 8 MB pieces, resumable (VIDEO-DOOR-1 2026-11-24); CC_UPLOAD_MAX_BYTES, CC_UPLOAD_FLOOR_BYTES
+BIG_UPLOADS = cc_extras.BigUploads(IN_DIR)
 # The memo tape (TAPE-2, 2026-11-14, scripts/cc/cc_tape.py): the console's /tape page reads and writes this one
 # folder through /cc/tape/*; a brain without one (no index.json there) answers {tape: false}. CC_TAPE_SIGNER is
 # the name a sign-off on the page records (default "owner").
 TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "memos"),
                     signer=os.environ.get("CC_TAPE_SIGNER", "").strip() or "owner")
+# The booth (SING-FREE-1, 2026-11-24, scripts/cc/cc_booth.py): /sing records the microphone and keeps one WAV per take
+# here, one folder per day, named afterwards; CC_BOOTH_DIR overrides <out>/studio/booth.
+BOOTH = cc_booth.Booth(os.environ.get("CC_BOOTH_DIR", "").strip() or str(OUT_DIR / "studio" / "booth"))
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
+# /listen (LISTEN-1, 2026-11-24, scripts/cc/cc_listen.py): stations from the world's listening tables; the play log
+# stays on the box (CC_LISTEN_LOG, default <out>/listen/plays.tsv).
+LISTEN = cc_listen.Listen(WORLD_DIR or None, STATE_DIR,
+                          os.environ.get("CC_LISTEN_LOG", "").strip() or str(OUT_DIR / "listen" / "plays.tsv"))
 LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
@@ -681,6 +712,7 @@ def _report_to_parent(status: int, payload: dict, parent: str | None = None, lab
         child = payload.get("thread")
         if parent and child:
             REPORTS.link(child, parent, label)
+            _inherit_style(child, parent)
         state = cc_reports.state_of(error=status != 200 or bool(payload.get("error")), stopped=bool(payload.get("stopped")),
                                     card=payload.get("proposal"), reply=payload.get("reply") or "")
         card = REPORTS.post(child, title=payload.get("title"), state=state, reply=payload.get("reply") or "",
@@ -2470,30 +2502,37 @@ def _threads_order(items: list) -> list:
     return sorted(by_last, key=lambda x: not x.get("pinned"))
 
 
-_STYLE_SKINS = ("gold", "paper", "sapphire", "forest", "crimson", "mono", "fox", "octopus", "owl", "dusk", "ocean", "rose", "sage", "sand")
-_STYLE_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_STYLE_SKINS = cc_skin.SKINS
+# the thread's own font (SKIN-3, 2026-11-23): the [data-font] tokens of ui/lib/skin.js FONT_SHAPES
+_STYLE_FONTS = cc_skin.FONTS
+# the console default skin and font (SKIN-4): one per box, the page caches it in bf-theme / bf-font
+SKIN_DEFAULT_PATH = STATE_DIR / "skin.json"
 
 
 def _thread_style(raw) -> dict | None:
-    """The look of one thread (2026-10-13, the tool line): accent colour, tint strength, text
-    size, density, skin, learning mode. Unknown keys and bad values are dropped, never stored;
-    an empty dict clears the look. None when the value is not a dict at all."""
-    if not isinstance(raw, dict):
-        return None
-    out = {}
-    if isinstance(raw.get("accent"), str) and _STYLE_HEX.match(raw["accent"]):
-        out["accent"] = raw["accent"].lower()
-    if isinstance(raw.get("tint"), (int, float)) and not isinstance(raw.get("tint"), bool):
-        out["tint"] = max(0, min(30, int(raw["tint"])))
-    if raw.get("text") in ("14px", "16px", "18px"):
-        out["text"] = raw["text"]
-    if raw.get("density") in ("compact", "comfortable"):
-        out["density"] = raw["density"]
-    if raw.get("skin") in _STYLE_SKINS:
-        out["skin"] = raw["skin"]
-    if raw.get("learn") is True:
-        out["learn"] = True
-    return out
+    """The look of one thread (2026-10-13, the tool line); the rules live in cc_skin.thread_style (SKIN-4)."""
+    return cc_skin.thread_style(raw)
+
+
+def _thread_style_of(brain: str) -> dict | None:
+    """One thread's look by id (SKIN-4): any thread the register knows, archived, side or past the list's 200,
+    whatever the list is filtered by. None when the thread is unknown."""
+    th = next((x for x in _threads_load() if x.get("brain") == brain), None)
+    return None if th is None else (cc_skin.thread_style(th.get("style")) or {})
+
+
+def _inherit_style(child: str, parent: str) -> None:
+    """A thread started from another thread is born in its parent's skin and font (SKIN-4), copied once: only a
+    child with no look of its own is written, the parent never."""
+    threads = _threads_load()
+    ch = next((x for x in threads if x.get("brain") == child), None)
+    pa = next((x for x in threads if x.get("brain") == parent), None)
+    if not ch or not pa or ch.get("style"):
+        return
+    st = cc_skin.child_style(pa.get("style"))
+    if st:
+        ch["style"] = st
+        _threads_save(threads)
 
 
 def _threads_update(brain: str, title=None, pinned=None, archived=None, style=None) -> dict | None:
@@ -2745,6 +2784,32 @@ def _brain_api(method: str, path: str, body: dict | None = None):
         return None
 
 
+def _brain_api_why(method: str, path: str, body: dict | None = None):
+    """_brain_api, but when the api refuses with an HTTP error its own reason comes back as {"detail": ...}
+    (LISTEN-1, 2026-11-24: `cc-job radio` said four setting names when the api had named the one missing)."""
+    if not BRAIN_API_KEY:
+        return {"detail": "the bridge has no BRAIN_API_KEY, so it cannot ask the brain's api"}
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{BRAIN_API_URL}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json", "X-API-Key": BRAIN_API_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read(4000) or b"{}")
+            why = d.get("detail") if isinstance(d, dict) else None
+        except ValueError:
+            why = None
+        print(f"brain api {method} {path} refused: {e.code}", flush=True)
+        return {"detail": f"the brain's api said ({e.code}): {why}" if isinstance(why, str) and why else None}
+    except Exception as e:
+        print(f"brain api {method} {path} failed: {type(e).__name__}", flush=True)
+        return None
+
+
 # Asking a peer brain (2026-10-20): `cc-job ask <https://peer> "<question>"` (or the console, with the
 # operator token) posts here; the bridge calls the brain's owner route POST /v1/ask-peer with its key,
 # and the brain signs with its own federation key. Agents and the reasoner never hold either key.
@@ -2831,7 +2896,7 @@ def _radio_link(body: dict) -> tuple[int, dict]:
     station = str((body or {}).get("station") or "https://orfeo.music").strip()
     if not station.startswith("https://"):
         return 400, {"ok": False, "error": "station must be https"}
-    r = _brain_api("POST", "/v1/radio/subscribe-token", {"station": station})
+    r = _brain_api_why("POST", "/v1/radio/subscribe-token", {"station": station})
     if not r or not isinstance(r, dict) or not r.get("url"):
         reason = (r or {}).get("detail") if isinstance(r, dict) else None
         return 503, {"ok": False, "error": reason or "the brain's api issued no token (BRAIN_API_KEY on the bridge; BRAIN_PUBLIC_URL, BRAIN_PRIVATE_KEY and BRAIN_ID on the brain)"}
@@ -4040,11 +4105,36 @@ def _codex_status(fresh: bool = False) -> dict:
     return dict(st)
 
 
+PRIVATE_CHOICE = STATE_DIR / "private.json"   # {"chosen": true, "at": ...}: the person picked the private seat (SEAT-3)
+
+
+def _private_chosen() -> bool:
+    if os.environ.get("CC_LOCAL_CHOSEN", "").strip() == "1":   # the owner's own endpoint, chosen for the whole brain
+        return True
+    try:
+        return bool(json.loads(PRIVATE_CHOICE.read_text()).get("chosen"))
+    except Exception:
+        return False
+
+
+def _private_choose(on: bool) -> dict:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    PRIVATE_CHOICE.write_text(json.dumps({"chosen": bool(on), "at": int(time.time())}))
+    return _local_status(live=False)
+
+
 def _local_status(live: bool = True) -> dict:
-    """The Local seat's state for the page: configured, answering, `local: <model> at <host>`. live:
-    a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down never stalls it.
+    """The Local seat's state for the page: configured, answering, `local: <model> at <host>`, and whether
+    the person chose it. live: a GET <base>/models (5 s); /cc/health passes live=False so a pod that is down
+    never stalls it. On the native engine a live check also says whether the model is installed there.
     Never carries the key."""
-    return cc_local.status(os.environ, live=live)
+    st = cc_local.status(os.environ, live=live, chosen=_private_chosen())
+    if live and st.get("reachable") and st.get("engine") == "native" and st.get("model"):
+        lst = cc_local.settings(os.environ)
+        if cc_private.installed(lst["base"], lst["model"]) is False:
+            st["reachable"] = False
+            st["reason"] = st["line"] = cc_private.NO_MODEL.format(m=lst["model"], h=st.get("host"))
+    return st
 
 
 # ---- the Codex seat's gated write mode (2026-11-03) ----
@@ -4163,7 +4253,8 @@ def _default_seat() -> str:
     cx = _codex_status()
     if cx.get("installed") and cx.get("signedIn"):
         return "codex"
-    if _local_status(live=False).get("configured"):
+    loc = _local_status(live=False)
+    if loc.get("configured") and loc.get("chosen"):   # offered is not chosen (SEAT-3): the person picks it once
         return "local"
     return "claude"
 
@@ -4175,6 +4266,44 @@ def _reasoner_pick(requested, thread_entry: dict | None, state: dict, default=No
         if r in REASONERS:
             return r
     return default() if default else "claude"
+
+
+PRIVATE_DIR = STATE_DIR / "private"   # one file per private-seat thread: the last few exchanges, text only
+
+
+def _run_private_turn(message: str, session_id: str | None, lst: dict, on_event, run, recent: str, first_use: str):
+    """A turn on the private seat's lean engine (cc_private.py): the bridge's own Local instructions and
+    composed prompt, straight to Ollama, three read-only tools run as the hands user. Same refusals, same
+    box-proposal card path as the Codex engine (the caller handles the reply exactly the same way)."""
+    if lst.get("model") and cc_private.installed(lst["base"], lst["model"]) is False:
+        return cc_private.NO_MODEL.format(m=lst["model"], h=cc_local.host(lst["base"])) + ". This turn was not answered; nothing fell back to another seat.", session_id, True
+    sid = session_id if (session_id and re.fullmatch(r"[a-f0-9]{32}", session_id)) else uuid.uuid4().hex
+    hist_file = PRIVATE_DIR / f"{sid}.json"
+    try:
+        history = json.loads(hist_file.read_text())
+    except Exception:
+        history = []
+    prompt, used = _compose(message, recent, first_use)
+    print(f"memory chunks={used} recent={len(recent)} seat=local engine=native", flush=True)
+    on_event("start", {"model": lst["model"], "session_id": sid, "reasoner": "local"})
+
+    def _run_tool(argv):
+        p = subprocess.run(_as_hands(argv), cwd=RUN_CWD, capture_output=True, text=True, timeout=30)
+        return p.stdout, p.returncode
+    d = cc_private.run_turn(lst["base"], lst["model"], LOCAL_SYSTEM, prompt, history, RUN_CWD, _run_tool, on_event=on_event)
+    META.update({"in": d["in"], "cached": 0, "out": d["out"], "steps": d["steps"], "cost": 0})
+    if run is not None and getattr(run, "stopped", False):
+        return "(stopped by you)", sid, False
+    if d["error"]:
+        return f"The private brain could not answer this turn: {d['error']}. Nothing fell back to another seat.", sid, True
+    try:
+        PRIVATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        hist_file.write_text(json.dumps(cc_private.keep(history, d["messages"])))
+    except OSError:
+        pass
+    on_event("block", {})
+    on_event("text", {"t": d["reply"]})
+    return d["reply"], sid, False
 
 
 def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Run | None = None,
@@ -4191,6 +4320,8 @@ def _run_codex_turn(message: str, session_id: str | None, on_event=None, run: Ru
     no = cc_local.probe(lst) if local else cc_codex.refusal(_codex_status(fresh=True))
     if no:
         return no, session_id, True
+    if local and lst.get("engine") == "native":
+        return _run_private_turn(message, session_id, lst, on_event or (lambda k, p: None), run, recent, first_use)
     write = False
     note = ""
     if not local and CODEX_WRITE:
@@ -5500,7 +5631,8 @@ def _dashboard_view() -> dict:
     return cc_dashboard.view(WORLD_DIR or None, threads, JOBS.list(200))
 
 
-def _systems_view() -> dict:
+def _systems_view(depth: str | None = None) -> dict:
+    """GET /cc/systems[?depth=<system>]: the tiles; with depth, that one tile also carries its thread's last tree."""
     try:
         SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
     except OSError as e:
@@ -5510,7 +5642,264 @@ def _systems_view() -> dict:
     static = cc_systems.load_static(SYSTEMS_BOARD, _SYSTEMS_STATIC)
     d = cc_systems.board(WORLD_DIR or None, JOBS.list(SYSTEMS_JOBS_SEEN), SYSTEMS_THREADS.threads(), static=static)
     d["world"] = bool(WORLD_DIR)
+    rows = {x.get("brain"): x for x in _threads_load() if isinstance(x, dict) and x.get("brain")}
+    for t in d["tiles"]:
+        t["said"] = _systems_said(t["thread"], rows.get(t["thread"])) if t.get("thread") else None
+    _systems_depth(d, depth)
     return d
+
+
+# The depth layer (WALL-3, 2026-11-24, hbar: "everything is hidden, and i can gain access some easy way WITHOUT
+# interfering with production and the main focus"). Each tile also carries, from what the poll already holds:
+#   summary  {text, from: "card" | "thread"}: one sentence of where the system stands, from its state card when the
+#            owner maps one (<world>/ops/wall/states.json, cc_systems.state_cards), else the first line of the
+#            standing thread's last answer (read in the same ask as `said`, so no second ask of the brain);
+#   jobs     the running jobs with minutes, brief, the waiter that will push it, and `steps`/`made` (the log's and
+#            the output file's last lines, the files it made so far), read at most every SYSTEMS_STEPS_TTL seconds;
+#   tree_n   how many branches the thread's last <tree> block has; `tree` itself only on ?depth=<that system>.
+# And the whole: waits {court, tasks_today}: open court items and tasks due today or before (asked of the brain at
+# most every SYSTEMS_TASKS_TTL seconds).
+SYSTEMS_STEPS_TTL = 15
+SYSTEMS_TASKS_TTL = 30
+_SYSTEMS_DEPTH: dict = {}   # thread -> {"first", "tree"} from the same read as _SYSTEMS_SAID
+_SYSTEMS_STEPS: dict = {}   # job id -> (asked_at, {"steps", "made"})
+_SYSTEMS_CARDS: dict = {}   # path -> (mtime, line)
+_SYSTEMS_TASKS: list = [0.0, None]
+_SYSTEMS_OPEN: list = [0.0, {}]   # system -> the console page its surface card opens first (cc_surfaces), 30 s
+
+
+def _systems_opens() -> dict:
+    now = time.time()
+    if now - _SYSTEMS_OPEN[0] < SYSTEMS_TASKS_TTL:
+        return _SYSTEMS_OPEN[1]
+    out = {}
+    try:
+        reg = cc_surfaces.load(WORLD_DIR or None, host=os.environ.get("CC_CONSOLE_HOST", ""))
+    except Exception:  # noqa: BLE001  (a register that does not read opens nothing)
+        reg = {}
+    for sf in reg.get("surfaces") or []:
+        page = next((a.get("open") for a in sf.get("actions") or [] if a.get("open") and a.get("kind") == "page"), None)
+        if page and sf.get("system") not in out:
+            out[sf["system"]] = page
+    _SYSTEMS_OPEN[0], _SYSTEMS_OPEN[1] = now, out
+    return out
+
+
+def _systems_card_read(rel: str) -> tuple:
+    """(line, prompts) of a card in the world, read again only when its mtime moves."""
+    p = Path(WORLD_DIR) / rel
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return "", []
+    got = _SYSTEMS_CARDS.get(str(p))
+    if got and got[0] == mt:
+        return got[1], got[2]
+    try:
+        text = p.read_text(errors="replace")[:16000]
+        line, prompts = cc_systems.card_line(text[:8000]), cc_systems.card_prompts(text)
+    except OSError:
+        line, prompts = "", []
+    _SYSTEMS_CARDS[str(p)] = (mt, line, prompts)
+    return line, prompts
+
+
+def _systems_card(rel: str) -> str:
+    return _systems_card_read(rel)[0]
+
+
+# WALL-4 (2026-11-24, hbar: "fill it with what we are currently doing-- the systems that is + prompts to continue"):
+# each tile carries `prompts`, the "## Continue" lines of its state card (states.json), else of its wall card
+# (<world>/ops/wall/cards/<id>.md); at most five, nothing when there is no card.
+def _systems_prompts(sid: str, mapped: str | None) -> list:
+    if not WORLD_DIR:
+        return []
+    got = _systems_card_read(mapped)[1] if mapped else []
+    if not got:
+        wc = cc_systems.wall_card(Path(WORLD_DIR), sid)
+        got = _systems_card_read(wc)[1] if wc and wc != mapped else []
+    return list(got)
+
+
+def _systems_tasks_today():
+    now = time.time()
+    if now - _SYSTEMS_TASKS[0] < SYSTEMS_TASKS_TTL:
+        return _SYSTEMS_TASKS[1]
+    d = _brain_api("GET", "/tasks")
+    n = cc_systems.due_today(d.get("tasks"), time.strftime("%Y-%m-%d", time.gmtime())) if isinstance(d, dict) else None
+    _SYSTEMS_TASKS[0], _SYSTEMS_TASKS[1] = now, n
+    return n
+
+
+def _systems_depth(d: dict, depth: str | None = None) -> None:
+    cards = cc_systems.state_cards(Path(WORLD_DIR)) if WORLD_DIR else {}
+    recs = {str(r.get("id") or ""): r for r in JOBS.list(SYSTEMS_JOBS_SEEN) if isinstance(r, dict)}
+    now = time.time()
+    live = set()
+    opens = _systems_opens()
+    for t in d["tiles"]:
+        t["open"] = opens.get(t["id"]) or None   # an instrument's own page: the wall opens it beside, never a thread
+        dep = _SYSTEMS_DEPTH.get(t.get("thread") or "") or {}
+        card = _systems_card(cards[t["id"]]) if t["id"] in cards else ""
+        first = dep.get("first") or ""
+        t["summary"] = {"text": card, "from": "card"} if card else ({"text": first, "from": "thread"} if first else None)
+        t["prompts"] = _systems_prompts(t["id"], cards.get(t["id"]))
+        t["tree_n"] = cc_systems.tree_size(dep.get("tree"))
+        if depth and t["id"] == depth:
+            t["tree"] = dep.get("tree")
+        for j in t.get("jobs") or []:
+            live.add(j["id"])
+            got = _SYSTEMS_STEPS.get(j["id"])
+            if not got or now - got[0] >= SYSTEMS_STEPS_TTL:
+                r = recs.get(j["id"]) or {}
+                got = (now, cc_systems.job_steps(str(r.get("log") or ""), str(r.get("out_file") or ""), OUT_DIR,
+                                                 j.get("brief") or "", r.get("started")))
+                _SYSTEMS_STEPS[j["id"]] = got
+            j.update(got[1])
+    for k in [k for k in _SYSTEMS_STEPS if k not in live]:
+        _SYSTEMS_STEPS.pop(k, None)
+    d.setdefault("waits", {})["tasks_today"] = _systems_tasks_today()
+
+
+# The wall's setting (WALL-2, 2026-11-24, hbar: "dont START WITH ALL 44 ... if i need to add a system to the page i
+# just have ability to add"). GET /cc/wall {look, set, seed, max}: the look /wall opens on and the systems kept in
+# its orbit. The owner's own choice (POST /cc/wall, kept beside the layout in layout.json) wins; else the world's
+# seed <world>/ops/wall/wall.json {"look","set"} (the brain's measured first set); else the generic grid and no set
+# (the page then starts from the systems in use). Ids not in the registry are dropped on the way out.
+WALL_SEED = Path(os.environ.get("CC_WALL_SEED", "").strip() or str(Path(WORLD_DIR or "/nonexistent") / "ops" / "wall" / "wall.json"))
+
+
+def _wall_seed() -> dict:
+    try:
+        return cc_layout.validate_wall({k: v for k, v in json.loads(WALL_SEED.read_text()).items() if k in ("look", "set", "pinned")})
+    except (OSError, ValueError, AttributeError, cc_layout.LayoutError):
+        return {"look": None, "set": None, "pinned": None}
+
+
+# WALL-4 (2026-11-24, hbar: "maybe some faint ones that i HAVE BEEN working on in other threads ... i want a clear way
+# to open and start the system up again in this new manner"). The seed may also carry:
+#   faint  systems worked on in other threads: dim names on the outer ring, no box; a press brings one into the orbit
+#   home   true: the console's home ("/" with nothing after it) opens on the wall, until the owner sets it himself
+#   note   one line on why the set is what it is (shown nowhere at rest)
+# and its mtime is its stamp: when the seed is newer than the owner's own saved set (and different from it), and he
+# has not answered that seed yet, GET /cc/wall carries `fresh` {set, stamp}: the page says "new set from the brain"
+# with "take it" and "keep mine". His own arrangement is never overwritten silently, with one exception he says
+# himself: a seed whose "take" carries his word (a dated quote, e.g. "2026-11-24 hbar: fill it with ...") is applied
+# once, as if he had pressed "take it"; the same word is never applied twice.
+def _wall_seed_extra() -> dict:
+    try:
+        raw = json.loads(WALL_SEED.read_text())
+        stamp = WALL_SEED.stat().st_mtime
+    except (OSError, ValueError):
+        return {"faint": [], "home": None, "stamp": None, "take": None}
+    if not isinstance(raw, dict):
+        return {"faint": [], "home": None, "stamp": None, "take": None}
+    faint = [x for x in (raw.get("faint") or []) if isinstance(x, str) and cc_systems.ID_RE.match(x)][:cc_layout.WALL_SET_MAX] \
+        if isinstance(raw.get("faint"), list) else []
+    home, take = raw.get("home"), raw.get("take")
+    return {"faint": faint, "home": home if isinstance(home, bool) else None, "stamp": round(stamp, 3),
+            "take": take.strip()[:200] if isinstance(take, str) and take.strip() else None}
+
+
+def _wall_view() -> dict:
+    own, seed = LAYOUT.wall(), _wall_seed()
+    meta, extra = LAYOUT.wall_meta(), _wall_seed_extra()
+    known = _systems_known()
+    if extra["take"] and extra["take"] != meta["taken"] and seed["set"] is not None:
+        try:
+            if own["set"] is not None:
+                LAYOUT.set_wall({"set": [x for x in seed["set"] if x in known]})
+            LAYOUT.set_wall_meta({"taken": extra["take"], "seen": extra["stamp"]})
+            own, meta = LAYOUT.wall(), LAYOUT.wall_meta()
+        except cc_layout.LayoutError:
+            pass
+    ids = own["set"] if own["set"] is not None else seed["set"]
+    kept = [x for x in ids if x in known] if ids is not None else None
+    fresh = None
+    if own["set"] is not None and seed["set"] is not None and extra["stamp"] is not None:
+        theirs = [x for x in seed["set"] if x in known]
+        answered = max(meta["at"] or 0, meta["seen"] or 0)
+        # WALL-5: a seed whose pinned instruments differ from his own pinned list asks the same way, never overwrites
+        pins = seed.get("pinned") if own.get("pinned") is not None and seed.get("pinned") is not None \
+            and seed.get("pinned") != own.get("pinned") else None
+        if (theirs != kept or pins is not None) and extra["stamp"] > answered:
+            fresh = {"set": theirs, "stamp": extra["stamp"]}
+            if pins is not None:
+                fresh["pinned"] = pins
+    return {"look": own["look"] or seed["look"] or "grid",
+            "set": kept,
+            "seed": own["set"] is None and seed["set"] is not None, "max": cc_layout.WALL_SET_MAX,
+            "looks": list(cc_layout.WALL_LOOKS),
+            # WALL-5: the instruments kept out on the orbit; his own list wins, else the seed's
+            "pinned": own.get("pinned") if own.get("pinned") is not None else (seed.get("pinned") or []),
+            "pinned_seed": own.get("pinned") is None and seed.get("pinned") is not None,
+            "faint": [x for x in extra["faint"] if x in known and x not in (kept or [])],
+            "fresh": fresh,
+            "home": meta["home"] if meta["home"] is not None else bool(extra["home"])}
+
+
+def _wall_save(body) -> tuple[int, dict]:
+    if not isinstance(body, dict):
+        return 400, {"ok": False, "error": "give look, set and/or pinned"}
+    if isinstance(body.get("set"), list):
+        known = _systems_known()
+        bad = [x for x in body["set"] if x not in known]
+        if bad:
+            return 400, {"ok": False, "error": f"not a system here: {str(bad[0])[:64]}"}
+    side = {k: body[k] for k in ("seen", "home") if k in body}
+    main = {k: v for k, v in body.items() if k not in ("seen", "home")}
+    try:
+        if side:
+            if "seen" in side and not (isinstance(side["seen"], (int, float)) and not isinstance(side["seen"], bool)):
+                raise cc_layout.LayoutError("wall.seen: the seed's stamp")
+            if "home" in side and not isinstance(side["home"], bool):
+                raise cc_layout.LayoutError("wall.home: true or false")
+        if main or not side:
+            LAYOUT.set_wall(main)
+        if side:
+            LAYOUT.set_wall_meta(side)
+    except cc_layout.LayoutError as e:
+        return 400, {"ok": False, "error": str(e)}
+    return 200, {"ok": True, **_wall_view()}
+
+
+# WALL-1 (2026-11-24, hbar: "all I need is that text box to speak into it I don't even have to see the entire
+# text"): each tile carries `said`, the ONE line its standing thread said last: {text, live, waiting, at}. While
+# a turn runs it is the run's own last line (its tool step or the sentence being written, live: true); else the
+# last sentence of the thread's last answer, from the brain's record, asked again only when the thread's "last"
+# stamp moves (a failed ask is tried again after SYSTEMS_SAID_RETRY seconds), so the three-second poll stays light.
+SYSTEMS_SAID_RETRY = 30
+_SYSTEMS_SAID: dict = {}    # thread -> (stamp, text, ok, asked_at)
+
+
+def _systems_said(tid: str, row: dict | None) -> dict:
+    r = _run_for_thread(tid)
+    if r is not None:
+        v = _run_view(r)
+        return {"text": str(v.get("last") or ""), "live": True, "waiting": bool(v.get("waiting")), "at": None}
+    stamp = str((row or {}).get("last") or "")
+    got = _SYSTEMS_SAID.get(tid)
+    if got and got[0] == stamp and (got[2] or time.time() - got[3] < SYSTEMS_SAID_RETRY):
+        return {"text": got[1], "live": False, "waiting": False, "at": stamp or None}
+    text, ok = "", False
+    d = _brain_api("GET", f"/sessions/{tid}/messages")
+    if isinstance(d, dict):
+        ok = True
+        for m in reversed(d.get("messages") or []):
+            if isinstance(m, dict) and m.get("role") == "assistant" and str(m.get("content") or "").strip():
+                text = cc_extras.last_sentence(str(m["content"])[-6000:], 200)
+                break
+        # WALL-3: the same read gives the depth layer the last answer's first line and the thread's last tree
+        last = next((m for m in reversed(d.get("messages") or []) if isinstance(m, dict) and m.get("role") == "assistant"
+                     and str(m.get("content") or "").strip()), None)
+        if len(_SYSTEMS_DEPTH) > 400:
+            _SYSTEMS_DEPTH.clear()
+        _SYSTEMS_DEPTH[tid] = {"first": cc_systems.first_line(cc_systems.TREE_RE.sub("", str((last or {}).get("content") or ""))[:6000]),
+                               "tree": cc_systems.last_tree(d.get("messages"))}
+    if len(_SYSTEMS_SAID) > 400:
+        _SYSTEMS_SAID.clear()
+    _SYSTEMS_SAID[tid] = (stamp, text, ok, time.time())
+    return {"text": text, "live": False, "waiting": False, "at": stamp or None}
 
 
 # The steer door (BOARD-5, 2026-11-23, hbar 2026-11-22: "We are getting way too disorganised we have so many threads
@@ -5554,7 +5943,9 @@ def _steer(tid: str, body: dict, start=None) -> tuple[int, dict]:
         if _run_for_thread(tid) or QUEUES.get(tid):
             return 409, {"ok": False, "busy": True, "system": sid,
                          "error": f"{sid} is answering now; send it again when it is free"}
-    text = f"(Steered from the central chat.) {message}"
+    # the wall (WALL-1) says it was typed or spoken on the wall, so the thread is not told a central chat steered it
+    text = (f"(Said on the wall.) {message}" if str((body or {}).get("via") or "") == "wall"
+            else f"(Steered from the central chat.) {message}")
     if _duplicate(tid, text):
         return 202, {"ok": True, "duplicate": True, "system": sid, "thread": tid}
     if frm:
@@ -5868,6 +6259,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _local_status())
         elif route == "/codex/status":
             self._send(200, _codex_status(fresh=self._query().get("fresh") == "1"))
+        elif route == "/threads/style":
+            # SKIN-4: one thread's look by id, never through the filtered list
+            st = _thread_style_of(str(self._query().get("brain") or "").strip()[:120])
+            if st is None:
+                self._send(404, {"ok": False, "error": "no such thread"})
+            else:
+                self._send(200, {"ok": True, "style": st})
+        elif route == "/skin":
+            # SKIN-4: the console default skin and font, one per box
+            self._send(200, {"ok": True, **cc_skin.load_default(SKIN_DEFAULT_PATH)})
         elif route == "/threads":
             _threads_sweep()
             a = self._query().get("archived")
@@ -6017,7 +6418,13 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/board":
             self._send(200, _board())
         elif route == "/systems":
-            self._send(200, _systems_view())
+            self._send(200, _systems_view(self._query().get("depth") or None))
+        elif route == "/wall":
+            self._send(200, _wall_view())
+        elif route == "/surfaces":
+            # a system's card (SURFACES-1): read fresh each time (a few small files), so a register edit shows at once
+            _host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip().split(":")[0]
+            self._send(200, cc_surfaces.load(WORLD_DIR or None, host=os.environ.get("CC_CONSOLE_HOST", "") or _host))
         elif route == "/dashboard":
             self._send(200, _dashboard_view())
         elif route == "/listening":
@@ -6032,6 +6439,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if d.get("ok") else 404, d)
         elif route == "/tape/file":
             TAPE.serve(self, self._query().get("path"))
+        elif route == "/listen":
+            self._send(200, LISTEN.state())
+        elif route == "/listen/station":
+            self._send(*LISTEN.station(self._query().get("id")))
+        elif route == "/listen/file":
+            LISTEN.serve(self, self._query().get("n"), cc_extras.Files)
+        elif route == "/booth":
+            self._send(200, BOOTH.state())
+        elif route == "/booth/file":
+            BOOTH.serve(self, self._query().get("path"))
         elif route == "/actions":
             self._send(200, _actions())
         elif route == "/agents":
@@ -6260,6 +6677,13 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/listening/read":
             self._send(*LISTENING.start())
             return
+        if route == "/listen/event":
+            self._send(*LISTEN.event(self._json(limit=4000) or {}))
+            return
+        if route == "/booth/name":
+            body = self._json(limit=2000) or {}
+            self._send(*BOOTH.rename(body.get("file"), body.get("name")))
+            return
         if route == "/tape/write":
             # the /tape page's own files only (cc_tape.WRITABLE): rulings, replies, markers, a take's slice list
             body = self._json(limit=cc_tape.WRITE_MAX + 4096)
@@ -6269,6 +6693,9 @@ class Handler(BaseHTTPRequestHandler):
             mt = body.get("mtime")
             d = TAPE.write(body.get("path"), body.get("text"), mt if isinstance(mt, int) and not isinstance(mt, bool) else None)
             self._send(200 if d.get("ok") else (409 if d.get("conflict") else 400), d)
+            return
+        if route == "/wall":
+            self._send(*_wall_save(self._json(limit=4000)))
             return
         if route == "/systems/thread":
             body = self._json(limit=2000)
@@ -6303,6 +6730,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "unreadable or too large"})
                 return
             self._send(*_steer(m_steer.group(1), body))
+            return
+        if route.startswith("/upload/big/"):
+            # VIDEO-DOOR-1: the same operator gate as /upload above (this route is not in the open list)
+            try:
+                code, d = BIG_UPLOADS.handle(route, self, self._query(), lambda: self._json(limit=4000))
+            except Exception as e:   # noqa: BLE001  an answer, not a dead thread
+                code, d = 500, {"ok": False, "error": f"could not take the piece: {type(e).__name__}"}
+            self._send(code, d)
+            return
+        if route == "/booth/take":
+            # one sung take, the WAV as the body (SING-FREE-1): kept as sent, never rewritten
+            self._send(*BOOTH.save(self))
             return
         if route == "/upload":
             try:
@@ -6471,6 +6910,12 @@ class Handler(BaseHTTPRequestHandler):
             print(f"model set to {m or 'default'}", flush=True)
             self._send(200, {"ok": True, "model": m or None})
             return
+        if route == "/skin":
+            if not cc_skin.default_skin(req):
+                self._send(400, {"ok": False, "error": "skin or font: one of the console's skins or fonts"})
+                return
+            self._send(200, {"ok": True, **cc_skin.save_default(SKIN_DEFAULT_PATH, req)})
+            return
         if route == "/threads/update":
             want = str(req.get("brain", "")).strip()
             if "title" in req and not isinstance(req.get("title"), str):
@@ -6572,6 +7017,15 @@ class Handler(BaseHTTPRequestHandler):
             out = _tg_unpair()
             self._send(200 if out.get("ok") else 409, out)
             return
+        if route == "/seat/private":
+            # the third seat on the sign-in screen (SEAT-3): the person chooses the private brain, or leaves it
+            on = req.get("on", True) is not False
+            st = _local_status(live=False)
+            if on and not st.get("configured"):
+                self._send(409, {"ok": False, "error": "this brain has no private model yet; the owner turns it on with CC_PRIVATE=1"})
+                return
+            self._send(200, {"ok": True, "local": _private_choose(on)})
+            return
         if route == "/login/apikey":
             key = str(req.get("key", "")).strip()
             if not key.startswith("sk-ant-") or len(key) < 30:
@@ -6612,7 +7066,8 @@ class Handler(BaseHTTPRequestHandler):
             if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
                 self._send(403, {"ok": False, "error": "not the reasoner or the console"})
                 return
-            body = self._json(limit=4000) or {}
+            # the body was read once above (req); reading it again blocked every caller until it gave up (SING-FREE-1)
+            body = req if isinstance(req, dict) else {}
             self._send(*_send_file(str(body.get("path") or ""), str(body.get("caption") or "")))
             return
         if route == "/ask-peer":

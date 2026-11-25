@@ -211,6 +211,57 @@ def _surfaces(v, where) -> list:
     return [x for x in SURFACES if x in picked]
 
 
+WALL_LOOKS = ("grid", "orbit")
+WALL_SET_MAX = 16
+WALL_PIN_MAX = 12   # WALL-5: the instruments kept out on the orbit (names from the surfaces register)
+_WALL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def validate_wall_meta(obj) -> dict:
+    """WALL-4: {"at": number|None, "seen": number|None, "home": bool|None}; a missing or odd value is None."""
+    o = obj if isinstance(obj, dict) else {}
+    num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None  # noqa: E731
+    home = o.get("home")
+    taken = o.get("taken")
+    return {"at": num(o.get("at")), "seen": num(o.get("seen")), "home": home if isinstance(home, bool) else None,
+            "taken": taken[:200] if isinstance(taken, str) and taken else None}
+
+
+def validate_wall(obj) -> dict:
+    """The wall's setting (WALL-2): look in WALL_LOOKS or None; set a list of distinct system ids (at most
+    WALL_SET_MAX) or None; pinned (WALL-5) a list of distinct instrument names (at most WALL_PIN_MAX) or None.
+    Which ids exist is the bridge's check (the registry), not this file's."""
+    if not isinstance(obj, dict):
+        raise LayoutError("wall: an object")
+    _only(obj, {"look", "set", "pinned"}, "wall")
+    look = obj.get("look")
+    if look is not None:
+        look = _enum(look, WALL_LOOKS, "wall.look")
+    ids = obj.get("set")
+    if ids is not None:
+        if not isinstance(ids, list) or len(ids) > WALL_SET_MAX:
+            raise LayoutError(f"wall.set: a list of at most {WALL_SET_MAX} systems")
+        seen = []
+        for x in ids:
+            if not isinstance(x, str) or not _WALL_ID.match(x):
+                raise LayoutError("wall.set: system ids only")
+            if x not in seen:
+                seen.append(x)
+        ids = seen
+    pins = obj.get("pinned")
+    if pins is not None:
+        if not isinstance(pins, list) or len(pins) > WALL_PIN_MAX:
+            raise LayoutError(f"wall.pinned: a list of at most {WALL_PIN_MAX} instruments")
+        kept = []
+        for x in pins:
+            if not isinstance(x, str) or not _WALL_ID.match(x):
+                raise LayoutError("wall.pinned: instrument names only")
+            if x not in kept:
+                kept.append(x)
+        pins = kept
+    return {"look": look, "set": ids, "pinned": pins}
+
+
 def resolve(layout: dict) -> dict:
     """What the page applies: the preset's variables with the layout's own on top, the zoom for the
     size, the font weight. Computed here so the page holds no second copy of the presets."""
@@ -468,6 +519,51 @@ class Store:
             d["arrangement"] = arr
             self._write(d)
         return arr
+
+    # The wall (WALL-2, 2026-11-24): which look /wall opens on (grid, the generic one; orbit, the personal one) and
+    # the systems kept in the orbit. Beside the layout like the arrangement, so a shared pack never carries it.
+    def wall(self) -> dict:
+        """{"look": str|None, "set": [ids]|None}; None where the owner has not chosen (the page then uses the seed)."""
+        try:
+            return validate_wall(self._read().get("wall") or {})
+        except LayoutError:
+            return {"look": None, "set": None, "pinned": None}
+
+    def set_wall(self, patch) -> dict:
+        """Change the look and/or the kept set; keys not in the patch stay as they are."""
+        if not isinstance(patch, dict) or not ({"look", "set", "pinned"} & set(patch)):
+            raise LayoutError("wall: give look, set and/or pinned")
+        with self.lock:
+            d = self._read()
+            cur = validate_wall(d.get("wall") or {}) if isinstance(d.get("wall"), dict) else {"look": None, "set": None, "pinned": None}
+            nxt = validate_wall({**cur, **{k: patch[k] for k in ("look", "set", "pinned") if k in patch}})
+            d["wall"] = nxt
+            if "set" in patch or "pinned" in patch:   # his own arrangement (WALL-5: pinned is one too)
+                d["wall_meta"] = {**validate_wall_meta(d.get("wall_meta")), "at": round(time.time(), 3)}
+            self._write(d)
+        return nxt
+
+    # WALL-4 (2026-11-24): beside the wall's setting, its bookkeeping, so the setting itself keeps its two keys:
+    #   at    when the owner last saved his own set (epoch seconds), stamped by set_wall
+    #   seen  the stamp (mtime) of the world's seed he last answered ("take it" or "keep mine")
+    #   home  the console's home opens on the wall: True, False, or None (unset: the world's seed decides)
+    #   taken the seed's "take" word the bridge has already applied once (see cc-bridge.py _wall_view)
+    def wall_meta(self) -> dict:
+        try:
+            return validate_wall_meta(self._read().get("wall_meta"))
+        except LayoutError:
+            return validate_wall_meta(None)
+
+    def set_wall_meta(self, patch) -> dict:
+        if not isinstance(patch, dict) or not ({"seen", "home", "taken"} & set(patch)):
+            raise LayoutError("wall: give seen and/or home")
+        with self.lock:
+            d = self._read()
+            cur = validate_wall_meta(d.get("wall_meta"))
+            nxt = validate_wall_meta({**cur, **{k: patch[k] for k in ("seen", "home", "taken") if k in patch}})
+            d["wall_meta"] = nxt
+            self._write(d)
+        return nxt
 
     def answers(self) -> dict:
         try:

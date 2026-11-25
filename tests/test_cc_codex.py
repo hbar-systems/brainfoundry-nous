@@ -287,10 +287,10 @@ def test_door_runs_the_device_code_login_as_the_hands():
 
 
 # ------------------------------------------------- SEAT-1: the signed-in seat (2026-11-08) ----
-def _signed(m, monkeypatch, claude=False, codex=False, installed=True, local=False):
+def _signed(m, monkeypatch, claude=False, codex=False, installed=True, local=False, chosen=True):
     monkeypatch.setattr(m, "_auth_status", lambda fresh=False: {"loggedIn": claude, "email": None, "method": None})
     monkeypatch.setattr(m, "_codex_status", lambda fresh=False: {"installed": installed, "signedIn": codex})
-    monkeypatch.setattr(m, "_local_status", lambda live=True: {"configured": local})
+    monkeypatch.setattr(m, "_local_status", lambda live=True: {"configured": local, "chosen": chosen})
 
 
 def test_default_seat_is_the_signed_in_reasoner(monkeypatch, tmp_path):
@@ -303,6 +303,9 @@ def test_default_seat_is_the_signed_in_reasoner(monkeypatch, tmp_path):
     assert m._default_seat() == "claude"
     _signed(m, monkeypatch, local=True)
     assert m._default_seat() == "local"
+    # SEAT-3: a configured private seat is offered, not taken; until the person picks it the sign-in shows
+    _signed(m, monkeypatch, local=True, chosen=False)
+    assert m._default_seat() == "claude"
     _signed(m, monkeypatch)
     assert m._default_seat() == "claude"
     # the default only fills a gap: the turn's own seat and the thread's seat still win
@@ -335,7 +338,8 @@ def test_health_fresh_rereads_both_sign_ins():
 
 def test_sign_in_card_rechecks_and_never_offers_a_second_chatgpt_login():
     src = (ROOT / "ui" / "pages" / "cc.js").read_text()
-    assert "fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health'" in src
+    # PANES-FIX-1 (2026-11-24): the frames on one page share the check (sharedHealth); a fresh one still asks fresh=1
+    assert "const url = fresh === true ? '/cc/health?fresh=1' : '/cc/health'" in src and "sharedHealth(fresh)" in src
     assert "onClose={() => { setPane(null); loadHealth(true) }}" in src          # a closed sign-in panel looks again
     card = src.split("function SignIn(", 1)[1].split("\nfunction ", 1)[0]
     assert "onRecheck" in card and ">recheck</Btn>" in card

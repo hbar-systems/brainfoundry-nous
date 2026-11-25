@@ -7,7 +7,7 @@
 // When both are in, the cards fold into one quiet line. Words and rules: ui/lib/moveIn.js.
 import { useEffect, useRef, useState } from 'react'
 import css from 'styled-jsx/css'
-import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords } from '../lib/moveIn'
+import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords, importAnswer } from '../lib/moveIn'
 import { readingState, refusedState, bigTotals, fmtHours, defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
 import { AI_EXPORTS } from '../lib/aiExports'
 import ConnectComputer from './ConnectComputer'
@@ -284,7 +284,14 @@ function AiChats({ lang, W, P, chat, chatBusy, approving, onFile, onPaste, remem
         </>
       )}
       {chatBusy && chatBusy.found != null && <p className="mi-note">{W.chatFound(chatBusy.found, chatBusy.took)}</p>}
+      {chatBusy && chatBusy.ignored && chatBusy.ignored.length > 0 && <p className="mi-note mi-dim">{W.chatIgnored(chatBusy.ignored.join(', '))}</p>}
       {chatBusy && chatBusy.error && <p className="mi-note mi-bad" role="alert">{chatBusy.error}</p>}
+      {chatBusy && chatBusy.links && chatBusy.links.length > 0 && (
+        <ul className="mi-links">
+          {chatBusy.links.map(l => <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer noopener">{l.name}</a></li>)}
+        </ul>
+      )}
+      {chatBusy && chatBusy.noLink && <p className="mi-note mi-dim">{chatBusy.noLink}</p>}
       {paste !== null && (
         <div className="mi-paste">
           <textarea value={paste} onChange={e => setPaste(e.target.value)} placeholder={P.chatsPasteHint} rows={6} aria-label={P.chatsPasteHint} />
@@ -424,8 +431,8 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
     try {
       const r = await fetch(`${API}/documents/import-chats`, { method: 'POST', body: fd })
       const j = await r.json().catch(() => ({}))
-      if (!r.ok) { setChatBusy({ error: (j.error && j.error.message) || j.detail || W.failed }); return }
-      setChatBusy({ found: j.conversations || 0, took: j.selected || 0 })
+      if (!r.ok) { const a = importAnswer(j, W); setChatBusy({ error: a.message, links: a.links, noLink: a.noLink }); return }
+      setChatBusy({ found: j.conversations || 0, took: j.selected || 0, ignored: j.ignored || [] })
       await load()
     } catch { setChatBusy({ error: W.failed }) }
   }
@@ -515,6 +522,8 @@ const miStyles = css`
         .mi :global(.mi-steps a), .mi :global(.mi-link) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
         .mi :global(.mi-sub) { margin: 14px 0 0 42px; font-size: 18px; line-height: 1.55; color: var(--text); opacity: 0.86; }
         .mi :global(.mi-note) { margin: 14px 0 0 42px; font-size: 17px; line-height: 1.5; color: var(--text); }
+        .mi :global(.mi-links) { margin: 8px 0 0 42px; padding: 0; list-style: none; font-size: 17px; line-height: 1.7; }
+        .mi :global(.mi-links a) { color: var(--text); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
         .mi :global(.mi-bad) { color: #d99a8a; }
         .mi :global(.mi-actions) { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin: 20px 0 0 42px; }
         .mi :global(.mi-done .mi-actions) { margin-top: 14px; }
@@ -538,7 +547,7 @@ const miStyles = css`
           .mi :global(.mi-card) { padding: 20px 18px 20px; border-radius: 16px; }
           .mi :global(.mi-card.mi-done) { padding: 16px 18px; }
           .mi :global(.mi-title) { font-size: 21px; }
-          .mi :global(.mi-state), .mi :global(.mi-steps), .mi :global(.mi-sub), .mi :global(.mi-note), .mi :global(.mi-actions) { margin-left: 0; }
+          .mi :global(.mi-state), .mi :global(.mi-steps), .mi :global(.mi-sub), .mi :global(.mi-note), .mi :global(.mi-links), .mi :global(.mi-actions) { margin-left: 0; }
           .mi :global(.mi-steps) { font-size: 17px; }
           .mi :global(.mi-btn) { width: 100%; }
         }

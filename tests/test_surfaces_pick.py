@@ -122,7 +122,7 @@ def test_home_stock_shows_everything():
     for lay in (None, L.DEFAULT):
         out = _home(lay, PAGES)
         assert all(out["on"].values())
-        assert [b["id"] for b in out["buttons"]] == ["decisions", "systems", "talkthrough"]   # tape rides on talk-through
+        assert [b["id"] for b in out["buttons"]] == ["decisions", "systems", "wall", "talkthrough"]   # tape rides on talk-through; wall rides on systems (WALL-4)
 
 
 def test_home_newcomer_pick():
@@ -134,10 +134,10 @@ def test_home_newcomer_pick():
 def test_home_second_pick_and_missing_pages():
     lay = L.from_answers({"surfaces": ["decisions", "systems", "phone", "terminal"]})
     out = _home(lay, PAGES)
-    assert [b["id"] for b in out["buttons"]] == ["decisions", "systems", "phone"]
+    assert [b["id"] for b in out["buttons"]] == ["decisions", "systems", "wall", "phone"]
     assert out["on"]["terminal"] and not out["on"]["sidepane"] and not out["on"]["thoughts"]
     # a brain without the desk pages shows only what has an address
-    assert [b["id"] for b in _home(lay, {})["buttons"]] == ["systems"]
+    assert [b["id"] for b in _home(lay, {})["buttons"]] == ["systems", "wall"]
     # an unknown id from an old file is ignored, the conversation stays
     out = _home({"surfaces": ["nope"]}, PAGES)
     assert out["on"]["chat"] and out["buttons"] == []

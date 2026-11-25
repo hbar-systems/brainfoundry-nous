@@ -156,3 +156,56 @@ def test_chat_ask_send_needs_chat_send():
 def test_chat_ask_bad_text_refused(text):
     out = run("chat.ask", {"text": text, "send": True}, perms=["chat.send"])
     assert out["r"]["error"]["code"] == "bad_text" and out["chat"] == []
+
+
+# ---- FINANCE-BOARD-1 (2026-11-23): the three ledger intents under 'ledgers.read' ----
+
+@pytest.mark.parametrize("intent", ["harmonics.read", "meter.read", "records.read"])
+def test_ledger_intents_need_ledgers_read(intent):
+    out = run(intent, {}, perms=["memory.read", "files.read"])
+    assert out["r"]["ok"] is False and out["r"]["error"]["code"] == "permission_denied"
+    assert "ledgers.read" in out["r"]["error"]["detail"] and out["calls"] == []
+
+
+def test_harmonics_read_fixed_fields_short_peer():
+    body = {"standing": 0.42, "half_life_days": 75.0, "events": [
+        {"id": 3, "peer_pubkey": "A" * 44, "role": "receiver", "cos": 0.9, "sin": 0.1, "score": 0.8,
+         "content_hash": "h", "sig": "ed25519:x", "event_timestamp": 1763900000, "judge_reason": "secret"}]}
+    out = run("harmonics.read", {"limit": 99999}, perms=["ledgers.read"], body=body)
+    assert out["r"]["ok"] is True
+    assert [c["url"] for c in out["calls"]] == ["/api/bf/harmonics/standing", "/api/bf/harmonics/ledger?limit=200"]
+    assert all(c["method"] == "GET" for c in out["calls"])
+    res = out["r"]["result"]
+    assert res["standing"] == 0.42 and res["half_life_days"] == 75.0
+    assert res["events"] == [{"id": 3, "role": "receiver", "score": 0.8, "at": 1763900000, "peer": "A" * 16, "signed": True}]
+
+
+def test_meter_read_tokens_only_no_euro():
+    body = {"window": "7d", "by_model": [{"model": "m", "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                                         "est_cost_eur": 0.5, "events": 2, "estimated_events": 0}],
+            "totals": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "est_cost_eur": 0.5, "events": 2, "estimated_events": 0}}
+    out = run("meter.read", {"window": "7d; DROP"}, perms=["ledgers.read"], body=body)
+    assert out["calls"][0]["url"] == "/api/bf/meter/usage?window=7d"
+    res = out["r"]["result"]
+    assert "eur" not in json.dumps(res)
+    assert res["totals"]["total_tokens"] == 15 and res["by_model"][0]["model"] == "m"
+    out = run("meter.read", {"window": "30d"}, perms=["ledgers.read"], body=body)
+    assert out["calls"][0]["url"] == "/api/bf/meter/usage?window=30d"
+
+
+def test_records_read_pay_kinds_only():
+    body = {"records": [
+        {"key": "k1", "dir": "out", "kind": "pay.intent", "rid": "p1", "from": "a", "to": "b",
+         "body": {"amount_minor": 5000, "currency": "EUR", "reason": "r", "rail": "wise"}, "answer": None,
+         "receipted": True, "at": 1, "confirm_text": "x", "last_error": None, "answerable": False},
+        {"key": "k2", "dir": "in", "kind": "note.share", "rid": "n1", "from": "b", "to": "a", "body": {"t": "private"}}]}
+    out = run("records.read", {}, perms=["ledgers.read"], body=body)
+    assert out["calls"][0]["url"] == "/api/bf/v1/federation/records"
+    res = out["r"]["result"]
+    assert res["exists"] is True and [r["rid"] for r in res["records"]] == ["p1"]
+    assert set(res["records"][0]) == {"dir", "kind", "rid", "from", "to", "body", "answer", "receipted", "at"}
+
+
+def test_records_read_without_door_is_empty_not_error():
+    out = run("records.read", {}, perms=["ledgers.read"], body={"detail": "Not Found"}, status=404)
+    assert out["r"] == {"ok": True, "result": {"exists": False, "records": []}}

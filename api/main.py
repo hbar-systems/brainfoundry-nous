@@ -5304,6 +5304,11 @@ def import_chat_history(
         res = chat_import.run(file.file if file is not None else None, RUNTIME_DIR, propose, newest=newest,
                               filename=file.filename if file is not None else None, text=pasted, title=title)
     except chat_import.NotAnExport as e:
+        if e.code:  # the card answers in its own words and shows the links (IMPORT-MANIFEST-1)
+            return JSONResponse(status_code=400, content=build_error(
+                code=KernelErrorCode.KERNEL_VALIDATION_ERROR, message=str(e),
+                details={"detail": str(e), "status_code": 400, "import": {"code": e.code, **e.info}},
+            ).model_dump())
         raise HTTPException(status_code=400, detail=str(e))
     print(f"[import-chats] {res['conversations']} found, {res['selected']} selected, {res['proposed']} proposed "
           f"({','.join(res['sources'])}) manifest={res['manifest_id']}" + (f" stopped: {res['stopped']}" if res['stopped'] else ""), flush=True)

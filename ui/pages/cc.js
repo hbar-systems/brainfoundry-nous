@@ -10,11 +10,13 @@ import { jobsUrl, splitFinished, stripItems, stripLabel, dismissAction } from '.
 import { merge as logMerge, whenOf as logWhen, addLive as logAddLive, answerAll as logAnswerAll } from '../lib/cardlog'
 import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
+import { uploadFiles, fmtMB } from '../lib/bigUpload'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
 import ListeningCard from '../components/ListeningCard'
 import FirstSignIn from '../components/FirstRun'
 import SignInSteps from '../components/SignInSteps'
+import SeatChoice from '../components/SeatChoice'
 import { currentStep, showFirstRun } from '../lib/firstRun'
 import { VEILS, readWall, setVeil, clearWall, setWallFromFile } from '../lib/wallpaper'
 import { press, routeName, slashName, choiceName } from '../lib/presses'
@@ -25,8 +27,11 @@ import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
 import Spiders from '../components/Spiders'
+import SurfaceCard, { SURFACE_CSS } from '../components/SurfaceCard'
+import { sayMatch, keyIndex } from '../lib/surfaces'
+import { isWallWord } from '../lib/wall'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
-import { SKINS, FONT_SHAPES, consoleTheme, currentFont, showTheme, setFont as setSkinFont } from '../lib/skin'
+import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont, cachedLook, cacheLook, childLook, knownThread, THREAD_KEY } from '../lib/skin'
 
 // CC — a plain chat surface backed by a reasoner running on the brain's own box.
 //
@@ -70,6 +75,20 @@ function JobsLight({ jobs, size = 8, fontSize = '10px' }) {
   )
 }
 
+// PANES-FIX-1 (2026-11-24): one /cc/health per page. /systems opens five chat frames at once and each asked the
+// bridge itself (5.8 s for one, 3 to 4 s each with five). The frames on one page share one request held by the
+// same-origin host window (made with the host's fetch, so a closed pane cannot strand the others), kept 5 s.
+function sharedHealth(fresh) {
+  let host = window
+  try { if (window.parent !== window && window.parent.location.origin === window.location.origin) host = window.parent } catch {}
+  const url = fresh === true ? '/cc/health?fresh=1' : '/cc/health'
+  const c = host.__ccHealth
+  if (fresh !== true && c && Date.now() - c.at < 5000) return c.p
+  const p = host.fetch(url, { cache: 'no-store' }).then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+  host.__ccHealth = { at: Date.now(), p }
+  p.catch(() => { if (host.__ccHealth && host.__ccHealth.p === p) host.__ccHealth = null })
+  return p
+}
 function shortModel(m) { return String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '') }
 function kTok(n) { n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n) }
 // The panel above the composer (hbar 2026-10-24): fixed asks, so the organizer thread needs no typing for the three daily questions.
@@ -129,6 +148,9 @@ const CC_PHONE_CSS = `.cc-chips button { white-space: nowrap; }
   .cc-chips { position: static !important; justify-content: flex-start !important; }
   .cc-threads-pop { white-space: normal; }
   .cc-conv { min-height: 140px !important; }
+  /* iOS zooms the page into any text box under 16 px and leaves it zoomed (hbar 2026-11-25, "always slightly adjusting size"):
+     the composer was 15 px in a pane and followed a smaller saved text size. Every box holds 16 px or more on a phone. */
+  textarea, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]) { font-size: max(16px, 1em) !important; }
 }`
 
 function Btn({ children, onClick, disabled, primary, small, title, accent }) {
@@ -588,12 +610,20 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
             {seatName('local', local)}
           </Chip>
           <span style={{ ...mono, fontSize: '10px', color: localOn ? C.faint : '#d08a7a' }}>{(local && local.line) || 'local model: status unknown'}</span>
+          {/* the way back to the sign-in screen from the private brain (SEAT-3): the choice is undone, nothing else */}
+          {local && local.chosen && local.engine === 'native' ? (
+            <a onClick={() => fetch('/cc/seat/private', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: false }) }).then(() => onRecheck && onRecheck()).catch(() => {})}
+              title="back to the sign-in screen: Claude or ChatGPT answer better" style={{ ...mono, fontSize: '10px', color: C.faint, cursor: 'pointer', textDecoration: 'underline' }}>sign in instead</a>
+          ) : null}
         </>
       ) : null}
     </span>
   )
 }
-function ToolLine({ look, setLook, text, density, font, onFont, posture, setPosture, extra }) {
+// SKIN-3 (2026-11-23): the skin and font chips set one of two levels, named on the line: "this thread" (kept
+// with the thread, drawn only where it is open) or "default" (every thread without its own, and the pages that
+// are not a thread: apps, tasks, systems, the brain's own pages). `defaults` is the console default now.
+function ToolLine({ look, setLook, text, density, onFont, defaults, onDefault, scope, setScope, posture, setPosture, extra }) {
   const [open, setOpen] = useState(false)
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
   const [wall, setWall] = useState({ image: '', veil: 60 })
@@ -602,6 +632,7 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
   useEffect(() => { setWall(readWall()); const on = () => setWall(readWall()); window.addEventListener('bf-wall', on); return () => window.removeEventListener('bf-wall', on) }, [])
   const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
+  const thread = scope !== 'default'
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
   return (
     <div data-nopick="1" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', padding: open ? '6px 8px' : '2px 8px', marginBottom: '6px',
@@ -613,6 +644,11 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
         tools {open ? '▾' : '▸'}
       </a>
       {open && <>
+        <span data-skin-scope={scope} style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+          <span style={lbl}>skin + font set</span>
+          <Chip on={thread} onClick={() => setScope('thread')} title="the skin and font chips change this thread only, wherever it is open">this thread</Chip>
+          <Chip on={!thread} onClick={() => setScope('default')} title="the skin and font chips change the default: threads without their own choice, and apps, tasks, systems pages">default</Chip>
+        </span>
         <ColourWheel value={look.accent} onPick={(hex) => put('accent', hex)} />
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
@@ -631,16 +667,22 @@ function ToolLine({ look, setLook, text, density, font, onFont, posture, setPost
           // shapes, each chip in its own face; the whole console takes it, remembered in this browser.
           <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={lbl}>font</span>
-            {FONT_SHAPES.map(f => (
-              <a key={f.value} onClick={() => onFont(f.value)} title={f.title + '; the whole console, every page'}
-                style={{ fontFamily: f.family, fontSize: '12px', padding: '1px 9px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
-                         border: `1px solid ${font === f.value ? C.gold : C.line}`, color: font === f.value ? C.gold : C.dim, backgroundColor: font === f.value ? C.card : 'transparent' }}>{f.label}</a>
-            ))}
+            {FONT_SHAPES.map(f => {
+              const on = thread ? look.font === f.value : defaults.font === f.value
+              const title = thread ? (on ? 'back to the default font' : f.title + '; this thread only') : f.title + '; the default, for every thread without its own font and every other page'
+              return (
+                <a key={f.value} data-font-chip={f.value} onClick={() => (thread ? put('font', on ? null : f.value) : onFont(f.value))} title={title}
+                  style={{ fontFamily: f.family, fontSize: '12px', padding: '1px 9px', borderRadius: '11px', cursor: 'pointer', whiteSpace: 'nowrap',
+                           border: `1px ${!on && thread && !look.font && defaults.font === f.value ? 'dashed' : 'solid'} ${on ? C.gold : C.line}`, color: on ? C.gold : C.dim, backgroundColor: on ? C.card : 'transparent' }}>{f.label}</a>
+              )
+            })}
           </span>
         ) : null}
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>skin</span>
-          {SKINS.map(s => <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the console skin' : 'this conversation in the ' + s + ' skin'}>{s}</Chip>)}
+          {SKINS.map(s => thread
+            ? <Chip key={s} on={look.skin === s} onClick={() => put('skin', look.skin === s ? null : s)} title={look.skin === s ? 'back to the default skin' : 'this thread in the ' + s + ' skin; other threads keep theirs'}>{s}{!look.skin && defaults.skin === s ? ' ·' : ''}</Chip>
+            : <Chip key={s} on={defaults.skin === s} onClick={() => onDefault(s)} title={'the default skin: every thread without its own, and apps, tasks, systems'}>{s}</Chip>)}
         </span>
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={lbl}>wallpaper</span>
@@ -1529,9 +1571,12 @@ const HL_OK = () => { try { return !!(window.CSS && CSS.highlights && window.Hig
 function CC() {
   const [turns, setTurns] = useState([])       // { who: 'me' | 'brain', text, ms, error }
   const [draft, setDraft] = useState('')
+  const surfacesRef = useRef([])                    // the surfaces register (GET /cc/surfaces, SURFACES-1 2026-11-24)
+  const [surfHit, setSurfHit] = useState(null)      // {turn, i}: the pad a number key just pressed, for its flash
   const [files, setFiles] = useState([])            // attachments chosen for the next message
   const [thoughts, setThoughts] = useState(false)   // just thoughts: what is sent is filed to the memo tape, not acted on (2026-10-24)
   const [attaching, setAttaching] = useState(0)     // files uploading for the message just sent (2026-10-22)
+  const [attachProg, setAttachProg] = useState('')  // "412 of 640 MB" while a big file goes up in pieces (VIDEO-DOOR-1)
   const sendingRef = useRef(false)                  // one press, one message: set while a send hands off
   const autoAskRef = useRef(null)                   // ?ask= from the brain's own pages: sent once the console is up (2026-11-13)
   // ?continue=<conversation document> (MOVE-IN-2, 2026-11-16): a new thread seeded with an imported
@@ -1835,11 +1880,17 @@ function CC() {
   useEffect(() => { try { const f = localStorage.getItem('cc.font'); if (f && FONTS.some(x => x.value === f)) setFont(f) } catch {} }, [])
   const setFontSaved = (v) => { setFont(v); setShowFonts(false); try { if (v) localStorage.setItem('cc.font', v); else localStorage.removeItem('cc.font') } catch {} }
   const fontPick = FONTS.find(x => x.value === font)
-  // The tool line's font chips (SKIN-2): the console font for every page, and this conversation with it.
-  const [consoleFont, setConsoleFont] = useState('system')
-  useEffect(() => { setConsoleFont(currentFont()); const on = () => setConsoleFont(currentFont()); window.addEventListener('bf-skin', on); return () => window.removeEventListener('bf-skin', on) }, [])
-  const pickFont = (v) => { setSkinFont(v, document.documentElement); setConsoleFont(v); setFontSaved(v) }
-  const fontFamily = fontPick ? fontPick.family : 'var(--font-display, serif)'
+  // The console default skin and font (SKIN-3), as the tool line shows them; another tab changing the default
+  // reaches here through lib/skin.js (storage event, then bf-skin).
+  const [defaults, setDefaults] = useState({ skin: 'gold', font: 'system' })
+  useEffect(() => { const on = () => setDefaults({ skin: consoleTheme(), font: consoleFont() }); on(); window.addEventListener('bf-skin', on); return () => window.removeEventListener('bf-skin', on) }, [])
+  // the default font: the console's, and the conversation font of this browser cleared so it follows the default
+  const pickFont = (v) => { setSkinFont(v, document.documentElement); setFontSaved('') }
+  const pickDefaultSkin = (t) => setConsoleTheme(t, document.documentElement)
+  // SKIN-4: "this thread" every time a page opens or another thread shows; "default" lasts only while it is on
+  // screen. SKIN-3 remembered it in the browser, so once set, a press in any thread changed every thread without
+  // its own skin (hbar 2026-11-24: changing one thread's colour changed other threads).
+  const [skinScope, setSkinScope] = useState('thread')
   // The technical surface's warnings, one line in the footer (2026-09-24): the api's view
   // (disk, memory, load, containers, backups) and the host's (failed services, units).
   const [sysWarn, setSysWarn] = useState([])
@@ -1859,6 +1910,7 @@ function CC() {
   const chooseRef = useRef(null)
   const switchRef = useRef(null)
   const [health, setHealth] = useState(null)   // null unknown, false down, object ok
+  const [opened, setOpened] = useState(false)    // the first health answer has set the thread (PANES-FIX-1)
   const activity = useActivity()                // the activity lights (2026-10-25): /cc/activity every 5 s while visible
   const lightOf = (brain) => (activity && activity.threads && activity.threads[brain]) || null
   const [usage, setUsage] = useState(null)        // today's totals for the footer (2026-09-29; declared 2026-10-01, the footer read it undeclared and crashed under details)
@@ -1952,6 +2004,7 @@ function CC() {
   // (localStorage cc.draft.<thread>, cleared when the box empties on send). A brand new conversation's
   // draft moves with it when the bridge names the thread.
   const draftKeyRef = useRef(null)
+  const earlyTypedRef = useRef(false)
   const draftCurRef = useRef(null)
   useEffect(() => {
     const key = draftKey(cur)
@@ -1962,6 +2015,8 @@ function CC() {
     let stored = ''
     try { stored = localStorage.getItem(key) || '' } catch {}
     if (wasSending && key !== DRAFT_NEW && !stored) { setDraft(d => { try { if (d) localStorage.setItem(key, d); localStorage.removeItem(DRAFT_NEW) } catch {} return d }); return }
+    // PANES-FIX-1: words typed into a pane while it was still opening stay, after the thread's kept draft
+    if (earlyTypedRef.current) { earlyTypedRef.current = false; setDraft(d => (d && d !== stored ? (stored ? stored + '\n' + d : d) : stored)); return }
     setDraft(stored)
   }, [cur])
   useEffect(() => {
@@ -2179,11 +2234,15 @@ function CC() {
   }, [health && health.cards_waiting])
   const loadUsage = () => fetch('/cc/usage', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => { if (d) setUsage(d) }).catch(() => {})
   // fresh: the bridge reads both sign-ins again instead of its 20 s caches (a sign-in panel closed, recheck pressed; 2026-11-08)
+  // a pane keeps what it knew when one check fails and asks again in 3 s (PANES-FIX-1): a failed call is not a "no"
+  const healthRetry = useRef(null)
   const loadHealth = (fresh) =>
-    fetch(fresh === true ? '/cc/health?fresh=1' : '/cc/health', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+    sharedHealth(fresh)
       .then(setHealth)
-      .catch(() => setHealth(false))
+      .catch(() => {
+        if (!paneModeRef.current) { setHealth(false); return }
+        if (!healthRetry.current) healthRetry.current = setTimeout(() => { healthRetry.current = null; loadHealth() }, 3000)
+      })
   // the sign-in screen's own look (step 3): a fresh check, kept stable for its timer
   const recheckSignIn = useCallback(() => { loadHealth(true) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const loadPending = () =>
@@ -2252,48 +2311,111 @@ function CC() {
   // A brain signed in only with ChatGPT starts its threads on Codex, not on a Claude that cannot answer (2026-11-07).
   const claudeIn = !!(health && health.auth && health.auth.loggedIn)
   const codexIn = !!(health && health.codex && health.codex.installed && health.codex.signedIn)
-  const localIn = !!(health && health.local && health.local.configured)
+  // offered is not chosen (SEAT-3): a configured private seat opens the chat only once the person picked it
+  const localIn = !!(health && health.local && health.local.configured && health.local.chosen)
   const defaultSeat = claudeIn ? 'claude' : codexIn ? 'codex' : localIn ? 'local' : 'claude'
   const seat = (seatPick && seatPick.key === seatKey) ? seatPick.seat : ((curThread && curThread.reasoner) || defaultSeat)
   const seatRef = useRef('claude'); seatRef.current = seat
   const pickSeat = (s) => setSeatPick({ key: seatKey, seat: SEATS.includes(s) ? s : 'claude' })
   const recheckCodex = () => fetch('/cc/codex/status?fresh=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
     .then(cx => { if (cx) setHealth(h => (h ? { ...h, codex: cx } : h)) }).catch(() => {})
-  // The thread's look (the tool line, 2026-10-13): read from the thread record on the box, changed here
-  // at once, written back a moment after the last touch so a drag round the wheel is one write.
-  const [look, setLookState] = useState({})
-  const lookSave = useRef(null)
-  const curStyle = JSON.stringify((curThread && curThread.style) || {})
+  // The thread's look (the tool line, 2026-10-13): kept on the box with the thread, changed here at once, written
+  // back a moment after the last touch so a drag round the wheel is one write.
+  // SKIN-4 (2026-11-24): the thread id is the key everywhere. The look is read by id (GET /cc/threads/style), never
+  // from the thread list: a searched list, the archive, a slow or failed list no longer turn the thread gold. This
+  // browser caches it under bf-skin.<thread> so a reload or a switch paints it at once. A new conversation opened
+  // from a thread (the new button) keeps that thread's skin, font and accent; a thread started by a choices button
+  // gets its parent's on the box (cc_skin.child_style). The parent is never written.
+  const [look, setLookState] = useState(() => cachedLook(cur) || {})
+  const lookSave = useRef(null)      // { brain, go, timer }: the write waiting for the last touch
+  const lookWrote = useRef({})       // brain -> when this page last wrote it: a list read before that is stale
+  const lookCarry = useRef(null)     // { brain, look }: a look picked before the first message, waiting for its thread
+  const curStyle = curThread ? JSON.stringify(curThread.style || {}) : null
   // A look picked before the first message (no thread yet) is kept and saved onto the thread the
   // message creates; before 2026-10-18 it was dropped there and the page fell back to gold.
   const lookRef = useRef({}); lookRef.current = look
   const lookCur = useRef(cur)
+  const flushLook = () => { const p = lookSave.current; if (p) { clearTimeout(p.timer); p.go() } }
+  // a page opened on ?thread=<id> wears that thread's cached skin from the first frame (lib/skin.js PREPAINT,
+  // watchSkin); nothing here draws the default over it while the bridge is still naming the thread
+  const pinWaiting = useRef(typeof window !== 'undefined' && (() => { try { return knownThread(new URLSearchParams(window.location.search).get('thread')) } catch { return false } })())
+  // the look shown, drawn in the same step (the effect below runs only when the skin or font value changes)
+  const showLook = (x) => { setLookState(x); showOwn({ skin: x.skin, font: x.font }, document.documentElement) }
   useEffect(() => {
     const was = lookCur.current; lookCur.current = cur
-    if (lookSave.current) return
+    flushLook()   // a touch in the thread just left is written to that thread, never carried to this one
+    setSkinScope('thread')
     const pending = lookRef.current
-    // carried when the page moves from no thread, or from a thread record that is gone (renamed on its first answer)
-    const gone = !was || !threads.some(t => t.brain === was)
-    if (gone && cur && curStyle === '{}' && Object.keys(pending).length) { saveLook(pending, cur); return }
-    setLookState(JSON.parse(curStyle))
-  }, [cur, curStyle])
+    if (cur) pinWaiting.current = false
+    if (!cur) { if (!pinWaiting.current) showLook(knownThread(was) ? childLook(pending) : {}); return undefined }
+    if (!knownThread(cur)) return undefined   // a new conversation being named: keep what is on screen
+    // carried when the page moves from no thread, or from a conversation the bridge just named
+    const carry = (!was || !knownThread(was)) && Object.keys(pending).length > 0
+    lookCarry.current = carry ? { brain: cur, look: pending } : null
+    const cached = cachedLook(cur)
+    if (!carry) showLook(cached || (curThread && curThread.style) || {})
+    let on = true
+    fetch('/cc/threads/style?brain=' + encodeURIComponent(cur), { cache: 'no-store' })
+      .then(r => (r.status === 404 ? null : r.ok ? r.json() : undefined))
+      .then(d => {
+        if (!on || lookCur.current !== cur || lookSave.current || d === undefined) return   // gone, touched, or no answer: keep what is drawn
+        const st = (d && d.style && typeof d.style === 'object') ? d.style : null
+        if (!st) return   // the box has not registered this thread yet: a carried look waits for the list (below)
+        if (carry && lookCarry.current && !Object.keys(st).length) { lookCarry.current = null; saveLook(pending, cur); return }
+        lookCarry.current = null
+        cacheLook(cur, st)
+        showLook(st)
+      })
+      .catch(() => {})
+    return () => { on = false }
+  }, [cur])
+  // another device changed this thread's look: the 20 s thread list carries it, when the list holds this thread
+  useEffect(() => {
+    if (curStyle === null || !knownThread(cur) || lookSave.current) return
+    const c = lookCarry.current
+    if (c && c.brain === cur) {
+      lookCarry.current = null
+      if (curStyle === '{}') { saveLook(c.look, cur); return }
+    }
+    if (Date.now() - (lookWrote.current[cur] || 0) < 25000) return
+    if (curStyle === JSON.stringify(lookRef.current)) return
+    const st = JSON.parse(curStyle)
+    cacheLook(cur, st)
+    showLook(st)
+  }, [curStyle])
+  // the same thread open in another tab or pane of this browser: follow its change at once (only this thread's key)
+  useEffect(() => {
+    if (!knownThread(cur)) return undefined
+    const on = (e) => { if (e.key === THREAD_KEY + cur && !lookSave.current) { const c = cachedLook(cur); if (c) showLook(c) } }
+    window.addEventListener('storage', on)
+    return () => window.removeEventListener('storage', on)
+  }, [cur])
   const setLook = (n) => {
     setLookState(n)
     if (cur) saveLook(n, cur)
   }
   function saveLook(n, brain) {
-    clearTimeout(lookSave.current)
-    lookSave.current = setTimeout(() => {
-      lookSave.current = null
+    if (lookSave.current) clearTimeout(lookSave.current.timer)
+    if (!knownThread(brain)) { lookSave.current = null; return }
+    cacheLook(brain, n)
+    const go = () => {
+      if (lookSave.current && lookSave.current.go === go) lookSave.current = null
+      lookWrote.current[brain] = Date.now()
       fetch('/cc/threads/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ brain, style: n }) })
-        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.thread) setThreads(ts => ts.map(t => (t.brain === brain ? { ...t, style: d.thread.style } : t))) }).catch(() => {})
-    }, 500)
+        .then(r => (r.ok ? r.json() : null)).then(d => { if (d && d.thread) { lookWrote.current[brain] = Date.now(); setThreads(ts => ts.map(t => (t.brain === brain ? { ...t, style: d.thread.style } : t))) } }).catch(() => {})
+    }
+    lookSave.current = { brain, go, timer: setTimeout(go, 500) }
   }
+  // a page opened on ?thread=<id> wears that thread's cached skin from the first frame (lib/skin.js PREPAINT,
+  // watchSkin); nothing here draws the default over it while the bridge is still naming the thread
   useEffect(() => {
-    const root = document.documentElement
-    // the skin on screen is written for every other page too (lib/skin.js): /apps, /tasks and the panes follow it
-    showTheme(look.skin || consoleTheme(), root)
-  }, [look.skin])
+    if (!cur && pinWaiting.current) return
+    // this thread's own skin and font, drawn in this document only (SKIN-3): another tab or pane is untouched
+    showOwn({ skin: look.skin, font: look.font }, document.documentElement)
+  }, [look.skin, look.font])
+  useEffect(() => () => showOwn(null, document.documentElement), [])
+  // the conversation's font: the thread's own, else this browser's pick under details, else the skin's display font
+  const fontFamily = (look.font && shapeFamily(look.font)) || (fontPick ? fontPick.family : 'var(--font-display, serif)')
   const learnCtx = useMemo(() => ({ on: !!look.learn, thread: cur }), [look.learn, cur])
   const lookText = look.text || textSize
   const lookDensity = look.density || density
@@ -2364,10 +2486,9 @@ function CC() {
         window.history.replaceState(window.history.state, '', u.href)
       }
     } catch {}
-    fetch('/cc/health', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+    const firstHealth = () => sharedHealth()
       .then(h => {
-        setHealth(h)
+        setHealth(h); setOpened(true)
         // the bare console opens a NEW thread (hbar 2026-11-04); an old one opens from threads or ?thread=<id>
         if (pin === 'new' || (!pin && !paneModeRef.current)) { freshRef.current = true }
         else if (pin) {
@@ -2379,8 +2500,12 @@ function CC() {
           if ((h.runs || []).some(r => r.thread === h.brain_session_id)) attach(h.brain_session_id)
         }
       })
-      .catch(() => setHealth(false))
+      .catch(() => { if (paneModeRef.current) setTimeout(firstHealth, 3000); else setHealth(false) })
+    firstHealth()
     loadPending(); loadFirstRun(); loadThreads(); loadLatest()
+    // SURFACES-1: a message that is only a system's say-word shows its card, with no model turn
+    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) surfacesRef.current = d.surfaces }).catch(() => {})
     // ?ask= prefills; from the brain's own desk pages (same origin, /cc/files/raw/: the court, the board)
     // it is sent on arrival, so one press there acts (hbar 2026-11-12 "i got sent back"). Any other
     // origin, or no referrer (Telegram, typed), keeps prefill only.
@@ -2784,6 +2909,18 @@ function CC() {
 
   // Any signed-in reasoner opens the chat: Claude, Codex (ChatGPT) or a configured local model (2026-11-07).
   const loggedIn = claudeIn || codexIn || localIn
+  // PANES-FIX-1: a pane's box is open while the first check is out; what is sent meanwhile is held and goes
+  // the moment the check says a reasoner is in. "connect a reasoner first" only after the check really said no.
+  const healthKnown = !!(health && typeof health === 'object')
+  const checking = !!paneMode && !healthKnown
+  const canType = loggedIn || checking
+  const [held, setHeld] = useState(null)
+  useEffect(() => {
+    if (!held || !healthKnown || !opened) return   // opened: the pane's thread is set, so it goes to the right thread
+    const q = held; setHeld(null)
+    if (loggedIn && sendRef.current) sendRef.current(q)
+    else setDraft(d => (d ? q + '\n' + d : q))   // the check said no: the words go back into the box, never lost
+  }, [held, healthKnown, loggedIn, opened])  // eslint-disable-line react-hooks/exhaustive-deps
   const firstOn = showFirstRun(signinOrder, quietHome) && !paneMode && turns.length === 0
   const firstStep = firstOn ? currentStep(signinOrder, loggedIn) : null
   // the start that waited for the sign-in runs once a reasoner is in (MEMBERS-14)
@@ -3124,13 +3261,12 @@ function CC() {
     if (!text && files.length === 0) return
     let saved = []
     if (files.length > 0) {
-      const fd = new FormData(); files.forEach(f => fd.append('file', f, f.name))
-      try {
-        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
-        const d = await r.json().catch(() => ({}))
-        if (!r.ok || !d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
-        saved = d.files || []
-      } catch { setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
+      // any size: over 50 MB goes in resumable pieces (ui/lib/bigUpload.js, VIDEO-DOOR-1)
+      setAttaching(files.length)
+      const d = await uploadFiles(files, setAttachProg)
+      setAttaching(0); setAttachProg('')
+      if (!d.ok) { setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error}`, error: true }]); return }
+      saved = d.files || []
       setFiles([])
     }
     setDraft('')
@@ -3157,26 +3293,39 @@ function CC() {
     if (thoughts && typeof forced !== 'string' && !text.startsWith('/')) text = ('just thoughts: ' + text).trim()
     const block = typeof forced === 'string' ? '' : notesBlock()
     if (!text && files.length === 0 && !block) return
+    if (paneMode && !(health && typeof health === 'object')) {
+      let h = text
+      if (block) { h = (h ? h + '\n\n' : '') + block; setNotes([]) }
+      if (!h) return
+      setHeld(x => (x ? x + '\n\n' + h : h)); if (typeof forced !== 'string') setDraft('')
+      return
+    }
     if (/^\/fix\b/.test(text)) { await sendFix(text.replace(/^\/fix\b\s*/, '')); return }
     if (text.startsWith('/') && await slash(text)) { setDraft(''); return }
+    // "wall" alone (WALL-4): the day opens on the wall; the brain is not asked
+    if (typeof forced !== 'string' && files.length === 0 && !block && !paneMode && isWallWord(text)) { setDraft(''); window.location.href = '/wall'; return }
+    // a system's say-word alone (SURFACES-1): its card in the thread, the brain is not asked
+    if (typeof forced !== 'string' && files.length === 0 && !block) {
+      const sf = sayMatch(text, surfacesRef.current)
+      if (sf) { setDraft(''); setTurns(t => [...t, { who: 'me', text }, { who: 'surface', surface: sf }]); return }
+    }
     // before any sign-in: the start waits for it instead of failing (MEMBERS-14 2026-11-23)
     if (health && !loggedIn && typeof forced === 'string' && !paneMode) { setPendingStart(text); return }
     if (block) { text = (text ? text + '\n\n' : '') + block; setNotes([]) }
     if (typeof forced !== 'string' && files.length > 0) {
       // Attachments go to the box first (in/<date>/), then the message names them.
       const sending = files, keptDraft = draft
-      const fd = new FormData(); sending.forEach(f => fd.append('file', f, f.name))
+      // Any size (VIDEO-DOOR-1 2026-11-24): up to 50 MB in one request as before, bigger files in 8 MB
+      // resumable pieces with one progress line "412 of 640 MB" (ui/lib/bigUpload.js).
       setDraft(''); setFiles([]); setAttaching(sending.length)
       const restore = () => { setDraft(d0 => d0 || keptDraft); setFiles(f0 => [...sending, ...f0]) }
       let saved = []
       try {
-        const r = await fetch('/cc/upload', { method: 'POST', body: fd })
-        const d = await r.json().catch(() => ({}))
-        if (!r.ok || !d.ok) { restore(); setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error || r.status}`, error: true }]); return }
+        const d = await uploadFiles(sending, setAttachProg)
+        if (!d.ok) { restore(); setTurns(t => [...t, { who: 'brain', text: `Could not attach: ${d.error}`, error: true }]); return }
         saved = d.files || []
-      } catch { restore(); setTurns(t => [...t, { who: 'brain', text: 'Could not attach: the bridge did not answer.', error: true }]); return }
-      finally { setAttaching(0) }
-      text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path).join(', ')
+      } finally { setAttaching(0); setAttachProg('') }
+      text = (text || 'Look at the attached file.') + '\n\nAttached on the box: ' + saved.map(f => f.path + (f.sha256 ? ` (sha256 ${f.sha256})` : '')).join(', ')
     }
     // A message sent while the thread answers is accepted by the bridge and queued there (2026-10-09):
     // delivered as the next turn the moment the running one ends, in order, cancellable below.
@@ -3341,6 +3490,7 @@ function CC() {
   }
 
   function onKey(e) {
+    if (!draft && !e.metaKey && !e.ctrlKey && !e.altKey && surfaceKey(e.key)) { e.preventDefault(); return }
     if (e.key === 'Escape' && active) { e.preventDefault(); stopTurn(); return }
     if (e.key === 'Escape' && listening) { e.preventDefault(); stopListening(false); return }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && active && draft.trim()) { e.preventDefault(); sendNow(); return }
@@ -3350,6 +3500,32 @@ function CC() {
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
+
+  // SURFACES-1: a card's pad. An address opens beside the chat (the pane); an ask goes into the box, not sent.
+  const surfaceOpen = (s, a) => openPane({ route: a.open, title: `${s.name} · ${a.label}` })
+  const surfaceAsk = (a) => { setDraft(a.ask); setTimeout(() => { const b = boxRef.current; if (b) { b.focus(); try { b.setSelectionRange(a.ask.length, a.ask.length) } catch {} } }, 0) }
+  // keys 1 to 5 press the newest card's pads while the box is empty and that card is the last thing in the thread
+  const surfaceKey = (key) => {
+    const n = turns.length - 1, t = turns[n]
+    if (!t || t.who !== 'surface') return false
+    const i = keyIndex(key, t.surface.actions.length)
+    if (i < 0) return false
+    const a = t.surface.actions[i]
+    setSurfHit({ turn: n, i }); setTimeout(() => setSurfHit(h => (h && h.turn === n && h.i === i ? null : h)), 220)
+    if (a.kind === 'ask') surfaceAsk(a); else surfaceOpen(t.surface, a)
+    return true
+  }
+  const surfaceKeyRef = useRef(surfaceKey); surfaceKeyRef.current = surfaceKey
+  useEffect(() => {
+    const k = (e) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = e.target, tag = el && el.tagName
+      if (el && (el.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return
+      if (surfaceKeyRef.current(e.key)) e.preventDefault()
+    }
+    document.addEventListener('keydown', k)
+    return () => document.removeEventListener('keydown', k)
+  }, [])
 
   const slimHero = !paneMode && !hidden.hero && !heroShow && turns.length > 2
   // A card waits: open its conversation, or the board beside the chat for a thread still starting.
@@ -3438,7 +3614,7 @@ function CC() {
   return (
     <LearnCtx.Provider value={learnCtx}>
       <Head><title>CC · BrainFoundry</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: LIGHT_CSS + ' ' + THREADCOLOR_CSS + ' ' + SURFACE_CSS }} />
       {/* as raw html: a '>' in the css text is escaped by the server and not by the client, a hydration mismatch (BOARD-4) */}
       <style dangerouslySetInnerHTML={{ __html: CC_PHONE_CSS }} />
       <MdPopup />
@@ -3520,8 +3696,10 @@ function CC() {
         {firstStep && health && <FirstSignIn lang={lang} state={signinOrder} loggedIn={loggedIn} onChange={setSigninOrder} />}
         {health && !loggedIn && (!firstStep || firstStep === 'seat') && (health.signin_proxy
           ? <SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />
-          : <SignInSteps lang={lang} bare={firstStep === 'seat'} loggedIn={loggedIn} onRecheck={recheckSignIn} pendingStart={pendingStart}
-              other={<SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />} />)}
+          : <SeatChoice lang={lang} local={health.local} codex={health.codex} onOpenPane={openPane} codexLogin={CODEX_LOGIN} onChosen={() => loadHealth(true)}>
+              <SignInSteps lang={lang} bare loggedIn={loggedIn} onRecheck={recheckSignIn} pendingStart={pendingStart}
+                other={<SignIn health={health} onDone={loadHealth} onRecheck={() => loadHealth(true)} onOpenPane={openPane} />} />
+            </SeatChoice>)}
 
         {!paneMode && tgNews && surfaceOn(layoutBase, 'phone') && (
           <div style={{ ...mono, display: 'flex', alignItems: 'baseline', gap: '8px', padding: '6px 12px', marginBottom: '10px', backgroundColor: C.card, border: `1px solid ${C.line}`, borderRadius: '8px', fontSize: '11px', color: C.dim }}>
@@ -3534,10 +3712,11 @@ function CC() {
 
         {loggedIn && !hidden.tools && (
           <div style={{ flexShrink: 0, ...(look.accent ? { '--accent': look.accent } : {}) }}>
-            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} font={consoleFont} onFont={pickFont}
+            <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} onFont={pickFont}
+              defaults={defaults} onDefault={pickDefaultSkin} scope={skinScope} setScope={setSkinScope}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={recheckCodex} />
+                <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={() => { recheckCodex(); loadHealth(true) }} />
                 <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
                   title="learning mode: bold phrases and code terms get a 'learn' door with a mini lesson (one small side call each, nothing posted here)">learn {look.learn ? 'on' : 'off'}</Chip>
                 <Recall />
@@ -3594,7 +3773,14 @@ function CC() {
               {health.session ? ' The previous thread continues.' : ''}
             </p>
           )}
-          {turns.map((t, i) => (t.who === 'note' ? (
+          {turns.map((t, i) => (t.who === 'surface' ? (
+            <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '6px 0' : '10px 0' }}>
+              <div style={{ width: '100%', maxWidth: paneMode ? '100%' : '560px' }}>
+                <SurfaceCard s={t.surface} keys={i === turns.length - 1} hit={surfHit && surfHit.turn === i ? surfHit.i : -1}
+                  onOpen={(a) => surfaceOpen(t.surface, a)} onAsk={surfaceAsk} />
+              </div>
+            </div>
+          ) : t.who === 'note' ? (
             <div key={i} data-turn={i} style={{ display: 'flex', justifyContent: 'flex-start', margin: paneMode ? '3px 0' : '4px 0' }}>
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>
@@ -3716,9 +3902,9 @@ function CC() {
         )}
         {/* The composer wraps on a phone (360 px): the textarea takes the first row, the buttons the next. */}
         <div style={{ display: 'flex', flexWrap: paneMode ? 'nowrap' : 'wrap', gap: paneMode ? '6px' : '8px', alignItems: 'flex-end', marginTop: paneMode ? '6px' : '12px' }}>
-          <textarea ref={boxRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} rows={paneMode ? 1 : 2}
-            placeholder={thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? 'connect a reasoner first' : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : W.ask}
-            disabled={!loggedIn}
+          <textarea ref={boxRef} value={draft} onChange={e => { if (checking && !curRef.current) earlyTypedRef.current = true; setDraft(e.target.value) }} onKeyDown={onKey} rows={paneMode ? 1 : 2}
+            placeholder={checking && !listening ? (health === false ? 'your brain has not answered yet; type, it sends when it does' : 'opening; type now, it sends when your brain answers') : thoughts && loggedIn && !listening ? 'just thoughts; speak, type or attach: filed to the memo tape, not acted on. /thoughts off to leave.' : paneMode && loggedIn && !listening ? (active ? 'answering; Enter queues, Cmd+Enter sends now' : 'Ask your brain') : !loggedIn ? (healthKnown ? 'connect a reasoner first' : health === false ? 'the bridge is not answering yet' : 'opening') : listening ? (srOk ? 'listening; a pause ends it, or press stop' : 'recording; a pause ends it, or press stop') : active ? 'thinking; Enter queues for when it ends, Cmd/Ctrl+Enter or "send now" interrupts, Esc stops.' : W.ask}
+            disabled={!canType}
             onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); setFiles(f => [...f, ...Array.from(e.dataTransfer.files || [])]) }}
             onPaste={e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); setFiles(f => [...f, ...fs]) } }}
             style={{ flex: paneMode ? '1 1 auto' : '1 1 240px', minWidth: 0, resize: paneMode ? 'none' : 'vertical', minHeight: paneMode ? '34px' : '48px', maxHeight: paneMode ? '132px' : undefined, padding: paneMode ? '6px 10px' : '10px 12px', borderRadius: '10px', backgroundColor: C.card, color: C.ink,
@@ -3739,7 +3925,7 @@ function CC() {
             {active && <Btn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here.">{W.stop}</Btn>}
             {active && (draft.trim() || files.length > 0) && <Btn onClick={sendNow} title="Stop the answer and send this now (Cmd/Ctrl+Enter)">send now</Btn>}
             {/* the "fix the brain" button left the send row 2026-10-23 (hbar: never used); /fix does the same */}
-            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}>{active && draft.trim() ? 'queue' : W.send}</Btn>
+            <Btn primary onClick={send} disabled={(!draft.trim() && files.length === 0) || !canType}>{active && draft.trim() ? 'queue' : W.send}</Btn>
           </div>
           )}
           {paneMode && !hidden.inputbuttons && (
@@ -3748,11 +3934,16 @@ function CC() {
               <IconBtn onClick={() => toggleTalk(draft)} disabled={!loggedIn || transcribing} on={listening}
                 title={listening ? 'Stop listening' : canTalk ? (srOk ? 'Speak; the words appear here as you talk' : 'Record; the bridge transcribes the clip') : (whyNoTalk || 'this browser cannot listen')}><IcoMic /></IconBtn>
               {active && <IconBtn onClick={stopTurn} title="Stop the answer in progress (Esc). The thread keeps everything up to here."><IcoStop /></IconBtn>}
-              <IconBtn primary onClick={active && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !loggedIn}
+              <IconBtn primary onClick={active && (draft.trim() || files.length > 0) ? sendNow : send} disabled={(!draft.trim() && files.length === 0) || !canType}
                 title={active ? 'Stop the answer and send this now (Cmd/Ctrl+Enter); Enter alone queues it' : 'Send (Enter)'}><IcoSend /></IconBtn>
             </div>
           )}
         </div>
+        {held && (
+          <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: '6px 0 0 0' }} title={held}>
+            held: sends when your brain answers · <a onClick={() => { setDraft(d => (d ? held + '\n' + d : held)); setHeld(null) }} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>take it back</a>
+          </p>
+        )}
         {(listening || transcribing || talkNote) && (
           <p style={{ ...mono, color: listening ? C.gold : C.faint, fontSize: '11px', margin: '6px 0 0 0' }}>
             {listening ? (
@@ -3769,11 +3960,11 @@ function CC() {
           </p>
         )}
         {attaching > 0 && (
-          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0' }}>attaching {attaching} file{attaching === 1 ? '' : 's'}, sending right after</p>
+          <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0' }}>{attachProg ? `uploading ${attachProg}` : `attaching ${attaching} file${attaching === 1 ? '' : 's'}`}, sending right after</p>
         )}
         {files.length > 0 && (
           <p style={{ ...mono, color: C.dim, fontSize: '11px', margin: '8px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}><ChipThumb file={f} />{f.name} · {(f.size / 1024).toFixed(0)} KB <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
+            {files.map((f, i) => <span key={i} style={{ border: `1px solid ${C.line}`, borderRadius: '8px', padding: '2px 8px', display: 'inline-flex', alignItems: 'center' }}><ChipThumb file={f} />{f.name} · {f.size >= 1024 * 1024 ? fmtMB(f.size) : (f.size / 1024).toFixed(0) + ' KB'} <a onClick={() => setFiles(x => x.filter((_, j) => j !== i))} style={{ cursor: 'pointer', color: C.faint }}>x</a></span>)}
           </p>
         )}
         {footQuiet && (
