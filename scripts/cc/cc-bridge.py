@@ -57,6 +57,7 @@ Endpoints (JSON):
   GET  /cc/take          {ok, takes:[booth card + step, demo, verdict, ask, sent], lines, films}: /take, record -> demo -> ask (DEMO-1, cc_take.py)
   GET  /cc/take/file?path=<p>  a demo's MP3 or a film cut   POST /cc/take/backing (body = a track)   POST /cc/take/verdict {take,word,treatment?}
   POST /cc/take/ask {take, word: draft|send|answer, ...}: the press only; the world's renderer drafts and sends
+  POST /cc/take/fetch {video_id, via_mac?}: "use this track" into the private library (DEMO-3); GET /cc/take adds library
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
@@ -696,7 +697,7 @@ LIBRARY_DIR = os.environ.get("CC_LIBRARY_DIR", "").strip() or "/mnt/HC_Volume_10
 # /take (DEMO-1, 2026-11-25, scripts/cc/cc_take.py): the takes recorded there, their demos, verdicts and asks; the
 # world's renderer (on hbar's brain scripts/take_demo.py) writes the demos into the same folder.
 TAKE = cc_take.Take(BOOTH, os.environ.get("CC_TAKE_DIR", "").strip() or str(OUT_DIR / "studio" / "take"),
-                    WORLD_DIR or None, os.environ.get("CC_TAKE_LINES", "").strip() or None)
+                    WORLD_DIR or None, os.environ.get("CC_TAKE_LINES", "").strip() or None, LIBRARY_DIR)
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
 # /listen (LISTEN-1, 2026-11-24, scripts/cc/cc_listen.py): stations from the world's listening tables; the play log
@@ -6705,6 +6706,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/take/verdict":
             self._send(*TAKE.verdict(self._json(limit=2000) or {}))
+            return
+        if route == "/take/fetch":
+            self._send(*TAKE.fetch(self._json(limit=2000) or {}))
             return
         if route == "/take/ask":
             self._send(*TAKE.ask(self._json(limit=12000) or {}))

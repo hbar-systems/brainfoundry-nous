@@ -23,6 +23,11 @@ Doors (behind the bridge's page gate like every page route):
   POST /cc/take/backing                  body = the audio file, X-Take-Name = its name -> {ok, id, name}
   POST /cc/take/verdict {take, word, treatment?}
   POST /cc/take/ask {take, word: draft | send | answer, to?, subject?, body?, answer?, note?}
+  POST /cc/take/fetch {video_id, via_mac?, title?}   "use this track": fetch/<id>.want.json for the world's renderer (DEMO-3)
+
+The private library (DEMO-3, 2026-11-25; CC_LIBRARY_DIR): YouTube tracks fetched for his demos, one folder per video
+id with a card (track.json: state fetched | demo made | asked | yes | no). GET /cc/take adds library: [...] and
+/cc/take/file serves library/<id>/<the fetched file> to the page behind the console sign-in; never after a no.
 
 Lines to read (spoken parts, one take per group) come from the world: <world>/systems/*/ops/take/lines.json
 (CC_TAKE_LINES overrides), {sets: [{id, title, treatment, groups: [{n, bar, lines: [...]}], film?: {room, ...}}]}.
@@ -48,6 +53,7 @@ AUDIO_EXT = re.compile(r"\.(mp3|wav|m4a|aac|flac|ogg|opus|aif|aiff|webm)$", re.I
 TAKE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{6})_([a-z0-9][a-z0-9-]{0,59})(\.wav)?")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 OFFER = "[your offer"
+VIDEO_RE = re.compile(r"[A-Za-z0-9_-]{11}")
 
 
 def _now() -> str:
@@ -63,9 +69,10 @@ def _read(p: Path):
 
 
 class Take:
-    def __init__(self, booth, root, world: str | None = None, lines: str | None = None):
+    def __init__(self, booth, root, world: str | None = None, lines: str | None = None, library: str | None = None):
         self.booth = booth
         self.root = Path(root)
+        self.library = Path(library) if library else None
         self.world = Path(world) if world else None
         self.lines_path = Path(lines) if lines else None
         self.lock = threading.Lock()
@@ -167,7 +174,65 @@ class Take:
         for r in self._film_rooms():
             films.append({"room": str(r), "cuts": (_read(r / "cuts" / "cuts.json") or {}).get("cuts", [])[-5:],
                           "choices": (_read(r / "cuts" / "choices.json") or {}).get("choices", [])})
-        return {"ok": True, "dir": str(self.root), "takes": takes, "lines": self.line_sets(), "films": films}
+        return {"ok": True, "dir": str(self.root), "takes": takes, "lines": self.line_sets(), "films": films,
+                "library": self.library_state()}
+
+    # ---- the private library (DEMO-3): YouTube tracks fetched for his demos, each with its state
+    def library_state(self) -> list[dict]:
+        """Every fetched track and where it stands: fetched, demo made, asked, yes, no (and a fetch on its way or
+        refused). Read from the library's own cards (written by the world's orfeo_library.py) and fetch/<id>.json."""
+        out, seen = [], set()
+        lib = self.library if self.library and self.library.is_dir() else None
+        for c in sorted(lib.glob("*/track.json")) if lib else []:
+            d = _read(c) or {}
+            vid = d.get("video_id")
+            if not vid:
+                continue
+            seen.add(vid)
+            audio = d.get("audio") if d.get("state") != "no" and (c.parent / str(d.get("audio") or "")).is_file() else None
+            out.append({k: d.get(k) for k in ("video_id", "title", "artist", "state", "licence", "claims", "grid",
+                                                "fetched_at", "contact", "duration_s", "yes_at", "no_at")}
+                       | {"demos": len(d.get("demos") or []), "stems": sorted((d.get("stems") or {}).keys()),
+                          "play": f"library/{vid}/{audio}" if audio else None})
+        fd = self.root / "fetch"
+        for f in sorted(fd.glob("*.json")) if fd.is_dir() else []:
+            if f.name.endswith(".want.json"):
+                vid = f.name.removesuffix(".want.json")
+                if vid not in seen and not (fd / f"{vid}.json").exists():
+                    out.append({"video_id": vid, "state": "fetching", "title": (_read(f) or {}).get("title")})
+                    seen.add(vid)
+                continue
+            r = _read(f) or {}
+            vid = f.stem
+            if vid in seen:
+                continue
+            want = _read(fd / f"{vid}.want.json") or {}
+            if r.get("state") == "refused" and want.get("via_mac") and not r.get("via_mac"):
+                out.append({"video_id": vid, "state": "fetching", "title": want.get("title"), "via_mac": True})
+            else:
+                out.append({"video_id": vid, "state": r.get("state") or "fetching", "title": r.get("title") or want.get("title"),
+                            "why": r.get("why"), "via_mac": r.get("via_mac")})
+            seen.add(vid)
+        return out
+
+    def fetch(self, body: dict) -> tuple[int, dict]:
+        """His "use this track": ask the box to fetch it into the library (the world's renderer does, within two
+        minutes). via_mac is his press for that one pull through his Mac's home connection, when YouTube refuses the box."""
+        body = body or {}
+        vid = str(body.get("video_id") or "").strip()
+        if not VIDEO_RE.fullmatch(vid):
+            return 400, {"ok": False, "error": "a YouTube video id is needed"}
+        d = self._dir("fetch", create=True)
+        if d is None:
+            return 500, {"ok": False, "error": f"the take folder {self.root} cannot be made"}
+        lib = self.library / vid / "track.json" if self.library else None
+        card = _read(lib) if lib else None
+        if card and card.get("state") == "no":
+            return 409, {"ok": False, "error": "the artist said no to this track; its copy was deleted"}
+        with self.lock:
+            self._write(d, f"{vid}.want.json", {"by": "owner", "via_mac": bool(body.get("via_mac")), "at": _now(),
+                                           "title": " ".join(str(body.get("title") or "").split())[:200] or None})
+        return 200, {"ok": True, "state": "fetching"}
 
     # ---- files
     def file_path(self, raw) -> Path | None:
@@ -178,10 +243,16 @@ class Take:
         r = self.root
         if not Path(s).is_absolute():
             parts = Path(s).parts
-            if not parts or parts[0] not in ("demos", "backing"):
+            if parts and parts[0] == "library" and self.library and len(parts) == 3 and VIDEO_RE.fullmatch(parts[1]):
+                card = _read(self.library / parts[1] / "track.json") or {}
+                if card.get("state") == "no" or parts[2] != card.get("audio"):
+                    return None                              # only the fetched copy itself, never after a no
+                cand, bases = self.library / parts[1] / parts[2], [self.library]
+            elif not parts or parts[0] not in ("demos", "backing"):
                 return None
-            cand = r / s
-            bases = [r]
+            else:
+                cand = r / s
+                bases = [r]
         else:
             cand = Path(s)
             bases = [p / "cuts" for p in self._film_rooms()] + [r / "demos", r / "backing"]

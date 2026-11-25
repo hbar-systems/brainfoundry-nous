@@ -196,3 +196,49 @@ def test_clock_fit_and_sync_step(tmp_path):
     assert out["st"]["max"] == 40 and out["st"]["n"] == 4
     assert out["strip"]["ready"] == 1 and out["strip"]["toAsk"] == 1
     assert out["offer"] == [False, True]
+
+
+# ---- DEMO-3 (2026-11-25): the private library of fetched tracks on /take
+
+def _lib_track(lib, vid="OpJeQP2QzkY", state="demo made", **kw):
+    f = lib / vid
+    f.mkdir(parents=True)
+    (f / "audio.webm").write_bytes(b"their audio")
+    (f / "track.wav").write_bytes(b"wav")
+    (f / "track.json").write_text(json.dumps({"video_id": vid, "title": "Control", "artist": "Stamina Beats", "state": state,
+                                              "audio": "audio.webm", "wav": "track.wav", "demos": [{}], "grid": {"bpm": 100},
+                                              "stems": {"drums": "stems/drums.wav"}, **kw}))
+    return f
+
+
+def test_library_states_fetch_door_and_copy_served(env, tmp_path):
+    t, booth, room, _ = env
+    lib = tmp_path / "library"
+    _lib_track(lib)
+    t = cc_take.Take(booth, tmp_path / "take", str(tmp_path / "world"), None, str(lib))
+    st = t.state()["library"]
+    assert st[0]["state"] == "demo made" and st[0]["play"] == "library/OpJeQP2QzkY/audio.webm" and st[0]["stems"] == ["drums"]
+    assert t.file_path("library/OpJeQP2QzkY/audio.webm") is not None          # his console plays the copy
+    assert t.file_path("library/OpJeQP2QzkY/track.json") is None
+    assert t.file_path("library/OpJeQP2QzkY/../../take/x.mp3") is None
+    code, d = t.fetch({"video_id": "abcdefghijk", "title": "Their Beat"})
+    assert code == 200 and (t.root / "fetch" / "abcdefghijk.want.json").exists()
+    assert {"video_id": "abcdefghijk", "state": "fetching", "title": "Their Beat"} in t.state()["library"]
+    (t.root / "fetch" / "abcdefghijk.json").write_text(json.dumps({"state": "refused", "why": "YouTube's bot wall", "via_mac": False}))
+    row = next(x for x in t.state()["library"] if x["video_id"] == "abcdefghijk")
+    assert row["state"] == "refused" and "bot wall" in row["why"]
+    t.fetch({"video_id": "abcdefghijk", "via_mac": True})                        # his press: through the Mac, once
+    row = next(x for x in t.state()["library"] if x["video_id"] == "abcdefghijk")
+    assert row["state"] == "fetching" and row["via_mac"]
+    assert t.fetch({"video_id": "../etc"})[0] == 400
+
+
+def test_library_no_is_never_served_or_fetched_again(env, tmp_path):
+    t, booth, room, _ = env
+    lib = tmp_path / "library"
+    f = _lib_track(lib, state="no")
+    (f / "audio.webm").unlink()
+    t = cc_take.Take(booth, tmp_path / "take", str(tmp_path / "world"), None, str(lib))
+    assert t.state()["library"][0]["play"] is None
+    assert t.file_path("library/OpJeQP2QzkY/audio.webm") is None
+    assert t.fetch({"video_id": "OpJeQP2QzkY"})[0] == 409
