@@ -5678,21 +5678,40 @@ def _systems_opens() -> dict:
     return out
 
 
-def _systems_card(rel: str) -> str:
+def _systems_card_read(rel: str) -> tuple:
+    """(line, prompts) of a card in the world, read again only when its mtime moves."""
     p = Path(WORLD_DIR) / rel
     try:
         mt = p.stat().st_mtime
     except OSError:
-        return ""
+        return "", []
     got = _SYSTEMS_CARDS.get(str(p))
     if got and got[0] == mt:
-        return got[1]
+        return got[1], got[2]
     try:
-        line = cc_systems.card_line(p.read_text(errors="replace")[:8000])
+        text = p.read_text(errors="replace")[:16000]
+        line, prompts = cc_systems.card_line(text[:8000]), cc_systems.card_prompts(text)
     except OSError:
-        line = ""
-    _SYSTEMS_CARDS[str(p)] = (mt, line)
-    return line
+        line, prompts = "", []
+    _SYSTEMS_CARDS[str(p)] = (mt, line, prompts)
+    return line, prompts
+
+
+def _systems_card(rel: str) -> str:
+    return _systems_card_read(rel)[0]
+
+
+# WALL-4 (2026-11-24, hbar: "fill it with what we are currently doing-- the systems that is + prompts to continue"):
+# each tile carries `prompts`, the "## Continue" lines of its state card (states.json), else of its wall card
+# (<world>/ops/wall/cards/<id>.md); at most five, nothing when there is no card.
+def _systems_prompts(sid: str, mapped: str | None) -> list:
+    if not WORLD_DIR:
+        return []
+    got = _systems_card_read(mapped)[1] if mapped else []
+    if not got:
+        wc = cc_systems.wall_card(Path(WORLD_DIR), sid)
+        got = _systems_card_read(wc)[1] if wc and wc != mapped else []
+    return list(got)
 
 
 def _systems_tasks_today():
@@ -5717,6 +5736,7 @@ def _systems_depth(d: dict, depth: str | None = None) -> None:
         card = _systems_card(cards[t["id"]]) if t["id"] in cards else ""
         first = dep.get("first") or ""
         t["summary"] = {"text": card, "from": "card"} if card else ({"text": first, "from": "thread"} if first else None)
+        t["prompts"] = _systems_prompts(t["id"], cards.get(t["id"]))
         t["tree_n"] = cc_systems.tree_size(dep.get("tree"))
         if depth and t["id"] == depth:
             t["tree"] = dep.get("tree")
@@ -5749,14 +5769,58 @@ def _wall_seed() -> dict:
         return {"look": None, "set": None}
 
 
+# WALL-4 (2026-11-24, hbar: "maybe some faint ones that i HAVE BEEN working on in other threads ... i want a clear way
+# to open and start the system up again in this new manner"). The seed may also carry:
+#   faint  systems worked on in other threads: dim names on the outer ring, no box; a press brings one into the orbit
+#   home   true: the console's home ("/" with nothing after it) opens on the wall, until the owner sets it himself
+#   note   one line on why the set is what it is (shown nowhere at rest)
+# and its mtime is its stamp: when the seed is newer than the owner's own saved set (and different from it), and he
+# has not answered that seed yet, GET /cc/wall carries `fresh` {set, stamp}: the page says "new set from the brain"
+# with "take it" and "keep mine". His own arrangement is never overwritten silently, with one exception he says
+# himself: a seed whose "take" carries his word (a dated quote, e.g. "2026-11-24 hbar: fill it with ...") is applied
+# once, as if he had pressed "take it"; the same word is never applied twice.
+def _wall_seed_extra() -> dict:
+    try:
+        raw = json.loads(WALL_SEED.read_text())
+        stamp = WALL_SEED.stat().st_mtime
+    except (OSError, ValueError):
+        return {"faint": [], "home": None, "stamp": None, "take": None}
+    if not isinstance(raw, dict):
+        return {"faint": [], "home": None, "stamp": None, "take": None}
+    faint = [x for x in (raw.get("faint") or []) if isinstance(x, str) and cc_systems.ID_RE.match(x)][:cc_layout.WALL_SET_MAX] \
+        if isinstance(raw.get("faint"), list) else []
+    home, take = raw.get("home"), raw.get("take")
+    return {"faint": faint, "home": home if isinstance(home, bool) else None, "stamp": round(stamp, 3),
+            "take": take.strip()[:200] if isinstance(take, str) and take.strip() else None}
+
+
 def _wall_view() -> dict:
     own, seed = LAYOUT.wall(), _wall_seed()
+    meta, extra = LAYOUT.wall_meta(), _wall_seed_extra()
     known = _systems_known()
+    if extra["take"] and extra["take"] != meta["taken"] and seed["set"] is not None:
+        try:
+            if own["set"] is not None:
+                LAYOUT.set_wall({"set": [x for x in seed["set"] if x in known]})
+            LAYOUT.set_wall_meta({"taken": extra["take"], "seen": extra["stamp"]})
+            own, meta = LAYOUT.wall(), LAYOUT.wall_meta()
+        except cc_layout.LayoutError:
+            pass
     ids = own["set"] if own["set"] is not None else seed["set"]
+    kept = [x for x in ids if x in known] if ids is not None else None
+    fresh = None
+    if own["set"] is not None and seed["set"] is not None and extra["stamp"] is not None:
+        theirs = [x for x in seed["set"] if x in known]
+        answered = max(meta["at"] or 0, meta["seen"] or 0)
+        if theirs != kept and extra["stamp"] > answered:
+            fresh = {"set": theirs, "stamp": extra["stamp"]}
     return {"look": own["look"] or seed["look"] or "grid",
-            "set": [x for x in ids if x in known] if ids is not None else None,
+            "set": kept,
             "seed": own["set"] is None and seed["set"] is not None, "max": cc_layout.WALL_SET_MAX,
-            "looks": list(cc_layout.WALL_LOOKS)}
+            "looks": list(cc_layout.WALL_LOOKS),
+            "faint": [x for x in extra["faint"] if x in known and x not in (kept or [])],
+            "fresh": fresh,
+            "home": meta["home"] if meta["home"] is not None else bool(extra["home"])}
 
 
 def _wall_save(body) -> tuple[int, dict]:
@@ -5767,8 +5831,18 @@ def _wall_save(body) -> tuple[int, dict]:
         bad = [x for x in body["set"] if x not in known]
         if bad:
             return 400, {"ok": False, "error": f"not a system here: {str(bad[0])[:64]}"}
+    side = {k: body[k] for k in ("seen", "home") if k in body}
+    main = {k: v for k, v in body.items() if k not in ("seen", "home")}
     try:
-        LAYOUT.set_wall(body)
+        if side:
+            if "seen" in side and not (isinstance(side["seen"], (int, float)) and not isinstance(side["seen"], bool)):
+                raise cc_layout.LayoutError("wall.seen: the seed's stamp")
+            if "home" in side and not isinstance(side["home"], bool):
+                raise cc_layout.LayoutError("wall.home: true or false")
+        if main or not side:
+            LAYOUT.set_wall(main)
+        if side:
+            LAYOUT.set_wall_meta(side)
     except cc_layout.LayoutError as e:
         return 400, {"ok": False, "error": str(e)}
     return 200, {"ok": True, **_wall_view()}

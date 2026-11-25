@@ -34,6 +34,12 @@ import WallOrbit from '../components/WallOrbit'
 // place (ui/components/WallDepth.js); the centre's count opens the brain's. While a layer is open the same
 // three-second poll asks for that system's tree too (GET /cc/systems?depth=<id>); nothing is sent, nothing
 // navigates, nothing that streams is touched. Pages the layer opens (tasks, court, an instrument) open beside.
+//
+// Continue (WALL-4, 2026-11-24, hbar: "fill it with what we are currently doing-- the systems that is + prompts to
+// continue from what has been in this thread, and maybe some faint ones that i HAVE BEEN working on in other
+// threads"): a focused box (or a system's layer) shows up to five prompts from its card's "## Continue"; a press puts
+// one in the box, a second press sends it. The world's faint systems sit dim on the outer ring; a press brings one
+// in. When the brain's seed is newer than his own set, one quiet line asks: "take it" or "keep mine".
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -200,6 +206,8 @@ export default function Wall() {
   const [note, setNote] = useState(null)       // {text, undo}
   const [depth, setDepthState] = useState(null) // the system whose depth layer is open (WALL-3), CENTRE for the brain
   const [route, setRoute] = useState(null)      // {route, title}: a page open beside (tasks, court, an instrument)
+  const [faint, setFaint] = useState([])        // WALL-4: systems worked on in other threads, dim on the outer ring
+  const [fresh, setFresh] = useState(null)      // WALL-4: {set, stamp} when the brain's seed is newer than his own set
   const depthRef = useRef(null)
   const timer = useRef(null)
   const noteTimer = useRef(null)
@@ -216,6 +224,7 @@ export default function Wall() {
     loadWall(fetch, store).then(w => {
       setLookState(pickLook(new URLSearchParams(window.location.search).get('look'), w))
       if (Array.isArray(w.set)) setSet(w.set)
+      setFaint(w.faint || []); setFresh(w.fresh || null)
     })
     const start = () => { if (!timer.current) { load(); timer.current = setInterval(load, 3000) } }
     const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
@@ -308,6 +317,20 @@ export default function Wall() {
     if (depthRef.current === sid) onDepth(null)
     tell(`${sid.replace(/^hbar\./, '')} left the orbit`, () => { keep(before); setNote(null) })
   }
+  // the brain's new set (WALL-4): taken or declined by his press, never applied silently
+  const onFresh = (take) => {
+    const f = fresh
+    if (!f) return
+    setFresh(null)
+    if (take) {
+      const before = kept
+      setSet(f.set)
+      saveWall(fetch, store(), { set: f.set, seen: f.stamp }).then(r => { if (r.kept !== 'bridge') tell('kept in this browser only: ' + (r.error || 'the bridge is away')) })
+      tell('the brain\'s set is in the orbit', () => { keep(before); setNote(null) })
+    } else {
+      saveWall(fetch, store(), { seen: f.stamp })
+    }
+  }
   const onLook = (k) => {
     setLookState(k)
     saveWall(fetch, store(), { look: k })
@@ -327,7 +350,8 @@ export default function Wall() {
           <main className="wl-orb" aria-label="the orbit">
             <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
               sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
-              onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute} />
+              onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute}
+              faint={faint} fresh={fresh} onFresh={onFresh} />
             {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
             <LookSwitch look={look} onLook={onLook} className="wl-lkf" />
             {note ? (

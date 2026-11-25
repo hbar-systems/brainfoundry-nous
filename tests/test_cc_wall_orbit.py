@@ -160,7 +160,7 @@ const down = async () => { throw new Error('away') }
   console.log(JSON.stringify({ a, s1, b, s2, c, e }))
 })()
 """)
-    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "from": "bridge"}
+    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "from": "bridge", "faint": [], "fresh": None, "home": False}   # faint, fresh, home: WALL-4
     assert d["s1"]["ok"] and d["s1"]["kept"] == "browser"
     assert d["b"] == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "from": "browser"}
     assert d["s2"] == {"ok": True, "kept": "bridge"}
@@ -194,5 +194,5 @@ def test_page_wiring_both_looks_and_the_switch():
     for src in (w, o):
         assert "router" not in src and "location.href" not in src and "<select" not in src         # never navigates; no native controls
     assert "\u210f" not in o and "'hbar'" not in o and "{symbol}" in o                              # the symbol is the brain's, handed in
-    assert "rimDots(tiles, kept)" in o and "orbitPlace(i + 1, kept.length)" in o and "onLeave" in o and "HOLD_MS" in o
+    assert "ringOf(tiles, kept, faint)" in o and "orbitPlace(i + 1, kept.length)" in o and "onLeave" in o and "HOLD_MS" in o
     assert "sid={CENTRE}" in o and "background:var(--obg)" in o and "--obg:#000" in o
