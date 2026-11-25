@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import struct
@@ -100,6 +101,12 @@ def _clean_over(over) -> dict | None:
         elif isinstance(v, dict):
             out[k] = {str(a)[:40]: (b if isinstance(b, (int, float, bool)) or b is None else str(b)[:300])
                       for a, b in list(v.items())[:30]}
+        elif isinstance(v, list):
+            # a short list of number pairs (DEMO-1: the embed's clock against the take's, [take_s, video_s])
+            pairs = [[float(x[0]), float(x[1])] for x in v[:64] if isinstance(x, (list, tuple)) and len(x) == 2
+                     and all(isinstance(y, (int, float)) and not isinstance(y, bool) and math.isfinite(y) for y in x)]
+            if pairs:
+                out[k] = pairs
         if len(out) >= 30:
             break
     return out or None
