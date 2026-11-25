@@ -132,6 +132,7 @@ FAKE = {
         "/cc/system": {"warnings": []},
         # the surfaces register the chat reads on arrival (SURFACES-1, 2026-11-24)
         "/cc/surfaces": {"surfaces": [], "skipped": []},
+        "/cc/wall": {"look": "grid", "set": None, "faint": [], "fresh": None, "home": False},   # WALL-4: the bare home asks whether it opens on the wall
         # the usage log (USAGE-1, 2026-11-22): every page POSTs its press here (SKIN-2 2026-11-23 found the fake lacked it)
         "/cc/presses": {"logged": True},
         # the quiet footer line on every page (INLINE-1, 2026-11-23); SKIN-3 found the fake lacked it

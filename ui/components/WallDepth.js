@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { CENTRE, depthOf, jobLines, jobsBySystem, minsText } from '../lib/wall'
+import { CENTRE, depthOf, jobLines, jobsBySystem, minsText, promptsOf, waitsForMore } from '../lib/wall'
 import { parseTree, treeCounts } from '../lib/tree'
 import ThreadTree from './ThreadTree'
 
@@ -55,6 +55,12 @@ const CSS = `
 .wd-tree{padding:0 4px 6px 10px}
 .wd-tree [data-thread-tree]{border-color:rgba(255,255,255,.06)!important}
 .wd-none{font-size:12px;color:var(--omute,#4f4d49);padding:2px 0 6px}
+.wd-pr{display:flex;gap:10px;padding:5px 10px 7px;align-items:flex-start}
+.wd-pr .wd-k{padding-top:5px}
+.wd-pl{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.wd-p{font-size:12.5px;line-height:1.35;color:var(--odim,#8f8c85)!important;padding:4px 8px!important;margin-left:-8px!important;border-radius:8px;overflow-wrap:anywhere}
+.wd-p:hover,.wd-p:focus-visible{color:var(--oink,#ecebe6)!important;background:rgba(255,255,255,.035)}
+.wd-p .k{color:var(--omute,#4f4d49)}
 @keyframes wd-in{from{opacity:0;transform:translateY(4px)}}
 @media(max-width:699px){.wd{position:static;width:auto;max-height:none;margin:8px 0 4px;animation:none;transform:none!important}.wd-in{padding-left:10px}}
 @media(prefers-reduced-motion:reduce){.wd{animation:none}}
@@ -91,6 +97,7 @@ export default function WallDepth({ t, tiles, waits, style, onClose, onRead, onT
   const sid = t ? t.id : null
   const centre = sid === CENTRE
   const d = depthOf(t)
+  const prompts = promptsOf(t)
   const tree = useMemo(() => (t && t.tree ? parseTree(JSON.stringify(t.tree)) : null), [t && t.tree])   // eslint-disable-line react-hooks/exhaustive-deps
   const counts = tree ? treeCounts(tree) : {}
   const groups = centre ? jobsBySystem(tiles) : null
@@ -122,6 +129,19 @@ export default function WallDepth({ t, tiles, waits, style, onClose, onRead, onT
       <Row k="now" open={row === 'now'} onPress={() => flip('now')} wrap title={d.summary.from === 'card' ? 'from its state card' : d.summary.from === 'thread' ? "from its thread's last answer" : 'from the registry'}>
         {d.summary.text}
       </Row>
+      {prompts.length ? (
+        <div className="wd-pr" role="group" aria-label="prompts to continue">
+          <span className="wd-k">continue</span>
+          <div className="wd-pl">
+            {prompts.map(p => (
+              <button key={p} type="button" className="wd-p" onClick={() => onTalk(sid, p)}
+                title={waitsForMore(p) ? 'puts it in the box; you finish it' : 'puts it in the box; press it again there, or Enter, to send'}>
+                {p.trim()}{waitsForMore(p) ? <span className="k">…</span> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <Row k="jobs" open={row === 'jobs'} onPress={() => flip('jobs')}>
         {centre ? (total ? <><span className="n">{total}</span> running in {groups.length} {groups.length === 1 ? 'system' : 'systems'}</> : 'nothing running') : d.jobs.n ? <><span className="n">{d.jobs.n}</span>{d.jobs.line.slice(String(d.jobs.n).length)}</> : d.jobs.line}
       </Row>

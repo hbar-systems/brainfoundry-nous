@@ -134,6 +134,13 @@ def test_fan_opens_folds_opens_beside_and_the_pin_survives_reload(harness):
         assert page.input_value(MUSIC + " .wo-in") == "listen on it"
         with h.lock:
             assert not [x for x in h.log if x[0] >= t0 and x[1] != "GET"], "an ask instrument sent something"
+        # typing in the box folds the fan (the box's own prompts show there)
+        page.click(MUSIC + " .wo-nm")
+        page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")
+        page.click(MUSIC + " .wo-in")
+        page.wait_for_selector(MUSIC + " .wf[data-fan-open='false']", timeout=3000, state="attached")
+        page.mouse.move(5, 5)
+        page.keyboard.press("Escape")
         # with the fan out, the next press on the name opens the thread beside, as before
         page.click(MUSIC + " .wo-nm")
         page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")

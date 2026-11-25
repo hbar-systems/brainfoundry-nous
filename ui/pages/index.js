@@ -4,6 +4,7 @@ import { useRouter } from 'next/router'
 import { loadModelsAndDefault } from '../lib/defaultModel'
 import CC from './cc'
 import { WELCOME_VERSION } from '../lib/welcome'
+import { homeOnWall } from '../lib/wall'
 
 // First-use checklist (unreleased 0.10.0). Server-driven from
 // GET /onboarding/first-use: add a model key -> drop ten files (progress
@@ -483,7 +484,13 @@ export default function Home() {
           router.replace('/welcome')
           return
         }
-        json('/api/bf/apps/list').then(d => setCcHome(!!(d && d.ccHome)))
+        json('/api/bf/apps/list').then(async d => {
+          const cc = !!(d && d.ccHome)
+          // WALL-4: the bare console address opens on the wall when the brain's setting says so; /talk and
+          // /?threads=1 (the brand, the Chat entry) stay the conversation
+          if (cc && homeOnWall(router.asPath, await json('/cc/wall'))) { router.replace('/wall'); return }
+          setCcHome(cc)
+        })
       })
   }, [])
   if (ccHome === null) return null

@@ -590,6 +590,48 @@ def card_line(text: str) -> str:
     return first_line(body)
 
 
+PROMPTS_MAX = 5
+PROMPT_MAX = 300
+_CONT_RE = re.compile(r"^#{1,4}\s*Continue\b", re.I)
+
+
+def card_prompts(text: str, n: int = PROMPTS_MAX) -> list:
+    """WALL-4 (hbar 2026-11-24: "fill it with ... prompts to continue"): the lines under a card's "## Continue" heading,
+    each a prompt for that system's box, at most n, in the card's order. A leading "pin:" (kept by
+    scripts/wall_cards.py when it rewrites the card) is not part of the prompt. A line ending in ": " keeps its
+    trailing space: the wall waits for him to finish it."""
+    out, on = [], False
+    for ln in str(text or "").splitlines():
+        t = ln.strip()
+        if t.startswith("#"):
+            if on:
+                break
+            on = bool(_CONT_RE.match(t))
+            continue
+        if not on:
+            continue
+        m = re.match(r"^[-*+]\s+(.*)$", ln.strip("\r"))
+        if not m:
+            continue
+        p = re.sub(r"^pin:\s*", "", m.group(1), flags=re.I)
+        open_end = bool(re.search(r":\s*$", p))
+        p = re.sub(r"\s+", " ", p).strip()[:PROMPT_MAX]
+        if not p:
+            continue
+        out.append(p + " " if open_end and p.endswith(":") else p)
+        if len(out) >= n:
+            break
+    return out
+
+
+def wall_card(world: Path | None, sid: str) -> str | None:
+    """The system's wall card in the world, <world>/ops/wall/cards/<id>.md, when there is one (relative path)."""
+    if world is None or not isinstance(sid, str) or not ID_RE.match(sid):
+        return None
+    rel = f"ops/wall/cards/{sid}.md"
+    return rel if (Path(world) / rel).is_file() else None
+
+
 def state_cards(world: Path | None) -> dict:
     """The owner's map system -> state card, <world>/ops/wall/states.json {"states": {"<system>": "<path in world>"}}.
     Paths stay inside the world; anything else is dropped."""

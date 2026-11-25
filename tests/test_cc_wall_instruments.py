@@ -146,8 +146,8 @@ def test_instrument_lib_under_node():
     assert d["many"] == d["max"] == 12
     assert d["clean"] == ["a", "b"]
     # a column on the side facing the symbol, centred on the name's row, evenly spaced; pinned ones take the first slots
-    assert [f["dx"] for f in d["fan"]] == [118, 118, 118] and [f["dy"] for f in d["fan"]] == [-34, 0, 34]
-    assert d["one"] == {"dx": -118, "dy": 0, "side": -1}
+    assert [f["dx"] for f in d["fan"]] == [140, 140, 140] and [f["dy"] for f in d["fan"]] == [-34, 0, 34]
+    assert d["one"] == {"dx": -140, "dy": 0, "side": -1}
     assert d["pf"] == ["c", "a", "b"]
 
 
@@ -185,8 +185,27 @@ def test_page_wiring_fan_pin_and_register():
     assert "fetch('/cc/surfaces'" in w and "saveWall(fetch, store(), { pinned: next })" in w and "surfaces={surfaces} pinned={pinned} onPin={onPin}" in w
     assert "instrumentsOf(sid, surfaces)" in o and "if (has && !fanned) { onFan(t.id, 'press'); return }" in o
     assert "setFan(null) } }" in o                                         # Esc folds the fan
+    assert "contains('wo-in')) onFan(null)" in o                            # typing in the box folds it (WALL-4's prompts show)
     assert "onRoute({ route: i.open, title: i.label })" in o and "onTalk(sid, i.ask)" in o   # beside, or into the box
     assert "<Box sid={t.id}" in o                                           # the system keeps its box
     assert "fanPlace(k, n, at)" in f and "data-instrument={inst.name}" in f and "aria-pressed={pinned}" in f
     for name in ("sing", "studio", "loops", "hbar.music", "k2"):            # the template names no instrument
         assert f"'{name}'" not in f and f"'{name}'" not in o
+
+
+def test_a_newer_seed_with_other_pins_asks_never_overwrites(monkeypatch, tmp_path):
+    """WALL-4's seed rule, for pins too: his own pinned list stays until he says 'take it'."""
+    import os
+    import test_cc_wall_orbit as O
+    m = O._bridge(monkeypatch, tmp_path, {"look": "orbit", "set": ["hbar.music"], "pinned": ["sing"]})
+    st, r = m._wall_save({"set": ["hbar.music"], "pinned": ["studio"]})
+    assert st == 200 and r["pinned"] == ["studio"] and not r.get("fresh")
+    seed = pathlib.Path(m.WORLD_DIR) / "ops" / "wall" / "wall.json"
+    seed.write_text(json.dumps({"look": "orbit", "set": ["hbar.music"], "pinned": ["sing", "loops"]}))
+    later = m.LAYOUT.wall_meta()["at"] + 60
+    os.utime(seed, (later, later))
+    d = m._wall_view()
+    assert d["pinned"] == ["studio"]                                        # never replaced silently
+    assert d["fresh"] and d["fresh"]["pinned"] == ["sing", "loops"] and d["fresh"]["set"] == ["hbar.music"]
+    st, r = m._wall_save({"seen": d["fresh"]["stamp"]})                     # keep mine
+    assert st == 200 and not r["fresh"] and r["pinned"] == ["studio"]
