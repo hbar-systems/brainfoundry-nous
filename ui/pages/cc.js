@@ -1,5 +1,6 @@
 import Head from 'next/head'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
@@ -30,6 +31,8 @@ import Spiders from '../components/Spiders'
 import SurfaceCard, { SURFACE_CSS } from '../components/SurfaceCard'
 import { sayMatch, keyIndex } from '../lib/surfaces'
 import { isWallWord } from '../lib/wall'
+import { pointOf, pointsIn, lineText, anchorSlot, findPoint, HOLD_MS } from '../lib/linetalk'
+import LineSlot, { LINE_SLOT_CSS } from '../components/LineSlot'
 import { threadState, stateLook, StateDot, LaneMark, Legend, STATE, THREADCOLOR_CSS } from '../lib/threadcolor'
 import { SKINS, FONT_SHAPES, fontFamily as shapeFamily, consoleTheme, consoleFont, showOwn, setConsoleTheme, setFont as setSkinFont, cachedLook, cacheLook, childLook, knownThread, THREAD_KEY } from '../lib/skin'
 
@@ -2086,7 +2089,9 @@ function CC() {
     if (!la || !lb) return false
     const range = document.createRange()
     range.setStart(fl.nodes[la.i], la.off); range.setEnd(fl.nodes[lb.i], lb.off)
-    if (HL_OK()) { CSS.highlights.set('cc-span', new Highlight(range)) }
+    // window.Highlight: the page's own Highlight component (2026-10-13) shadows the browser's class, and calling it threw
+    // React's invalid-hook error on every clause press (found by LINE-TALK-1, 2026-11-25)
+    if (HL_OK()) { CSS.highlights.set('cc-span', new window.Highlight(range)) }
     else { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range) }   // no highlight support: a plain selection, same words
     const raw = fl.text.slice(a, b).replace(/\n{2,}/g, '\n')
     const quote = raw.replace(/\s+/g, ' ').trim()
@@ -2127,20 +2132,120 @@ function CC() {
     if (!lad.length) return false
     return showSpan(bubble, i, fl, anchor, lad, Math.min(lad.length - 1, again ? cur.level + 1 : 0))
   }
+  // Line talk (LINE-TALK-1, 2026-11-25, hbar: "if i can click the line ... and this automatically either does what the
+  // ask button does or what note does.. but point is by clicking i can continue to talk without needing to press too
+  // much"). One press on a line that starts a point of an answer (a list item, a heading, a table row, a paragraph
+  // opening in bold; ui/lib/linetalk.js) opens a reply slot right under it: a margin remark of kind "line", kept with
+  // the others, shown in place instead of the margin, the cursor in it. Enter sends it with every other filled remark
+  // and the composer, as one message, the way a remark goes today. Holding the line for half a second (a mouse or a
+  // pen) opens the slot and dictates into it until the release; the slot's mic does the same with two presses.
+  // A press elsewhere in an answer still underlines the clause; a drag still selects; links and buttons are untouched.
+  const holdRef = useRef(null)                      // a press held on a point line: { timer, x, y, fired }
+  const [talkTo, setTalkTo] = useState(null)        // the line slot dictation writes into (null: the composer)
+  const talkToRef = useRef(null)
+  const [slotFocus, setSlotFocus] = useState(null)  // { id, n }: the slot that takes the cursor
+  const hostsRef = useRef({})                       // slot id -> { host, remove, el }: where each slot sits in its answer
+  const [, setHostTick] = useState(0)
+  const notesRef = useRef(notes); notesRef.current = notes
+  // `door`: a press on a bold phrase keeps opening its own card (a door, like a link); only a hold dictates there
+  function linePoint(target, door) {
+    if (!door && target && target.closest && target.closest('strong,[data-infocard]')) return null
+    const bubble = target && target.closest ? target.closest('[data-bubble]') : null
+    if (!bubble) return null
+    const row = bubble.closest('[data-turn]'); const i = row ? parseInt(row.getAttribute('data-turn'), 10) : -1
+    const t = turns[i]
+    if (!t || t.who !== 'brain' || !t.text || t.job || t.live) return null
+    const el = pointOf(target, bubble)
+    const quote = el ? lineText(el) : ''
+    if (!quote) return null
+    return { turn: i, el, quote, idx: pointsIn(bubble).indexOf(el) }
+  }
+  function openLine(pt) {
+    const have = notesRef.current.find(n => n.kind === 'line' && n.turn === pt.turn && n.quote === pt.quote)
+    const id = have ? have.id : `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    if (!have) setNotes(ns => [...ns, { id, kind: 'line', turn: pt.turn, who: 'brain', idx: pt.idx, quote: pt.quote, text: '', mode: 'keep' }])
+    setSlotFocus(f => ({ id, n: ((f && f.n) || 0) + 1 }))
+    clearSpan(); setPick(null)
+    return id
+  }
+  function endHold() { const h = holdRef.current; holdRef.current = null; if (h) clearTimeout(h.timer); return h }
   function onConvDown(e) {
     let had = false; try { const sel = window.getSelection(); had = !!(sel && sel.toString().trim()) } catch {}
     downRef.current = { x: e.clientX, y: e.clientY, had }
+    endHold()
+    if (e.button !== 0 || had || !canTalk || (e.target.closest && e.target.closest('[data-pickui],a,button,input,textarea,select,summary,[data-nopick]'))) return
+    const pt = linePoint(e.target, true)
+    if (!pt) return
+    const h = { x: e.clientX, y: e.clientY, fired: false, timer: null }
+    h.timer = setTimeout(() => {
+      let sel = ''; try { sel = window.getSelection().toString().trim() } catch {}
+      if (holdRef.current !== h || sel) return
+      h.fired = true
+      slotMic(openLine(pt))
+    }, HOLD_MS)
+    holdRef.current = h
+  }
+  function onConvMove(e) {
+    const h = holdRef.current
+    if (h && !h.fired && (Math.abs(e.clientX - h.x) > 4 || Math.abs(e.clientY - h.y) > 4)) endHold()
   }
   function onConvUp(e) {
     const d = downRef.current; downRef.current = null
+    const h = endHold()
+    if (h && h.fired) {
+      if (listeningRef.current && talkToRef.current) stopListening(false)
+      try { window.getSelection().removeAllRanges() } catch {}
+      // the click that ends a hold is not a press: a bold door under it stays shut
+      const eat = (c) => { c.stopPropagation(); c.preventDefault() }
+      document.addEventListener('click', eat, { capture: true, once: true })
+      setTimeout(() => document.removeEventListener('click', eat, { capture: true }), 0)
+      return
+    }
     if (e.target.closest && e.target.closest('[data-pickui]')) return
     let q = ''; try { const sel = window.getSelection(); q = sel ? sel.toString().trim() : '' } catch {}
     if (q) { clearSpan(); onPick(); return }          // a dragged selection: as before
     const moved = !d || Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3
     const blocked = e.target.closest && e.target.closest('a,button,input,textarea,select,label,summary,[role="button"],[data-nopick]')
-    if (!moved && !d.had && e.button === 0 && e.detail <= 1 && !blocked && pressAt(e)) return
+    if (!moved && !d.had && e.button === 0 && e.detail <= 1 && !blocked) {
+      const pt = linePoint(e.target)
+      if (pt) { openLine(pt); return }
+      if (pressAt(e)) return
+    }
     clearSpan(); setPick(null)
   }
+  // the slot's mic: a press starts dictation into it, the next press (or the release of a hold) stops it
+  function slotMic(id) {
+    if (listeningRef.current) { stopListening(false); return }
+    if (transcribing) return
+    if (!canTalk) { setTalkNote(whyNoTalk || 'this browser cannot listen'); return }
+    const n = notesRef.current.find(x => x.id === id)
+    startListening((n && n.text) || '', id)
+  }
+  function slotClose(id, keep) {
+    if (talkToRef.current === id && listeningRef.current) stopListening(true)
+    if (keep) { try { document.activeElement && document.activeElement.blur() } catch {} return }
+    dropNote(id)
+  }
+  // each line slot sits in a host right under its line (re-found by its index and words after a re-render)
+  useLayoutEffect(() => {
+    const conv = convRef.current
+    const hs = hostsRef.current
+    const want = new Set()
+    let changed = false
+    for (const n of notes) {
+      if (n.kind !== 'line') continue
+      want.add(n.id)
+      const bubble = conv ? conv.querySelector(`[data-turn="${n.turn}"] [data-bubble]`) : null
+      const h = hs[n.id]
+      if (h && bubble && h.host.isConnected && h.el.isConnected && bubble.contains(h.host)) continue
+      if (h) { try { h.remove() } catch {} delete hs[n.id]; changed = true }
+      const f = bubble ? findPoint(bubble, n.idx, n.quote) : null
+      const a = f ? anchorSlot(f.el) : null
+      if (a) { hs[n.id] = { ...a, el: f.el }; changed = true }
+    }
+    for (const id of Object.keys(hs)) if (!want.has(id)) { try { hs[id].remove() } catch {} delete hs[id]; changed = true }
+    if (changed) setHostTick(x => x + 1)
+  })
   function addNote() {
     if (!pick) return
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
@@ -2166,10 +2271,11 @@ function CC() {
     const lines = live.map((n, k) => {
       const t = turns[n.turn]; const head = t ? (t.text || '').replace(/\s+/g, ' ').trim().slice(0, 60) : ''
       const whose = n.who === 'me' ? 'my message' : 'your message'
-      return `${k + 1}. ${whose} #${n.turn + 1}${head ? ` ("${head}${head.length >= 60 ? '…' : ''}")` : ''}, the span I marked: "${n.quote}"\n   my remark: ${n.text.trim()}`
+      return `${k + 1}. ${whose} #${n.turn + 1}${head ? ` ("${head}${head.length >= 60 ? '…' : ''}")` : ''}, ${n.kind === 'line' ? 'the line I pressed' : 'the span I marked'}: "${n.quote}"\n   my remark: ${n.text.trim()}`
     })
-    return `[remarks in the margin, each on a span I marked in the conversation]\n${lines.join('\n')}`
+    return `${live.some(n => n.kind === 'line') ? '[remarks, each on a line I pressed or a span I marked in the conversation]' : '[remarks in the margin, each on a span I marked in the conversation]'}\n${lines.join('\n')}`
   }
+  const margin = notes.filter(n => n.kind !== 'line')   // line slots sit under their line, not in the margin
   const noteCard = (n) => (
       <div key={n.id} style={{ width: room ? '250px' : '100%', border: `1px solid ${C.gold}55`, borderLeft: `3px solid ${C.gold}`, borderRadius: '8px', backgroundColor: C.card, padding: '8px 10px', boxSizing: 'border-box' }}>
         <p style={{ margin: '0 0 6px 0', fontSize: '12px', color: C.dim, fontStyle: 'italic', lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>“{n.quote}”</p>
@@ -3035,8 +3141,10 @@ function CC() {
   // A run ended with `text`: it stays in the composer, or hands-free sends it at once.
   const finishTalk = (text) => {
     const st = talkRef.current
+    const to = talkToRef.current; talkToRef.current = null; setTalkTo(null)
     if (st.cancel) { st.cancel = false; return }
     const t = (text || '').trim()
+    if (to) { setNote(to, t); setSlotFocus(f => ({ id: to, n: ((f && f.n) || 0) + 1 })); return }   // a line slot: kept there, never sent by itself
     setDraft(t)
     if (!handsfreeRef.current) return
     const bad = st.err === 'not-allowed' || st.err === 'service-not-allowed' || st.err === 'audio-capture'
@@ -3101,8 +3209,11 @@ function CC() {
     mediaRef.current = m; listeningRef.current = true; setListening(true); setTalkNote('')
     try { recorder.start(250) } catch { mediaRef.current = null; listeningRef.current = false; setListening(false); setTalkNote('could not start recording') }
   }
-  const startListening = (base) => {
+  // `to`: a line slot's id (LINE-TALK-1): the words go into that slot instead of the composer
+  const putTalk = (v) => { const to = talkToRef.current; if (to) setNote(to, v); else setDraft(v) }
+  const startListening = (base, to) => {
     if (listeningRef.current || transcribing) return
+    talkToRef.current = to || null; setTalkTo(to || null)
     const SR = (typeof window !== 'undefined') && (window.SpeechRecognition || window.webkitSpeechRecognition)
     if (!SR) { startRecording(base); return }
     if (speakingRef.current) stopSpeaking()
@@ -3117,7 +3228,7 @@ function CC() {
         if (r.isFinal) finals += t + ' '; else interim += t
       }
       st.finals = finals.trim()
-      setDraft([st.base, st.finals, interim.trim()].filter(Boolean).join(' '))
+      putTalk([st.base, st.finals, interim.trim()].filter(Boolean).join(' '))
       clearPause()
       // a pause of about 1.5 s after a final result ends the run
       if (st.finals && !interim.trim()) pauseRef.current = setTimeout(() => { pauseRef.current = null; try { rec.stop() } catch {} }, 1500)
@@ -3724,10 +3835,10 @@ function CC() {
           </div>
         )}
 
-        <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseUp={onConvUp} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
+        <div ref={convRef} className="cc-conv" onMouseDown={onConvDown} onMouseMove={onConvMove} onMouseUp={onConvUp} style={{ '--lt-ink': C.ink, '--lt-dim': C.dim, '--lt-accent': C.gold, '--lt-bg': `color-mix(in srgb, ${C.gold} 9%, transparent)`, flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '4px 2px', position: 'relative', '--cc-fs': look.text || (paneMode ? '15px' : textSize),
           ...(look.accent ? { '--accent': look.accent, borderRadius: '8px', backgroundColor: look.tint ? `color-mix(in srgb, ${look.accent} ${look.tint}%, transparent)` : undefined } : {}),
           ...(lookDensity === 'comfortable' ? { '--cc-gap': '8px', '--cc-li': '5px', '--cc-lh': 1.6, '--cc-pad': '12px 16px' } : { '--cc-gap': '6px', '--cc-li': '2px', '--cc-lh': 1.45, '--cc-pad': '10px 14px' }) }}>
-          <style dangerouslySetInnerHTML={{ __html: `.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; }` }} />
+          <style dangerouslySetInnerHTML={{ __html: `.cc-md li > p { margin: 0 !important; } .cc-md li > ul, .cc-md li > ol { margin: 2px 0 0 0 !important; } .cc-md > :first-child { margin-top: 0 !important; } .cc-md > :last-child { margin-bottom: 0 !important; } ::highlight(cc-span) { text-decoration: underline; text-decoration-color: ${C.gold}; text-decoration-thickness: 1px; text-underline-offset: 3px; background-color: ${C.gold}1f; } .cc-md li, .cc-md h1, .cc-md h2, .cc-md h3, .cc-md h4, .cc-md tr { cursor: text; } ${LINE_SLOT_CSS}` }} />
           {pick && (
             <span data-pickui="1" onMouseDown={e => e.stopPropagation()} style={{ position: 'absolute', left: pick.x, top: pick.y, zIndex: 50, display: 'inline-flex', gap: '4px' }}>
               {[['note', 'a note in the margin on this span: keep it for your next message, or send it now', () => addNote(), true],
@@ -3785,15 +3896,15 @@ function CC() {
               <span style={{ ...mono, fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color: C.faint, padding: '0 4px' }}>· {t.text}</span>
             </div>
           ) : (
-            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'flex-start', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative', paddingRight: room && notes.length ? '266px' : 0, minHeight: room && notes.some(n => n.turn === i) ? `${notes.filter(n => n.turn === i).length * 150}px` : undefined }}>
-              {notes.some(n => n.turn === i) && (
+            <div key={i} data-turn={i} style={{ display: 'flex', flexWrap: 'nowrap', alignItems: 'flex-start', justifyContent: t.who === 'me' ? 'flex-end' : 'flex-start', margin: paneMode ? '5px 0' : '8px 0', position: 'relative', paddingRight: room && margin.length ? '266px' : 0, minHeight: room && margin.some(n => n.turn === i) ? `${margin.filter(n => n.turn === i).length * 150}px` : undefined }}>
+              {margin.some(n => n.turn === i) && (
                 <div style={room ? { position: 'absolute', right: '2px', top: 0, display: 'flex', flexDirection: 'column', gap: '8px', width: '250px', zIndex: 2 }
                                   : { order: t.who === 'me' ? 0 : 2, flex: '0 0 min(280px, 34%)', display: 'flex', flexDirection: 'column', gap: '8px', margin: t.who === 'me' ? '0 10px 0 0' : '0 0 0 10px' }}>
-                  {notes.filter(n => n.turn === i).map(noteCard)}
+                  {margin.filter(n => n.turn === i).map(noteCard)}
                 </div>
               )}
               <div data-bubble="1" style={{
-                maxWidth: room ? (paneMode ? '94%' : '78%') : (notes.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && (t.job || t.report || t.text) ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: room ? (paneMode ? '94%' : '78%') : (margin.some(n => n.turn === i) ? '64%' : (paneMode ? '94%' : '78%')), padding: paneMode ? '6px 11px' : 'var(--cc-pad, 10px 14px)', borderRadius: paneMode ? '10px' : '12px', whiteSpace: t.who === 'brain' && (t.job || t.report || t.text) ? 'normal' : 'pre-wrap', wordBreak: 'break-word',
                 backgroundColor: t.who === 'me' ? C.me : C.brain, border: `1px solid ${t.error ? C.bad : C.line}`,
                 color: t.who === 'me' ? C.meText : C.ink, fontSize: 'var(--cc-fs, 16px)', lineHeight: 'var(--cc-lh, 1.45)', opacity: t.queued ? 0.55 : 1,
               }}>
@@ -3827,6 +3938,12 @@ function CC() {
               </div>
             </div>
           )))}
+          {notes.filter(n => n.kind === 'line' && hostsRef.current[n.id]).map(n => createPortal(
+            <LineSlot slot={n} listening={listening && talkTo === n.id} hearing={mic.level > 0.08} canMic={canTalk}
+              others={notes.filter(x => x.id !== n.id && String(x.text || '').trim()).length + (draft.trim() ? 1 : 0)}
+              focus={slotFocus && slotFocus.id === n.id ? slotFocus.n : 0}
+              onText={setNote} onSend={() => send()} onClose={slotClose} onMic={slotMic} />,
+            hostsRef.current[n.id].host, n.id))}
           {srv && srv.queue && srv.queue.map(q => (
             <div key={q.id} style={{ display: 'flex', justifyContent: 'flex-end', margin: paneMode ? '5px 0' : '8px 0' }}>
               <div style={{ maxWidth: paneMode ? '94%' : '78%', padding: paneMode ? '6px 11px' : '10px 14px', borderRadius: paneMode ? '10px' : '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', backgroundColor: C.me, border: `1px solid ${C.line}`, color: C.meText, fontSize: 'var(--cc-fs, 16px)', lineHeight: 1.6, opacity: 0.55 }}>
@@ -3874,7 +3991,7 @@ function CC() {
           )
         })()}
         {notes.filter(n => n.text.trim()).length > 0 && (
-          <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'} in the margin go with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
+          <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '12px 0 0 0' }}>{notes.filter(n => n.text.trim()).length} remark{notes.filter(n => n.text.trim()).length === 1 ? '' : 's'}{margin.some(n => n.text.trim()) && !notes.some(n => n.kind === 'line' && n.text.trim()) ? ' in the margin' : ''} go{notes.filter(n => n.text.trim()).length === 1 ? 'es' : ''} with your next message · <a onClick={() => setNotes([])} style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline' }}>clear</a></p>
         )}
         {latest.length > 0 && (!paneMode || paneDetails) && !(quietHome && !paneMode) && (
           <p className="cc-row" style={{ ...mono, color: C.faint, fontSize: '11px', margin: '12px 0 0 0', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>

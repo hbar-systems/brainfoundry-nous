@@ -58,6 +58,7 @@ Endpoints (JSON):
   GET  /cc/take/file?path=<p>  a demo's MP3 or a film cut   POST /cc/take/backing (body = a track)   POST /cc/take/verdict {take,word,treatment?}
   POST /cc/take/ask {take, word: draft|send|answer, ...}: the press only; the world's renderer drafts and sends
   POST /cc/take/fetch {video_id, via_mac?}: "use this track" into the private library (DEMO-3); GET /cc/take adds library
+  GET  /cc/take/find?q=<words>&live=0|1 | ?check=<video id>: the orfeo library under the voice (DEMO-2, cc_find.py)
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
@@ -562,6 +563,7 @@ import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks p
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_library  # noqa: E402   the private library guard on the release doors (DEMO-3, 2026-11-25)
 import cc_take  # noqa: E402    /take: record, demo, ask (DEMO-1, 2026-11-25)
+import cc_find  # noqa: E402    /take: the orfeo library search under the voice (DEMO-2, 2026-11-25)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -704,6 +706,10 @@ TAKE = cc_take.Take(BOOTH, os.environ.get("CC_TAKE_DIR", "").strip() or str(OUT_
 # stays on the box (CC_LISTEN_LOG, default <out>/listen/plays.tsv).
 LISTEN = cc_listen.Listen(WORLD_DIR or None, STATE_DIR,
                           os.environ.get("CC_LISTEN_LOG", "").strip() or str(OUT_DIR / "listen" / "plays.tsv"))
+# The orfeo library search on /take (DEMO-2, 2026-11-25, scripts/cc/cc_find.py): the owner's library first, then a live
+# YouTube search through their One connection (one-read, GET only; capped per day, cached); embed flags per id.
+# CC_FIND_YT_KEY picks the youtube-data connection (its key or its tail); default the first one.
+FIND = cc_find.Find(LISTEN, TAKE, STATE_DIR, key=os.environ.get("CC_FIND_YT_KEY", "").strip())
 LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
@@ -3963,7 +3969,8 @@ def _stream_turn(cmd: list[str], on_event, run: Run | None = None, prompt: str =
                 for blk in ((ev.get("message") or {}).get("content") or []):
                     if blk.get("type") == "tool_use":
                         in_tool[0] = True
-                        on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input"))})
+                        on_event("tool", {"name": blk.get("name"), "brief": _tool_brief(blk.get("name"), blk.get("input")),
+                                          "plain": cc_extras.tool_plain(blk.get("name"), blk.get("input"))})
             elif kind == "user":
                 # A hand-back: a background subagent finished and the reasoner starts another
                 # step on its own ("Another Claude session sent a message" / <task-notification>).
@@ -5521,7 +5528,8 @@ def _run_view(r: Run) -> dict:
     last = ""
     for k, pl in reversed(events):
         if k == "tool":
-            last = pl.get("brief") or pl.get("name") or ""
+            # LINE-TALK-1: the live line says what the step is for ("reading the handoff"), never the raw command
+            last = pl.get("plain") or pl.get("brief") or pl.get("name") or ""
             break
         if k == "text":
             last = cc_extras.last_sentence(partial)
@@ -5856,6 +5864,33 @@ def _wall_view() -> dict:
             "faint": [x for x in extra["faint"] if x in known and x not in (kept or [])],
             "fresh": fresh,
             "home": meta["home"] if meta["home"] is not None else bool(extra["home"])}
+
+
+# The corner switch between the wall and the columns (LINE-TALK-1, 2026-11-25, hbar: "maybe we should try that
+# parallel-systems verticle production surface?"). POST /cc/view {"view": "wall" | "columns", "from"?}: one line per
+# switch in <out>/board/views.jsonl ({"ts", "view", "from"}; beside the board, where the hands can read it), which the
+# observer (the world's scripts/observe.py) counts as a "view" event. The choice itself is kept in the browser
+# (cc.view); nothing here changes what a page shows.
+VIEWS_LOG = Path(os.environ.get("CC_VIEWS_LOG", "").strip() or str(OUT_DIR / "board" / "views.jsonl"))
+
+
+def _view_note(body) -> tuple[int, dict]:
+    view = (body or {}).get("view") if isinstance(body, dict) else None
+    frm = (body or {}).get("from") if isinstance(body, dict) else None
+    if view not in ("wall", "columns"):
+        return 400, {"ok": False, "error": "view: wall or columns"}
+    row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "view": view,
+           "from": frm if frm in ("wall", "columns") else None}
+    try:
+        VIEWS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        new = not VIEWS_LOG.exists()
+        with VIEWS_LOG.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        if new:
+            os.chmod(VIEWS_LOG, 0o664)     # the observer runs as the hands and only reads it
+    except OSError as e:
+        return 500, {"ok": False, "error": f"could not note it: {type(e).__name__}"}
+    return 200, {"ok": True, **row}
 
 
 def _wall_save(body) -> tuple[int, dict]:
@@ -6471,6 +6506,12 @@ class Handler(BaseHTTPRequestHandler):
             BOOTH.serve(self, self._query().get("path"))
         elif route == "/take":
             self._send(200, TAKE.state())
+        elif route == "/take/find":
+            qq = self._query()
+            if qq.get("check"):
+                self._send(*FIND.check(qq.get("check")))
+            else:
+                self._send(*FIND.find(qq.get("q"), str(qq.get("live") or "") == "1"))
         elif route == "/take/file":
             TAKE.serve(self, self._query().get("path"))
         elif route == "/actions":
@@ -6729,6 +6770,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/wall":
             self._send(*_wall_save(self._json(limit=4000)))
+            return
+        if route == "/view":
+            self._send(*_view_note(self._json(limit=1000)))
             return
         if route == "/systems/thread":
             body = self._json(limit=2000)

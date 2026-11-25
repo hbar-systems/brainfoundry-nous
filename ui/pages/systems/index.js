@@ -3,6 +3,17 @@ import React, { useEffect, useRef, useState } from 'react'
 import { readOpen, toggleOpen, gridOf, OPEN_KEY } from '../../lib/steer'
 import SurfaceCard, { SURFACE_CSS } from '../../components/SurfaceCard'
 import { systemsFor } from '../../lib/surfaces'
+import { switchView } from '../../lib/wall'
+import ViewSwitch, { VIEW_CSS } from '../../components/ViewSwitch'
+
+// LINE-TALK-1 (2026-11-25, hbar: "maybe we should try that parallel-systems verticle production surface?"): the corner
+// switch goes back to the wall (the same systems and threads); the choice is kept (cc.view) and told to the bridge.
+const VIEW_SKIN = { '--vw-bg': '#e6d6bd', '--vw-dim': '#7a6a55', '--vw-ink': '#2b2116', '--vw-on': '#efe3cf' }
+const toWall = async () => {
+  const store = (() => { try { return window.localStorage } catch { return null } })()
+  await switchView(fetch, store, 'wall', 'columns')
+  window.location.href = '/wall?view=wall'
+}
 
 // SURFACES-1 (2026-11-24): a tile whose system has a card in the register (GET /cc/surfaces) carries the card's pads
 // under its name, in the card's hue; a card with no tile (a project, the court) is a tile of its own at the start.
@@ -38,6 +49,7 @@ const CENTRAL = 'world'               // the central chat: the world's standing 
 const CKEY = 'cc.systems.central'
 
 const CSS = `
+.sy-vw{margin:0 12px 10px}
 .sy{--bg:#efe3cf;--surface:#e6d6bd;--ink:#2b2116;--dim:#54473a;--muted:#7a6a55;--rust:#a8452b;--ease:cubic-bezier(.2,.7,.2,1);
   --top:calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px));
   background:var(--bg);color:var(--ink);min-height:calc(100vh - var(--top));font:400 16px/1.5 system-ui,-apple-system,sans-serif;box-sizing:border-box}
@@ -440,11 +452,12 @@ export default function Systems() {
   return (
     <>
       <Head><title>Systems</title></Head>
-      <style dangerouslySetInnerHTML={{ __html: CSS + SURFACE_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + SURFACE_CSS + VIEW_CSS }} />
       <div className="sy">
         <div className={'sy-split' + (many ? ' many' : '')}>
           <main className="sy-left" aria-label={data && data.built ? `Systems, read ${data.built}` : 'Systems'}>
             {data === false ? <p className="sy-note">The bridge is not answering at /cc/systems. The tiles fill by themselves once it does.</p> : null}
+            <div className="sy-vw"><ViewSwitch view="columns" style={VIEW_SKIN} onPick={(v) => { if (v === 'wall') toWall() }} /></div>
             {tiles.length ? (
               <div className="sy-key" aria-hidden="true">
                 <span><Glyph k="running" />{running ? `${running} running now` : 'running now'}</span>

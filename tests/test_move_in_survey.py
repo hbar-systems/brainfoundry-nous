@@ -168,6 +168,10 @@ def test_survey_byte_cap():
     assert ls.survey_max_bytes({"LAPTOP_SURVEY_MAX_GB": "3"}, None, None) == 3 * G
     assert ls.survey_max_bytes({}, 30 * G, 150 * G) == 15 * G        # free less a tenth of the disk
     assert ls.survey_max_bytes({}, 5 * G, 150 * G) == 0
+    # MEMBERS-16: never more than what is left of the brain's share (15 GB share, 2.6 GB used)
+    assert ls.survey_max_bytes({}, 89 * G, 150 * G, int(12.4 * G)) == int(12.4 * G)
+    assert ls.survey_max_bytes({"LAPTOP_SURVEY_MAX_GB": "3"}, 89 * G, 150 * G, 12 * G) == 3 * G
+    assert ls.survey_max_bytes({}, None, None, -5) == 0
 
 
 # ── end to end: helper --survey against the api ─────────────────────

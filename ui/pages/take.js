@@ -109,6 +109,25 @@ const CSS = `
 .tk-form textarea{min-height:230px;resize:vertical}
 .tk-found{font-size:13px;color:var(--text-dim);overflow-wrap:anywhere}
 .tk-empty{color:var(--text-dim);margin:6px 2px}
+.tk-eye{display:block;font:500 11px/1 var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.tk-find{margin-top:10px;border-radius:16px;background:var(--soft);box-shadow:inset 0 0 0 1px var(--line);padding:12px}
+.tk-find header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0 2px 10px;flex-wrap:wrap}
+.tk-find header b{font:400 19px/1.2 var(--font-display)}.tk-find header small{color:var(--text-dim);font-size:13px}
+.tk-q{display:flex;gap:8px;align-items:center}
+.tk-q input{flex:1;min-width:0;font:400 17px/1.4 var(--font-body);color:var(--text);background:color-mix(in srgb,var(--bg) 70%,transparent);border:0;
+  box-shadow:inset 0 0 0 1px var(--line);border-radius:12px;padding:11px 14px;outline:none;-webkit-appearance:none;appearance:none}
+.tk-q input:focus{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.tk-q input::placeholder{color:var(--text-dim)}
+.tk-q button{padding:11px 16px;border-radius:12px;background:var(--accent);color:var(--bg);font-weight:500;white-space:nowrap}
+.tk-q button[disabled]{opacity:.5;cursor:default}
+.tk-fl{margin:14px 2px 4px;font:500 11px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim)}
+.tk-sc{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tk-sc button{padding:7px 12px;border-radius:999px;font-size:14px;box-shadow:inset 0 0 0 1px var(--line);color:var(--text-dim)}
+.tk-sc button:hover{color:var(--text);background:color-mix(in srgb,var(--text) 6%,transparent)}
+.tk-it.off{opacity:.42;cursor:not-allowed}.tk-it.off:hover{background:none}
+.tk-it em{display:block;font-style:normal;font-size:12px;color:var(--text-dim)}
+.tk-grey{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:12px 2px 2px;font-size:13px;color:var(--text-dim)}
+.tk-grey button{padding:7px 12px;border-radius:999px;box-shadow:inset 0 0 0 1px var(--line);color:var(--text)}
 .tk-drop{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 85%,transparent);pointer-events:none}
 .tk-drop div{border:2px dashed var(--accent);border-radius:24px;padding:40px 48px;text-align:center;font:400 26px/1.3 var(--font-display)}
 @media(max-width:599px){.tk-in{padding:14px 14px 100px}.tk-st{padding:8px 11px;font-size:13px}.tk-yt{width:200px;height:200px}.tk-under{flex-wrap:wrap}}
@@ -164,6 +183,9 @@ export default function TakePage() {
   const [pick, setPick] = useState(null)          // 'own' | 'playlists' | null: which list is open
   const [items, setItems] = useState(null)        // the open list's items
   const [plOpen, setPlOpen] = useState(null)      // the playlist whose items show
+  const [q, setQ] = useState('')                  // the orfeo library search box
+  const [found, setFound] = useState(null)        // GET /cc/take/find answer
+  const [finding, setFinding] = useState(false)   // a live YouTube search on its way
   const [under, setUnder] = useState({ kind: 'none' })
   const [read, setRead] = useState(null)          // { set, group } lines shown to read
   const [phase, setPhase] = useState('idle')      // idle | loading | arming | rec | saving
@@ -228,8 +250,41 @@ export default function TakePage() {
       if (which === 'own') {
         const r = await fetch('/cc/listen/station?id=own'); const d = await r.json()
         setItems(r.ok ? (d.items || []) : [])
-      } else setItems(st.filter(s => s.kind !== 'own' && s.id !== 'own' && s.id !== 'mix'))
+      } else {
+        setItems(st.filter(s => s.kind !== 'own' && s.id !== 'own' && s.id !== 'mix'))
+        if (which === 'orfeo') find(q, false)
+      }
     } catch { setItems([]) }
+  }
+  // the orfeo library: his own music first (in the brain, free, as he types), YouTube through his account on the press
+  const findSeq = useRef(0)
+  async function find(words, live) {
+    const n = ++findSeq.current
+    if (live) setFinding(true)
+    try {
+      const r = await fetch(`/cc/take/find?q=${encodeURIComponent(words || '')}&live=${live ? 1 : 0}`)
+      const d = await r.json()
+      if (n === findSeq.current) setFound(r.ok && d.ok ? d : { library: [], recent: [], shortcuts: [], live: { ok: false, items: [], why: d.error || String(r.status) } })
+    } catch { if (n === findSeq.current) setFound(f => f || { library: [], recent: [], shortcuts: [] }) }
+    if (live) setFinding(false)
+  }
+  useEffect(() => {
+    if (pick !== 'orfeo') return
+    const t = setTimeout(() => find(q, false), 220)
+    return () => clearTimeout(t)
+  }, [q])   // eslint-disable-line react-hooks/exhaustive-deps
+  async function choosePick(it) {
+    if (it.k === 'file') { chooseOwn(it); return }
+    if (it.embed === false) { say(`${it.title}: ${it.why}. Drop the file instead if you have it.`, true); return }
+    if (it.embed == null) {
+      say('checking that YouTube lets it play here')
+      try {
+        const r = await fetch(`/cc/take/find?check=${encodeURIComponent(it.id)}`); const d = await r.json()
+        if (r.ok && d.ok && d.embed === false) { say(`${it.title}: ${d.why}. Drop the file instead if you have it.`, true); return }
+        if (d && d.dur && !it.dur) it = { ...it, dur: d.dur }
+      } catch {}
+    }
+    chooseYT(it)
   }
   async function openPlaylist(s) {
     setPlOpen({ ...s, items: null })
@@ -563,6 +618,67 @@ export default function TakePage() {
     </nav>
   )
 
+  function pickRow(it, i) {
+    const off = it.embed === false
+    const meta = [it.artist, it.dur ? clock(it.dur) : '', it.src].filter(Boolean).join(' · ')
+    return (
+      <button key={(it.id || it.n) + ':' + i} type="button" className={'tk-it' + (off ? ' off' : '')} aria-disabled={off}
+        title={off ? it.why : undefined} onClick={() => choosePick(it)}>
+        <span>{it.title}{off ? <em>{it.why}</em> : null}</span><small>{meta}</small>
+      </button>
+    )
+  }
+  function findPanel() {
+    const f = found || {}
+    const lib = f.library || [], rec = f.recent || [], sc = f.shortcuts || []
+    const lv = f.live
+    const shown = [...rec, ...lib, ...((lv && lv.items) || [])]
+    const anyOff = shown.some(x => x.embed === false)
+    const words = q.trim()
+    return (
+      <div className="tk-find" aria-label="orfeo library">
+        <header><b>orfeo library</b><small>your account's music: your tracks, likes and playlists, then YouTube</small></header>
+        <form className="tk-q" onSubmit={(e) => { e.preventDefault(); if (words) find(words, true) }}>
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="a title or an artist" aria-label="search your music" autoFocus spellCheck={false} />
+          <button type="submit" disabled={!words || finding}>{finding ? 'searching' : 'search YouTube'}</button>
+        </form>
+        {plOpen ? null : !words ? (
+          <>
+            {sc.length || (items && items.length) ? (
+              <div className="tk-sc">
+                {sc.map(s => <button key={s.id} type="button" onClick={() => openPlaylist({ id: s.id, name: s.name })}>from {s.name}</button>)}
+                {items && items.length ? <button type="button" onClick={() => setPick('playlists')}>all {items.length} playlists</button> : null}
+              </div>
+            ) : null}
+            {rec.length ? <><p className="tk-fl">recently used</p>{rec.map(pickRow)}</> : null}
+          </>
+        ) : (
+          <>
+            <p className="tk-fl">in your library{lib.length ? ` · ${lib.length}` : ''}</p>
+            {lib.length ? lib.map(pickRow) : <p className="tk-note">Nothing in your tracks, likes or playlists has all of those words.</p>}
+            {lv ? (
+              <>
+                <p className="tk-fl">on YouTube{lv.cached ? ' · from earlier today' : ''}</p>
+                {lv.ok ? (lv.items.length ? lv.items.map(pickRow) : <p className="tk-note">YouTube found nothing for that.</p>) : <p className="tk-note">{lv.why}</p>}
+              </>
+            ) : <p className="tk-note">Not here? Press search YouTube{f.live_left == null ? '' : ` (${f.live_left} searches left today)`}.</p>}
+          </>
+        )}
+        {plOpen ? (
+          <div className="tk-list" aria-label={plOpen.name}>
+            <button type="button" className="tk-it" onClick={() => setPlOpen(null)}><span>back to the search</span><small>{plOpen.name}</small></button>
+            {plOpen.items === null ? <p className="tk-note">loading</p> : plOpen.items.filter(x => x.k === 'yt').map(it => pickRow({ ...it, src: '' }, it.id))}
+          </div>
+        ) : null}
+        {anyOff ? (
+          <div className="tk-grey">
+            <span>Greyed out: embedding off (or blocked in most countries), so YouTube will not play it under your take.</span>
+            <button type="button" onClick={() => fileRef.current && fileRef.current.click()}>drop the file instead</button>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
   function demoRow(t) {
     const open = sel === t.file || sel === t.demo_dir
     const ver = t.demo && t.demo.versions && t.demo.versions[t.demo.versions.length - 1]
@@ -649,11 +765,11 @@ export default function TakePage() {
 
   return (
     <>
-      <Head><title>Take</title></Head>
+      <Head><title>Take · orfeo</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
       <div className={'tk' + (rec ? ' rec' : '')} ref={rootRef}>
         <div className="tk-in">
-          <div className="tk-h"><h1>Take</h1>{strip()}</div>
+          <div className="tk-h"><h1><span className="tk-eye">orfeo</span>Take</h1>{strip()}</div>
 
           {tab === 'record' ? (
             <>
@@ -662,7 +778,7 @@ export default function TakePage() {
                 <div className="tk-chips">
                   <button type="button" className={'tk-chip' + (under.kind === 'none' && !pick ? ' on' : '')} disabled={busy} onClick={() => { dropPlayer(); A.current.trackBuf = null; setUnder({ kind: 'none' }); setPick(null) }}>nothing</button>
                   <button type="button" className={'tk-chip' + (under.kind === 'own' || pick === 'own' ? ' on' : '')} disabled={busy} onClick={() => openList('own')}>my tracks</button>
-                  <button type="button" className={'tk-chip' + (under.kind === 'embed' || pick === 'playlists' ? ' on' : '')} disabled={busy} onClick={() => openList('playlists')}>my playlists</button>
+                  <button type="button" className={'tk-chip' + (under.kind === 'embed' || pick === 'orfeo' || pick === 'playlists' ? ' on' : '')} disabled={busy} onClick={() => openList('orfeo')}>orfeo library</button>
                   <button type="button" className={'tk-chip' + (under.kind === 'file' ? ' on' : '')} disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>a file</button>
                   <input ref={fileRef} type="file" accept="audio/*" hidden onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) pickFile(f); e.target.value = '' }} />
                 </div>
@@ -673,6 +789,7 @@ export default function TakePage() {
                     ))}
                   </div>
                 ) : null}
+                {pick === 'orfeo' ? findPanel() : null}
                 {pick === 'playlists' ? (
                   <div className="tk-list" aria-label="my playlists">
                     {items === null ? <p className="tk-note">loading</p> : !items.length ? <p className="tk-note">No playlists on this brain yet.</p> : plOpen ? (

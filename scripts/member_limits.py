@@ -36,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------- the profile ----
@@ -387,7 +388,34 @@ def member_volumes(m: str) -> list[str]:
     return out
 
 
-def disk(names: list[str], brains_root: Path, quota_gb: float, home: str = "/home", fs: str = "/") -> tuple[list[str], list[str]]:
+def runtime_volume(m: str) -> str | None:
+    """The mountpoint of the member's api_runtime volume (where the api reads disk_share.json)."""
+    if not shutil.which("docker"):
+        return None
+    i = subprocess.run(["docker", "volume", "inspect", "-f", "{{.Mountpoint}}", f"brain-{m}_api_runtime"],
+                       capture_output=True, text=True)
+    return i.stdout.strip() or None
+
+
+def write_share(m: str, used_mb: int, quota_gb: float, where: str | None = None) -> str | None:
+    """MEMBERS-16: tell the member's api its measured use and its share, so one bring-in never takes more than
+    what is left of the share (api/main.py _disk_share). Written atomically, 644 (numbers, not a secret)."""
+    d = where or runtime_volume(m)
+    if not d or not os.path.isdir(d):
+        return None
+    body = json.dumps({"member": m, "quota_gb": quota_gb, "used_bytes": used_mb * 1024 ** 2,
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    f = os.path.join(d, "disk_share.json")
+    tmp = f + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(body + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, f)
+    return f
+
+
+def disk(names: list[str], brains_root: Path, quota_gb: float, home: str = "/home", fs: str = "/",
+         share: bool = False, share_dirs: dict | None = None) -> tuple[list[str], list[str]]:
     lines, problems = [f"{'member':<12}{'used MB':>10}{'quota MB':>10}"], []
     for m in names:
         paths = [str(brains_root / m), f"{home}/{m}-cc", f"{home}/{m}-hands", *member_volumes(m)]
@@ -396,6 +424,9 @@ def disk(names: list[str], brains_root: Path, quota_gb: float, home: str = "/hom
         lines.append(f"{m:<12}{used:>10}{q:>10}")
         if used > q:
             problems.append(f"{m}: {used} MB used, over its {q} MB quota")
+        if share:
+            f = write_share(m, used, quota_gb, (share_dirs or {}).get(m))
+            lines.append(f"{'':<12}share file {f}" if f else f"{'':<12}share file: no api_runtime volume")
     st = os.statvfs(fs)
     free = st.f_bavail / st.f_blocks * 100 if st.f_blocks else 100
     lines.append(f"box: {free:.0f}% of {fs} free")
@@ -428,6 +459,10 @@ def main(argv=None) -> int:
         c.add_argument("members_tsv", nargs="?")
         c.add_argument("--members", dest="members_opt")
         c.add_argument("--brains-root", default=os.environ.get("BRAINS_ROOT", "/srv/brains"))
+        if name == "disk":
+            c.add_argument("--only", default="", help="comma list: measure only these members")
+            c.add_argument("--write-share", action="store_true",
+                           help="write each member's use and share to its api_runtime volume (disk_share.json)")
         if name == "check":
             c.add_argument("--plan", action="store_true", help="every member with the profile (after apply)")
             c.add_argument("--admin-dir", default=os.environ.get("ADMIN_BRAIN_DIR", "/home/hbar/brain"))
@@ -465,7 +500,14 @@ def main(argv=None) -> int:
         return 0
     names = members(tsv)
     if a.cmd == "disk":
-        lines, problems = disk(names, root, p["disk_gb"])
+        if a.only:
+            want = [x for x in a.only.split(",") if x]
+            unknown = [x for x in want if x not in names]
+            if unknown:
+                print(f"refused: not in {tsv}: {', '.join(unknown)}", file=sys.stderr)
+                return 2
+            names = want
+        lines, problems = disk(names, root, p["disk_gb"], share=a.write_share)
     else:
         tenants, ollama = {}, None
         if not a.no_admin:

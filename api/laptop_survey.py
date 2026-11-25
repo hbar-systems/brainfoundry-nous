@@ -35,9 +35,11 @@ SURVEY_MAX_BYTES = 20 * 1024 ** 3
 SURVEY_MAX_BYTES_SHARED = 8 * 1024 ** 3
 
 
-def survey_max_bytes(env: dict, free_bytes: int | None, total_bytes: int | None) -> int:
+def survey_max_bytes(env: dict, free_bytes: int | None, total_bytes: int | None,
+                     share_left_bytes: int | None = None) -> int:
     """The byte cap of one survey run: 20 GB on a brain's own box, 8 GB for a member on a shared box,
-    LAPTOP_SURVEY_MAX_GB when set; never more than the free disk less a tenth of the disk."""
+    LAPTOP_SURVEY_MAX_GB when set; never more than the free disk less a tenth of the disk, and (MEMBERS-16)
+    never more than what is left of the brain's disk share on a shared box, when that is known."""
     cap = SURVEY_MAX_BYTES_SHARED if env.get("LAPTOP_AUDIO_HOST_DIR") else SURVEY_MAX_BYTES
     try:
         if env.get("LAPTOP_SURVEY_MAX_GB"):
@@ -46,6 +48,8 @@ def survey_max_bytes(env: dict, free_bytes: int | None, total_bytes: int | None)
         pass
     if free_bytes is not None and total_bytes:
         cap = min(cap, max(0, free_bytes - total_bytes // 10))
+    if share_left_bytes is not None:
+        cap = min(cap, max(0, int(share_left_bytes)))
     return max(cap, 0)
 # The inventory itself: at most this many file rows, and this many bytes of (decompressed) JSON.
 MAX_ENTRIES = 300000
