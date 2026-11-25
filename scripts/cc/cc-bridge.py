@@ -556,6 +556,7 @@ import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (T
 import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-14)
 import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks played in the console (LISTEN-1, 2026-11-24)
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
+import cc_library  # noqa: E402   the private library guard on the release doors (DEMO-3, 2026-11-25)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -684,6 +685,10 @@ TAPE = cc_tape.Tape(os.environ.get("CC_TAPE_DIR", "").strip() or str(IN_DIR / "m
 # The booth (SING-FREE-1, 2026-11-24, scripts/cc/cc_booth.py): /sing records the microphone and keeps one WAV per take
 # here, one folder per day, named afterwards; CC_BOOTH_DIR overrides <out>/studio/booth.
 BOOTH = cc_booth.Booth(os.environ.get("CC_BOOTH_DIR", "").strip() or str(OUT_DIR / "studio" / "booth"))
+# The private library (DEMO-3, 2026-11-25): tracks by other artists fetched for his demos (hbar.world
+# scripts/orfeo_library.py writes it). The release doors refuse its audio before the artist's yes. CC_LIBRARY_DIR
+# overrides; the default is where the owner's box keeps it; a brain without the folder refuses nothing.
+LIBRARY_DIR = os.environ.get("CC_LIBRARY_DIR", "").strip() or "/mnt/HC_Volume_107461509/hands/orfeo.music/library"
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
 # /listen (LISTEN-1, 2026-11-24, scripts/cc/cc_listen.py): stations from the world's listening tables; the play log
@@ -2914,6 +2919,9 @@ def _orfeo_post(body: dict, ask=None, api=None) -> tuple[int, dict]:
         return 400, {"ok": False, "error": "need kind (loop or track) and a title"}
     if not str(post.get("audio_url") or "").startswith("https://") or not re.fullmatch(r"[0-9a-f]{64}", str(post.get("audio_sha256") or "")):
         return 400, {"ok": False, "error": "need an https audio_url and the file's sha256"}
+    why = cc_library.refusal(LIBRARY_DIR, sha256=post["audio_sha256"])
+    if why:
+        return 403, {"ok": False, "error": why}
     if not BRAIN_API_KEY:
         return 409, {"ok": False, "error": "the bridge has no brain key, so it cannot sign"}
     d = ask("orfeo_post", post, None, str(b.get("run") or "") or None)
@@ -4955,6 +4963,9 @@ def _send_file(raw: str, caption: str = "") -> tuple:
         return 404, {"ok": False, "error": "not a file under the desk (out/, in/) or the world"}
     if any(part.startswith(".") for part in p.parts[1:]) or p.suffix.lower() in (".pem", ".key", ".env") or "secret" in p.name.lower():
         return 403, {"ok": False, "error": "dotfiles, keys and secrets never leave the box"}
+    why = cc_library.refusal(LIBRARY_DIR, path=p)
+    if why:
+        return 403, {"ok": False, "error": why}
     with NOTIFY_LOCK:
         now = time.time()
         SEND_SENT[:] = [t for t in SEND_SENT if now - t < 3600]
