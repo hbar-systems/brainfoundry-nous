@@ -31,11 +31,19 @@ function overCaps(t, run) {
   return t.files > (run.max_files || Infinity) || t.bytes > (run.max_bytes || Infinity)
 }
 
+// The run's exact arrival counts (IMPORT-PACE-1): run.counts from the api; the arrived list (only its newest
+// 500 rows) is the fallback for an older api. The card read the list and said "479 wait, 21 kept" of 1,825.
+function arrivedCounts(run) {
+  const c = run && run.counts && typeof run.counts === 'object' ? run.counts : null
+  const arrived = (run && Array.isArray(run.arrived)) ? run.arrived : []
+  const n = (k) => (c ? (c[k] || 0) : arrived.filter(a => a.kind === k).length)
+  const docs = n('knowledge'), audio = n('audio'), media = n('media')
+  return { docs, audio, media, kept: audio + media }
+}
+
 // How far the pull is: arrived rows of this run against the chosen total.
 function pullState(run, survey) {
-  const arrived = (run && Array.isArray(run.arrived)) ? run.arrived : []
-  const docs = arrived.filter(a => a.kind === 'knowledge').length
-  const kept = arrived.filter(a => a.kind === 'audio' || a.kind === 'media').length
+  const { docs, kept } = arrivedCounts(run)
   const total = survey && survey.chosen && Array.isArray(survey.groups)
     ? survey.groups.filter(g => survey.chosen.includes(g.id)).reduce((s, g) => s + (g.files || 0), 0) : 0
   return { docs, kept, done: docs + kept, total, open: !!(run && run.open) }
@@ -48,6 +56,40 @@ function surveyStep(run, survey, minted) {
   if (!survey || survey.state === 'waiting') return run.open ? 'line' : 'start'
   if (survey.state === 'plan') return run.open ? 'plan' : 'start'
   return run.open ? 'pulling' : 'pulled'
+}
+
+// What the person sees while the brain reads (IMPORT-PACE-1): reading (the first pass), ready (the first
+// pass is in, the rest goes on in the background), done, or none. w: GET /documents/waiting.
+function readingState(w) {
+  const r = (w && w.reading) || null
+  if (!r || !r.running) return { step: 'none' }
+  const firstLeft = (r.first_total || 0) - (r.first_done || 0)
+  const step = firstLeft > 0 ? 'first' : 'ready'
+  return { step, done: r.done || 0, total: r.total || 0, firstDone: r.first_done || 0, firstTotal: r.first_total || 0, hours: (r.eta_seconds || 0) / 3600 }
+}
+
+// The refused files of the run, by reason (IMPORT-PACE-1), and how many "send these again" retries.
+const RETRYABLE = ['busy', 'other']
+function refusedState(survey) {
+  const by = (survey && survey.refused_by) || {}
+  const total = (survey && survey.refused_total) || 0
+  const again = RETRYABLE.reduce((s, k) => s + (by[k] || 0), 0)
+  return { total, by, again, rows: (survey && Array.isArray(survey.refused)) ? survey.refused : [] }
+}
+
+// The books among the chosen groups (long PDFs and DOCX), flagged at the choosing step.
+function bigTotals(groups, picks) {
+  let files = 0, bytes = 0
+  for (const g of Array.isArray(groups) ? groups : []) {
+    if (!(picks && picks[g.id])) continue
+    files += g.big || 0; bytes += g.big_bytes || 0
+  }
+  return { files, bytes }
+}
+
+function fmtHours(h, lang) {
+  if (lang === 'ru') return h < 1 ? 'меньше часа' : `около ${Math.round(h)} ч`
+  return h < 1 ? 'under an hour' : `about ${Math.round(h)} hour${Math.round(h) === 1 ? '' : 's'}`
 }
 
 function fmtBytes(n) {
@@ -119,6 +161,20 @@ const EN = {
   pulling: (d, n) => `Arriving: ${d} of ${n}. Keep the window on the computer open.`,
   pullingSpoke: (d, n) => `Arriving: ${d} of ${n}. Keep the computer open and awake.`,
   pulled: (d, k) => `Arrived: ${d} document${d === 1 ? '' : 's'} wait for your yes${k ? `, ${k} file${k === 1 ? '' : 's'} kept` : ''}.`,
+  books: (f, b) => `${f} book${f === 1 ? '' : 's'}, ${b}: read them`,
+  bookNow: 'now', bookNight: 'overnight',
+  booksWhy: 'Books take long to read. Overnight, the rest is ready to talk first.',
+  readingFirst: (d, n) => `Reading what matters first: ${d} of ${n}.`,
+  readyNow: (d, n, h) => `Ready to talk now. Still reading the rest: ${d} of ${n}, ${h}.`,
+  // MEMBERS-15 (Anne's onboarding, 2026-11-25): how much is in, the plain limits, and when to leave files on the computer
+  roomIn: (n, w) => `Inside: ${n} document${n === 1 ? '' : 's'}${w ? `, ${w} waiting for your yes` : ''}.`,
+  roomLimit: (f, b, q) => `One bring-in takes up to ${f} files and ${b}${q ? `; this brain's share of its shared box is ${q} GB` : ''}. Past that the files are refused and listed; nothing already inside is touched.`,
+  roomSpoke: 'Photos, video, music and archives you rarely open can stay on your computer. Connect it below and the brain looks there when you ask, instead of keeping a copy.',
+  refusedBy: (n) => `${n} file${n === 1 ? '' : 's'} did not come in:`,
+  reason: { too_big: 'too big', type: 'a type Knowledge does not read', busy: 'brain busy', gone: 'no longer on the computer', other: 'other' },
+  sendAgain: (n) => `Send these ${n} again`,
+  sentAgain: 'Asked. The window on the computer sends them now.',
+  showing: (n, of) => `showing ${n} of ${of}`,
   dropOr: 'Or drop single files on this card.',
   chatsTitle: 'Bring your chats with ChatGPT, Claude and other AIs',
   chatsWhich: 'Where is your export?',
@@ -164,6 +220,19 @@ const RU = {
   pulling: (d, n) => `Приходит: ${d} из ${n}. Не закрывайте окно на компьютере.`,
   pullingSpoke: (d, n) => `Приходит: ${d} из ${n}. Не закрывайте компьютер и не давайте ему уснуть.`,
   pulled: (d, k) => `Пришло: ${d} ${ruPlural(d, ['документ ждёт', 'документа ждут', 'документов ждут'])} вашего «да»${k ? `, ${k} ${ruPlural(k, ['файл сохранён', 'файла сохранены', 'файлов сохранено'])}` : ''}.`,
+  books: (f, b) => `${f} ${ruPlural(f, ['книга', 'книги', 'книг'])}, ${b}: читать`,
+  bookNow: 'сейчас', bookNight: 'ночью',
+  booksWhy: 'Книги читаются долго. Ночью: остальное готово к разговору раньше.',
+  readingFirst: (d, n) => `Сначала читаю главное: ${d} из ${n}.`,
+  readyNow: (d, n, h) => `Можно говорить. Дочитываю остальное: ${d} из ${n}, ${h}.`,
+  roomIn: (n, w) => `Внутри: ${n} ${ruPlural(n, ['документ', 'документа', 'документов'])}${w ? `, ${w} ждут вашего «да»` : ''}.`,
+  roomLimit: (f, b, q) => `За один раз переносится до ${f} файлов и ${b}${q ? `; доля этого мозга на общем сервере ${q} ГБ` : ''}. Сверх этого файлы не принимаются и показываются списком; то, что уже внутри, не трогается.`,
+  roomSpoke: 'Фото, видео, музыку и архивы, которые вы редко открываете, можно оставить на компьютере. Подключите его ниже, и мозг будет смотреть там, когда вы попросите, а не хранить копию.',
+  refusedBy: (n) => `${n} ${ruPlural(n, ['файл не пришёл', 'файла не пришли', 'файлов не пришли'])}:`,
+  reason: { too_big: 'слишком большой', type: 'тип, который Знания не читают', busy: 'мозг занят', gone: 'его уже нет на компьютере', other: 'другое' },
+  sendAgain: (n) => `Отправить эти ${n} ещё раз`,
+  sentAgain: 'Готово. Окно на компьютере отправляет их сейчас.',
+  showing: (n, of) => `показано ${n} из ${of}`,
   dropOr: 'Или перетащите сюда отдельные файлы.',
   chatsTitle: 'Перенесите сюда разговоры с ChatGPT, Claude и другими ИИ',
   chatsWhich: 'Где ваш экспорт?',
@@ -184,4 +253,4 @@ const RU = {
 const PLAN_TEXT = { en: EN, ru: RU }
 const planWords = (lang) => PLAN_TEXT[lang === 'ru' ? 'ru' : 'en']
 
-module.exports = { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, PLAN_TEXT, planWords }
+module.exports = { arrivedCounts, readingState, refusedState, bigTotals, fmtHours, defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, PLAN_TEXT, planWords }

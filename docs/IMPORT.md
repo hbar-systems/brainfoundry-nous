@@ -185,12 +185,12 @@ An audio file goes to the same `POST /documents/import-laptop/file` with the sam
 The console sits behind its login; the helper carries only the token. So the console site block opens exactly the four token-gated paths, straight to the api (the console's own `/api/bf` proxy would add the owner key), and keeps the login for everything else, `/token` and `/status` included. `scripts/add-member.sh` prints it in every new member's block. The snippet, for any console block (`<api port>` is the brain's api port):
 
 ```
-    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/documents/import-laptop/refused /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     handle @import {
         uri strip_prefix /api/bf
         reverse_proxy localhost:<api port>
     }
-    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/documents/import-laptop/refused /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     basicauth @login {
 ```
 
@@ -231,6 +231,44 @@ When the brain has a spoke (`docs/spoke.md`) and the computer joined it, the hom
 - The home lists "Your chats from ChatGPT and Claude" (the AIs found) with Continue here on each; the Knowledge page's document rows carry the same button for conversation documents. The button opens `/?continue=<name>`: the console opens a new thread and sends that first message. From another site, or when the import's injection scan flagged the conversation, it only fills the composer and waits for the person's send.
 
 Not done yet: resume after a broken survey run (a new line resends); the survey walk on a real Mac and Windows (tested on Linux with made-up cloud folders); a group chosen while the helper is gone waits until the token expires.
+
+## Pace: moving in at what a brain can read (IMPORT-PACE-1, 2026-11-24)
+
+hbar, after two days of one member's sitting: "did we consider limits so we dont import from computer more than what brain can handle? notice how long the onboarding takes." That sitting: 1,865 files chosen (7.5 GB listed), 1,825 arrived, 40 refused; the brain's health check silent for 15 s during the run; the home showing three counts (card "479 wait, 21 kept", button "Remember all 1000", footer "200 wait"); the sitting stopped and went on the next day. The start (one pasted line, the list first, the choice on the home) stays as it is.
+
+### Measured (synthetic files, 2026-11-24)
+
+2 cores of a Neoverse-N1 (the core of the Hetzner CAX boxes), bge-large-en-v1.5 fp32 through ONNX Runtime with 2 threads (a stand-in for the container's torch; the container itself was not measured, docker is not reachable from the build box), batch 32, 512 tokens, CHUNKER=words. Scripts and raw numbers: `/home/hands/out/2026-11-24/import-pace-1/measure/` (rates.py, latency.py, rates.json, latency.json).
+
+| file | words | chunks | read (extract + chunk + embed) |
+|---|---|---|---|
+| note | 403 | 1 | 12.5 s (10 notes, 12.46 to 12.86) |
+| slide deck PDF, 25 slides | 1,550 | 4 | 63.8 s (3 decks, 63.3 to 64.3) |
+| book PDF, 300 pages | 126,000 | 281 | not measured whole: the run stopped at its 60-minute limit; extrapolated 281 x 15.9 s = about 74 minutes (unverified) |
+
+Embedding is nearly all of it: extracting the 300-page PDF's text layer takes 1.4 s; one 512-token chunk takes 12.5 s alone and 15.9 s in a batch. So a 2-core member brain reads about 5 notes a minute, and 1,825 documents are a night's work, not a sitting's.
+
+What the api did meanwhile: the laptop file route was `async` and read the PDF on the event loop. Ten reads of the 300-page PDF on the loop kept `/health` from answering for 13.9 s (the sitting's 15 s); the same reads in a worker thread kept its slowest answer at 0.085 s.
+
+### What changed
+
+1. Reading off the loop, one at a time. `POST /documents/import-laptop/file` extracts and proposes in a worker thread behind a gate of one reader and two waiting (api/import_pace.py `ReadGate`). Beyond that the brain answers 503 with `Retry-After: 5` before the file is charged to the run; the agent sends it again after 2, 4, 8 ... 60 s, up to 8 times, and only then counts it refused ("brain busy"). The exception handler now passes an HTTPException's headers through (it dropped them).
+2. Two passes. At the choice (`POST /documents/import-laptop/plan`) the brain makes the first pass: the chosen documents that fit `FIRST_PASS_SECONDS` (15 minutes) of reading at the measured rate, folders the person named first (`"named": [...]`), then files changed in the last 180 days, smallest first; books (PDF or DOCX of 5 MB or more) read overnight unless the person says now (`"big": "now"`). The helper sends in that order (first pass, then the files kept as files, then the rest smallest first), and the approve-all worker reads in that order. At the measured rate the first pass is about 56 notes. (Branch import-manifest-1 proposes a first pass of about 300 files, "measure before choosing the cap": at 15.9 s a chunk 300 notes are about 80 minutes of reading, so the cap here is the 15-minute budget, not a file count.)
+3. The second pass reads below chat: the worker thread runs at a lower priority (nice 10), pauses 0.5 s between documents, and waits while a chat ran in the last 8 s (a plain ASGI clock on `/chat*`, at most 2 minutes per document).
+4. One true count. `GET /documents/waiting` (owner) counts every pending document proposal (documents and chats apart, by the server's one chat rule, api/chat_continue.py `CHAT_DOC`) and the reading now (done of total, the first pass, an estimate in seconds). The home card and its button read it; the footer (cc-bridge `_pending_live`) reads it. The run's arrivals are counted exactly (`run.counts`) beside the list of the newest 500. The NodeOS page of 1,000 and the bridge's page of 200 are gone.
+5. Approve once. "Remember all" sends `{"kind": "documents", "follow": true}`: the server chooses from the full list, keeps the yes on disk (`runtime/remember_all.json`), lets the open run's later files join it as they arrive, resumes it after an api restart, and never queues one proposal twice. The home shows the progress from the server, so a closed browser loses nothing. A proposal the injection scan rated high is still held for a one-by-one look.
+6. Refused files. At the end of its run the agent prints them by reason (too big, a type Knowledge does not read, brain busy, no longer on the computer, other) and posts the list (`POST /documents/import-laptop/refused`, the run's token, only names the run listed). The home lists them by reason; "Send these again" (`POST /documents/import-laptop/retry`, owner) or Return in the terminal sends only the retryable ones (brain busy, other); the agent waits 10 minutes for that, then closes the run.
+7. What the person sees while it reads: "Reading what matters first: N of M." then "Ready to talk now. Still reading the rest: N of M, about H hours."; at the choice, "12 books, 2.1 GB: read them overnight / now".
+
+The Caddy lines of every member gain `/api/bf/documents/import-laptop/refused` (above and in scripts/add-member.sh); without it the refused list does not reach the home (the run itself is unaffected).
+
+### Not done
+
+- The member manifest's work areas as first-pass folders: the plan route takes `named`, the home does not ask for it yet.
+- The container itself was not measured (torch, Postgres writes); the numbers are ONNX on the same core type.
+- The Python helper retries a busy brain and posts its refused list, but has no "send these again" wait.
+- agent.ps1 was not run (no PowerShell on the build box).
+- A faster embedder for 2-core member brains (bge-small, or the embedding spoke) would change the first pass from about 56 notes to several hundred; not changed here, it re-indexes.
 
 ## Claude's export in parts: the manifest (IMPORT-MANIFEST-1, 2026-11-24)
 

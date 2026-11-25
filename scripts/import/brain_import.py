@@ -239,11 +239,33 @@ class Brain:
              f"Content-Type: {ctype}\r\n\r\n").encode("utf-8") + data + b"\r\n",
             f"--{boundary}--\r\n".encode(),
         ]
-        return self._req("POST", "/documents/import-laptop/file", b"".join(parts),
-                         {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        body = b"".join(parts)
+        # IMPORT-PACE-1: a busy brain answers "wait" (503); the file goes again after 2, 4, 8 ... 60 s
+        pause = 2
+        for attempt in range(1, SEND_TRIES + 1):
+            try:
+                st, j = self._req("POST", "/documents/import-laptop/file", body,
+                                  {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                st, j = 0, {"detail": f"no answer: {e}"}
+            if st not in BUSY_CODES or attempt == SEND_TRIES:
+                return st, j
+            print(f"  your brain is busy reading; trying again in {pause} s", flush=True)
+            time.sleep(pause)
+            pause = min(60, pause * 2)
+        return st, j
+
+    def refused(self, rows):
+        """IMPORT-PACE-1: the files this run could not bring, for the home's list by reason."""
+        body = "\n".join(f"{r.get('status') or 0}\t{r['path']}" for r in rows).encode("utf-8")
+        return self._req("POST", "/documents/import-laptop/refused", body, {"Content-Type": "text/plain"})
 
     def finish(self):
         return self._req("POST", "/documents/import-laptop/finish", b"")
+
+
+SEND_TRIES = 8
+BUSY_CODES = (0, 429, 502, 503, 504)
 
 
 def _q(s):
@@ -520,6 +542,17 @@ def survey_run(a, out=print):
         if st == 401:
             out("The line stopped working; the rest was not sent.")
             break
+    if receipt["refused"]:
+        by = {}
+        for r in receipt["refused"]:
+            k = {413: "too big", 415: "a type Knowledge does not read", 404: "no longer on this computer"}.get(
+                r.get("status"), "brain busy" if r.get("status") in BUSY_CODES else "other")
+            by[k] = by.get(k, 0) + 1
+        out("Not taken, by reason: " + ", ".join(f"{k} {n}" for k, n in by.items()) + ".")
+        try:
+            brain.refused(receipt["refused"])
+        except Exception:  # noqa: BLE001
+            pass
     st, j = brain.finish()
     receipt["finished"] = j if st == 200 else {"status": st, "detail": j.get("detail")}
     receipt["ended"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")

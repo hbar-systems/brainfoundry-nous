@@ -41,6 +41,8 @@ PUBLIC_DOORS = {
                              "(api/federation_help.py), an answer only for a request this brain sent; awaiting hbar's review",
     "/documents/import-laptop/file": "one-run laptop-import bearer token minted by the owner",
     "/documents/import-laptop/finish": "one-run laptop-import bearer token minted by the owner",
+    "/documents/import-laptop/refused": "IMPORT-PACE-1 2026-11-24: the run's refused file names and codes under its survey-only one-run token; "
+                                        "only names the run listed are kept; 8 MB cap; awaiting hbar's review",
     "/documents/import-laptop/check": "POST: the survey's inventory (names, sizes, dates; no content) under a survey-only one-run token minted by the owner; 64 MB cap, paths cleaned; MOVE-IN-2 2026-11-16, awaiting hbar's review",
     "/v1/federation/dm/receive": "ED25519 signature over the payload; size and rate bounds",
     "/harmonics/exchange": "contributor signature verified; receiver records its own row",

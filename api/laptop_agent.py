@@ -118,6 +118,12 @@ WORDS = {
         "DONE": "Done: {0} sent, {1} not taken. Nothing stays on this computer: the temporary folder is deleted and nothing keeps running. You can close this window.",
         "ASKTOKEN": "Paste the key from your brain's home (imp_...)",
         "LOOKONLY": "Looked only: nothing was sent and nothing was kept.",
+        "WAITBRAIN": "  your brain is busy reading; trying again in {0} s",
+        "REFUSEDBY": "Not taken, by reason: {0}.",
+        "REASON_too_big": "too big", "REASON_type": "a type Knowledge does not read", "REASON_busy": "brain busy",
+        "REASON_gone": "no longer on this computer", "REASON_other": "other",
+        "RETRYASK": "{0} of them can be sent again. Press Return here, or Send these again on your brain's home (waits 10 minutes).",
+        "RETRYING": "Sending the {0} again.",
     },
     "ru": {
         "BADTOKEN": "Нужна строка с главной страницы вашего мозга, с ключом (imp_...). Сделайте там новую строку: «Перенести этот компьютер».",
@@ -148,6 +154,12 @@ WORDS = {
         "DONE": "Готово: отправлено {0}, не принято {1}. На компьютере ничего не осталось: временная папка удалена, ничего не работает. Окно можно закрыть.",
         "ASKTOKEN": "Вставьте ключ с главной страницы мозга (imp_...)",
         "LOOKONLY": "Только посмотрел: ничего не отправлено и ничего не сохранено.",
+        "WAITBRAIN": "  мозг занят чтением; ещё раз через {0} с",
+        "REFUSEDBY": "Не принято, по причинам: {0}.",
+        "REASON_too_big": "слишком большой", "REASON_type": "тип, который Знания не читают", "REASON_busy": "мозг занят",
+        "REASON_gone": "его уже нет на компьютере", "REASON_other": "другое",
+        "RETRYASK": "{0} из них можно отправить ещё раз. Нажмите Return здесь или «Отправить ещё раз» на главной странице мозга (жду 10 минут).",
+        "RETRYING": "Отправляю {0} ещё раз.",
     },
 }
 
@@ -227,7 +239,8 @@ def render(kind: str, base: str, lang: str = "en") -> str:
 
 def lines_form(state: str, take: dict | None) -> str:
     """GET /documents/import-laptop/check?form=lines, for the shell agents (no JSON parser on a Mac's
-    bash): 'state <none|waiting|chosen|folder>', then one '<kind>\\t<path>' per chosen file."""
+    bash): 'state <none|waiting|chosen|folder|retry>', then one '<kind>\\t<path>' per chosen file (on
+    'retry', IMPORT-PACE-1: only the refused files the owner asked to send again)."""
     out = [f"state {state}"]
     for p, kind in (take or {}).get("paths") or []:
         if "\t" in p or "\n" in p or "\r" in p:

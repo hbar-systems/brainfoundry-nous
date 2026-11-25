@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import css from 'styled-jsx/css'
 import { HOME_NEWEST, chatState, docState, folded, MOVE_WAIT_KEY, MOVE_DOCS_KEY, day, moveWords, importAnswer } from '../lib/moveIn'
-import { defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
+import { readingState, refusedState, bigTotals, fmtHours, defaultPicks, pickTotals, overCaps, pullState, surveyStep, fmtBytes, surveyCommands, helperCommands, agentUrls, vendorsOf, continueHref, planWords } from '../lib/moveInPlan'
 import { AI_EXPORTS } from '../lib/aiExports'
 import ConnectComputer from './ConnectComputer'
 
@@ -98,7 +98,7 @@ const fmtClock = (s) => { try { return new Date(s * 1000).toLocaleTimeString([],
 // back grouped; one yes per group or all proposed; the same agent run pulls them, closes the key and is gone.
 // Below the line, folded: the Python helper line (MOVE-IN-2) as the fallback. spoke (SWITCH-1): the Connect this
 // computer card below this one is the advanced path; a run the spoke started has no window on the computer.
-function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, spoke }) {
+function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, spoke, readLine }) {
   const [mint, setMint] = useState(null)        // null | { busy } | { token, expires_at } | { error }
   const [os, setOs] = useState('mac')
   const [copied, setCopied] = useState(false)
@@ -106,6 +106,8 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
   const [picks, setPicks] = useState(null)
   const [all, setAll] = useState(false)
   const [sending, setSending] = useState(null)  // null | 'busy' | { error }
+  const [bigNow, setBigNow] = useState(false)    // IMPORT-PACE-1: books now or overnight (the default)
+  const [again, setAgain] = useState(null)       // null | 'busy' | 'asked' | { error }
   const base = typeof window === 'undefined' ? '' : `${window.location.origin}${API}`
   useEffect(() => { if (typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent || '')) setOs('windows') }, [])
   const status = async () => {
@@ -143,13 +145,22 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
     setSending('busy')
     try {
       const take = t.proposed ? 'proposed' : groups.filter(g => picks && picks[g.id]).map(g => g.id)
-      const r = await fetch(`${API}/documents/import-laptop/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ take }) })
+      const r = await fetch(`${API}/documents/import-laptop/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ take, big: bigNow ? 'now' : 'overnight' }) })
       const j = await r.json().catch(() => ({}))
       setSending(r.ok ? null : { error: j.detail || W.failed })
       status()
     } catch { setSending({ error: W.failed }) }
   }
   const pull = pullState(run, survey)
+  const big = bigTotals(groups, picks || {})
+  const refused = refusedState(survey)
+  const sendAgain = async () => {
+    setAgain('busy')
+    const r = await fetch(`${API}/documents/import-laptop/retry`, { method: 'POST' }).catch(() => null)
+    const j = r ? await r.json().catch(() => ({})) : {}
+    setAgain(r && r.ok ? 'asked' : { error: j.detail || W.failed })
+    status()
+  }
   const shown = all ? groups : groups.slice(0, 10)
   const viaSpoke = !!(spoke && spoke.started)
   const label = step === 'pulled' ? P.pulled(pull.docs, pull.kept) : step === 'pulling' ? (viaSpoke ? P.pullingSpoke(pull.done, pull.total) : P.pulling(pull.done, pull.total))
@@ -201,7 +212,26 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
           )}
         </ul>
       )}
+      {step === 'plan' && big.files > 0 && (
+        <div className="mi-books">
+          <span className="mi-sub">{P.books(big.files, fmtBytes(big.bytes))}</span>
+          <Chips items={[{ key: 'night', name: P.bookNight }, { key: 'now', name: P.bookNow }]} value={bigNow ? 'now' : 'night'} onPick={(k) => setBigNow(k === 'now')} label="books" />
+          <p className="mi-note mi-dim">{P.booksWhy}</p>
+        </div>
+      )}
       {step === 'plan' && over && run && <p className="mi-note mi-bad" role="alert">{P.overCaps(run.max_files, fmtBytes(run.max_bytes))}</p>}
+      {readLine && <p className="mi-sub mi-reading" role="status">{readLine}</p>}
+      {refused.total > 0 && (step === 'pulling' || step === 'pulled') && (
+        <div className="mi-refused">
+          <p className="mi-note">{P.refusedBy(refused.total)} {Object.entries(refused.by).map(([k, n]) => `${P.reason[k] || k} ${n}`).join(', ')}</p>
+          <ul className="mi-refused-list">
+            {refused.rows.slice(0, 8).map(r => <li key={r.path} className="mi-note mi-dim">{r.path} · {P.reason[r.reason] || r.reason}</li>)}
+          </ul>
+          {refused.total > Math.min(8, refused.rows.length) && <p className="mi-note mi-dim">{P.showing(Math.min(8, refused.rows.length), refused.total)}</p>}
+          {again === 'asked' && <p className="mi-note">{P.sentAgain}</p>}
+          {again && again.error && <p className="mi-note mi-bad" role="alert">{again.error}</p>}
+        </div>
+      )}
       {sending && sending.error && <p className="mi-note mi-bad" role="alert">{sending.error}</p>}
       {mint && mint.error && <p className="mi-note mi-bad" role="alert">{mint.error}</p>}
       {docBusy && docBusy.error && <p className="mi-note mi-bad" role="alert">{docBusy.error}</p>}
@@ -223,6 +253,9 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
           </button>
         )}
         {docLine}
+        {refused.again > 0 && run && run.open && again !== 'asked' && (step === 'pulling' || step === 'pulled') && (
+          <button type="button" className="mi-btn" disabled={again === 'busy'} onClick={sendAgain}>{P.sendAgain(refused.again)}</button>
+        )}
         {step === 'pulled' && <button type="button" className="mi-btn" onClick={start}>{P.compNew}</button>}
       </div>
       {(step === 'start' || step === 'pulled') && <p className="mi-note mi-dim">{P.compPhone} {P.dropOr}</p>}
@@ -266,7 +299,7 @@ function AiChats({ lang, W, P, chat, chatBusy, approving, onFile, onPaste, remem
       )}
       <div className="mi-actions">
         {chat.waitingYes > 0 ? (
-          <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('chat', chatIds())}>
+          <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('chat')}>
             {ap ? W.remembering(approving.done, approving.total) : W.remember(chat.waitingYes)}
           </button>
         ) : paste !== null ? (
@@ -323,10 +356,13 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
   const [reopen, setReopen] = useState(false)
   const [chats, setChats] = useState([])        // GET /documents/chats rows
   const [spoke, setSpoke] = useState(null)      // the Connect this computer card's { step, ready, started }
+  // IMPORT-PACE-1: the one true count (GET /documents/waiting): what waits, the reading now, the kept yes
+  const [waiting, setWaiting] = useState(null)
 
   const load = async () => {
     const j = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
-    const [d, p, c] = await Promise.all([j(`${API}/documents?limit=10000`), j(`${API}/memory/proposals?status=PENDING&limit=1000`), j(`${API}/documents/chats`)])
+    const [d, p, c, w] = await Promise.all([j(`${API}/documents?limit=10000`), j(`${API}/memory/proposals?status=PENDING&limit=100000`), j(`${API}/documents/chats`), j(`${API}/documents/waiting`)])
+    setWaiting(w)
     setDocs(d && Array.isArray(d.documents) ? d.documents : [])
     const items = p && Array.isArray(p.proposals) ? p.proposals : []
     setPending(items.filter(x => x.memory_type === 'document_embedding' && x.proposal_id)
@@ -339,36 +375,50 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
     load()
   }, [])
 
-  const chat = chatState(docs, pending, asked)
-  const doc = docState(docMark, pending)
+  // the counts on the card, its button and the footer are the server's one count (IMPORT-PACE-1)
+  const chat0 = chatState(docs, pending, asked)
+  const doc0 = docState(docMark, pending)
+  const chat = waiting ? { ...chat0, waitingYes: waiting.chats } : chat0
+  const doc = waiting ? { ...doc0, waitingYes: waiting.documents, ...(doc0.step === 'pending' ? { n: waiting.documents } : {}) } : doc0
+  const reading = readingState(waiting)
 
-  // one press remembers what waits; the server ingests (approve-all), this card follows its count
-  const remember = async (which, ids) => {
-    if (!ids.length) return
-    setApproving({ which, done: 0, total: ids.length })
+  // a "Remember all" the server is still reading (this browser closed, or another one pressed it) shows here
+  useEffect(() => {
+    const r = waiting && waiting.reading
+    if (r && r.running) {
+      const which = waiting.remember && waiting.remember.kind === 'chats' ? 'chat' : 'doc'
+      setApproving({ which, done: r.done || 0, total: r.total || 0 })
+    } else if (approving && waiting) {
+      setApproving(null)
+      if (onMoved) onMoved(approving.which)
+    }
+  }, [waiting && waiting.reading && `${waiting.reading.running}:${waiting.reading.done}:${waiting.reading.total}`])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!(approving || reading.step !== 'none')) return undefined
+    const t = setInterval(load, 4000)
+    return () => clearInterval(t)
+  }, [!!approving, reading.step])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // one press remembers everything that waits of its kind, chosen on the server from the full list, and
+  // the files of the open run that are still coming; the server keeps the yes (a closed browser, a restart)
+  const remember = async (which) => {
+    const n = which === 'chat' ? chat.waitingYes : doc.waitingYes
+    if (!n) return
+    setApproving({ which, done: 0, total: n })
     try {
-      const r = await fetch(`${API}/documents/approve-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposal_ids: ids }) })
+      const r = await fetch(`${API}/documents/approve-all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: which === 'chat' ? 'chats' : 'documents', follow: which === 'doc' }) })
       if (!r.ok) throw new Error(String(r.status))
-      for (let k = 0; k < 900; k++) {
-        await new Promise(res => setTimeout(res, 2000))
-        const s = await fetch(`${API}/documents/approve-all/status`, { cache: 'no-store' }).then(x => (x.ok ? x.json() : null)).catch(() => null)
-        if (!s) continue
-        setApproving({ which, done: s.done || 0, total: s.total || ids.length })
-        if (!s.running) break
-      }
       if (which === 'doc') {
-        const m = { n: ((docMark && docMark.n) || 0) + ids.length, at: todayIso() }
+        const m = { n: ((docMark && docMark.n) || 0) + n, at: todayIso() }
         ls.set(MOVE_DOCS_KEY, JSON.stringify(m)); setDocMark(m)
       }
-      if (onMoved) onMoved(which)
     } catch {
+      setApproving(null)
       if (which === 'chat') setChatBusy({ error: W.failed }); else setDocBusy({ error: W.failed })
     }
-    setApproving(null)
     load()
   }
-  const chatIds = () => pending.filter(p => chatState([], [p], null).step === 'pending').map(p => p.proposal_id)
-  const docIds = () => pending.filter(p => docState(null, [p]).step === 'pending').map(p => p.proposal_id)
+  const chatIds = () => []   // kept for the chats card's call shape; the server chooses (IMPORT-PACE-1)
 
   // any AI's export as it came (zip, json, html, csv), or pasted text: the import detects which
   const importChats = async (files, text) => {
@@ -426,15 +476,24 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
 
   const ap = (which) => approving && approving.which === which
   const docLine = doc.waitingYes > 0 ? (
-    <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('doc', docIds())}>
+    <button type="button" className="mi-btn mi-primary" disabled={!!approving} onClick={() => remember('doc')}>
       {ap('doc') ? W.remembering(approving.done, approving.total) : W.remember(doc.waitingYes)}
     </button>
   ) : (docBusy && docBusy.n ? <span className="mi-note">{W.docSending(docBusy.i, docBusy.n)}</span> : null)
+  const readLine = reading.step === 'first' ? P.readingFirst(reading.firstDone, reading.firstTotal)
+    : reading.step === 'ready' ? P.readyNow(reading.done, reading.total, fmtHours(reading.hours, lang)) : null
 
   return (
     <div className="mi">
       <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
-        docBusy={docBusy} docLine={docLine} remember={remember} spoke={spoke} />
+        docBusy={docBusy} docLine={docLine} remember={remember} spoke={spoke} readLine={readLine} />
+      {waiting && waiting.room && (
+        <div className="mi-room" role="note">
+          <p className="mi-sub">{P.roomIn(Array.isArray(docs) ? docs.length : 0, (waiting.documents || 0) + (waiting.chats || 0))}</p>
+          <p className="mi-note mi-dim">{P.roomLimit(Number(waiting.room.run_files || 0).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US'), waiting.room.run_bytes ? fmtBytes(waiting.room.run_bytes) : '-', waiting.room.share_gb)}</p>
+          <p className="mi-note mi-dim">{P.roomSpoke}</p>
+        </div>
+      )}
       <ConnectComputer lang={lang} onState={(x) => setSpoke(s => ({ ...(s || {}), ...x, started: !!((s && s.started) || x.started) }))} />
       <AiChats lang={lang} W={W} P={P} chat={chat} chatBusy={chatBusy} approving={approving}
         onFile={(fs) => importChats(fs, null)} onPaste={(t) => importChats(null, t)} remember={remember} chatIds={chatIds}
@@ -503,6 +562,7 @@ const miStyles = css`
         .mi :global(.mi-sub a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; overflow-wrap: anywhere; }
         .mi :global(.mi-dim) { opacity: 0.72; font-size: 16px; }
         .mi :global(.mi-chips) { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 42px; }
+        .mi :global(.mi-room) { margin: 4px 0 14px; padding: 0 4px; }
         .mi :global(.mi-chip) { font: inherit; font-size: 16px; min-height: 40px; padding: 0 16px; border-radius: 999px; cursor: pointer; color: var(--text); background: transparent; border: 1px solid color-mix(in srgb, var(--border) 50%, var(--text) 25%); transition: background-color 150ms ease-out, border-color 150ms ease-out; }
         .mi :global(.mi-chip:hover) { background: color-mix(in srgb, var(--text) 7%, transparent); }
         .mi :global(.mi-chip-on) { color: var(--bg); background: var(--accent); border-color: var(--accent); }

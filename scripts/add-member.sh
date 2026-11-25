@@ -278,12 +278,12 @@ console.$HANDLE.brainfoundry.ai {
     # token, never this password. Only the four token-gated paths and the two agent scripts
     # (public, no state; SPOKE-3), straight to the api (the
     # console's own proxy would add the owner key); minting a token stays behind the login.
-    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
+    @import path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/documents/import-laptop/refused /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     handle @import {
         uri strip_prefix /api/bf
         reverse_proxy localhost:$M_API_PORT
     }
-    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
+    @login not path /api/bf/documents/import-laptop/helper.py /api/bf/documents/import-laptop/check /api/bf/documents/import-laptop/file /api/bf/documents/import-laptop/finish /api/bf/documents/import-laptop/refused /api/bf/laptop/agent.sh /api/bf/laptop/agent.ps1
     basicauth @login {
         $HANDLE <hash of the member's console password: caddy hash-password>
     }

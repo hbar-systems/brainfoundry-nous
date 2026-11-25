@@ -23,10 +23,14 @@
 main() {
 set -u
 umask 077
-AGENT_VERSION="agent-sh/0.1.0"
+AGENT_VERSION="agent-sh/0.2.0"
 TOKEN="${1:-}"
 BASE="${2:-@@BASE@@}"
 POLL="${BRAIN_AGENT_POLL:-3}"
+# IMPORT-PACE-1: a busy brain answers "wait" (503); the file goes again after 2, 4, 8 ... 60 s, up to 8 times
+BACKOFF_MAX="${BRAIN_AGENT_BACKOFF_MAX:-60}"
+TRIES="${BRAIN_AGENT_TRIES:-8}"
+RETRY_WAIT="${BRAIN_AGENT_RETRY_WAIT:-600}"
 HOME_DIR="${BRAIN_AGENT_HOME:-$HOME}"
 
 # ── words (@@LANG@@) ──
@@ -274,27 +278,85 @@ send_total="$(awk -F '\t' '{ s += $4 } END { printf "%d", s }' "$TMP/send")"
 printf '\n'
 sayf "$W_CHOSE" "$n_send" "$(human "${send_total:-0}")"
 [ "${n_miss:-0}" -gt 0 ] && sayf "$W_IGNORED" "$n_miss"
-i=0; sent=0; refused=0
-while IFS="$TAB" read -r kind name path _size; do
-  i=$((i + 1))
+sent=0; refused=0; STOP=0
+send_one() {  # send_one <kind> <name> <path> -> code in $code; waits and sends again while the brain says "wait"
+  local kind="$1" name="$2" path="$3" ext keep q try=1 pause="${BRAIN_AGENT_PAUSE:-2}"
   ext="${name##*.}"; ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
   keep=""
   [ "$kind" = files ] && case "$IMAGES" in *" $ext "*) keep=file ;; esac
   q="${path//\"/\\\"}"
-  if [ -f "$path" ] && [ ! -L "$path" ]; then
-    code="$(api POST /documents/import-laptop/file --form-string "path=$name" --form-string "keep=$keep" -F "file=@\"$q\"")"
-  else
-    code=404; printf '{"detail":"not on this computer any more"}' > "$TMP/out"
-  fi
-  if [ "$code" = 200 ]; then
-    sent=$((sent + 1))
-    if grep -q '"where"' "$TMP/out"; then mark="$W_KEPT"; else mark="$W_OK"; fi
-  else
-    refused=$((refused + 1)); mark="$(printf "$W_REFUSEDONE" "$code $(detail)")"
-  fi
-  printf '[%d/%d] %s  %s\n' "$i" "$n_send" "$name" "$mark"
-  if [ "$code" = 401 ]; then say "$W_STOPPED"; break; fi
-done < "$TMP/send"
+  while :; do
+    if [ -f "$path" ] && [ ! -L "$path" ]; then
+      code="$(api POST /documents/import-laptop/file --max-time 900 --form-string "path=$name" --form-string "keep=$keep" -F "file=@\"$q\"")"
+    else
+      code=404; printf '{"detail":"not on this computer any more"}' > "$TMP/out"
+    fi
+    case "$code" in 503|429|502|504|000) ;; *) return ;; esac
+    [ "$try" -ge "$TRIES" ] && return
+    sayf "$W_WAITBRAIN" "$pause"
+    sleep "$pause"
+    try=$((try + 1)); pause=$((pause * 2)); [ "$pause" -gt "$BACKOFF_MAX" ] && pause="$BACKOFF_MAX"
+  done
+}
+reason_of() {  # the brain's reasons (api/import_pace.py refusal_reason)
+  case "$1" in 413) echo too_big ;; 415) echo type ;; 503|429|502|504|000) echo busy ;; 404) echo gone ;; *) echo other ;; esac
+}
+send_list() {  # send_list <file of kind TAB name TAB path TAB size>: refused rows go to $TMP/refused
+  local i=0 n kind name path _size mark
+  n="$(awk 'END { print NR }' "$1")"
+  : > "$TMP/refused"
+  while IFS="$TAB" read -r kind name path _size; do
+    i=$((i + 1))
+    send_one "$kind" "$name" "$path"
+    if [ "$code" = 200 ]; then
+      sent=$((sent + 1))
+      if grep -q '"where"' "$TMP/out"; then mark="$W_KEPT"; else mark="$W_OK"; fi
+    else
+      refused=$((refused + 1)); mark="$(printf "$W_REFUSEDONE" "$code $(detail)")"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(reason_of "$code")" "$code" "$kind" "$name" "$path" >> "$TMP/refused"
+    fi
+    printf '[%d/%d] %s  %s\n' "$i" "$n" "$name" "$mark"
+    if [ "$code" = 401 ]; then say "$W_STOPPED"; STOP=1; break; fi
+  done < "$1"
+}
+word_reason() { case "$1" in too_big) echo "$W_REASON_too_big" ;; type) echo "$W_REASON_type" ;; busy) echo "$W_REASON_busy" ;; gone) echo "$W_REASON_gone" ;; *) echo "$W_REASON_other" ;; esac; }
+send_list "$TMP/send"
+
+# IMPORT-PACE-1: what did not come in, by reason; the list goes to the home; "send these again" (Return
+# here, or the button on the home) sends only those that can come (brain busy, other), then the run closes
+while [ "$STOP" = 0 ] && [ -s "$TMP/refused" ]; do
+  printf '\n'
+  sayf "$W_REFUSEDBY" "$(cut -f1 "$TMP/refused" | sort | uniq -c | while read -r n r; do printf '%s %s, ' "$(word_reason "$r")" "$n"; done | sed 's/, $//')"
+  awk -F '\t' '{ print $2 "\t" $4 }' "$TMP/refused" > "$TMP/refused.lines"
+  api POST /documents/import-laptop/refused -H 'Content-Type: text/plain' --data-binary @"$TMP/refused.lines" >/dev/null
+  awk -F '\t' '$1 == "busy" || $1 == "other" { print $3 "\t" $4 "\t" $5 "\t0" }' "$TMP/refused" > "$TMP/again"
+  n_again="$(awk 'END { print NR }' "$TMP/again")"
+  [ "$n_again" -gt 0 ] || break
+  sayf "$W_RETRYASK" "$n_again"
+  go=0; tty=0; deadline=$((SECONDS + RETRY_WAIT))
+  [ -z "${BRAIN_AGENT_NO_TTY:-}" ] && (exec < /dev/tty) 2>/dev/null && tty=1
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if [ "$tty" = 1 ]; then
+      if read -r -t "$POLL" _ < /dev/tty; then go=1; break; fi
+    else
+      sleep "$POLL"
+    fi
+    code="$(api GET '/documents/import-laptop/check?form=lines')"
+    if [ "$code" = 200 ] && head -1 "$TMP/out" | grep -q '^state retry$'; then go=1; break; fi
+    [ "$code" = 401 ] && break
+  done
+  [ "$go" = 1 ] || break
+  sayf "$W_RETRYING" "$n_again"
+  refused=$((refused - n_again))
+  awk -F '\t' '$1 != "busy" && $1 != "other"' "$TMP/refused" > "$TMP/refused.keep"
+  send_list "$TMP/again"
+  cat "$TMP/refused.keep" >> "$TMP/refused"
+  [ -s "$TMP/refused.keep" ] && [ "$(awk -F '\t' '$1 == "busy" || $1 == "other"' "$TMP/refused" | wc -l)" -eq 0 ] && {
+    awk -F '\t' '{ print $2 "\t" $4 }' "$TMP/refused" > "$TMP/refused.lines"
+    api POST /documents/import-laptop/refused -H 'Content-Type: text/plain' --data-binary @"$TMP/refused.lines" >/dev/null
+    break
+  }
+done
 
 finish
 printf '\n'

@@ -300,6 +300,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             message=str(detail) if isinstance(detail, str) else "HTTP exception",
             details={"detail": detail, "status_code": exc.status_code},
         ).model_dump(),
+        headers=getattr(exc, "headers", None),   # IMPORT-PACE-1: Retry-After on "wait" reaches the helper
     )
 
 @app.exception_handler(Exception)
@@ -331,6 +332,30 @@ app.add_middleware(
         'X-Brain-Permit',
     ],
 )
+
+
+# IMPORT-PACE-1 (2026-11-24): when a chat last ran, so the background reading of a move-in steps aside
+# (api/import_pace.py ChatClock). Plain ASGI, so a streamed answer counts until its last byte.
+from api import import_pace as _pace
+_CHAT_CLOCK = _pace.ChatClock()
+
+
+class _ChatClockASGI:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and str(scope.get("path", "")).startswith(("/chat", "/v1/chat")):
+            _CHAT_CLOCK.begin()
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _CHAT_CLOCK.end()
+        else:
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(_ChatClockASGI)
 
 # --- API key authentication (defined early so all endpoints can use Depends(get_api_key)) ---
 BRAIN_API_KEY = os.getenv("BRAIN_API_KEY", "")
@@ -5373,6 +5398,9 @@ _LAPTOP_TOKENS = _laptop_import.TokenStore(RUNTIME_DIR / "laptop_import_tokens.j
 from api import laptop_survey as _laptop_survey
 _LAPTOP_SURVEYS = _laptop_survey.SurveyStore(RUNTIME_DIR / "laptop_surveys")
 _LAPTOP_HELPER = Path(__file__).resolve().parent.parent / "scripts" / "import" / "brain_import.py"
+# The pace (IMPORT-PACE-1, 2026-11-24, api/import_pace.py): files are read off the event loop, one at a
+# time with a short queue; beyond it the helper hears "wait" (503, Retry-After) and sends the file again.
+_READ_GATE = _pace.ReadGate()
 _laptop_permit = {"id": None, "at": 0.0}
 # Audio is kept as files, not read: in the container at LAPTOP_AUDIO_DIR, which compose mounts from
 # the member's ~/in when LAPTOP_AUDIO_HOST_DIR is set (scripts/member_env.py sets it), else a volume.
@@ -5390,13 +5418,7 @@ async def import_laptop_token(request: Request, api_key: str = Depends(get_api_k
     except (ValueError, AttributeError):
         survey = False
     if survey:
-        import shutil as _shutil
-        try:
-            du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
-            free, total = du.free, du.total
-        except OSError:
-            free, total = None, None
-        cap = _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+        cap = _survey_cap()
         out = _LAPTOP_TOKENS.mint(ttl=_laptop_survey.SURVEY_TTL_SECONDS, max_files=_laptop_survey.SURVEY_MAX_FILES,
                                   max_bytes=cap, survey=True)
     else:
@@ -5420,7 +5442,10 @@ def import_laptop_status(api_key: str = Depends(get_api_key)):
             survey = {"state": "chosen" if data.get("chosen") is not None else "plan", "at": data["at"],
                       "groups": _laptop_survey.public(data["groups"]), "skipped": data["skipped"],
                       "roots": data["roots"], "os": data.get("os", ""), "chosen": data.get("chosen"),
-                      "proposed": _laptop_survey.totals(data["groups"], proposed)}
+                      "proposed": _laptop_survey.totals(data["groups"], proposed),
+                      "estimate": data.get("estimate"), "refused": (data.get("refused") or [])[:500],
+                      "refused_total": len(data.get("refused") or []),
+                      "refused_by": _pace.tally_refused(data.get("refused") or []), "retry": bool(data.get("retry"))}
     return {"run": run, "survey": survey,
             "audio_to": "in" if os.getenv("LAPTOP_AUDIO_HOST_DIR") else "brain"}
 
@@ -5434,13 +5459,16 @@ async def import_laptop_plan(request: Request, api_key: str = Depends(get_api_ke
     except ValueError:
         raise HTTPException(status_code=400, detail="body must be JSON")
     take = body.get("take") if isinstance(body, dict) else None
+    # IMPORT-PACE-1: folders the person named are read first; books ("big") now or overnight (default)
+    named = [x for x in (body.get("named") or []) if isinstance(x, str)][:40] if isinstance(body, dict) else []
+    big_now = isinstance(body, dict) and body.get("big") == "now"
     if take != "proposed" and not isinstance(take, list):
         raise HTTPException(status_code=400, detail='take must be a list of group ids or "proposed"')
     run = _LAPTOP_TOKENS.latest()
     if not run or not run.get("survey") or not run.get("open"):
         raise HTTPException(status_code=409, detail="no open whole-computer run; start one on the home")
     try:
-        t = _LAPTOP_SURVEYS.choose(_LAPTOP_TOKENS.latest_hash() or "", take, run)
+        t = _LAPTOP_SURVEYS.choose(_LAPTOP_TOKENS.latest_hash() or "", take, run, named=named, big_now=big_now)
     except LookupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -5499,6 +5527,9 @@ def import_laptop_check(authorization: str = _Header(""), form: str = ""):
             return PlainTextResponse(_laptop_agent.lines_form("folder", None))
         h = _LAPTOP_TOKENS.hash_of(_laptop_import.bearer(authorization))
         data = _LAPTOP_SURVEYS.get(h)
+        again = _LAPTOP_SURVEYS.retry_take(h) if data else None
+        if again is not None:  # IMPORT-PACE-1: the owner pressed "send these again" on the home
+            return PlainTextResponse(_laptop_agent.lines_form("retry", {"paths": again}), headers={"Cache-Control": "no-store"})
         take = _LAPTOP_SURVEYS.take(h) if data else None
         state = "none" if data is None else ("chosen" if take is not None else "waiting")
         return PlainTextResponse(_laptop_agent.lines_form(state, take), headers={"Cache-Control": "no-store"})
@@ -5580,27 +5611,44 @@ async def import_laptop_file(
     if ext not in _laptop_import.ACCEPTED_EXT:
         raise HTTPException(status_code=415, detail=f"Knowledge does not read .{ext or '(none)'} files")
     content = await file.read(_laptop_import.MAX_FILE_BYTES + 1)
+    if len(content) > _laptop_import.MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"file over {_laptop_import.MAX_FILE_BYTES // 1024 ** 2} MB")
+    # IMPORT-PACE-1: a 300-page PDF read on the event loop kept /health silent for 15 s in a member's
+    # sitting. Now the reading runs in a worker thread, one file at a time; a full queue answers "wait"
+    # (503 with Retry-After) before the file is charged, and the helper sends it again.
+    from starlette.concurrency import run_in_threadpool as _rtp
+    if not await _rtp(_READ_GATE.enter, 20.0):
+        raise HTTPException(status_code=503, detail="brain busy reading; send it again shortly",
+                            headers={"Retry-After": str(_pace.RETRY_AFTER_SECONDS)})
     try:
-        _LAPTOP_TOKENS.charge(raw, len(content))
-    except _laptop_import.TokenError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
-    try:
-        if ext == "pdf":
-            text, ctype = extract_text_from_pdf(content), "application/pdf"
-        elif ext == "docx":
-            text, ctype = extract_text_from_docx(content), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        elif ext in _laptop_import.IMAGE_EXT:
-            text, ctype = extract_text_from_image(content), f"image/{ext}"
-        else:
-            text, ctype = _laptop_import.decode_text(content), "text/plain"
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"could not read the file: {str(e)[:200]}")
-    if not text.strip():
-        raise HTTPException(status_code=422, detail="no text in the file")
-    res = _laptop_propose(text, f"laptop/{rel}", ctype, len(content))
+        try:
+            _LAPTOP_TOKENS.charge(raw, len(content))
+        except _laptop_import.TokenError as e:
+            raise HTTPException(status_code=e.status, detail=e.detail)
+        try:
+            text, ctype = await _rtp(_laptop_extract, ext, content)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"could not read the file: {str(e)[:200]}")
+        if not text.strip():
+            raise HTTPException(status_code=422, detail="no text in the file")
+        res = await _rtp(_laptop_propose, text, f"laptop/{rel}", ctype, len(content))
+    finally:
+        _READ_GATE.leave()
     _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
+    _remember_follow({"proposal_id": res["proposal_id"], "source_refs": {"filename": f"laptop/{rel}"}}, raw)
     return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"],
             "injection_risk": (res.get("injection_scan") or {}).get("risk")}
+
+
+def _laptop_extract(ext: str, content: bytes):
+    """The text of one laptop file and its content type (in a worker thread, IMPORT-PACE-1)."""
+    if ext == "pdf":
+        return extract_text_from_pdf(content), "application/pdf"
+    if ext == "docx":
+        return extract_text_from_docx(content), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if ext in _laptop_import.IMAGE_EXT:
+        return extract_text_from_image(content), f"image/{ext}"
+    return _laptop_import.decode_text(content), "text/plain"
 
 
 def _laptop_propose(text: str, filename: str, ctype: str, size: int) -> dict:
@@ -5648,8 +5696,10 @@ async def _import_laptop_session(file, rel: str, raw: str):
         raise HTTPException(status_code=422, detail="no conversation in this session (nothing typed)")
     text = ic.render(conv)
     name = ic.conv_file_name(conv)
-    res = _laptop_propose(text, name, "text/markdown", len(text.encode("utf-8")))
+    from starlette.concurrency import run_in_threadpool as _rtp
+    res = await _rtp(_laptop_propose, text, name, "text/markdown", len(text.encode("utf-8")))
     _LAPTOP_TOKENS.note(raw, {"path": rel, "kind": "knowledge", "proposal_id": res["proposal_id"]})
+    _remember_follow({"proposal_id": res["proposal_id"], "source_refs": {"filename": name}}, raw)
     return {"path": rel, "status": res["status"], "proposal_id": res["proposal_id"], "name": name,
             "injection_risk": (res.get("injection_scan") or {}).get("risk")}
 
@@ -5699,6 +5749,55 @@ def import_laptop_finish(authorization: str = _Header("")):
         raise HTTPException(status_code=e.status, detail=e.detail)
     print(f"[import-laptop] finished: {rec['files']} files, {rec['bytes']} bytes proposed", flush=True)
     return {"files": rec["files"], "bytes": rec["bytes"]}
+
+
+@app.post("/documents/import-laptop/refused")
+async def import_laptop_refused(request: Request, authorization: str = _Header("")):
+    """IMPORT-PACE-1. The helper, at the end of its run: the files it could not bring
+    ({"refused": [{"path", "code"}]}), for the home's list by reason and one "send these again".
+    Body JSON or lines ('<code>\t<path>' per file, from the shell agents)."""
+    raw = _laptop_import.bearer(authorization)
+    try:
+        rec = _LAPTOP_TOKENS.check(raw)
+    except _laptop_import.TokenError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    if not rec.get("survey"):
+        raise HTTPException(status_code=409, detail="this token is for a folder-by-folder run, not a survey")
+    body = await request.body()
+    if len(body) > 8 * 1024 ** 2:
+        raise HTTPException(status_code=413, detail="list too large")
+    rows = []
+    text = body.decode("utf-8", "replace")
+    if text.lstrip().startswith("{"):
+        try:
+            rows = [r for r in (json.loads(text).get("refused") or []) if isinstance(r, dict)]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="body must be JSON or lines")
+    else:
+        for line in text.splitlines():
+            code, _, path = line.partition("\t")
+            if path:
+                rows.append({"path": path, "code": code.strip()})
+    try:
+        by = _LAPTOP_SURVEYS.refused(_LAPTOP_TOKENS.hash_of(raw), rows)
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    print(f"[import-laptop] refused: {by}", flush=True)
+    return {"by": by, "retryable": sum(v for k, v in by.items() if k in _pace.RETRYABLE)}
+
+
+@app.post("/documents/import-laptop/retry")
+def import_laptop_retry(api_key: str = Depends(get_api_key)):
+    """Owner only (IMPORT-PACE-1). "Send these again": the helper still waiting on the computer sends
+    only the refused files that can come (brain busy, other); too big and wrong type stay."""
+    run = _LAPTOP_TOKENS.latest()
+    if not run or not run.get("survey") or not run.get("open"):
+        raise HTTPException(status_code=409, detail="the run on the computer is closed; start a new line on the home")
+    try:
+        n = _LAPTOP_SURVEYS.ask_retry(_LAPTOP_TOKENS.latest_hash() or "")
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"retry": n}
 
 
 @app.post("/documents/upload")
@@ -8341,18 +8440,111 @@ _APPROVE_ALL: Dict[str, Any] = {"running": False, "total": 0, "done": 0, "failed
                                 "started": None, "finished": None}
 _APPROVE_ALL_LOCK = threading.Lock()
 _APPROVE_QUEUE: List[Dict[str, Any]] = []   # proposals handed in while a batch runs
+PENDING_LIST_MAX = 100000
+_APPROVE_SEEN: set = set()   # proposal ids handed to the current batch (IMPORT-PACE-1: never twice)
+# IMPORT-PACE-1: the person's one "Remember all", kept on disk so a closed browser or an api restart does
+# not lose it ({kind, follow: the run's token hash or null, at}); files of that run that arrive later join it.
+_REMEMBER_FILE = RUNTIME_DIR / "remember_all.json"
+
+
+def _remember_intent() -> Optional[Dict[str, Any]]:
+    try:
+        return json.loads(_REMEMBER_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _remember_set(intent: Optional[Dict[str, Any]]) -> None:
+    try:
+        if intent is None:
+            _REMEMBER_FILE.unlink(missing_ok=True)
+            return
+        tmp = _REMEMBER_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(intent), encoding="utf-8")
+        os.replace(tmp, _REMEMBER_FILE)
+    except OSError as e:
+        print(f"[approve-all] could not keep the intent: {e}", flush=True)
+
+
+def _proposal_size(p: Dict[str, Any]) -> int:
+    try:
+        meta = json.loads((PROPOSAL_TEXT_DIR / f"{p['proposal_id']}.meta.json").read_text(encoding="utf-8"))
+        return int(meta.get("size") or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _first_pass_names() -> List[str]:
+    """The newest survey run's first pass, as proposal names (laptop/<path>)."""
+    try:
+        data = _LAPTOP_SURVEYS.get(_LAPTOP_TOKENS.latest_hash() or "") or {}
+    except Exception:  # noqa: BLE001
+        return []
+    return [f"laptop/{x}" for x in data.get("first") or []]
+
+
+def _remember_run_open(intent: Dict[str, Any]) -> bool:
+    run = _LAPTOP_TOKENS.latest()
+    return bool(intent.get("follow") and run and run.get("open") and _LAPTOP_TOKENS.latest_hash() == intent["follow"])
+
+
+def _remember_covers(intent: Dict[str, Any], p: Dict[str, Any]) -> bool:
+    """Is this pending proposal inside the person's yes: one of the ids they pressed on, or, with follow, a
+    file of that run (its name laptop/<a path the run chose>)."""
+    if p["proposal_id"] in set(intent.get("ids") or []):
+        return True
+    if not intent.get("follow"):
+        return False
+    try:
+        data = _LAPTOP_SURVEYS.get(intent["follow"]) or {}
+    except Exception:  # noqa: BLE001
+        return False
+    chosen = set(data.get("chosen") or [])
+    names = {f"laptop/{x}" for g in data.get("groups") or [] if g["id"] in chosen for x in g["paths"]}
+    return ((p.get("source_refs") or {}).get("filename") or "") in names
+
+
+def _remember_follow(p: Dict[str, Any], raw: str) -> None:
+    """A file of a run the person already said "Remember all" to joins the reading (IMPORT-PACE-1).
+    A proposal the injection scan rated high is held for a one-by-one look, as in approve-all."""
+    from api import chat_continue as _cc
+    intent = _remember_intent()
+    if not intent or not intent.get("follow"):
+        return
+    try:
+        if intent["follow"] != _LAPTOP_TOKENS.hash_of(raw):
+            return
+    except Exception:  # noqa: BLE001
+        return
+    name = (p.get("source_refs") or {}).get("filename") or ""
+    if not _pace.kind_matches(name, intent.get("kind") or "all", _cc.CHAT_DOC):
+        return
+    if _proposal_scan_risk(p["proposal_id"]) == "high":
+        return
+    _approve_start([p], cont=True)
 
 
 def _pending_document_proposals() -> List[Dict[str, Any]]:
-    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": 1000},
-                     headers=_nodeos_headers(), timeout=15)
+    # IMPORT-PACE-1: every pending one (the 1000 cap here showed "Remember all 1000" of 1,825)
+    r = requests.get(f"{NODEOS_URL}/v1/memory/proposals", params={"status": "PENDING", "limit": PENDING_LIST_MAX},
+                     headers=_nodeos_headers(), timeout=30)
     r.raise_for_status()
     items = r.json().get("proposals") or []
     return [p for p in items if p.get("memory_type") == "document_embedding" and p.get("proposal_id")]
 
 
 def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
+    # IMPORT-PACE-1: below chat. A lower priority for this thread (Linux: a thread is its own task), a pause
+    # between documents once the first pass is read, and a wait while a chat runs.
+    try:
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+    except (AttributeError, OSError):
+        pass
+    first = set(_first_pass_names())
     for p in items:
+        name0 = (p.get("source_refs") or {}).get("filename") or ""
+        if name0 not in first:
+            _CHAT_CLOCK.wait_quiet()
         pid = p["proposal_id"]
         name = (p.get("source_refs") or {}).get("filename") or pid
         _APPROVE_ALL["current"] = name
@@ -8373,11 +8565,48 @@ def _approve_all_worker(items: List[Dict[str, Any]]) -> None:
             _APPROVE_ALL["failed"].append({"name": name, "error": f"{type(e).__name__}: {e}"[:200]})
             print(f"[approve-all] {name}: {type(e).__name__}: {e}", flush=True)
         _APPROVE_ALL["done"] += 1
+        if name0 in first:
+            _APPROVE_ALL["first_done"] = _APPROVE_ALL.get("first_done", 0) + 1
+        else:
+            time.sleep(_pace.PACE_SECONDS)
         if not items_left(items, p):
             with _APPROVE_ALL_LOCK:
                 if _APPROVE_QUEUE:
                     items.extend(_APPROVE_QUEUE); _APPROVE_QUEUE.clear()
     _APPROVE_ALL.update(running=False, current=None, finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    intent = _remember_intent()
+    if intent and not _remember_run_open(intent):
+        _remember_set(None)   # done; a run's yes stays only while that run is open and its files may still come
+
+
+def _approve_start(items: List[Dict[str, Any]], cont: bool = False) -> Dict[str, Any]:
+    """Hand proposals to the worker: queued behind a running batch, or a new batch in read order.
+    cont: a run's file arriving after its batch ran dry continues that batch's count (N of M)."""
+    with _APPROVE_ALL_LOCK:
+        if _APPROVE_ALL["running"]:
+            # never twice: a proposal already in this batch (done, reading or queued) is not queued again
+            new = [p for p in items if p["proposal_id"] not in _APPROVE_SEEN]
+            _APPROVE_SEEN.update(p["proposal_id"] for p in new)
+            _APPROVE_QUEUE.extend(new)
+            _APPROVE_ALL["total"] += len(new)
+            return {**_APPROVE_ALL, "queued": len(new)}
+        if not cont:
+            _APPROVE_SEEN.clear()
+        items = [p for p in items if p["proposal_id"] not in _APPROVE_SEEN]
+        _APPROVE_SEEN.update(p["proposal_id"] for p in items)
+        items = _pace.reading_order(items, _first_pass_names(), _proposal_size)
+        first = set(_first_pass_names())
+        nfirst = sum(1 for p in items if ((p.get("source_refs") or {}).get("filename") or "") in first)
+        if cont and items:
+            _APPROVE_ALL.update(running=True, total=(_APPROVE_ALL.get("done") or 0) + len(items),
+                                first_total=(_APPROVE_ALL.get("first_total") or 0) + nfirst, current=None, finished=None)
+        else:
+            _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
+                                first_total=nfirst, first_done=0, started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                finished=None if items else "nothing pending")
+        if items:
+            threading.Thread(target=_approve_all_worker, args=(items,), name="approve-all", daemon=True).start()
+        return dict(_APPROVE_ALL)
 
 
 def items_left(items: List[Dict[str, Any]], current: Dict[str, Any]) -> bool:
@@ -8386,6 +8615,11 @@ def items_left(items: List[Dict[str, Any]], current: Dict[str, Any]) -> bool:
 
 class ApproveAllRequest(BaseModel):
     proposal_ids: Optional[List[str]] = None   # a subset; None means every pending document
+    # IMPORT-PACE-1: the home's one press: "documents" (not conversations), "chats" or "all", chosen on the
+    # server from the true list (no id list from a capped page); follow: files of the open run that arrive
+    # later join this yes; both kept on disk until done.
+    kind: Optional[str] = None
+    follow: bool = False
     # SEC-1 (2026-11-06): a bulk approve holds back the proposals the injection scan rated
     # high; they stay PENDING for a one-by-one look unless the caller says so on purpose.
     include_high_risk: bool = False
@@ -8404,6 +8638,7 @@ def _proposal_scan_risk(proposal_id: str) -> Optional[str]:
 def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str = Depends(get_api_key)):
     """Approve and ingest pending document proposals on the server: all of them, or the ids
     given (used by the world reconciler's self-approval rule, 2026-09-27)."""
+    from api import chat_continue as _cc
     with _APPROVE_ALL_LOCK:
         try:
             items = _pending_document_proposals()
@@ -8412,6 +8647,13 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
         if req and req.proposal_ids:
             want = set(req.proposal_ids)
             items = [p for p in items if p["proposal_id"] in want]
+        if req and req.kind in ("documents", "chats", "all"):
+            items = [p for p in items if _pace.kind_matches((p.get("source_refs") or {}).get("filename") or "", req.kind, _cc.CHAT_DOC)]
+            run = _LAPTOP_TOKENS.latest()
+            follow = _LAPTOP_TOKENS.latest_hash() if (req.follow and run and run.get("open")) else None
+            # the yes covers exactly these ids and, with follow, the files of that one run; nothing else
+            _remember_set({"kind": req.kind, "follow": follow, "at": int(time.time()),
+                           "ids": [p["proposal_id"] for p in items]})
         held: List[Dict[str, Any]] = []
         if not (req and req.include_high_risk):
             held = [p for p in items if _proposal_scan_risk(p["proposal_id"]) == "high"]
@@ -8421,23 +8663,95 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
                 print(f"[approve-all] held {len(held)} high-risk proposal(s) for a one-by-one look", flush=True)
         held_out = [{"proposal_id": p["proposal_id"],
                      "name": (p.get("source_refs") or {}).get("filename") or p["proposal_id"]} for p in held]
-        if _APPROVE_ALL["running"]:
-            # A batch is already running: queue these for it (the reconciler's second batch
-            # of 392 was dropped here on 2026-09-27); the worker drains the queue when done.
-            seen = {p["proposal_id"] for p in _APPROVE_QUEUE}
-            _APPROVE_QUEUE.extend(p for p in items if p["proposal_id"] not in seen)
-            _APPROVE_ALL["total"] += len(items)
-            return {**_APPROVE_ALL, "queued": len(items), "held": held_out}
-        _APPROVE_ALL.update(running=bool(items), total=len(items), done=0, failed=[], current=None,
-                            started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), finished=None if items else "nothing pending")
-        if items:
-            threading.Thread(target=_approve_all_worker, args=(items,), name="approve-all", daemon=True).start()
-    return {**_APPROVE_ALL, "held": held_out}
+    # A batch already running takes these into its queue (the reconciler's second batch of 392 was
+    # dropped on 2026-09-27); otherwise a new batch in read order (the first pass first).
+    return {**_approve_start(items), "held": held_out}
 
 
 @app.get("/documents/approve-all/status")
 def documents_approve_all_status(api_key: str = Depends(get_api_key)):
     return dict(_APPROVE_ALL)
+
+
+def _survey_cap() -> int:
+    """The byte cap of one whole-computer run on this box now (laptop_survey.survey_max_bytes)."""
+    import shutil as _shutil
+    try:
+        du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
+        free, total = du.free, du.total
+    except OSError:
+        free, total = None, None
+    return _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+
+
+def _room() -> Dict[str, Any]:
+    """MEMBERS-15 (Anne's question 2026-11-25: "do we have limits?"): the plain limits the home states
+    beside the import: one run's file and byte cap, and the brain's disk share on a shared box
+    (BRAIN_LIMIT_DISK_GB, docs/MEMBER_LIMITS.md) when the admin set one."""
+    try:
+        q = float(os.environ.get("BRAIN_LIMIT_DISK_GB") or 0) or None
+    except ValueError:
+        q = None
+    try:
+        cap = _survey_cap()
+    except Exception:  # noqa: BLE001
+        cap = None
+    return {"run_files": _laptop_survey.SURVEY_MAX_FILES, "run_bytes": cap, "share_gb": q}
+
+
+@app.get("/documents/waiting")
+def documents_waiting(api_key: str = Depends(get_api_key)):
+    """IMPORT-PACE-1. The one true count of what waits for the person's yes, for the home's card, its
+    button and the footer: {documents, chats, total} from the full pending list (no page cap), the
+    reading now ({running, done, total, first_done, first_total, eta_seconds}), and the remembered yes."""
+    from api import chat_continue as _cc
+    try:
+        items = _pending_document_proposals()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"could not list pending proposals: {type(e).__name__}")
+    names = [(p.get("source_refs") or {}).get("filename") or "" for p in items]
+    out = _pace.split_waiting(names, _cc.CHAT_DOC)
+    st = dict(_APPROVE_ALL)
+    left = max(0, (st.get("total") or 0) - (st.get("done") or 0)) if st.get("running") else 0
+    est = None
+    try:
+        est = (_LAPTOP_SURVEYS.get(_LAPTOP_TOKENS.latest_hash() or "") or {}).get("estimate")
+    except Exception:  # noqa: BLE001
+        est = None
+    if left and est and est.get("rest_files"):
+        per = est["rest_seconds"] / est["rest_files"] + _pace.PACE_SECONDS
+        eta = int(left * per)
+    else:
+        eta = int(left * (_pace.MEASURED["note_seconds"] + _pace.PACE_SECONDS))
+    out["reading"] = {"running": bool(st.get("running")), "done": st.get("done") or 0, "total": st.get("total") or 0,
+                      "first_done": st.get("first_done") or 0, "first_total": st.get("first_total") or 0,
+                      "failed": len(st.get("failed") or []), "eta_seconds": eta}
+    intent = _remember_intent()
+    out["remember"] = {"kind": intent.get("kind"), "follow": bool(intent.get("follow"))} if intent else None
+    out["room"] = _room()
+    return out
+
+
+@app.on_event("startup")
+def _resume_remember_all() -> None:
+    """IMPORT-PACE-1: a "Remember all" the api did not finish (a restart, an update) picks up again."""
+    intent = _remember_intent()
+    if not intent:
+        return
+
+    def _go():
+        from api import chat_continue as _cc
+        time.sleep(20)   # NodeOS and the database come up beside the api
+        try:
+            items = _pending_document_proposals()
+        except Exception as e:  # noqa: BLE001
+            print(f"[approve-all] resume: could not list pending: {type(e).__name__}", flush=True)
+            return
+        items = [p for p in items if _pace.kind_matches((p.get("source_refs") or {}).get("filename") or "", intent.get("kind") or "all", _cc.CHAT_DOC)
+                 and _remember_covers(intent, p) and _proposal_scan_risk(p["proposal_id"]) != "high"]
+        print(f"[approve-all] resume after restart: {len(items)} waiting", flush=True)
+        _approve_start(items)
+    threading.Thread(target=_go, name="approve-all-resume", daemon=True).start()
 
 
 @app.post("/admin/prune-images")
