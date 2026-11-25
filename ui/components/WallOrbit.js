@@ -111,6 +111,7 @@ const CSS = `
 .wo-pr{display:flex;flex-direction:column;align-items:stretch;gap:1px;width:250px;padding:5px;border-radius:14px;background:rgba(8,8,9,.96);
   border:1px solid rgba(255,255,255,.06);animation:wo-up 160ms var(--ease)}
 .wo-cbox .wo-pr{width:340px}
+.wo-bw.up .wo-pr{position:absolute;bottom:calc(100% + 40px);left:50%;transform:translateX(-50%);z-index:5;animation:none}
 .wo-p{font-size:12.5px!important;line-height:1.35;color:var(--odim)!important;text-align:left!important;padding:6px 9px!important;border-radius:9px;
   display:flex;gap:8px;align-items:baseline;overflow-wrap:anywhere;transition:color 160ms var(--ease),background-color 160ms var(--ease)}
 .wo-p:hover,.wo-p:focus-visible{color:var(--oink)!important;background:rgba(255,255,255,.04)}
@@ -143,6 +144,7 @@ const CSS = `
   .wo-add{position:static;transform:none;width:100%;max-height:none;margin-top:14px;animation:none}
   .wo-empty{position:static;transform:none;margin:8px 0 0}
   .wo-bw{align-items:stretch}.wo-pr,.wo-cbox .wo-pr{width:100%}
+  .wo-bw.up .wo-pr{position:static;transform:none}
   .wo-f{padding:9px 2px;border-radius:0}
   .wo-fresh{position:static;transform:none;margin:0 auto 18px;white-space:normal;flex-wrap:wrap;justify-content:center}
 }
@@ -174,7 +176,7 @@ function Prompts({ list, armed, onPress }) {
   )
 }
 
-function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill, prompts }) {
+function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill, prompts, up }) {
   const [text, setText] = useState('')
   const [armed, setArmed] = useState(null)
   const [inside, setInside] = useState(false)
@@ -198,7 +200,7 @@ function Box({ sid, rec, secs, onSend, onMic, wide, autoFocus, fill, prompts }) 
   const list = promptsOf({ prompts })
   const who = sid === CENTRE ? 'the brain' : sid
   return (
-    <div className={'wo-bw' + (inside ? ' in' : '')} ref={wrap}
+    <div className={'wo-bw' + (inside ? ' in' : '') + (up ? ' up' : '')} ref={wrap}
       onFocus={() => setInside(true)}
       onBlur={e => { if (!wrap.current || !wrap.current.contains(e.relatedTarget)) setInside(false) }}>
     <div className={'wo-box' + (recording || text ? ' on' : '')}>
@@ -273,7 +275,7 @@ function Body({ t, at, sent, rec, secs, open, onSend, onMic, onName, onLeave, de
       {inst ? <span className="wo-op">{kindOf(t) === 'site' ? 'a site · press to open' : 'an instrument · press to open'}</span> : (
         <>
           {speaks(ln) ? <Line ln={ln} /> : null}
-          <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} prompts={t.prompts} />
+          <Box sid={t.id} rec={rec} secs={secs} onSend={onSend} onMic={onMic} fill={fill} prompts={t.prompts} up={at.y > 52} />
         </>
       )}
     </section>
