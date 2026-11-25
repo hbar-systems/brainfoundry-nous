@@ -168,7 +168,8 @@ const EN = {
   readyNow: (d, n, h) => `Ready to talk now. Still reading the rest: ${d} of ${n}, ${h}.`,
   // MEMBERS-15 (Anne's onboarding, 2026-11-25): how much is in, the plain limits, and when to leave files on the computer
   roomIn: (n, w) => `Inside: ${n} document${n === 1 ? '' : 's'}${w ? `, ${w} waiting for your yes` : ''}.`,
-  roomLimit: (f, b, q) => `One bring-in takes up to ${f} files and ${b}${q ? `; this brain's share of its shared box is ${q} GB` : ''}. Past that the files are refused and listed; nothing already inside is touched.`,
+  // MEMBERS-16: with a share, the byte limit is the smaller of the fixed cap and what is left of the share
+  roomLimit: (f, b, q, left) => `One bring-in takes up to ${f} files and ${b}${q ? `, the smaller of the fixed limit and what is left of this brain's ${q} GB share of its shared box${left ? ` (${left} left)` : ''}` : ''}. Past that the files are refused and listed; nothing already inside is touched.`,
   roomSpoke: 'Photos, video, music and archives you rarely open can stay on your computer. Connect it below and the brain looks there when you ask, instead of keeping a copy.',
   refusedBy: (n) => `${n} file${n === 1 ? '' : 's'} did not come in:`,
   reason: { too_big: 'too big', type: 'a type Knowledge does not read', busy: 'brain busy', gone: 'no longer on the computer', other: 'other' },
@@ -226,7 +227,7 @@ const RU = {
   readingFirst: (d, n) => `Сначала читаю главное: ${d} из ${n}.`,
   readyNow: (d, n, h) => `Можно говорить. Дочитываю остальное: ${d} из ${n}, ${h}.`,
   roomIn: (n, w) => `Внутри: ${n} ${ruPlural(n, ['документ', 'документа', 'документов'])}${w ? `, ${w} ждут вашего «да»` : ''}.`,
-  roomLimit: (f, b, q) => `За один раз переносится до ${f} файлов и ${b}${q ? `; доля этого мозга на общем сервере ${q} ГБ` : ''}. Сверх этого файлы не принимаются и показываются списком; то, что уже внутри, не трогается.`,
+  roomLimit: (f, b, q, left) => `За один раз переносится до ${f} файлов и ${b}${q ? `: меньшее из постоянного предела и того, что осталось от доли этого мозга на общем сервере (${q} ГБ${left ? `, осталось ${left}` : ''})` : ''}. Сверх этого файлы не принимаются и показываются списком; то, что уже внутри, не трогается.`,
   roomSpoke: 'Фото, видео, музыку и архивы, которые вы редко открываете, можно оставить на компьютере. Подключите его ниже, и мозг будет смотреть там, когда вы попросите, а не хранить копию.',
   refusedBy: (n) => `${n} ${ruPlural(n, ['файл не пришёл', 'файла не пришли', 'файлов не пришли'])}:`,
   reason: { too_big: 'слишком большой', type: 'тип, который Знания не читают', busy: 'мозг занят', gone: 'его уже нет на компьютере', other: 'другое' },

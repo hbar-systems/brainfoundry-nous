@@ -9,6 +9,7 @@ nothing, the bridge's job cap and the admin's spend ceiling hold. Every host eff
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -193,6 +194,23 @@ def test_disk_alarm_over_quota(tmp_path, monkeypatch):
     lines, problems = L.disk(["ada"], root, quota_gb=1, home=str(tmp_path / "home"))
     assert not [p for p in problems if p.startswith("ada")]
 
+
+
+def test_disk_writes_the_share_for_the_api(tmp_path, monkeypatch):
+    """MEMBERS-16: the hourly check tells each member's api its measured use and share (disk_share.json in
+    the api_runtime volume), so one bring-in never takes more than what is left of the share."""
+    root = tmp_path / "srv"
+    (root / "ada").mkdir(parents=True)
+    (root / "ada" / "blob").write_bytes(b"x" * (3 * 1024 * 1024))
+    rt = tmp_path / "rt"; rt.mkdir()
+    monkeypatch.setattr(L, "member_volumes", lambda m: [])
+    lines, problems = L.disk(["ada"], root, quota_gb=15, home=str(tmp_path / "home"), share=True, share_dirs={"ada": str(rt)})
+    j = json.loads((rt / "disk_share.json").read_text())
+    assert j["quota_gb"] == 15 and j["used_bytes"] >= 3 * 1024 ** 2 and j["member"] == "ada"
+    assert oct((rt / "disk_share.json").stat().st_mode & 0o777) == "0o644"
+    assert any("share file" in ln for ln in lines)
+    lines, _ = L.disk(["ada"], root, quota_gb=15, home=str(tmp_path / "home"))   # without the flag: prints only
+    assert not any("share file" in ln for ln in lines)
 
 # ------------------------------------------------------------ add-member ----
 def test_add_member_dry_run_writes_the_limits(tmp_path):

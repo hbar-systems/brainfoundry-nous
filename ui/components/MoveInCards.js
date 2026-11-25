@@ -490,7 +490,7 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
       {waiting && waiting.room && (
         <div className="mi-room" role="note">
           <p className="mi-sub">{P.roomIn(Array.isArray(docs) ? docs.length : 0, (waiting.documents || 0) + (waiting.chats || 0))}</p>
-          <p className="mi-note mi-dim">{P.roomLimit(Number(waiting.room.run_files || 0).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US'), waiting.room.run_bytes ? fmtBytes(waiting.room.run_bytes) : '-', waiting.room.share_gb)}</p>
+          <p className="mi-note mi-dim">{P.roomLimit(Number(waiting.room.run_files || 0).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US'), waiting.room.run_bytes ? fmtBytes(waiting.room.run_bytes) : '-', waiting.room.share_gb, waiting.room.share_left_bytes != null ? fmtBytes(waiting.room.share_left_bytes) : null)}</p>
           <p className="mi-note mi-dim">{P.roomSpoke}</p>
         </div>
       )}
