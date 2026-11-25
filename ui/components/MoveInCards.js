@@ -487,6 +487,13 @@ export default function MoveInCards({ lang = 'en', onMoved }) {
     <div className="mi">
       <WholeComputer lang={lang} W={W} P={P} busy={!!(docBusy && docBusy.n) || ap('doc')} onFiles={sendDocs}
         docBusy={docBusy} docLine={docLine} remember={remember} spoke={spoke} readLine={readLine} />
+      {waiting && waiting.room && (
+        <div className="mi-room" role="note">
+          <p className="mi-sub">{P.roomIn(Array.isArray(docs) ? docs.length : 0, (waiting.documents || 0) + (waiting.chats || 0))}</p>
+          <p className="mi-note mi-dim">{P.roomLimit(Number(waiting.room.run_files || 0).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US'), waiting.room.run_bytes ? fmtBytes(waiting.room.run_bytes) : '-', waiting.room.share_gb)}</p>
+          <p className="mi-note mi-dim">{P.roomSpoke}</p>
+        </div>
+      )}
       <ConnectComputer lang={lang} onState={(x) => setSpoke(s => ({ ...(s || {}), ...x, started: !!((s && s.started) || x.started) }))} />
       <AiChats lang={lang} W={W} P={P} chat={chat} chatBusy={chatBusy} approving={approving}
         onFile={(fs) => importChats(fs, null)} onPaste={(t) => importChats(null, t)} remember={remember} chatIds={chatIds}
@@ -555,6 +562,7 @@ const miStyles = css`
         .mi :global(.mi-sub a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; overflow-wrap: anywhere; }
         .mi :global(.mi-dim) { opacity: 0.72; font-size: 16px; }
         .mi :global(.mi-chips) { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 42px; }
+        .mi :global(.mi-room) { margin: 4px 0 14px; padding: 0 4px; }
         .mi :global(.mi-chip) { font: inherit; font-size: 16px; min-height: 40px; padding: 0 16px; border-radius: 999px; cursor: pointer; color: var(--text); background: transparent; border: 1px solid color-mix(in srgb, var(--border) 50%, var(--text) 25%); transition: background-color 150ms ease-out, border-color 150ms ease-out; }
         .mi :global(.mi-chip:hover) { background: color-mix(in srgb, var(--text) 7%, transparent); }
         .mi :global(.mi-chip-on) { color: var(--bg); background: var(--accent); border-color: var(--accent); }

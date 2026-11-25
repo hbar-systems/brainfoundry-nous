@@ -394,3 +394,35 @@ def test_a_kept_yes_covers_only_what_it_was_given(monkeypatch, server):
     later = {"proposal_id": "p9", "memory_type": "document_embedding", "source_refs": {"filename": "upload/other.md"}}
     assert m._remember_covers(intent, pressed[0]) and not m._remember_covers(intent, later)
     m._APPROVE_ALL.update(running=False)
+
+
+def test_waiting_states_the_room(monkeypatch, server):
+    """MEMBERS-15: the home states the plain limits beside the import (Anne's "do we have limits?")."""
+    from fastapi.testclient import TestClient
+    _api_env(monkeypatch, server, [])
+    monkeypatch.setenv("BRAIN_LIMIT_DISK_GB", "15")
+    room = TestClient(server.m.app).get("/documents/waiting").json()["room"]
+    assert room["run_files"] == 20000 and room["share_gb"] == 15.0
+    assert room["run_bytes"] is None or room["run_bytes"] >= 0
+    monkeypatch.delenv("BRAIN_LIMIT_DISK_GB")
+    assert TestClient(server.m.app).get("/documents/waiting").json()["room"]["share_gb"] is None
+
+
+def test_room_words_both_languages():
+    node = __import__("shutil").which("node")
+    if not node:
+        pytest.skip("node needed")
+    js = r"""
+const P = require(process.argv[1]);
+const out = {};
+for (const l of ['en', 'ru']) { const W = P.planWords(l); out[l] = [W.roomIn(1, 0), W.roomIn(600, 200), W.roomLimit(20000, '8 GB', 15), W.roomLimit(20000, '8 GB', null), W.roomSpoke]; }
+console.log(JSON.stringify(out));
+"""
+    r = subprocess.run([node, "-e", js, str(ROOT / "ui" / "lib" / "moveInPlan.js")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    j = json.loads(r.stdout)
+    assert j["en"][0] == "Inside: 1 document."
+    assert j["en"][1] == "Inside: 600 documents, 200 waiting for your yes."
+    assert "15 GB" in j["en"][2] and "share" not in j["en"][3]
+    assert j["ru"][1].startswith("Внутри: 600 документов, 200 ждут")
+    assert all(len(s.split(". ")) <= 2 for s in (j["en"][4], j["ru"][4]))

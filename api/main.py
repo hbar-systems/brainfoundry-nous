@@ -5418,13 +5418,7 @@ async def import_laptop_token(request: Request, api_key: str = Depends(get_api_k
     except (ValueError, AttributeError):
         survey = False
     if survey:
-        import shutil as _shutil
-        try:
-            du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
-            free, total = du.free, du.total
-        except OSError:
-            free, total = None, None
-        cap = _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+        cap = _survey_cap()
         out = _LAPTOP_TOKENS.mint(ttl=_laptop_survey.SURVEY_TTL_SECONDS, max_files=_laptop_survey.SURVEY_MAX_FILES,
                                   max_bytes=cap, survey=True)
     else:
@@ -8679,6 +8673,32 @@ def documents_approve_all_status(api_key: str = Depends(get_api_key)):
     return dict(_APPROVE_ALL)
 
 
+def _survey_cap() -> int:
+    """The byte cap of one whole-computer run on this box now (laptop_survey.survey_max_bytes)."""
+    import shutil as _shutil
+    try:
+        du = _shutil.disk_usage(str(_LAPTOP_AUDIO_DIR if _LAPTOP_AUDIO_DIR.exists() else RUNTIME_DIR))
+        free, total = du.free, du.total
+    except OSError:
+        free, total = None, None
+    return _laptop_survey.survey_max_bytes(dict(os.environ), free, total)
+
+
+def _room() -> Dict[str, Any]:
+    """MEMBERS-15 (Anne's question 2026-11-25: "do we have limits?"): the plain limits the home states
+    beside the import: one run's file and byte cap, and the brain's disk share on a shared box
+    (BRAIN_LIMIT_DISK_GB, docs/MEMBER_LIMITS.md) when the admin set one."""
+    try:
+        q = float(os.environ.get("BRAIN_LIMIT_DISK_GB") or 0) or None
+    except ValueError:
+        q = None
+    try:
+        cap = _survey_cap()
+    except Exception:  # noqa: BLE001
+        cap = None
+    return {"run_files": _laptop_survey.SURVEY_MAX_FILES, "run_bytes": cap, "share_gb": q}
+
+
 @app.get("/documents/waiting")
 def documents_waiting(api_key: str = Depends(get_api_key)):
     """IMPORT-PACE-1. The one true count of what waits for the person's yes, for the home's card, its
@@ -8708,6 +8728,7 @@ def documents_waiting(api_key: str = Depends(get_api_key)):
                       "failed": len(st.get("failed") or []), "eta_seconds": eta}
     intent = _remember_intent()
     out["remember"] = {"kind": intent.get("kind"), "follow": bool(intent.get("follow"))} if intent else None
+    out["room"] = _room()
     return out
 
 
