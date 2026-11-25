@@ -84,7 +84,8 @@ def test_an_instrument_name_belongs_to_the_first_file(tmp_path):
 
 
 def test_the_worlds_register_carries_the_music_instruments():
-    """On a box with the world beside it: music fans sing, studio, loops, K2, listen; media fans the film rooms."""
+    """On a box with the world beside it: music fans take, loops, K2, listen (DEMO-1 2026-11-25: take folded sing and
+    studio into one path, record, demo, ask); media fans the film rooms."""
     world = pathlib.Path("/home/hands/world")
     if not (world / "registry" / "surfaces" / "music.json").is_file():
         pytest.skip("no world on this box")
@@ -95,7 +96,7 @@ def test_the_worlds_register_carries_the_music_instruments():
         for i in s.get("instruments", []):
             for sid in i["on"]:
                 on.setdefault(sid, []).append(i["name"])
-    assert {"sing", "studio", "loops", "k2", "listen"} <= set(on.get("hbar.music", []))
+    assert {"take", "loops", "k2", "listen"} <= set(on.get("hbar.music", []))
     assert {"film", "shots", "control"} <= set(on.get("hbar.media", []))
 
 
