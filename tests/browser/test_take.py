@@ -204,8 +204,8 @@ def test_lines_and_an_embed_take_and_synced_demo(harness):
         pg.locator(".tk-read", has_text="the next group").wait_for()            # on to the next group by itself
         pg.locator(".tk-chip", has_text="none").first.click()
         # a playlist track through the (stand-in) embed
-        pg.locator(".tk-chip", has_text="my playlists").click()
-        pg.locator(".tk-it", has_text="BEATS test").click()
+        pg.locator(".tk-chip", has_text="orfeo library").click()            # DEMO-2: one search over his library
+        pg.locator(".tk-q input").fill("dark prod")
         pg.locator(".tk-it", has_text="Dark Beat").click()
         pg.locator(".tk-under iframe").wait_for(timeout=8000)
         pg.wait_for_function("!document.querySelector('.tk-btn').disabled", timeout=8000)
@@ -229,3 +229,83 @@ def test_lines_and_an_embed_take_and_synced_demo(harness):
         assert drift and max(abs(x) for x in drift) < 120, drift
         b.close()
     assert not errors, errors
+
+
+def test_orfeo_library_search_live_and_blocked_embed(harness):
+    """DEMO-2: the orfeo library search under the voice. Typing finds his library (no YouTube call); the press
+    searches YouTube through the (stubbed) One door; a result whose embedding is off is greyed with its reason, a
+    press on it sets nothing and says why, the one line offers "drop the file instead"; a playable result goes under
+    the take through the embed."""
+    from playwright.sync_api import sync_playwright
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "cc"))
+    import cc_find
+    h = harness
+    calls = []
+
+    def yt(action, key, q):
+        calls.append(action)
+        if action == cc_find.SEARCH_ACTION:
+            return {"items": [{"id": {"videoId": "goodgoodgo1"}, "snippet": {"title": "Lose Yourself (Instrumental)", "channelTitle": "Eminem"}},
+                              {"id": {"videoId": "blockedbea1"}, "snippet": {"title": "Lose Control Beat", "channelTitle": "A Label"}}]}
+        ids = q["id"].split(",")
+        if q["part"] == "status":
+            return {"items": [{"id": i, "status": {"embeddable": i != "blockedbea1", "privacyStatus": "public"}} for i in ids]}
+        return {"items": [{"id": i, "contentDetails": {"duration": "PT3M5S"}} for i in ids]}
+
+    lst = h.world / "systems" / "m" / "ops" / "listening"
+    (lst / "listen.json").write_text(json.dumps({"first": ["beats"]}))           # the BEATS series comes first
+    h.bridge.LISTEN._cache = None
+    h.bridge.FIND = cc_find.Find(h.bridge.LISTEN, h.bridge.TAKE, h.root / "find-state", get=yt)
+    bad = []
+    shots = os.environ.get("DEMO2_SHOTS")
+    with sync_playwright() as p:
+        b = launch(p, h.voice)
+        ctx = b.new_context(viewport={"width": 1440, "height": 1000})
+        ctx.add_init_script(FAKE_YT)
+        pg = ctx.new_page()
+        errs(pg, bad)
+        pg.goto(h.url + "/take")
+        pg.locator(".tk-eye", has_text="orfeo").wait_for(timeout=15000)
+        pg.locator(".tk-chip", has_text="orfeo library").click()
+        pg.locator(".tk-find header", has_text="orfeo library").wait_for()
+        pg.locator(".tk-sc button", has_text="from BEATS test").wait_for()          # the BEATS shortcut on top
+        pg.wait_for_timeout(400)
+        opened = len(calls)                                  # opening checks the recent tracks' flags (a cached week)
+        pg.locator(".tk-q input").fill("dark")
+        pg.locator(".tk-it", has_text="Dark Beat").wait_for()
+        pg.wait_for_timeout(400)
+        assert len(calls) == opened                                                # typing never reaches YouTube
+        pg.locator(".tk-q input").fill("lose")
+        pg.locator(".tk-note", has_text="Nothing in your tracks").wait_for()
+        pg.locator(".tk-q button", has_text="search YouTube").click()
+        good = pg.locator(".tk-it", has_text="Lose Yourself (Instrumental)")
+        good.wait_for(timeout=8000)
+        blocked = pg.locator(".tk-it.off", has_text="Lose Control Beat")
+        blocked.wait_for()
+        assert "embedding is off" in blocked.inner_text()
+        assert "3:05" in good.inner_text()
+        pg.locator(".tk-grey", has_text="embedding off").wait_for()
+        assert pg.locator(".tk-grey button", has_text="drop the file instead").count() == 1
+        if shots:
+            pg.screenshot(path=os.path.join(shots, "01-orfeo-search.png"))
+        blocked.click(force=True)                            # aria-disabled: a press still says why
+        pg.locator(".tk-word.err", has_text="embedding is off").wait_for()
+        assert pg.locator(".tk-under").count() == 0                                # nothing set under the take
+        good.click()
+        pg.locator(".tk-under iframe").wait_for(timeout=8000)
+        assert "Lose Yourself" in pg.locator(".tk-under").inner_text()
+        if shots:
+            pg.screenshot(path=os.path.join(shots, "02-picked.png"))
+        assert set(calls) <= {cc_find.SEARCH_ACTION, cc_find.VIDEOS_ACTION} and calls.count(cc_find.SEARCH_ACTION) == 1 and cc_find.SEARCH_ACTION not in calls[:opened]
+        # an empty box again: recent is empty in this harness (no embed takes yet in this test's order), shortcuts stay
+        pg.locator(".tk-chip", has_text="orfeo library").click()              # a pick closed the list; open it again
+        pg.locator(".tk-q input").fill("")
+        pg.locator(".tk-sc button", has_text="from BEATS test").wait_for()
+        if shots:
+            pg.set_viewport_size({"width": 390, "height": 900})
+            pg.locator(".tk-q input").fill("lose")
+            pg.locator(".tk-q button").click()
+            pg.locator(".tk-it.off").wait_for()
+            pg.screenshot(path=os.path.join(shots, "03-orfeo-search-phone.png"), full_page=True)
+        b.close()
+    assert not bad, bad

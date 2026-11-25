@@ -57,6 +57,7 @@ Endpoints (JSON):
   GET  /cc/take          {ok, takes:[booth card + step, demo, verdict, ask, sent], lines, films}: /take, record -> demo -> ask (DEMO-1, cc_take.py)
   GET  /cc/take/file?path=<p>  a demo's MP3 or a film cut   POST /cc/take/backing (body = a track)   POST /cc/take/verdict {take,word,treatment?}
   POST /cc/take/ask {take, word: draft|send|answer, ...}: the press only; the world's renderer drafts and sends
+  GET  /cc/take/find?q=<words>&live=0|1 | ?check=<video id>: the orfeo library under the voice (DEMO-2, cc_find.py)
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
@@ -560,6 +561,7 @@ import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-
 import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks played in the console (LISTEN-1, 2026-11-24)
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_take  # noqa: E402    /take: record, demo, ask (DEMO-1, 2026-11-25)
+import cc_find  # noqa: E402    /take: the orfeo library search under the voice (DEMO-2, 2026-11-25)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -698,6 +700,10 @@ TAKE = cc_take.Take(BOOTH, os.environ.get("CC_TAKE_DIR", "").strip() or str(OUT_
 # stays on the box (CC_LISTEN_LOG, default <out>/listen/plays.tsv).
 LISTEN = cc_listen.Listen(WORLD_DIR or None, STATE_DIR,
                           os.environ.get("CC_LISTEN_LOG", "").strip() or str(OUT_DIR / "listen" / "plays.tsv"))
+# The orfeo library search on /take (DEMO-2, 2026-11-25, scripts/cc/cc_find.py): the owner's library first, then a live
+# YouTube search through their One connection (one-read, GET only; capped per day, cached); embed flags per id.
+# CC_FIND_YT_KEY picks the youtube-data connection (its key or its tail); default the first one.
+FIND = cc_find.Find(LISTEN, TAKE, STATE_DIR, key=os.environ.get("CC_FIND_YT_KEY", "").strip())
 LISTENING = cc_listening.Listening(STATE_DIR / "listening", api_url=BRAIN_API_URL, api_key=BRAIN_API_KEY)
 # The same message to the same thread within 60 s is a second press, not a second message (2026-10-22,
 # issue 8 in ops/2026-10-07_brain-use-issues.md): dropped with a 202 the page already reads as "taken".
@@ -6459,6 +6465,12 @@ class Handler(BaseHTTPRequestHandler):
             BOOTH.serve(self, self._query().get("path"))
         elif route == "/take":
             self._send(200, TAKE.state())
+        elif route == "/take/find":
+            qq = self._query()
+            if qq.get("check"):
+                self._send(*FIND.check(qq.get("check")))
+            else:
+                self._send(*FIND.find(qq.get("q"), str(qq.get("live") or "") == "1"))
         elif route == "/take/file":
             TAKE.serve(self, self._query().get("path"))
         elif route == "/actions":
