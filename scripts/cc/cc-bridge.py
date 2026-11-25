@@ -54,6 +54,9 @@ Endpoints (JSON):
   POST /cc/tape/write {path,text,mtime?}   the /tape page's own files only: bits.json, replies, inbox markers, a take's slice list
   GET  /cc/booth          {ok, dir, takes:[{file,path,name,day,made,seconds,rate,channels,bits,sha256,over}]}: the /sing booth's takes (SING-FREE-1, cc_booth.py)
   GET  /cc/booth/file?path=<p>  a take's wav   POST /cc/booth/take  body = wav, X-Booth-Meta {name?,over?}   POST /cc/booth/name {file,name}
+  GET  /cc/take          {ok, takes:[booth card + step, demo, verdict, ask, sent], lines, films}: /take, record -> demo -> ask (DEMO-1, cc_take.py)
+  GET  /cc/take/file?path=<p>  a demo's MP3 or a film cut   POST /cc/take/backing (body = a track)   POST /cc/take/verdict {take,word,treatment?}
+  POST /cc/take/ask {take, word: draft|send|answer, ...}: the press only; the world's renderer drafts and sends
   GET  /cc/listening      {one, accounts:[{tail,channel,handle}], running, error, last, disclosure}: "Bring your listening" (YT-2, cc_listening.py)
   POST /cc/listening/read -> 202: read the owner's YouTube likes and playlists through one-read (GET only), keep them here, a taste note into memory
   GET  /cc/listen         {ok, stations:[{id,name,kind,count,note?,first?}], from|why}: /listen, the owner's listening played back (LISTEN-1, cc_listen.py)
@@ -557,6 +560,7 @@ import cc_tape  # noqa: E402   the memo tape as a console page (TAPE-2, 2026-11-
 import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks played in the console (LISTEN-1, 2026-11-24)
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_library  # noqa: E402   the private library guard on the release doors (DEMO-3, 2026-11-25)
+import cc_take  # noqa: E402    /take: record, demo, ask (DEMO-1, 2026-11-25)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
 import cc_member  # noqa: E402
@@ -689,6 +693,10 @@ BOOTH = cc_booth.Booth(os.environ.get("CC_BOOTH_DIR", "").strip() or str(OUT_DIR
 # scripts/orfeo_library.py writes it). The release doors refuse its audio before the artist's yes. CC_LIBRARY_DIR
 # overrides; the default is where the owner's box keeps it; a brain without the folder refuses nothing.
 LIBRARY_DIR = os.environ.get("CC_LIBRARY_DIR", "").strip() or "/mnt/HC_Volume_107461509/hands/orfeo.music/library"
+# /take (DEMO-1, 2026-11-25, scripts/cc/cc_take.py): the takes recorded there, their demos, verdicts and asks; the
+# world's renderer (on hbar's brain scripts/take_demo.py) writes the demos into the same folder.
+TAKE = cc_take.Take(BOOTH, os.environ.get("CC_TAKE_DIR", "").strip() or str(OUT_DIR / "studio" / "take"),
+                    WORLD_DIR or None, os.environ.get("CC_TAKE_LINES", "").strip() or None)
 # "Bring your listening" (YT-2, 2026-11-23, scripts/cc/cc_listening.py): the owner's own YouTube likes and playlists,
 # read through one-read (GET only) into STATE_DIR/listening, and one taste note into this brain's memory.
 # /listen (LISTEN-1, 2026-11-24, scripts/cc/cc_listen.py): stations from the world's listening tables; the play log
@@ -6460,6 +6468,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, BOOTH.state())
         elif route == "/booth/file":
             BOOTH.serve(self, self._query().get("path"))
+        elif route == "/take":
+            self._send(200, TAKE.state())
+        elif route == "/take/file":
+            TAKE.serve(self, self._query().get("path"))
         elif route == "/actions":
             self._send(200, _actions())
         elif route == "/agents":
@@ -6691,6 +6703,12 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/listen/event":
             self._send(*LISTEN.event(self._json(limit=4000) or {}))
             return
+        if route == "/take/verdict":
+            self._send(*TAKE.verdict(self._json(limit=2000) or {}))
+            return
+        if route == "/take/ask":
+            self._send(*TAKE.ask(self._json(limit=12000) or {}))
+            return
         if route == "/booth/name":
             body = self._json(limit=2000) or {}
             self._send(*BOOTH.rename(body.get("file"), body.get("name")))
@@ -6749,6 +6767,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:   # noqa: BLE001  an answer, not a dead thread
                 code, d = 500, {"ok": False, "error": f"could not take the piece: {type(e).__name__}"}
             self._send(code, d)
+            return
+        if route == "/take/backing":
+            # a track dropped on /take, kept so the box can put the demo over it (DEMO-1)
+            self._send(*TAKE.backing(self))
             return
         if route == "/booth/take":
             # one sung take, the WAV as the body (SING-FREE-1): kept as sent, never rewritten
