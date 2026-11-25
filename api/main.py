@@ -5028,7 +5028,10 @@ def _stream_ingest_path_b(
         # Chunk-level update (2026-09-27): rows of this name whose text is unchanged are kept
         # (fresh created_at, so a later "retire older chunks" leaves them), only new text is
         # embedded, rows whose text disappeared are deleted at the end.
-        cursor.execute("SELECT id, content, metadata FROM document_embeddings WHERE document_name = %s", (filename,))
+        # MEMBERS-16: never a trashed row. Reusing one kept its deleted_at, so a document sent again after it was
+        # trashed stayed in the trash, unseen ("stored=0 reused=1"); its trashed rows stay where they are.
+        cursor.execute("SELECT id, content, metadata FROM document_embeddings WHERE document_name = %s "
+                       "AND (metadata->>'deleted_at') IS NULL", (filename,))
         existing: dict = {}
         _existing_levels = []
         for rid, content, _md in cursor.fetchall():
@@ -8667,9 +8670,17 @@ def documents_approve_all(req: Optional[ApproveAllRequest] = None, api_key: str 
             items = [p for p in items if _pace.kind_matches((p.get("source_refs") or {}).get("filename") or "", req.kind, _cc.CHAT_DOC)]
             run = _LAPTOP_TOKENS.latest()
             follow = _LAPTOP_TOKENS.latest_hash() if (req.follow and run and run.get("open")) else None
-            # the yes covers exactly these ids and, with follow, the files of that one run; nothing else
-            _remember_set({"kind": req.kind, "follow": follow, "at": int(time.time()),
-                           "ids": [p["proposal_id"] for p in items]})
+            # the yes covers exactly these ids and, with follow, the files of that one run; nothing else.
+            # MEMBERS-16: a yes not yet done only grows. A second press lists only what is still pending, so it
+            # used to drop the file being read from the kept yes, and a restart then lost that file.
+            ids = [p["proposal_id"] for p in items]
+            kind = req.kind
+            prev = _remember_intent()
+            if prev:
+                ids = list(dict.fromkeys(list(prev.get("ids") or []) + ids))
+                kind = kind if prev.get("kind") in (None, kind) else "all"
+                follow = follow or prev.get("follow")
+            _remember_set({"kind": kind, "follow": follow, "at": int(time.time()), "ids": ids})
         held: List[Dict[str, Any]] = []
         if not (req and req.include_high_risk):
             held = [p for p in items if _proposal_scan_risk(p["proposal_id"]) == "high"]

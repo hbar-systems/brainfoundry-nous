@@ -492,3 +492,53 @@ console.log(JSON.stringify(['en', 'ru'].map(l => P.planWords(l).roomLimit('20,00
     en, ru = json.loads(r.stdout)
     assert "the smaller of the fixed limit and what is left of this brain's 15 GB share" in en and "(12.4 GB left)" in en
     assert "меньшее из постоянного предела" in ru and "осталось 12.4 GB" in ru
+
+
+def test_a_second_press_never_drops_the_file_being_read(monkeypatch, server):
+    """MEMBERS-16, seen live on Elena's and Alexander's brains: press 1 kept the yes for 4 notes, the first was
+    decided and being read, press 2 listed only the 3 still pending and rewrote the kept yes without it; the api
+    restarted and the resume skipped it. The kept yes now only grows until it is done."""
+    from fastapi.testclient import TestClient
+    m = server.m
+    doc = lambda i: {"proposal_id": f"p{i}", "memory_type": "document_embedding",
+                     "source_refs": {"filename": f"laptop/Documents/n{i}.md"}}
+    pending = [doc(i) for i in range(1, 5)]
+    _api_env(monkeypatch, server, pending)
+    c = TestClient(m.app)
+    c.post("/documents/approve-all", json={"kind": "documents"})
+    m._APPROVE_ALL.update(running=True)
+    pending.pop(0)                                    # p1 decided: no longer pending, being read
+    c.post("/documents/approve-all", json={"kind": "documents"})
+    intent = json.loads((server.tmp / "remember_all.json").read_text())
+    assert intent["ids"] == ["p1", "p2", "p3", "p4"] and intent["kind"] == "documents"
+    assert m._remember_covers(intent, doc(1))
+    c.post("/documents/approve-all", json={"kind": "chats"})   # another kind joins: the yes keeps both
+    assert json.loads((server.tmp / "remember_all.json").read_text())["kind"] == "all"
+    m._APPROVE_ALL.update(running=False)
+
+
+def test_a_document_sent_again_after_the_trash_is_not_kept_in_the_trash(monkeypatch, server):
+    """MEMBERS-16: the chunk-level update reused rows of the same name, trashed ones too, and kept their
+    deleted_at, so a document sent again after it was trashed stayed invisible. It never reuses a trashed row."""
+    m = server.m
+    seen = []
+
+    class Cur:
+        def execute(self, sql, args=None):
+            seen.append(" ".join(sql.split()))
+            if len(seen) > 1:
+                raise RuntimeError("stop here")
+        def fetchall(self):
+            return []
+
+    class Conn:
+        def cursor(self):
+            return Cur()
+        def commit(self): pass
+        def rollback(self): pass
+        def close(self): pass
+
+    monkeypatch.setattr(m, "get_db_connection", lambda: Conn())
+    list(m._stream_ingest_path_b(text="# a note\n\nsome words", filename="laptop/Documents/a.md",
+                                 content_type="text/markdown", size=20, proposal_id="p1", layer=None))
+    assert seen and "WHERE document_name = %s" in seen[0] and "deleted_at') IS NULL" in seen[0]
