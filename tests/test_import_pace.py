@@ -426,3 +426,69 @@ console.log(JSON.stringify(out));
     assert "15 GB" in j["en"][2] and "share" not in j["en"][3]
     assert j["ru"][1].startswith("Внутри: 600 документов, 200 ждут")
     assert all(len(s.split(". ")) <= 2 for s in (j["en"][4], j["ru"][4]))
+
+
+def test_a_file_mid_read_at_a_restart_is_read_again(monkeypatch, server):
+    """MEMBERS-16: the worker decides APPROVE before it reads, so a restart mid-read left that file approved and
+    never stored (1 of 4 test notes on Elena's and Alexander's brains, 2026-11-25). The kept yes now takes it up
+    again after the restart, read once, not decided twice; a stored one (text deleted) is not read again."""
+    m = server.m
+    tdir = server.tmp / "proposal_texts"
+    tdir.mkdir(exist_ok=True)
+    monkeypatch.setattr(m, "PROPOSAL_TEXT_DIR", tdir)
+    doc = lambda pid, n: {"proposal_id": pid, "memory_type": "document_embedding",
+                          "source_refs": {"filename": f"laptop/Documents/{n}.md"}}
+    lists = {"PENDING": [doc("p3", "c"), doc("p4", "d")], "APPROVED": [doc("p1", "a"), doc("p2", "b"), doc("old", "z")]}
+    monkeypatch.setattr(m, "_document_proposals", lambda status: [dict(p) for p in lists[status]])
+    for pid, n in (("p2", "b"), ("old", "z"), ("p3", "c"), ("p4", "d")):   # p2 mid-read (text kept); p1 stored (deleted); old: not this yes
+        m._save_proposal_text(pid, f"note {pid}", filename=f"laptop/Documents/{n}.md", content_type="text/markdown", size=6)
+    intent = {"kind": "documents", "follow": None, "at": 0, "ids": ["p1", "p2", "p3", "p4"]}
+    items = m._resume_items(intent)
+    assert sorted(p["proposal_id"] for p in items) == ["p2", "p3", "p4"]
+    assert [p.get("approved") for p in items if p["proposal_id"] == "p2"] == [True]
+    decided, read = [], []
+    monkeypatch.setattr(m, "_nodeos_decide_memory", lambda pid, *a, **k: decided.append(pid) or {"status": "APPROVED"})
+    def ingest(**kw):
+        read.append(kw["proposal_id"]); yield "event: done\ndata: {}\n\n"
+    monkeypatch.setattr(m, "_stream_ingest_path_b", ingest)
+    monkeypatch.setattr(m._pace, "PACE_SECONDS", 0)
+    monkeypatch.setattr(m, "_REMEMBER_FILE", server.tmp / "remember_all.json")
+    m._approve_all_worker(items)
+    assert sorted(read) == ["p2", "p3", "p4"] and sorted(decided) == ["p3", "p4"]
+    assert m._APPROVE_ALL["failed"] == []
+
+
+def test_one_bring_in_never_passes_what_is_left_of_the_share(monkeypatch, server):
+    """MEMBERS-16: on a shared box the run's byte cap is the smaller of the fixed cap and what is left of the
+    brain's share (the hourly disk check's file), and the page says so."""
+    from fastapi.testclient import TestClient
+    m = server.m
+    _api_env(monkeypatch, server, [])
+    f = server.tmp / "disk_share.json"
+    monkeypatch.setattr(m, "_DISK_SHARE_FILE", f)
+    G = 1024 ** 3
+    f.write_text(json.dumps({"quota_gb": 15, "used_bytes": 13 * G, "at": "2026-11-25T16:00:00Z"}))
+    room = TestClient(m.app).get("/documents/waiting").json()["room"]
+    assert room["share_gb"] == 15.0 and room["share_left_bytes"] == 2 * G
+    assert room["run_bytes"] <= 2 * G                       # was 20 GB against a 15 GB share
+    tok = TestClient(m.app).post("/documents/import-laptop/token", json={"survey": True}).json()
+    assert tok.get("max_bytes", 0) <= 2 * G
+    f.write_text(json.dumps({"quota_gb": 15, "used_bytes": 16 * G}))   # over the share: nothing more comes in
+    assert TestClient(m.app).get("/documents/waiting").json()["room"]["run_bytes"] == 0
+    f.unlink()
+    assert TestClient(m.app).get("/documents/waiting").json()["room"]["share_gb"] is None
+
+
+def test_share_words_both_languages():
+    node = __import__("shutil").which("node")
+    if not node:
+        pytest.skip("node needed")
+    js = r"""
+const P = require(process.argv[1]);
+console.log(JSON.stringify(['en', 'ru'].map(l => P.planWords(l).roomLimit('20,000', '12.4 GB', 15, '12.4 GB'))));
+"""
+    r = subprocess.run([node, "-e", js, str(ROOT / "ui" / "lib" / "moveInPlan.js")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    en, ru = json.loads(r.stdout)
+    assert "the smaller of the fixed limit and what is left of this brain's 15 GB share" in en and "(12.4 GB left)" in en
+    assert "меньшее из постоянного предела" in ru and "осталось 12.4 GB" in ru
