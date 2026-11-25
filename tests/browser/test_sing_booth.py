@@ -113,7 +113,8 @@ class Harness:
     def start(self):
         env = {"HOME": str(self.root), "CC_CWD": str(self.root / "brain"), "CC_HANDS_HOME": str(self.home),
                "CC_OPERATOR_TOKEN": TOKEN, "CC_WORLD_DIR": str(self.world),
-               "CC_SYSTEMS_SEED": str(self.root / "no-seed.json"), "CC_SYSTEMS_BOARD": str(self.root / "board.json")}
+               "CC_SYSTEMS_SEED": str(self.root / "no-seed.json"), "CC_SYSTEMS_BOARD": str(self.root / "board.json"),
+               "CC_LIBRARY_DIR": str(self.root / "library")}   # DEMO-3: never the box's real private library
         self._old = {k: os.environ.get(k) for k in list(env) + ["CC_BOOTH_DIR", "BRAIN_API_KEY", "CC_TELEGRAM_TOKEN"]}
         os.environ.update(env)
         for k in ("CC_BOOTH_DIR", "BRAIN_API_KEY", "CC_TELEGRAM_TOKEN"):

@@ -124,7 +124,7 @@ class Take:
     def step(card: dict, demo: dict | None, verdict: dict | None, ask: dict | None, sent: dict | None, failed: dict | None) -> dict:
         """Where a take stands on the strip record -> demo -> ask, in one word and a line."""
         over = card.get("over") or {}
-        theirs = over.get("kind") in ("embed", "file") and not over.get("mine")
+        theirs = over.get("kind") in ("embed", "file", "yt") and not over.get("mine")
         w = (verdict or {}).get("word")
         if failed and not demo:
             return {"at": "demo", "state": "failed", "say": f"the demo did not render: {failed.get('why', '')}"[:200]}

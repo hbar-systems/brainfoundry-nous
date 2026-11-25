@@ -84,6 +84,11 @@ const CSS = `
 .tk-row.sel{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 75%,transparent)}
 .tk-row b{font:400 19px/1.25 var(--font-display);overflow-wrap:anywhere;display:block}
 .tk-row small{color:var(--text-dim);font-size:13px;overflow-wrap:anywhere}
+.tk-libst{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.tk-libst i{font:600 10px/1 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;font-style:normal;padding:5px 7px;border-radius:6px;box-shadow:inset 0 0 0 1px var(--line);color:var(--text-dim)}
+.tk-libst i.on{background:var(--accent);color:var(--bg);box-shadow:none}
+.tk-parts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.tk-parts .tk-w svg{width:12px;height:12px;vertical-align:-1px}
 .tk-tag{font:600 11px/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;padding:6px 9px;border-radius:6px;background:var(--line);color:var(--text);white-space:nowrap}
 .tk-tag.ready,.tk-tag.drafted,.tk-tag.to-ask{background:var(--accent);color:var(--bg)}
 .tk-tag.making,.tk-tag.drafting,.tk-tag.sending{background:transparent;box-shadow:inset 0 0 0 1px var(--line);color:var(--text-dim)}
@@ -174,6 +179,50 @@ function Play({ on }) {
   return on
     ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" /><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" /></svg>
     : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor" /></svg>
+}
+
+const LIB_STATES = ['fetched', 'demo made', 'asked', 'yes', 'no']
+
+// The mute strip (DEMO-3): his voice in the treatment he chose and the fetched track's parts, all started on one clock,
+// each one in or out with a press, so he hears how the voice sits against the drums, the bass or their vocal.
+function Parts({ t, ver, chosen, ctxNow, fileUrl }) {
+  const names = ['voice', ...Object.keys(ver.stems)]
+  const [on, setOn] = useState(() => Object.fromEntries(names.map(n => [n, n !== 'vocals'])))
+  const [run, setRun] = useState(false)
+  const P = useRef({ gains: {}, srcs: [], bufs: null, key: null })
+  const tr = ver.treatments.find(x => x.id === chosen) || ver.treatments[0]
+  useEffect(() => () => stop(), [])   // eslint-disable-line react-hooks/exhaustive-deps
+  function stop() { P.current.srcs.forEach(s => { try { s.stop() } catch {} }); P.current.srcs = []; setRun(false) }
+  async function play() {
+    if (run) { stop(); return }
+    const ctx = ctxNow()
+    const key = `${t.file}:${tr.id}`
+    if (!P.current.bufs || P.current.key !== key) {
+      const urls = { voice: tr.voice, ...ver.stems }
+      const got = await Promise.all(Object.entries(urls).map(async ([n, rel]) => {
+        const r = await fetch(fileUrl(rel)); return [n, await ctx.decodeAudioData(await r.arrayBuffer())]
+      }))
+      P.current.bufs = Object.fromEntries(got); P.current.key = key
+    }
+    const at = ctx.currentTime + 0.15
+    P.current.srcs = names.map(n => {
+      const s = ctx.createBufferSource(); s.buffer = P.current.bufs[n]
+      const g = ctx.createGain(); g.gain.value = on[n] ? 1 : 0
+      s.connect(g); g.connect(ctx.destination); s.start(at)
+      P.current.gains[n] = g
+      return s
+    })
+    setRun(true)
+  }
+  function flip(n) {
+    setOn(o => { const v = !o[n]; const g = P.current.gains[n]; if (g) g.gain.value = v ? 1 : 0; return { ...o, [n]: v } })
+  }
+  return (
+    <div className="tk-parts" role="group" aria-label="parts">
+      <button type="button" className="tk-w" onClick={play} aria-pressed={run}><Play on={run} /> parts</button>
+      {names.map(n => <button key={n} type="button" className={'tk-chip' + (on[n] ? ' on' : '')} onClick={() => flip(n)} aria-pressed={!!on[n]}>{n === 'vocals' ? 'their vocal' : n}</button>)}
+    </div>
+  )
 }
 
 export default function TakePage() {
@@ -307,11 +356,44 @@ export default function TakePage() {
     } catch { say(`could not load ${it.title}`, true) }
     setPhase('idle')
   }
+  // DEMO-3: a YouTube pick is fetched into his private library; once the copy is on the box it plays from there
+  // (like a file: exact sync, a real mix), and until then the official embed stays under the take
+  const libRow = (id) => ((data && data.library) || []).find(x => x.video_id === id) || null
+  async function askFetch(it, viaMac) {
+    try {
+      const r = await fetch('/cc/take/fetch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_id: it.id || it.video_id, title: it.title || '', via_mac: !!viaMac }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d.ok) say(d.error || 'the box did not take the fetch', true)
+      else load()
+    } catch { say('the box did not take the fetch', true) }
+  }
+  async function useCopy(row, it) {
+    if (phaseRef.current !== 'idle') return
+    dropPlayer(); setPhase('loading'); say(`loading your copy of ${row.title || it.title}`)
+    try {
+      const r = await fetch(`/cc/take/file?path=${encodeURIComponent(row.play)}`)
+      if (!r.ok) throw new Error(r.status)
+      const buf = await ctxNow().decodeAudioData(await r.arrayBuffer())
+      A.current.trackBuf = buf
+      setUnder({ kind: 'yt', video_id: row.video_id, title: row.title || it.title, artist: row.artist || it.artist || '', seconds: buf.duration, mine: false })
+      setPick(null); say('')
+    } catch { say('the copy did not load; the YouTube player stays', true) }
+    setPhase('idle')
+  }
   async function chooseYT(it) {
     dropPlayer(); A.current.trackBuf = null
+    const row = libRow(it.id)
+    if (row && row.play) { useCopy(row, it); return }
     setUnder({ kind: 'embed', video_id: it.id, title: it.title, artist: it.artist, dur: it.dur, ready: false }); setPick(null)
     say('loading the player')
+    if (!row || row.state === 'refused') { if (!row) askFetch(it, false) }
   }
+  useEffect(() => {   // the copy arrived while the embed sat under the take: switch to it (not mid-take)
+    if (under.kind !== 'embed' || phase !== 'idle') return
+    const row = libRow(under.video_id)
+    if (row && row.play) useCopy(row, { title: under.title, artist: under.artist })
+  }, [data, under.kind, under.video_id, phase])   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (under.kind !== 'embed' || under.ready || !ytRecEl.current) return
     let live = true
@@ -341,7 +423,7 @@ export default function TakePage() {
     const o = t.over || {}
     setTab('record'); setRead(t.page && t.page.lines ? { set: t.page.lines.set, group: t.page.lines.group } : null)
     if (o.kind === 'own') chooseOwn({ n: o.n, title: o.title, artist: o.artist })
-    else if (o.kind === 'embed') chooseYT({ id: o.video_id, title: o.title, artist: o.artist })
+    else if (o.kind === 'embed' || o.kind === 'yt') chooseYT({ id: o.video_id, title: o.title, artist: o.artist })
     else if (o.kind === 'file' && t.demo && t.demo.versions) {
       const bed = t.demo.versions[t.demo.versions.length - 1].bed
       const rel = bed && bed.includes('/backing/') ? 'backing/' + bed.split('/backing/')[1] : null
@@ -413,7 +495,7 @@ export default function TakePage() {
       const s = ctx.createBufferSource(); s.buffer = mb; s.connect(a.recIn); s.start(M)   // the sync mark: into the take only
       a.sources.push(s); a.take.M = M
       const T = M + LEAD
-      if (a.trackBuf && (under.kind === 'own' || under.kind === 'file')) {
+      if (a.trackBuf && (under.kind === 'own' || under.kind === 'file' || under.kind === 'yt')) {
         const b = ctx.createBufferSource(); b.buffer = a.trackBuf; b.connect(ctx.destination); b.start(T)
         a.sources.push(b); a.take.T = T; a.endAt = T + a.trackBuf.duration
       } else if (under.kind === 'embed' && a.yt) {
@@ -473,7 +555,7 @@ export default function TakePage() {
           embed_start_in_take_s: all.length ? all[0][0] : null, pairs_all: all.length, fit_rate: fit ? Math.round(fit.rate * 1e6) / 1e6 : null,
           fit_res_ms: fit ? fit.maxResMs : null }
       } else {
-        over = { ...base, kind: under.kind, n: under.n || null, backing: under.backing || null, name: under.name || null,
+        over = { ...base, kind: under.kind, n: under.n || null, backing: under.backing || null, name: under.name || null, video_id: under.video_id || null,
           seconds: Math.round((under.seconds || 0) * 1000) / 1000,
           track_start_in_take_s: marker != null && tk.T ? Math.round((marker + (tk.T - tk.M) + lat) * 10000) / 10000 : null }
       }
@@ -510,7 +592,7 @@ export default function TakePage() {
     const el = audioRef.current
     const key = `${t.file}:${tr.id}`
     if (!el) return
-    if (t.over && t.over.kind === 'embed') { syncPlay(t, tr); return }
+    if (t.over && t.over.kind === 'embed' && !tr.mix) { syncPlay(t, tr); return }
     if (playing === key && !el.paused) { el.pause(); setPlaying(null); return }
     el.src = fileUrl(tr.mix || tr.voice); el.currentTime = 0
     el.play().then(() => setPlaying(key)).catch(() => setRowMsg(m => ({ ...m, [t.file]: 'this browser could not play it' })))
@@ -704,7 +786,8 @@ export default function TakePage() {
                     </button>
                   ))}
                 </div>
-                {t.over && t.over.kind === 'embed' ? <div className="tk-yt" ref={ytDemoEl} style={{ marginTop: 8 }} /> : null}
+                {t.over && t.over.kind === 'embed' && !(ver.treatments[0] || {}).mix ? <div className="tk-yt" ref={ytDemoEl} style={{ marginTop: 8 }} /> : null}
+                {ver.stems ? <Parts t={t} ver={ver} chosen={chosen} ctxNow={ctxNow} fileUrl={fileUrl} /> : null}
                 {sync && sync.file === t.file ? <div className="tk-sync">{sync.text}</div> : null}
                 <div className="tk-words">
                   <button type="button" className="tk-w keep" onClick={() => verdict(t, 'keep')}>keep {ver.treatments.find(x => x.id === chosen) ? ver.treatments.find(x => x.id === chosen).label : ''}</button>
@@ -718,6 +801,30 @@ export default function TakePage() {
           </div>
         ) : null}
       </div>
+    )
+  }
+
+  function libraryStrip() {
+    const rows = (data && data.library) || []
+    if (!rows.length) return null
+    return (
+      <section className="tk-sec" aria-label="orfeo library, private">
+        <p className="tk-lab">their tracks, kept private for your demos</p>
+        {rows.map(r => (
+          <div key={r.video_id} className="tk-row">
+            <div style={{ minWidth: 0 }}>
+              <b>{r.title || r.video_id}</b>
+              <small>{[r.artist, r.grid && r.grid.bpm ? `${Math.round(r.grid.bpm)} bpm` : '', r.grid && (r.grid.key_label || r.grid.key) ? (r.grid.key || r.grid.key_label) : '', r.demos ? `${r.demos} demo files` : '', r.contact || ''].filter(Boolean).join(' · ')}</small>
+              {r.claims && r.claims.length ? <small style={{ display: 'block' }}>the uploader says: {r.claims[0]}</small> : null}
+              {r.why ? <small style={{ display: 'block' }}>{r.why}</small> : null}
+            </div>
+            <span className="tk-libst" aria-label={`where it stands: ${r.state}`}>
+              {LIB_STATES.map(s => <i key={s} className={s === r.state ? 'on' : ''}>{s}</i>)}
+            </span>
+          </div>
+        ))}
+        <small style={{ color: 'var(--text-dim)' }}>Nothing here is published or shared beyond its artist until they say yes. On their no, the copy and the demos over it are deleted.</small>
+      </section>
     )
   }
 
@@ -809,7 +916,13 @@ export default function TakePage() {
                     {under.kind === 'embed' ? <div className="tk-yt" ref={ytRecEl} /> : null}
                     <div>
                       <b>{under.title || under.name}</b>
-                      <small>{[under.artist, under.seconds ? clock(under.seconds) : under.dur ? clock(under.dur) : '', under.kind === 'embed' ? 'plays from YouTube in your headphones; nothing is downloaded' : under.kind === 'own' ? 'your track' : 'kept on the box for the demo'].filter(Boolean).join(' · ')}</small>
+                      <small>{[under.artist, under.seconds ? clock(under.seconds) : under.dur ? clock(under.dur) : '', under.kind === 'embed' ? 'plays from YouTube in your headphones while the box fetches a private copy for the demo' : under.kind === 'yt' ? 'your private copy, fetched for this demo; deleted if the artist says no' : under.kind === 'own' ? 'your track' : 'kept on the box for the demo'].filter(Boolean).join(' · ')}</small>
+                      {under.kind === 'embed' && libRow(under.video_id) && libRow(under.video_id).state === 'refused' ? (
+                        <div className="tk-word">
+                          {libRow(under.video_id).via_mac ? 'the Mac pull was refused too; the YouTube player stays, or drop the file. ' : 'YouTube refused the box, so the player stays for now. '}
+                          {!libRow(under.video_id).via_mac ? <button type="button" className="tk-w" onClick={() => askFetch(under, true)}>fetch through my Mac</button> : null}
+                        </div>
+                      ) : under.kind === 'embed' && libRow(under.video_id) && libRow(under.video_id).state === 'fetching' ? <div className="tk-word">fetching the copy (a minute or two)</div> : null}
                       {under.kind === 'file' ? (
                         <button type="button" className={'tk-mine' + (under.mine ? ' on' : '')} onClick={() => setUnder(u => ({ ...u, mine: !u.mine }))} aria-pressed={!!under.mine}>
                           <i>{under.mine ? '✓' : ''}</i>this track is mine (no ask needed)
@@ -891,6 +1004,7 @@ export default function TakePage() {
               {askTakes.map(t => askRow(t))}
             </section>
           ) : null}
+          {tab === 'ask' ? libraryStrip() : null}
         </div>
         <audio ref={audioRef} preload="none" hidden />
         {dragging ? <div className="tk-drop"><div>Drop a track to record over</div></div> : null}

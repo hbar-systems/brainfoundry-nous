@@ -309,3 +309,96 @@ def test_orfeo_library_search_live_and_blocked_embed(harness):
             pg.screenshot(path=os.path.join(shots, "03-orfeo-search-phone.png"), full_page=True)
         b.close()
     assert not bad, bad
+
+
+def test_fetched_copy_under_the_voice_parts_and_the_library_strip(harness):
+    """DEMO-3: a YouTube pick whose copy is in the private library plays from the copy (kind yt, like a file) and the
+    take carries the video id; a pick YouTube refused keeps the embed and offers one press "fetch through my Mac", which
+    lands as fetch/<id>.want.json with via_mac; a demo over the copy has a parts strip (voice, drums, their vocal) and
+    the Ask screen shows each fetched track on the strip fetched / demo made / asked / yes / no."""
+    from playwright.sync_api import sync_playwright
+    h = harness
+    lib = h.root / "library"
+    f = lib / "abcdefghijk"
+    f.mkdir(parents=True, exist_ok=True)
+    tone_wav(f / "audio.wav", 8, 110, 0.3)
+    (f / "track.json").write_text(json.dumps({"video_id": "abcdefghijk", "title": "Dark Beat", "artist": "Prod", "state": "demo made",
+                                              "audio": "audio.wav", "wav": "audio.wav", "demos": [{}], "grid": {"bpm": 120, "key": "A minor"},
+                                              "contact": "prod@beats.example", "claims": ["FREE FOR NON-PROFIT, credit me"]}))
+    h.bridge.TAKE.library = lib
+    bad = []
+    shots = os.environ.get("DEMO3_SHOTS")
+    with sync_playwright() as p:
+        b = launch(p, h.voice)
+        ctx = b.new_context(viewport={"width": 1440, "height": 1000})
+        ctx.add_init_script(FAKE_YT)
+        pg = ctx.new_page()
+        errs(pg, bad)
+        pg.goto(h.url + "/take")
+        pg.locator(".tk-chip", has_text="orfeo library").wait_for(timeout=15000)
+        pg.locator(".tk-chip", has_text="orfeo library").click()
+        pg.locator(".tk-q input").fill("dark")
+        pg.locator(".tk-it", has_text="Dark Beat").click()
+        pg.locator(".tk-under", has_text="your private copy").wait_for(timeout=8000)
+        assert pg.locator(".tk-under iframe").count() == 0                        # the copy, not the embed
+        if shots:
+            pg.screenshot(path=os.path.join(shots, "01-record-over-the-copy.png"))
+        n0 = len(h.takes())
+        pg.locator(".tk-btn").click()
+        pg.wait_for_timeout(2500)
+        pg.locator(".tk-btn").click()
+        for _ in range(40):
+            if len(h.takes()) > n0:
+                break
+            pg.wait_for_timeout(250)
+        w, card = newest_card(h)
+        assert card["over"]["kind"] == "yt" and card["over"]["video_id"] == "abcdefghijk"
+        assert card["over"]["track_start_in_take_s"] is not None
+        # a demo over the copy, with the track's parts (the renderer's output, written here)
+        d = fake_demo(h, w)
+        dj = json.loads((d / "demo.json").read_text())
+        for k in ("drums", "vocals"):
+            shutil.copy(h.voice, d / "v01" / f"stem_{k}.wav")
+        dj["versions"][0]["stems"] = {"drums": f"demos/{w.stem}/v01/stem_drums.wav", "vocals": f"demos/{w.stem}/v01/stem_vocals.wav"}
+        (d / "demo.json").write_text(json.dumps(dj))
+        pg.reload()
+        pg.locator(".tk-st", has_text="demo").click()
+        pg.locator(".tk-row", has_text="Dark Beat").first.locator("button").first.click()
+        pg.locator(".tk-parts").wait_for(timeout=8000)
+        assert pg.locator(".tk-parts .tk-chip", has_text="their vocal").count() == 1
+        pg.locator(".tk-parts .tk-w").click()
+        pg.locator(".tk-parts .tk-chip", has_text="drums").click()
+        assert pg.locator(".tk-parts .tk-chip.on", has_text="drums").count() == 0
+        if shots:
+            pg.screenshot(path=os.path.join(shots, "02-demo-parts.png"))
+        # the strip on Ask
+        pg.locator(".tk-st", has_text="ask").click()
+        row = pg.locator("[aria-label='orfeo library, private'] .tk-row", has_text="Dark Beat")
+        row.wait_for(timeout=8000)
+        assert row.locator(".tk-libst i.on").inner_text().lower() == "demo made"
+        assert "FREE FOR NON-PROFIT" in row.inner_text()
+        if shots:
+            pg.screenshot(path=os.path.join(shots, "03-ask-library-strip.png"), full_page=True)
+        # a pick YouTube refused: the embed stays, one press through the Mac
+        (take_dir(h) / "fetch").mkdir(parents=True, exist_ok=True)
+        (take_dir(h) / "fetch" / "lmnopqrstuv.json").write_text(json.dumps({"state": "refused", "why": "YouTube's bot wall", "via_mac": False}))
+        lst = h.world / "systems" / "m" / "ops" / "listening"
+        with (lst / "2026-11-20_playlist-items.tsv").open("a") as fh:
+            fh.write("a\tPLbeats0001\tBEATS test\tlmnopqrstuv\tWall Beat\tWall Channel\tWall\t150\n")
+        h.bridge.LISTEN._cache = None
+        pg.reload()
+        pg.locator(".tk-chip", has_text="orfeo library").click()
+        pg.locator(".tk-q input").fill("wall")
+        pg.locator(".tk-it", has_text="Wall Beat").click()
+        btn = pg.locator(".tk-under button", has_text="fetch through my Mac")
+        btn.wait_for(timeout=8000)
+        assert pg.locator(".tk-under iframe").count() == 1                        # the embed stays meanwhile
+        btn.click()
+        want = take_dir(h) / "fetch" / "lmnopqrstuv.want.json"
+        for _ in range(20):
+            if want.exists():
+                break
+            pg.wait_for_timeout(250)
+        assert json.loads(want.read_text())["via_mac"] is True
+        b.close()
+    assert not bad, bad
