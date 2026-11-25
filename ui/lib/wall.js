@@ -479,7 +479,81 @@ const pinFirst = (items, pinned) => {
   return [...l.filter(i => p.includes(i.name)), ...l.filter(i => !p.includes(i.name))]
 }
 
+// ---- reading a thread from the wall (LINE-TALK-1, 2026-11-25) ----
+// hbar: "how can we read thread thru wall? like something pop out?". A press on a line opens the thread's last answer
+// as a card over the wall (ui/components/WallRead.js); these are its two reads.
+//
+//   readable(text)          an answer without the markers the chat draws itself (tree, steer, pane, choices)
+//   lastAnswer(f, thread)   {text} of the thread's last answer (GET /api/bf/sessions/<id>/messages), else {error}
+//   transcribe(f, blob)     {ok, text} | {ok: false, error}: a recording into words, never sent by itself
+
+const MARK_RE = /<(tree|steer|pane|choices|card)\b[^>]*>[\s\S]*?<\/\1>/g
+const readable = (text) => String(text || '').replace(MARK_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+
+async function lastAnswer(f, thread) {
+  if (!thread) return { error: 'no thread here yet' }
+  try {
+    const r = await f('/api/bf/sessions/' + encodeURIComponent(thread) + '/messages', { cache: 'no-store' })
+    if (!r.ok) return { error: `the brain answered ${r.status}` }
+    const d = await json(r)
+    const list = Array.isArray(d && d.messages) ? d.messages : []
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i]
+      if (!m || m.role !== 'assistant') continue
+      const text = readable(m.content)
+      if (text && !/^\[agent report received[^\]]*\]$/.test(text)) return { text, at: m.created_at || null }
+    }
+    return { error: 'nothing said in this thread yet' }
+  } catch {
+    return { error: 'the brain did not answer' }
+  }
+}
+
+async function transcribe(f, blob, FD) {
+  const Form = FD || FormData
+  try {
+    const fd = new Form(); fd.append('file', blob, clipName(blob))
+    const r = await f('/cc/transcribe', { method: 'POST', body: fd })
+    const d = await json(r)
+    if (r.ok && d.ok && String(d.text || '').trim()) return { ok: true, text: String(d.text).trim() }
+    if (r.ok && d.ok) return { ok: false, error: 'nothing was heard' }
+    return { ok: false, error: r.status === 409 ? 'this box has no speech service; type it, or use the mic in the box' : (d.error || `the speech service answered ${r.status}`) }
+  } catch {
+    return { ok: false, error: 'the bridge did not answer' }
+  }
+}
+
+// ---- the switch between the wall and the columns (LINE-TALK-1, 2026-11-25) ----
+// hbar: "maybe we should try that parallel-systems verticle production surface?". The same systems and threads in
+// either view: the wall's kept set opens as the columns of /systems (at most four beside the central chat); the
+// choice is kept in this browser (cc.view) and told to the bridge (POST /cc/view) so the observer counts it.
+//
+//   VIEWS, VIEW_KEY          'wall' | 'columns'; the localStorage key
+//   readView(storage)        the kept choice, else null
+//   columnsUrl(ids, side)    /systems?open=... with the open thread first, then the kept set (four at most)
+//   switchView(f, storage, to, from)  keeps the choice and tells the bridge; never throws
+
+const VIEWS = ['wall', 'columns']
+const VIEW_KEY = 'cc.view'
+const COLUMNS_MAX = 4
+function readView(storage) {
+  try { const v = storage && storage.getItem(VIEW_KEY); return VIEWS.includes(v) ? v : null } catch { return null }
+}
+function columnsUrl(ids, side) {
+  const out = []
+  for (const x of [side, ...(ids || [])]) if (typeof x === 'string' && ID_RE.test(x) && x !== CENTRE && !out.includes(x)) out.push(x)
+  const list = out.slice(0, COLUMNS_MAX)
+  return '/systems' + (list.length ? '?open=' + list.map(encodeURIComponent).join(',') : '')
+}
+async function switchView(f, storage, to, from) {
+  if (!VIEWS.includes(to)) return { ok: false }
+  try { if (storage) storage.setItem(VIEW_KEY, to) } catch {}
+  try { await post(f, '/cc/view', { view: to, from: VIEWS.includes(from) ? from : null }) } catch {}
+  return { ok: true }
+}
+
 module.exports = {
+  readable, lastAnswer, transcribe, VIEWS, VIEW_KEY, COLUMNS_MAX, readView, columnsUrl, switchView,
   PIN_MAX, allInstruments, instrumentsOf, cleanPinned, pinnedOut, togglePin, fanPlace, pinFirst,
   PROMPTS_MAX, WALL_WORDS, isWallWord, promptsOf, waitsForMore, promptPress, ringOf, wallExtra, homeOnWall,
   KINDS, kindOf, openOf, minsText, jobLines, depthOf, jobsBySystem, addGroups, systemsUrl, treeSize,
