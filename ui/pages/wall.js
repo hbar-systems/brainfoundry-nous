@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import React, { useEffect, useRef, useState } from 'react'
-import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl, cleanPinned, togglePin, readView, columnsUrl, switchView } from '../lib/wall'
+import { cellLine, cellState, sentOver, sendText, sendClip, Recorder, CENTRE, pickLook, keptSet, addTo, removeFrom, loadWall, saveWall, systemsUrl, cleanPinned, togglePin, readView, columnsUrl, switchView, readSnap, writeSnap, nowOf } from '../lib/wall'
 import WallOrbit from '../components/WallOrbit'
 import WallRead from '../components/WallRead'
 import ViewSwitch, { VIEW_CSS } from '../components/ViewSwitch'
@@ -54,6 +54,25 @@ import ViewSwitch, { VIEW_CSS } from '../components/ViewSwitch'
 // words while a thread works ("reading the handoff"; the bridge's cc_extras.tool_plain, never the raw command). The
 // switch in the top corner (ui/components/ViewSwitch.js) goes to the columns of /systems with the same systems and
 // threads and back; the choice is kept (cc.view) and a /wall visit with "columns" kept goes on to the columns.
+//
+// Seeing, entering, fast (WALL-6, 2026-11-26, hbar: "the wall needs fixing to see ... it doesnt flow. it takes too
+// long, it opens and loads too slow"): the page draws at once from the last board, setting and register this browser
+// saw (localStorage cc.wall.snap) and fills in as the bridge answers; with nothing seen yet it draws the orbit's shell
+// (the symbol, today's lines as a skeleton). The poll asks for the slim board (?wall=1). One press on a name enters
+// the system (WallOrbit -> WallEnter); Esc leaves it first. The thread beside shows its last known line over a
+// skeleton until its frame has loaded, so a panel is never empty.
+
+// WALL-6: the first three asks start when this page's code arrives, before React draws anything (measured: they
+// started 0.5 to 1.5 s later behind the first paint on a loaded box). Each early answer is used once, by the first
+// ask for that address; every later ask goes out as before.
+const EARLY = typeof window !== 'undefined' && window.location && window.location.pathname === '/wall'
+  ? Object.fromEntries([systemsUrl(null), '/cc/wall', '/cc/surfaces'].map(u => [u, fetch(u, { cache: 'no-store' })]))
+  : {}
+const early = (url, opts) => {
+  const r = EARLY[url]
+  if (r) { delete EARLY[url]; return r }
+  return fetch(url, opts)
+}
 
 const LAST = ['self', 'unfiled']
 const short = (id) => String(id || '').replace(/^hbar\./, '')
@@ -64,7 +83,7 @@ const order = (tiles) => {
 const fmt = (s) => (s < 60 ? `0:${String(s).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`)
 
 const CSS = `
-.wl{--wbg:#0b0c0e;--wcell:#131418;--wcell2:#1a1c21;--wink:#e9e7e2;--wdim:#9a978f;--wmute:#5d5b56;--wlit:var(--accent,#c9a96e);
+.wl{--wbg:#0b0c0e;--wcell:#131418;--wcell2:#1a1c21;--wink:#e9e7e2;--wdim:#a9a69e;--wmute:#8a877f;--wlit:var(--accent,#c9a96e);
   --ease:cubic-bezier(.2,.7,.2,1);--top:calc(var(--nav-h, 52px) + env(safe-area-inset-top, 0px));
   background:var(--wbg);color:var(--wink);min-height:calc(100vh - var(--top));font:400 14px/1.4 var(--font-body,system-ui,sans-serif);box-sizing:border-box;
   display:grid;grid-template-columns:minmax(0,1fr)}
@@ -76,7 +95,7 @@ const CSS = `
 .wl-top{display:flex;align-items:baseline;gap:14px;padding:0 4px 10px;color:var(--wmute);font-size:12px;letter-spacing:.06em}
 .wl-top b{font-weight:500;color:var(--wdim)}.wl-top .on{color:var(--wlit)}
 .wl-top .wl-lk{margin-left:auto}
-.wl-lk{display:flex;gap:12px;font-size:11px;letter-spacing:.14em;color:var(--wmute,#4f4d49);text-transform:lowercase}
+.wl-lk{display:flex;gap:12px;font-size:11px;letter-spacing:.14em;color:var(--wmute,#8a877f);text-transform:lowercase}
 .wl-lk button{color:inherit;opacity:.8}.wl-lk button:hover{color:var(--wink,#ecebe6)}.wl-lk button[aria-pressed=true]{color:var(--wdim,#8f8c85);cursor:default}
 .wl-lkf{position:absolute;left:22px;bottom:18px;z-index:6}
 .wl-sws{display:flex;align-items:center;gap:14px}.wl-top .wl-sws{margin-left:auto}
@@ -116,6 +135,13 @@ const CSS = `
 .wl-sh .wl-nm{font-size:16px}
 .wl-sh a,.wl-x{color:var(--wdim);font-size:13px;text-decoration:none}.wl-sh a:hover,.wl-x:hover{color:var(--wlit)}
 .wl-fr{flex:1;width:100%;border:0;background:var(--wbg);min-height:0}
+.wl-frw{position:relative;flex:1;display:flex;min-height:0}
+.wl-frw .wl-fr{height:100%}
+.wl-skel{position:absolute;inset:0;background:var(--wbg);display:flex;flex-direction:column;gap:12px;padding:22px 20px}
+.wl-skl{margin:0 0 6px;color:var(--wink);font-size:14px;line-height:1.45;max-width:60ch;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.wl-sk{display:block;height:12px;border-radius:6px;background:#1c1d21;animation:wl-sk 1.6s ease-in-out infinite;will-change:opacity}
+.wl-skb{margin-top:auto;height:44px;border-radius:999px;border:1px solid rgba(255,255,255,.12)}
+@keyframes wl-sk{50%{opacity:.45}}
 .wl-hold{flex:1;display:flex;align-items:center;justify-content:center;color:var(--wdim);padding:20px;text-align:center}
 @media(max-width:899px){
   .wl,.wl.with{grid-template-columns:minmax(0,1fr)}
@@ -184,7 +210,9 @@ function LookSwitch({ look, onLook, className }) {
   )
 }
 
-function Side({ sid, thread, err, onClose }) {
+function Side({ sid, thread, err, onClose, last }) {
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => { setLoaded(false) }, [thread])
   return (
     <aside className="wl-side" aria-label={`${sid} thread`}>
       <div className="wl-sh">
@@ -193,10 +221,24 @@ function Side({ sid, thread, err, onClose }) {
         <button className="wl-x" onClick={onClose} aria-label={`close ${sid}`} title="close; it keeps running">close</button>
       </div>
       {thread ? (
-        <iframe key={thread} className="wl-fr" title={`${sid} thread`} allow="microphone; clipboard-write"
-          src={`/talk?pane=wall-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}`} />
-      ) : <div className="wl-hold">{err || `opening the ${sid} thread`}</div>}
+        <div className="wl-frw">
+          <iframe key={thread} className="wl-fr" title={`${sid} thread`} allow="microphone; clipboard-write" onLoad={() => setLoaded(true)}
+            src={`/talk?pane=wall-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}`} />
+          {!loaded ? <SideSkel last={last} /> : null}
+        </div>
+      ) : (err ? <div className="wl-hold">{err}</div> : <div className="wl-frw"><SideSkel last={last} /></div>)}
     </aside>
+  )
+}
+
+// WALL-6: never an empty panel: the last thing known about the thread, and the shape of the chat, until it is there
+function SideSkel({ last }) {
+  return (
+    <div className="wl-skel" aria-busy="true" data-side-skel="1">
+      {last ? <p className="wl-skl">{last}</p> : null}
+      <span className="wl-sk" style={{ width: '72%' }} /><span className="wl-sk" style={{ width: '54%' }} /><span className="wl-sk" style={{ width: '64%' }} />
+      <span className="wl-skb" />
+    </div>
   )
 }
 
@@ -233,14 +275,23 @@ export default function Wall() {
   const [faint, setFaint] = useState([])        // WALL-4: systems worked on in other threads, dim on the outer ring
   const [fresh, setFresh] = useState(null)      // WALL-4: {set, stamp} when the brain's seed is newer than his own set
   const [reading, setReading] = useState(null)  // LINE-TALK-1: the system whose last answer is open as a card
+  const [entered, setEnteredState] = useState(null) // WALL-6: the system entered with one press (CENTRE for the brain)
+  const [tz, setTz] = useState(null)            // WALL-6: the owner's zone for today's times (the seed's tz)
+  const [fromSnap, setFromSnap] = useState(false) // WALL-6: what shows is the last known board, the bridge has not answered yet
+  const enteredRef = useRef(null)
   const depthRef = useRef(null)
   const timer = useRef(null)
   const noteTimer = useRef(null)
   const recorder = useRef(null)
 
-  const load = () => fetch(systemsUrl(depthRef.current), { cache: 'no-store' })
+  const snapStore = () => { try { return window.localStorage } catch { return null } }
+  const load = () => early(systemsUrl(depthRef.current), { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-    .then(d => setData(d && Array.isArray(d.tiles) ? d : false))
+    .then(d => {
+      const ok = d && Array.isArray(d.tiles)
+      setData(ok ? d : false); setFromSnap(false)
+      if (ok && !depthRef.current) writeSnap(snapStore(), { systems: d })
+    })
     .catch(() => setData(d => (d ? d : false)))
 
   useEffect(() => {
@@ -249,14 +300,27 @@ export default function Wall() {
     // LINE-TALK-1: "columns" kept from the last switch goes on to /systems, unless this visit asks for the wall
     const q = new URLSearchParams(window.location.search)
     if (readView(store) === 'columns' && q.get('view') !== 'wall' && !q.get('look')) { window.location.replace('/systems'); return }
-    loadWall(fetch, store).then(w => {
+    // WALL-6: what this browser saw last, drawn at once; the bridge's answers replace it as they come
+    const snap = readSnap(store)
+    if (snap) {
+      if (snap.systems && Array.isArray(snap.systems.tiles)) { setData(snap.systems); setFromSnap(true) }
+      if (snap.wall) {
+        setLookState(pickLook(q.get('look'), snap.wall))
+        if (Array.isArray(snap.wall.set)) setSet(snap.wall.set)
+        if (Array.isArray(snap.wall.pinned)) setPinned(cleanPinned(snap.wall.pinned))
+        setFaint(snap.wall.faint || []); setTz(snap.wall.tz || null)
+      }
+      if (Array.isArray(snap.surfaces)) setSurfaces(snap.surfaces)
+    }
+    loadWall(early, store).then(w => {
       setLookState(pickLook(new URLSearchParams(window.location.search).get('look'), w))
       if (Array.isArray(w.set)) setSet(w.set)
       if (Array.isArray(w.pinned)) setPinned(cleanPinned(w.pinned))
-      setFaint(w.faint || []); setFresh(w.fresh || null)
+      setFaint(w.faint || []); setFresh(w.fresh || null); setTz(w.tz || null)
+      if (w.from === 'bridge') writeSnap(store, { wall: { look: w.look, set: w.set, pinned: w.pinned, faint: w.faint || [], tz: w.tz || null } })
     })
-    fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d && Array.isArray(d.surfaces)) setSurfaces(d.surfaces) }).catch(() => {})
+    early('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.surfaces)) { setSurfaces(d.surfaces); writeSnap(store, { surfaces: d.surfaces }) } }).catch(() => {})
     const start = () => { if (!timer.current) { load(); timer.current = setInterval(load, 3000) } }
     const stop = () => { if (timer.current) { clearInterval(timer.current); timer.current = null } }
     const onVis = () => (document.visibilityState === 'visible' ? start() : stop())
@@ -265,6 +329,7 @@ export default function Wall() {
     const onKey = (e) => {
       if (e.key !== 'Escape') return
       if (recorder.current && recorder.current.busy) { recorder.current.drop(); setMic({ sid: null, state: null, secs: 0 }); return }
+      if (enteredRef.current) { enteredRef.current = null; setEnteredState(null); return }   // WALL-6: the entered card first
       if (depthRef.current) { depthRef.current = null; setDepthState(null); return }   // the layer first, the thread beside stays
       setSide(null); setRoute(null)
     }
@@ -317,6 +382,7 @@ export default function Wall() {
   }
   const onRoute = (r) => { setSide(null); setRoute(r && r.route ? r : null) }
   const onRead = (sid) => setReading(sid || null)
+  const onEnter = (sid) => { enteredRef.current = sid || null; setEnteredState(sid || null); if (sid) { depthRef.current = null; setDepthState(null) } }
   const toColumns = async () => {
     const store = (() => { try { return window.localStorage } catch { return null } })()
     await switchView(fetch, store, 'columns', 'wall')
@@ -337,6 +403,8 @@ export default function Wall() {
 
   const store = () => { try { return window.localStorage } catch { return null } }
   const kept = keptSet(set === null ? null : { set }, tiles, null)
+  // WALL-6: before anything is known, the orbit's shell carries the names the brain seeds, not an empty sky
+  const skeleton = !data && Array.isArray(set) && set.length ? set : null
   const tell = (text, undo) => {
     clearTimeout(noteTimer.current)
     setNote({ text, undo })
@@ -379,6 +447,8 @@ export default function Wall() {
     saveWall(fetch, store(), { look: k })
   }
 
+  // WALL-6: what the thread beside last said (or the system's now-line), shown over a skeleton while its frame loads
+  const lastOf = (sid) => { const tl = tileOf(sid); if (!tl) return ''; const l = cellLine(tl, null); return l.text || nowOf(tl) || '' }
   // "sent" gives way to the thread's own line once it answers (or after a minute)
   const now = Date.now()
   const shownSent = (sid) => { const s = sent[sid]; return s && !sentOver(s, tileOf(sid), now) ? s : null }
@@ -388,15 +458,16 @@ export default function Wall() {
     <>
       <Head><title>Wall</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS + VIEW_CSS }} />
-      <div className={'wl' + (side || route ? ' with' : '') + (look === 'orbit' ? ' orbit' : '')}>
-        {look === 'orbit' ? (
+      <div className={'wl' + (side || route ? ' with' : '') + (look === 'orbit' || look === null ? ' orbit' : '')} data-snap={fromSnap ? '1' : undefined}>
+        {look === 'orbit' || look === null ? (
           <main className="wl-orb" aria-label="the orbit">
             <WallOrbit tiles={tiles} set={kept} running={running} symbol={process.env.NEXT_PUBLIC_BRAIN_SYMBOL || '\u210f'}
               sentOf={shownSent} mic={mic} side={side} ready={!!data} onSend={onSend} onMic={onMic} onName={onName}
               onAdd={onAdd} onLeave={onLeave} depth={depth} onDepth={onDepth} waits={(data && data.waits) || null} onRoute={onRoute}
-              faint={faint} fresh={fresh} onFresh={onFresh} surfaces={surfaces} pinned={pinned} onPin={onPin} onRead={onRead} />
+              faint={faint} fresh={fresh} onFresh={onFresh} surfaces={surfaces} pinned={pinned} onPin={onPin} onRead={onRead}
+              entered={entered} onEnter={onEnter} tz={tz} skeleton={skeleton} />
             {data === false ? <p className="wl-note" style={{ position: 'absolute', top: 14, left: 22 }}>The bridge is not answering at /cc/systems.</p> : null}
-            <div className="wl-lkf wl-sws"><LookSwitch look={look} onLook={onLook} /><ViewSwitch view="wall" onPick={(v) => { if (v === 'columns') toColumns() }} /></div>
+            {look ? <div className="wl-lkf wl-sws"><LookSwitch look={look} onLook={onLook} /><ViewSwitch view="wall" onPick={(v) => { if (v === 'columns') toColumns() }} /></div> : null}
             {note ? (
               <div className="wl-toast" role="status">{note.text}{note.undo ? <button onClick={note.undo}>undo</button> : null}</div>
             ) : null}
@@ -422,7 +493,7 @@ export default function Wall() {
           </div>
         </main>
         ) : <main className="wl-main" aria-label="the wall" />}
-        {side ? <Side sid={side} thread={threadOf(side)} err={sideErr} onClose={() => setSide(null)} /> : null}
+        {side ? <Side sid={side} thread={threadOf(side)} err={sideErr} onClose={() => setSide(null)} last={lastOf(side)} /> : null}
         {!side && route ? <Beside route={route} onClose={() => setRoute(null)} /> : null}
       </div>
       {reading ? (

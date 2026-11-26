@@ -160,7 +160,7 @@ const down = async () => { throw new Error('away') }
   console.log(JSON.stringify({ a, s1, b, s2, c, e }))
 })()
 """)
-    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "pinned": None, "from": "bridge", "faint": [], "fresh": None, "home": False}   # faint, fresh, home: WALL-4
+    assert d["a"] == {"look": "orbit", "set": ["hbar.music"], "pinned": None, "from": "bridge", "faint": [], "fresh": None, "home": False, "tz": None}   # faint, fresh, home: WALL-4; tz: WALL-6
     assert d["s1"]["ok"] and d["s1"]["kept"] == "browser"
     assert d["b"] == {"look": "orbit", "set": ["hbar.music", "hbar.film"], "pinned": None, "from": "browser"}
     assert d["s2"] == {"ok": True, "kept": "bridge"}

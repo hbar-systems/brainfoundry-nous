@@ -5659,7 +5659,7 @@ def _dashboard_view() -> dict:
     return cc_dashboard.view(WORLD_DIR or None, threads, JOBS.list(200))
 
 
-def _systems_view(depth: str | None = None) -> dict:
+def _systems_view(depth: str | None = None, slim: bool = False) -> dict:
     """GET /cc/systems[?depth=<system>]: the tiles; with depth, that one tile also carries its thread's last tree."""
     try:
         SYSTEMS_THREADS.refresh(_systems_keep)   # seat ids follow the threads; a dropped thread goes back in the list
@@ -5674,7 +5674,24 @@ def _systems_view(depth: str | None = None) -> dict:
     for t in d["tiles"]:
         t["said"] = _systems_said(t["thread"], rows.get(t["thread"])) if t.get("thread") else None
     _systems_depth(d, depth)
+    if slim:
+        _systems_slim(d)
     return d
+
+
+# WALL-6 (2026-11-26, hbar: "it doesnt flow. it takes too long, it opens and loads too slow"): the wall polls every
+# three seconds and draws none of the /systems lists, so ?wall=1 leaves them out (about 144 kB -> about 20 kB on his
+# brain): each tile keeps what the wall reads (id, kind, thread, said, counts, jobs, summary, prompts, latest, open,
+# tree, domain, description, detail.running).
+_SLIM_DROP = ("lines", "more", "extra", "moving", "total")
+
+
+def _systems_slim(d: dict) -> None:
+    for t in d.get("tiles") or []:
+        for k in _SLIM_DROP:
+            t.pop(k, None)
+        det = t.get("detail") if isinstance(t.get("detail"), dict) else {}
+        t["detail"] = {"running": det["running"]} if det.get("running") else {}
 
 
 # The depth layer (WALL-3, 2026-11-24, hbar: "everything is hidden, and i can gain access some easy way WITHOUT
@@ -5692,7 +5709,7 @@ SYSTEMS_TASKS_TTL = 30
 _SYSTEMS_DEPTH: dict = {}   # thread -> {"first", "tree"} from the same read as _SYSTEMS_SAID
 _SYSTEMS_STEPS: dict = {}   # job id -> (asked_at, {"steps", "made"})
 _SYSTEMS_CARDS: dict = {}   # path -> (mtime, line)
-_SYSTEMS_TASKS: list = [0.0, None]
+_SYSTEMS_TASKS: list = [0.0, None, None]
 _SYSTEMS_OPEN: list = [0.0, {}]   # system -> the console page its surface card opens first (cc_surfaces), 30 s
 
 
@@ -5719,17 +5736,18 @@ def _systems_card_read(rel: str) -> tuple:
     try:
         mt = p.stat().st_mtime
     except OSError:
-        return "", []
+        return "", [], None
     got = _SYSTEMS_CARDS.get(str(p))
     if got and got[0] == mt:
-        return got[1], got[2]
+        return got[1], got[2], got[3]
     try:
         text = p.read_text(errors="replace")[:16000]
         line, prompts = cc_systems.card_line(text[:8000]), cc_systems.card_prompts(text)
+        latest = cc_systems.card_latest(text[:8000], Path(WORLD_DIR), (str(OUT_DIR),))
     except OSError:
-        line, prompts = "", []
-    _SYSTEMS_CARDS[str(p)] = (mt, line, prompts)
-    return line, prompts
+        line, prompts, latest = "", [], None
+    _SYSTEMS_CARDS[str(p)] = (mt, line, prompts, latest)
+    return line, prompts, latest
 
 
 def _systems_card(rel: str) -> str:
@@ -5740,23 +5758,44 @@ def _systems_card(rel: str) -> str:
 # each tile carries `prompts`, the "## Continue" lines of its state card (states.json), else of its wall card
 # (<world>/ops/wall/cards/<id>.md); at most five, nothing when there is no card.
 def _systems_prompts(sid: str, mapped: str | None) -> list:
+    return _systems_card_more(sid, mapped)[0]
+
+
+# WALL-6: (prompts, latest) from the mapped state card, else from the system's wall card, each on its own.
+def _systems_card_more(sid: str, mapped: str | None) -> tuple:
     if not WORLD_DIR:
-        return []
-    got = _systems_card_read(mapped)[1] if mapped else []
-    if not got:
-        wc = cc_systems.wall_card(Path(WORLD_DIR), sid)
-        got = _systems_card_read(wc)[1] if wc and wc != mapped else []
-    return list(got)
+        return [], None
+    a = _systems_card_read(mapped) if mapped else ("", [], None)
+    wc = cc_systems.wall_card(Path(WORLD_DIR), sid)
+    b = _systems_card_read(wc) if wc and wc != mapped else ("", [], None)
+    return list(a[1] or b[1]), a[2] or b[2]
+
+
+def _owner_today() -> str:
+    """YYYY-MM-DD in the owner's zone (the wall seed's "tz", WALL-6), else UTC."""
+    tz = _wall_seed_extra().get("tz")
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+            import datetime as _dt
+            return _dt.datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001  (an unknown zone falls back to UTC)
+            pass
+    return time.strftime("%Y-%m-%d", time.gmtime())
 
 
 def _systems_tasks_today():
+    """(count due today or before, the centre's three lines) from the brain's tasks, asked at most every 30 s."""
     now = time.time()
     if now - _SYSTEMS_TASKS[0] < SYSTEMS_TASKS_TTL:
-        return _SYSTEMS_TASKS[1]
+        return _SYSTEMS_TASKS[1], _SYSTEMS_TASKS[2]
     d = _brain_api("GET", "/tasks")
-    n = cc_systems.due_today(d.get("tasks"), time.strftime("%Y-%m-%d", time.gmtime())) if isinstance(d, dict) else None
-    _SYSTEMS_TASKS[0], _SYSTEMS_TASKS[1] = now, n
-    return n
+    today = _owner_today()
+    tasks = d.get("tasks") if isinstance(d, dict) else None
+    n = cc_systems.due_today(tasks, today) if isinstance(d, dict) else None
+    lines = cc_systems.today_list(tasks, today) if isinstance(d, dict) else None
+    _SYSTEMS_TASKS[0], _SYSTEMS_TASKS[1], _SYSTEMS_TASKS[2] = now, n, lines
+    return n, lines
 
 
 def _systems_depth(d: dict, depth: str | None = None) -> None:
@@ -5771,7 +5810,7 @@ def _systems_depth(d: dict, depth: str | None = None) -> None:
         card = _systems_card(cards[t["id"]]) if t["id"] in cards else ""
         first = dep.get("first") or ""
         t["summary"] = {"text": card, "from": "card"} if card else ({"text": first, "from": "thread"} if first else None)
-        t["prompts"] = _systems_prompts(t["id"], cards.get(t["id"]))
+        t["prompts"], t["latest"] = _systems_card_more(t["id"], cards.get(t["id"]))
         t["tree_n"] = cc_systems.tree_size(dep.get("tree"))
         if depth and t["id"] == depth:
             t["tree"] = dep.get("tree")
@@ -5786,7 +5825,9 @@ def _systems_depth(d: dict, depth: str | None = None) -> None:
             j.update(got[1])
     for k in [k for k in _SYSTEMS_STEPS if k not in live]:
         _SYSTEMS_STEPS.pop(k, None)
-    d.setdefault("waits", {})["tasks_today"] = _systems_tasks_today()
+    n, lines = _systems_tasks_today()
+    w = d.setdefault("waits", {})
+    w["tasks_today"], w["today"] = n, lines
 
 
 # The wall's setting (WALL-2, 2026-11-24, hbar: "dont START WITH ALL 44 ... if i need to add a system to the page i
@@ -5819,14 +5860,16 @@ def _wall_seed_extra() -> dict:
         raw = json.loads(WALL_SEED.read_text())
         stamp = WALL_SEED.stat().st_mtime
     except (OSError, ValueError):
-        return {"faint": [], "home": None, "stamp": None, "take": None}
+        return {"faint": [], "home": None, "stamp": None, "take": None, "tz": None}
     if not isinstance(raw, dict):
-        return {"faint": [], "home": None, "stamp": None, "take": None}
+        return {"faint": [], "home": None, "stamp": None, "take": None, "tz": None}
     faint = [x for x in (raw.get("faint") or []) if isinstance(x, str) and cc_systems.ID_RE.match(x)][:cc_layout.WALL_SET_MAX] \
         if isinstance(raw.get("faint"), list) else []
     home, take = raw.get("home"), raw.get("take")
     return {"faint": faint, "home": home if isinstance(home, bool) else None, "stamp": round(stamp, 3),
-            "take": take.strip()[:200] if isinstance(take, str) and take.strip() else None}
+            "take": take.strip()[:200] if isinstance(take, str) and take.strip() else None,
+            # WALL-6: the owner's zone for the wall's clock ("14:05" for a task due today), e.g. "Europe/Bratislava"
+            "tz": raw["tz"] if isinstance(raw.get("tz"), str) and re.match(r"^[A-Za-z_]+(?:/[A-Za-z0-9_+-]+){0,2}$", raw["tz"]) else None}
 
 
 def _wall_view() -> dict:
@@ -5863,7 +5906,8 @@ def _wall_view() -> dict:
             "pinned_seed": own.get("pinned") is None and seed.get("pinned") is not None,
             "faint": [x for x in extra["faint"] if x in known and x not in (kept or [])],
             "fresh": fresh,
-            "home": meta["home"] if meta["home"] is not None else bool(extra["home"])}
+            "home": meta["home"] if meta["home"] is not None else bool(extra["home"]),
+            "tz": extra.get("tz")}
 
 
 # The corner switch between the wall and the columns (LINE-TALK-1, 2026-11-25, hbar: "maybe we should try that
@@ -6473,7 +6517,8 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/board":
             self._send(200, _board())
         elif route == "/systems":
-            self._send(200, _systems_view(self._query().get("depth") or None))
+            q = self._query()
+            self._send(200, _systems_view(q.get("depth") or None, slim=q.get("wall") == "1"))
         elif route == "/wall":
             self._send(200, _wall_view())
         elif route == "/surfaces":

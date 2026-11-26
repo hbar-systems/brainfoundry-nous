@@ -214,4 +214,4 @@ def test_pages_are_wired():
     sy = (UI / "pages" / "systems" / "index.js").read_text()
     assert '<ViewSwitch view="columns"' in sy and "switchView(fetch, store, 'wall', 'columns')" in sy
     orbit = (UI / "components" / "WallOrbit.js").read_text()
-    assert orbit.count("onRead={onRead ? () => onRead(CENTRE) : null}") == 2
+    assert orbit.count("onRead={onRead ? () => onRead(CENTRE) : null}") == 1   # WALL-6: the centre's box stays out, one line

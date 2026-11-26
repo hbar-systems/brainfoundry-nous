@@ -62,7 +62,7 @@ const CSS = `
 .wd-p:hover,.wd-p:focus-visible{color:var(--oink,#ecebe6)!important;background:rgba(255,255,255,.035)}
 .wd-p .k{color:var(--omute,#4f4d49)}
 @keyframes wd-in{from{opacity:0;transform:translateY(4px)}}
-@media(max-width:699px){.wd{position:static;width:auto;max-height:none;margin:8px 0 4px;animation:none;transform:none!important}.wd-in{padding-left:10px}}
+@media(max-width:759px){.wd{position:static;width:auto;max-height:none;margin:8px 0 4px;animation:none;transform:none!important}.wd-in{padding-left:10px}}
 @media(prefers-reduced-motion:reduce){.wd{animation:none}}
 `
 

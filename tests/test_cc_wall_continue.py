@@ -217,8 +217,8 @@ console.log(JSON.stringify({
     assert d["ring"] == [{"id": "hbar.art", "running": 2, "live": False, "faint": True},
                          {"id": "hbar.blog", "running": 0, "live": False, "faint": True},
                          {"id": "hbar.econ", "running": 1, "live": False, "faint": False}]
-    assert d["extra"][0] == {"faint": ["a"], "fresh": {"set": ["x"], "stamp": 5}, "home": True}
-    assert d["extra"][1] == {"faint": [], "fresh": None, "home": False} and d["extra"][2] == d["extra"][1]
+    assert d["extra"][0] == {"faint": ["a"], "fresh": {"set": ["x"], "stamp": 5}, "home": True, "tz": None}
+    assert d["extra"][1] == {"faint": [], "fresh": None, "home": False, "tz": None} and d["extra"][2] == d["extra"][1]
     assert d["home"] == [True, False, False, False]
     assert d["words"] == [True, True, True, False, False, False]
 
@@ -231,9 +231,11 @@ def test_page_wiring():
     cc = (ROOT / "ui" / "pages" / "cc.js").read_text()
     ix = (ROOT / "ui" / "pages" / "index.js").read_text()
     lay = (ROOT / "ui" / "lib" / "layout.js").read_text()
-    # prompts: only while the box is focused; a press fills, a second press sends; nothing at rest
-    assert "{inside && !recording && !busy ? <Prompts list={list}" in o and "onMouseDown={e => e.preventDefault()}" in o
-    assert "promptPress(armed && text === armed ? armed : null, p)" in o and "prompts={t.prompts}" in o and "prompts={world.prompts}" in o
+    # prompts (WALL-6 moved them): no dropdown under a body's box; they are shortcut chips in the entered card, a press
+    # puts the words in the empty box and never sends by itself
+    en = (ROOT / "ui" / "components" / "WallEnter.js").read_text()
+    assert "<Prompts" not in o and "prompts={t.prompts}" not in o
+    assert "shortcutsOf(t, 4)" in en and "onClick={() => cut(p)}" in en and "onSend(" not in en.split("const cut = (p) => {", 1)[1].split("}", 1)[0]
     assert "onClick={() => onTalk(sid, p)}" in dp and "promptsOf(t)" in dp
     for bad in ("fetch(", "sendText", "router"):
         assert bad not in dp, bad

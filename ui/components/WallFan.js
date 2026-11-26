@@ -32,7 +32,7 @@ export const FAN_CSS = `
 .wf-p i{width:7px;height:7px;border-radius:50%;border:1.3px solid currentColor;display:block}
 .wf-p[aria-pressed=true]{opacity:.9}.wf-p[aria-pressed=true] i{background:currentColor}
 @keyframes wf-in{from{opacity:0;transform:translate(calc(var(--ax) + var(--dx) * .7), calc(-50% + var(--dy) * .4)) scale(.92)}}
-@media(max-width:699px){
+@media(max-width:759px){
   .wf{position:static;width:auto;height:auto;display:flex;flex-wrap:wrap;gap:6px 6px}
   .wf-i{position:static;transform:none}
   .wf-i.in{animation:none}
