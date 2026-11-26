@@ -129,6 +129,8 @@ run sudo usermod -aG "$GROUP" "$ADMIN_USER"
 # ~/in exists before the stack starts: compose mounts it for laptop-import audio (docs/IMPORT.md),
 # and a folder docker made would belong to root.
 run sudo install -d -o "$HANDS_USER" -g "$HANDS_USER" -m 755 "/home/$HANDS_USER/in"
+# <handle>.world/ likewise: the map the member says yes to is written there (ORGANISE-1, docs/IMPORT.md "Your map").
+run sudo install -d -o "$HANDS_USER" -g "$HANDS_USER" -m 755 "/home/$HANDS_USER/$HANDLE.world"
 
 say "== 2 checkout $DIR (owner $ADMIN_USER, group $GROUP, nothing for anyone else)"
 run sudo install -d -o root -g root -m 711 "$BRAINS_ROOT"

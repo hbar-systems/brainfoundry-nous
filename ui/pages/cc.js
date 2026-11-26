@@ -14,6 +14,7 @@ import { wantsThreads } from '../lib/home'
 import { uploadFiles, fmtMB } from '../lib/bigUpload'
 import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
+import MapCard from '../components/MapCard'
 import ListeningCard from '../components/ListeningCard'
 import FirstSignIn from '../components/FirstRun'
 import SignInSteps from '../components/SignInSteps'
@@ -3859,6 +3860,9 @@ function CC() {
               </div>
             </div>
           ))}
+          {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
+            <MapCard lang={lang} />
+          )}
           {turns.length === 0 && loggedIn && pending.length === 0 && quietHome && !paneMode && !firstStep && (
             <MoveInCards lang={lang} />
           )}

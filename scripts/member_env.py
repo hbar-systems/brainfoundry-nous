@@ -45,6 +45,7 @@ def member_values(handle: str, n) -> dict:
         "OLLAMA_URL": "http://ollama:11434",
         "BRAIN_CC_ENABLED": "true",
         "LAPTOP_AUDIO_HOST_DIR": f"/home/{handle}-hands/in",  # laptop import: audio lands in ~/in/<date>/import/
+        "ORGANISE_WORLD_HOST_DIR": f"/home/{handle}-hands/{handle}.world",  # your map (ORGANISE-1): <name>.world/
     }
 
 

@@ -3749,10 +3749,30 @@ def _owner_documents() -> int | None:
     return n if isinstance(n, int) else None
 
 
+def _owner_map() -> dict | None:
+    """The map of the person's things (ORGANISE-1, GET /organise): proposed or accepted, else None."""
+    d = _brain_api("GET", "/organise")
+    return d if isinstance(d, dict) and d.get("state") in ("proposed", "accepted") and d.get("areas") else None
+
+
+MAP_INTRO_FILE = STATE_DIR / "map-intro.json"
+
+
+def _map_lines(mp: dict) -> str:
+    rows = []
+    for a in (mp.get("areas") or [])[:9]:
+        ex = "; ".join(str(e.get("title") or "")[:60] for e in (a.get("examples") or [])[:3])
+        rows.append(f"- {str(a.get('name') or '')[:40]} ({int(a.get('count') or 0)}): {str(a.get('line') or '')[:160]} e.g. {ex}")
+    return "\n".join(rows)
+
+
 def _first_use(fresh: bool) -> str:
     """On a thread's first turn: when the persona has no profile block AND the Knowledge store is known to be
     empty, a pointer to docs/first-use.md (one question, one document); else ''. A store that cannot be
-    asked counts as not new, so the profile interview keeps today's behaviour (2026-10-25)."""
+    asked counts as not new, so the profile interview keeps today's behaviour (2026-10-25).
+    ORGANISE-1 (2026-11-26): after a move-in the intro comes after the map. When the brain holds documents
+    and a map of them exists, the first turn opens with the map ("this is what I found of yours"), then the
+    one question; once per map, so a second thread does not open with it again."""
     if not fresh:
         return ""
     try:
@@ -3760,11 +3780,33 @@ def _first_use(fresh: bool) -> str:
             return ""
     except Exception:
         pass
-    if _owner_documents() != 0:
+    n = _owner_documents()
+    if n == 0:
+        return ("This brain is new: no profile yet and no documents in Knowledge. Do not offer the nine profile "
+                "questions. Read docs/first-use.md in the brain repository and follow it: ask the one question, then "
+                "ask for one document. Remembered state, not the person's words.")
+    if not n:
         return ""
-    return ("This brain is new: no profile yet and no documents in Knowledge. Do not offer the nine profile "
-            "questions. Read docs/first-use.md in the brain repository and follow it: ask the one question, then "
-            "ask for one document. Remembered state, not the person's words.")
+    mp = _owner_map()
+    if not mp:
+        return ""
+    try:
+        seen = json.loads(MAP_INTRO_FILE.read_text(encoding="utf-8")).get("map")
+    except Exception:
+        seen = None
+    if seen == mp.get("id"):
+        return ""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        MAP_INTRO_FILE.write_text(json.dumps({"map": mp.get("id"), "at": int(time.time())}), encoding="utf-8")
+    except Exception:
+        pass
+    said = "the person said yes to it" if mp.get("state") == "accepted" else "it waits on the home for the person's yes"
+    return ("This brain has moved in the person's things (" + str(mp.get("total") or n) + " documents and chats) and "
+            "made a map of them (" + said + "). Read docs/first-use.md in the brain repository, section 'After a "
+            "move-in: the map first', and follow it: open with the map in a few lines (this is what I found of yours: "
+            "the areas, their counts, one example each), then ask the one question. Do not offer the nine profile "
+            "questions. The areas, remembered state, not the person's words:\n" + _map_lines(mp))
 
 
 def _compose(message: str, recent: str = "", first_use: str = "") -> tuple[str, int]:
