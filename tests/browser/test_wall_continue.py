@@ -102,7 +102,10 @@ def _posts(h, t0, part):
         return [x for x in h.log if x[0] >= t0 and x[1] == "POST" and part in x[2]]
 
 
-def test_prompts_fill_then_send_in_place(harness):
+# WALL-6 (2026-11-26, hbar: "can i only send this? i cant type a message and it will go through?"): the prompts are
+# shortcut chips in the entered card, under an EMPTY box; a chip puts its words in the box and never sends; Enter sends
+# what the box holds; nothing under a body's box at rest or on focus.
+def test_prompts_are_shortcuts_that_fill_and_never_send(harness):
     from playwright.sync_api import sync_playwright
     h, errors = harness, []
     with sync_playwright() as p:
@@ -112,46 +115,42 @@ def test_prompts_fill_then_send_in_place(harness):
         page.goto(h.url + "/wall", wait_until="domcontentloaded")
         page.wait_for_selector(".wo-b[aria-label='hbar.film'] .wo-in", timeout=20000)
         page.click(".wo-fresh button:has-text('keep mine')")                 # out of the way first (checked below)
-        assert page.locator(".wo-pr").count() == 0                            # nothing at rest
         t0 = time.time()
-        page.click(".wo-b[aria-label='hbar.film'] .wo-in")
-        page.wait_for_selector(".wo-b[aria-label='hbar.film'] .wo-pr", timeout=3000)
-        lines = page.locator(".wo-b[aria-label='hbar.film'] .wo-p").all_inner_texts()
-        assert [x.strip() for x in lines] == [x.strip() for x in FILM_P], lines
-        # one press fills, sends nothing
-        page.click(".wo-b[aria-label='hbar.film'] .wo-p:has-text('play the trailer')")
-        assert page.input_value(".wo-b[aria-label='hbar.film'] .wo-in") == "play the trailer"
+        page.click(".wo-b[aria-label='hbar.film'] .wo-in")                   # focusing a body's box shows no list
+        page.wait_for_timeout(300)
+        assert page.locator(".wo-pr, .wo-p").count() == 0
+        page.click(".wo-b[aria-label='hbar.film'] .wo-nm")
+        page.wait_for_selector(".we-veil[data-enter-for='hbar.film']", timeout=3000)
+        assert page.input_value(".we-in") == ""
+        chips = page.locator(".we-chip").all_inner_texts()
+        assert [x.strip() for x in chips] == [x.strip() for x in FILM_P][:4], chips
+        # a chip fills, sends nothing; pressed again, still nothing
+        page.click(".we-chip:has-text('play the trailer')")
+        page.click(".we-chip:has-text('play the trailer')")
+        assert page.input_value(".we-in") == "play the trailer"
         assert not _posts(h, t0, "/say")
-        # an open line fills and waits; a second press does not send it
-        page.click(".wo-b[aria-label='hbar.film'] .wo-p:has-text('grade look')")
-        assert page.input_value(".wo-b[aria-label='hbar.film'] .wo-in") == "grade look: "
-        page.click(".wo-b[aria-label='hbar.film'] .wo-p:has-text('grade look')")
-        assert not _posts(h, t0, "/say")
-        page.type(".wo-b[aria-label='hbar.film'] .wo-in", "warm")
+        # an open line fills and waits for him
+        page.click(".we-chip:has-text('grade look')")
+        assert page.input_value(".we-in") == "grade look: "
+        page.type(".we-in", "warm")
         page.keyboard.press("Enter")
         page.wait_for_timeout(600)
         said = _posts(h, t0, "/say")
         assert len(said) == 1 and _body(said[0])["message"] == "grade look: warm", said
-        # a second press on the same line sends it, in place
-        page.click(".wo-b[aria-label='hbar.film'] .wo-in")
-        page.click(".wo-b[aria-label='hbar.film'] .wo-p:has-text('status of FILM-2')")
-        page.click(".wo-b[aria-label='hbar.film'] .wo-p:has-text('status of FILM-2')")
-        page.wait_for_timeout(600)
-        said = _posts(h, t0, "/say")
-        assert len(said) == 2, said
         assert page.url.endswith("/wall")                                      # never navigated
-        # the layer's prompts fill the box too
+        # the layer's prompts still fill the body's box
         page.keyboard.press("Escape")
         page.click(".wo-b[aria-label='hbar.film'] .wo-dp")
         page.wait_for_selector(".wd .wd-p", timeout=3000)
         page.click(".wd .wd-p:has-text('four')")
         page.wait_for_selector(".wd", state="detached", timeout=3000)
         assert page.input_value(".wo-b[aria-label='hbar.film'] .wo-in") == "four"
-        assert len(_posts(h, t0, "/say")) == 2
-        # the centre's box shows the centre's list
+        assert len(_posts(h, t0, "/say")) == 1
+        # the brain's card shows the centre's list; the centre's own box is empty at rest
+        assert page.input_value(".wo-cbox .wo-in") == ""
         page.click(".wo-sym")
-        page.wait_for_selector(".wo-cbox .wo-pr", timeout=3000)
-        assert "what waits for me today" in page.locator(".wo-cbox .wo-pr").inner_text()
+        page.wait_for_selector(".we-veil[data-enter-for='world'] .we-chip", timeout=3000)
+        assert "what waits for me today" in page.locator(".we-chips").inner_text()
         b.close()
     assert not errors, errors
 

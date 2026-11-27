@@ -231,7 +231,7 @@ class B { constructor(parts, o) { this.parts = parts.length; this.type = o.type 
 
 def test_wall_page_wiring_and_systems_untouched():
     w = (ROOT / "ui" / "pages" / "wall.js").read_text()
-    assert "from '../lib/wall'" in w and "fetch(systemsUrl(depthRef.current), { cache: 'no-store' })" in w   # /cc/systems; ?depth= while a layer is open (WALL-3)
+    assert "from '../lib/wall'" in w and "early(systemsUrl(depthRef.current), { cache: 'no-store' })" in w   # /cc/systems; ?depth= while a layer is open (WALL-3); the first ask starts early (WALL-6)
     assert "setInterval(load, 3000)" in w and "document.visibilityState === 'visible'" in w       # none while hidden
     assert "sendText(fetch, sid, text, threadOf(sid))" in w and "sendClip(fetch, sid, blob, threadOf(sid))" in w
     # LINE-TALK-1 (2026-11-25): the corner switch to the columns is the one navigation (asked for); sending never navigates

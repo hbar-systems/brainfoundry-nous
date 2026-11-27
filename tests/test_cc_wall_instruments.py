@@ -183,10 +183,12 @@ def test_page_wiring_fan_pin_and_register():
     w = (ROOT / "ui" / "pages" / "wall.js").read_text()
     o = (ROOT / "ui" / "components" / "WallOrbit.js").read_text()
     f = (ROOT / "ui" / "components" / "WallFan.js").read_text()
-    assert "fetch('/cc/surfaces'" in w and "saveWall(fetch, store(), { pinned: next })" in w and "surfaces={surfaces} pinned={pinned} onPin={onPin}" in w
-    assert "instrumentsOf(sid, surfaces)" in o and "if (has && !fanned) { onFan(t.id, 'press'); return }" in o
-    assert "setFan(null) } }" in o                                         # Esc folds the fan
-    assert "contains('wo-in')) onFan(null)" in o                            # typing in the box folds it (WALL-4's prompts show)
+    assert "early('/cc/surfaces'" in w and "saveWall(fetch, store(), { pinned: next })" in w and "surfaces={surfaces} pinned={pinned} onPin={onPin}" in w
+    # WALL-6: one press on the name enters the system; its instruments are in the entered card, the pinned ones sit in
+    # a row under the body (open={false}); no hover fan any more
+    en = (ROOT / "ui" / "components" / "WallEnter.js").read_text()
+    assert "instrumentsOf(sid, surfaces)" in o and "onEnter(t.id)" in o and "open={false}" in o and "onFan" not in o
+    assert "tools={entered === CENTRE ? [] : toolsOf(entered)}" in o and "onClick={() => onTool(sid, i)}" in en
     assert "onRoute({ route: i.open, title: i.label })" in o and "onTalk(sid, i.ask)" in o   # beside, or into the box
     assert "<Box sid={t.id}" in o                                           # the system keeps its box
     assert "fanPlace(k, n, at)" in f and "data-instrument={inst.name}" in f and "aria-pressed={pinned}" in f

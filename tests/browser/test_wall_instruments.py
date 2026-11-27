@@ -7,11 +7,11 @@ a press on one opens it beside, Esc folds them back, a pinned one stays out and 
     Chromium (Playwright) -> a front (test_panes_health.Harness): /cc/* answered by a small fake bridge that keeps the
     wall's setting in memory and logs every request; the rest to the built console (next standalone).
 
-Checks, on /wall in the orbit at 1440: at rest only the pinned instrument is out and the box is there; a press on the
-name fans every instrument out and opens nothing; Esc folds them; a press on one opens its page beside (no thread); an
-`ask` one fills the system's box and sends nothing; with the fan out, the next press on the name opens the thread
-beside; a hover fans a system out and leaving folds it; the pin mark saves {pinned} on the bridge and the pin is there
-after a reload. At 390 the fan is a row under the name. No page error.
+Checks, on /wall in the orbit at 1440 (WALL-6 moved the fan into the entered card): at rest only the pinned instrument
+is out, in a row under the box; a press on the name enters the system and its card holds every instrument; a hover
+opens nothing; a press on one opens its page beside (no thread); an `ask` one fills the system's box and sends nothing;
+the card's "whole thread" opens the thread beside; the ring saves {pinned} on the bridge and the pin is there after a
+reload. At 390 the card fits the screen. No page error.
 
 Skips without python playwright or a console build (NOUS_CONSOLE_BUILD=<ui dir after npm ci && npm run build>).
 
@@ -99,7 +99,13 @@ def shown(page, sel):
     return sorted(page.locator(sel + " .wf-i").evaluate_all("els => els.map(e => e.dataset.instrument)"))
 
 
-def test_fan_opens_folds_opens_beside_and_the_pin_survives_reload(harness):
+def inst_in_card(page):
+    return sorted(page.locator(".we [data-instrument]").evaluate_all("els => els.map(e => e.dataset.instrument)"))
+
+
+# WALL-6 (2026-11-26): one press on a name enters the system; its instruments are in the entered card (each opens beside,
+# an ask fills the box, a small ring pins it); the pinned ones sit in a row under the body at rest. No hover fan.
+def test_instruments_in_the_entered_card_and_the_pin_survives_reload(harness):
     from playwright.sync_api import sync_playwright
     h, errors = harness, []
     with sync_playwright() as p:
@@ -108,58 +114,48 @@ def test_fan_opens_folds_opens_beside_and_the_pin_survives_reload(harness):
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(h.url + "/wall", wait_until="domcontentloaded")
         page.wait_for_selector(MUSIC + " .wf-i[data-instrument='sing']", timeout=20000)
-        # at rest: only the pinned one is out; the system keeps its box
+        # at rest: only the pinned one is out, under the body; the system keeps its box
         assert shown(page, MUSIC) == ["sing"] and shown(page, FILM) == []
         assert page.locator(MUSIC + " .wo-box").count() == 1
-        # a press on the name: every instrument out (its own first, the lent K2 too), nothing opened beside
-        page.mouse.move(5, 5)
+        sing, box = page.locator(MUSIC + " .wf-i").first.bounding_box(), page.locator(MUSIC + " .wo-box").bounding_box()
+        assert sing["y"] >= box["y"] + box["height"] - 1                    # a row under the box, not toward the centre
+        # a press on the name enters: every instrument in the card (its own first, the lent K2 too), nothing beside
         page.click(MUSIC + " .wo-nm")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")
-        assert shown(page, MUSIC) == ["k2", "listen", "sing", "studio"]
+        page.wait_for_selector(".we-veil[data-enter-for='sys.music']", timeout=3000)
+        assert inst_in_card(page) == ["k2", "listen", "sing", "studio"]
         assert page.locator("aside.wl-side").count() == 0
-        # Esc folds them back to the pinned one
+        # a hover on a name opens nothing
         page.keyboard.press("Escape")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='false']", timeout=3000, state="attached")
-        assert shown(page, MUSIC) == ["sing"]
-        # a press on one opens it beside, never a thread
+        page.wait_for_selector(".we-veil", state="detached", timeout=3000)
+        page.hover(FILM + " .wo-nm")
+        page.wait_for_timeout(500)
+        assert page.locator(".we-veil").count() == 0 and shown(page, FILM) == []
+        # a press on one opens it beside, never a thread; the card closes
         page.click(MUSIC + " .wo-nm")
-        page.click(MUSIC + " .wf-i[data-instrument='studio'] .wf-o")
+        page.click(".we [data-instrument='studio'] .we-ins")
         page.wait_for_selector("aside.wl-side iframe[src='/cc/page/rooms/studio/']", timeout=5000)
-        assert shown(page, MUSIC) == ["sing"]                              # the fan folds after a press
+        assert page.locator(".we-veil").count() == 0
         page.click("aside.wl-side .wl-x")
-        # an ask one fills the box and sends nothing
+        # an ask one fills the system's box and sends nothing
         t0 = time.time()
         page.click(MUSIC + " .wo-nm")
-        page.click(MUSIC + " .wf-i[data-instrument='listen'] .wf-o")
+        page.click(".we [data-instrument='listen'] .we-ins")
         assert page.input_value(MUSIC + " .wo-in") == "listen on it"
         with h.lock:
             assert not [x for x in h.log if x[0] >= t0 and x[1] != "GET"], "an ask instrument sent something"
-        # typing in the box folds the fan (the box's own prompts show there)
+        # the whole thread beside, from the card
         page.click(MUSIC + " .wo-nm")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")
-        page.click(MUSIC + " .wo-in")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='false']", timeout=3000, state="attached")
-        page.mouse.move(5, 5)
-        page.keyboard.press("Escape")
-        # with the fan out, the next press on the name opens the thread beside, as before
-        page.click(MUSIC + " .wo-nm")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")
-        page.click(MUSIC + " .wo-nm")
+        page.click(".we-foot button")
         page.wait_for_selector("iframe.wl-fr[src*='pane=wall-sys.music']", timeout=5000)
         page.click("aside.wl-side .wl-x")
-        # a hover fans the film out; leaving folds it
-        page.hover(FILM + " .wo-nm")
-        page.wait_for_selector(FILM + " .wf[data-fan-open='true']", timeout=3000, state="attached")
-        assert shown(page, FILM) == ["cut", "k2"]
-        page.mouse.move(5, 890)
-        page.wait_for_selector(FILM + " .wf", state="detached", timeout=3000)
-        # the pin mark keeps studio out: saved on the bridge, there after a reload
+        # the ring keeps studio out: saved on the bridge, there after a reload
         page.click(MUSIC + " .wo-nm")
-        page.click(MUSIC + " .wf-i[data-instrument='studio'] .wf-p")
+        page.click(".we [data-instrument='studio'] .we-pin")
         deadline = time.time() + 5
         while time.time() < deadline and h.wall["pinned"] != ["sing", "studio"]:
             time.sleep(0.1)
         assert h.wall["pinned"] == ["sing", "studio"]
+        assert page.get_attribute(".we [data-instrument='studio'] .we-pin", "aria-pressed") == "true"
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector(MUSIC + " .wf-i[data-instrument='studio']", timeout=20000)
         assert shown(page, MUSIC) == ["sing", "studio"]
@@ -167,7 +163,7 @@ def test_fan_opens_folds_opens_beside_and_the_pin_survives_reload(harness):
     assert not errors, errors
 
 
-def test_phone_fans_as_a_row_under_the_name(harness):
+def test_phone_card_holds_the_instruments(harness):
     from playwright.sync_api import sync_playwright
     h, errors = harness, []
     with sync_playwright() as p:
@@ -177,10 +173,9 @@ def test_phone_fans_as_a_row_under_the_name(harness):
         page.goto(h.url + "/wall", wait_until="domcontentloaded")
         page.wait_for_selector(MUSIC + " .wo-nm", timeout=20000)
         page.tap(MUSIC + " .wo-nm")
-        page.wait_for_selector(MUSIC + " .wf[data-fan-open='true']", timeout=3000, state="attached")
-        name = page.locator(MUSIC + " .wo-nm").bounding_box()
-        first = page.locator(MUSIC + " .wf-i").first.bounding_box()
-        assert first["y"] > name["y"] and first["x"] >= 0 and first["x"] + first["width"] <= 390
+        page.wait_for_selector(".we [data-instrument='k2']", timeout=3000)
+        r = page.locator(".we").bounding_box()
+        assert r["x"] >= 0 and r["x"] + r["width"] <= 390
         assert page.evaluate("document.documentElement.scrollWidth") <= 390
         b.close()
     assert not errors, errors

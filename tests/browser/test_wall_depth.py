@@ -112,7 +112,8 @@ def test_layer_opens_reads_and_closes_without_a_send(harness):
         assert page.locator(".wo-b[aria-label='hbar.ink'] .wo-box").count() == 0
         assert page.locator(".wo-b[aria-label='hbar.film'] .wo-box").count() == 1
         # a thread beside, its frame marked; a slow request in flight
-        page.click(".wo-b[aria-label='hbar.music'] .wo-nm")
+        page.click(".wo-b[aria-label='hbar.music'] .wo-nm")              # WALL-6: the name enters; the card opens the thread
+        page.click(".we-veil[data-enter-for='hbar.music'] .we-foot button")
         page.wait_for_selector("iframe.wl-fr", timeout=10000)
         frame = next(f for f in page.frames if "pane=wall-hbar.music" in f.url)
         frame.wait_for_load_state("domcontentloaded")
@@ -151,7 +152,7 @@ def test_layer_opens_reads_and_closes_without_a_send(harness):
         with h.lock:
             during = [x for x in h.log if x[0] >= t0]
         assert not [x for x in during if x[1] != "GET" and any(d in x[2] for d in SEND_DOORS)], during
-        assert any(x[2].startswith("/cc/systems?depth=hbar.film") for x in during)
+        assert any(x[2].startswith("/cc/systems?wall=1&depth=hbar.film") for x in during)
         b.close()
     assert not errors, errors
 

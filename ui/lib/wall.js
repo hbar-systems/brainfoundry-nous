@@ -392,7 +392,8 @@ function ringOf(tiles, kept, faint) {
 
 function wallExtra(d) {
   const fresh = d && d.fresh && Array.isArray(d.fresh.set) && typeof d.fresh.stamp === 'number' ? { set: d.fresh.set, stamp: d.fresh.stamp } : null
-  return { faint: d && Array.isArray(d.faint) ? d.faint.filter(x => typeof x === 'string') : [], fresh, home: !!(d && d.home === true) }
+  const tz = d && typeof d.tz === 'string' && /^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/.test(d.tz) ? d.tz : null
+  return { faint: d && Array.isArray(d.faint) ? d.faint.filter(x => typeof x === 'string') : [], fresh, home: !!(d && d.home === true), tz }
 }
 
 // the say-word: a message that is only "wall" (or "the wall", "open the wall") opens /wall, the brain is not asked
@@ -401,7 +402,8 @@ const isWallWord = (text) => WALL_WORDS.includes(String(text == null ? '' : text
 
 const homeOnWall = (path, wall) => String(path || '') === '/' && !!(wall && wall.home === true)
 
-const systemsUrl = (depth) => '/cc/systems' + (depth ? '?depth=' + encodeURIComponent(depth) : '')
+// WALL-6: the wall asks for the slim board (wall=1: no /systems lines, ~1/10 of the bytes every three seconds)
+const systemsUrl = (depth) => '/cc/systems?wall=1' + (depth ? '&depth=' + encodeURIComponent(depth) : '')
 
 // ---- instruments (WALL-5, 2026-11-24) ----
 // hbar: "where is my musical surfaces tho those i wanted actually -- i want to create more". A system carries the
@@ -552,7 +554,84 @@ async function switchView(f, storage, to, from) {
   return { ok: true }
 }
 
+// ---- seeing and entering (WALL-6, 2026-11-26) ----
+// hbar, tired, 00:51 Bratislava: "the wall needs fixing to see. otherwise the wall is now main one i want to begin
+// with but the thing is it just lets me see the current system but not so much easy", and "it doesnt flow. it takes
+// too long, it opens and loads too slow", and on the centre box: "can i only send this? i cant type a message and it
+// will go through?". So: every body shows what it is doing now at rest (its card's "Now:"), one press enters a
+// system (its now-line, its box focused and empty, its shortcuts as separate chips, its latest thing to look at or
+// hear), the centre answers "what waits for me today" in place, and the page shows at once from what it saw last.
+//
+//   nowOf(tile)                 the one line of what a system is doing now: its card's Now: line, else ''
+//   latestOf(tile)              {label, href, hear, route}: its latest thing to look at or hear (the card's
+//                               "Latest:" line, checked by the bridge); route = it opens beside on the console
+//   shortcutsOf(tile, n)        the first n prompts, shown as chips under the empty box (never in the box)
+//   clockOf(iso, tz)            "14:05" in the owner's zone (the seed's tz, else the browser's), '' when unreadable
+//   todayLines(waits, tz, now)  the centre's three lines: [{time, text, href, late, any}], from waits.today (the bridge
+//                               reads the brain's tasks: due today or before, in order, then open ones with no time)
+//   SNAP_KEY, readSnap, writeSnap  the last board, setting and register this browser saw, so the page draws at once
+//                               and fills in as the bridge answers (never an empty panel)
+
+function nowOf(t) {
+  const s = t && t.summary && t.summary.from === 'card' ? squash(t.summary.text) : ''
+  return s
+}
+
+function latestOf(t) {
+  const l = t && t.latest
+  if (!l || typeof l.href !== 'string') return null
+  const href = l.href.trim()
+  const route = /^\/(?!\/)/.test(href)
+  if (!route && !/^https:\/\/[^\s]+$/.test(href)) return null
+  const label = squash(l.label) || href.split('/').filter(Boolean).pop() || 'open'
+  return { label: label.slice(0, 80), href, hear: !!l.hear, route }
+}
+
+function shortcutsOf(t, n) {
+  return promptsOf(t).slice(0, n || 4)
+}
+
+function clockOf(iso, tz) {
+  if (typeof iso !== 'string' || !iso) return ''
+  if (!/[T ]\d{2}:\d{2}/.test(iso)) return ''                     // a date without a time has no clock
+  const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso.replace(' ', 'T') + 'Z')   // the store keeps UTC
+  if (isNaN(d.getTime())) return ''
+  try {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, ...(tz ? { timeZone: tz } : {}) }).format(d)
+  } catch {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(d)
+  }
+}
+
+function todayLines(waits, tz, now) {
+  const list = waits && Array.isArray(waits.today) ? waits.today : []
+  const at = typeof now === 'number' ? now : Date.now()
+  const out = []
+  for (const x of list) {
+    if (!x || typeof x.text !== 'string' || !x.text.trim()) continue
+    const due = typeof x.due === 'string' ? x.due : ''
+    const when = due ? new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(due) ? due : due.replace(' ', 'T') + 'Z').getTime() : NaN
+    // a task that carries its link ("Press Update: https://...") reads as its words; the link is the press
+    const raw = squash(x.text)
+    const m = raw.match(/https:\/\/[^\s]+/)
+    const href = m ? m[0].replace(/[).,;]+$/, '') : null
+    const text = (m ? raw.replace(m[0], ' ') : raw).replace(/\s+/g, ' ').replace(/[\s:,-]+$/, '').trim() || raw
+    out.push({ time: clockOf(due, tz), text: text.slice(0, 160), href, late: !isNaN(when) && when < at, any: !due })
+    if (out.length >= 3) break
+  }
+  return out
+}
+
+const SNAP_KEY = 'cc.wall.snap'
+function readSnap(storage) {
+  try { const v = JSON.parse((storage && storage.getItem(SNAP_KEY)) || 'null'); return v && typeof v === 'object' ? v : null } catch { return null }
+}
+function writeSnap(storage, patch) {
+  try { if (storage) storage.setItem(SNAP_KEY, JSON.stringify({ ...(readSnap(storage) || {}), ...patch, at: Date.now() })) } catch {}
+}
+
 module.exports = {
+  nowOf, latestOf, shortcutsOf, clockOf, todayLines, SNAP_KEY, readSnap, writeSnap,
   readable, lastAnswer, transcribe, VIEWS, VIEW_KEY, COLUMNS_MAX, readView, columnsUrl, switchView,
   PIN_MAX, allInstruments, instrumentsOf, cleanPinned, pinnedOut, togglePin, fanPlace, pinFirst,
   PROMPTS_MAX, WALL_WORDS, isWallWord, promptsOf, waitsForMore, promptPress, ringOf, wallExtra, homeOnWall,

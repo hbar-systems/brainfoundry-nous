@@ -211,7 +211,7 @@ console.log(JSON.stringify({
     assert d["mins"] == ["just started", "5 min", "1 h 15", ""]
     assert d["groups"] == [["hbar.film", 2]]
     assert d["add"] == [["work", ["hbar.music", "hbar.film"]], ["instrument", ["hbar.ink", "hbar.poker"]], ["site", ["hbar.blog"]]]
-    assert d["urls"] == ["/cc/systems", "/cc/systems?depth=hbar.film"]
+    assert d["urls"] == ["/cc/systems?wall=1", "/cc/systems?wall=1&depth=hbar.film"]   # WALL-6: the slim board
 
 
 # ---- the page ----
@@ -220,7 +220,7 @@ def test_page_wiring_the_layer_only_reads():
     o = (ROOT / "ui" / "components" / "WallOrbit.js").read_text()
     dp = (ROOT / "ui" / "components" / "WallDepth.js").read_text()
     tt = (ROOT / "ui" / "components" / "ThreadTree.js").read_text()
-    assert "fetch(systemsUrl(depthRef.current)" in w and "if (depthRef.current) { depthRef.current = null; setDepthState(null); return }" in w
+    assert "early(systemsUrl(depthRef.current)" in w and "if (depthRef.current) { depthRef.current = null; setDepthState(null); return }" in w
     assert "import WallDepth from './WallDepth'" in o and "data-depth-for={t.id}" in o and "data-depth-for={CENTRE}" in o
     assert "kindOf(t) !== 'work'" in o and "if (inst) { onOpen(t); return }" in o            # an instrument opens, it has no box
     assert "fill={fills[id]}" in o and "onDepth(null)" in o

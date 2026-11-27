@@ -662,6 +662,46 @@ def card_prompts(text: str, n: int = PROMPTS_MAX) -> list:
     return out
 
 
+_LATEST_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:Latest|Look|Hear)(?:\*\*)?:\s*(.+)$", re.M | re.I)
+_HEAR_EXT = {"mp3", "wav", "m4a", "ogg", "opus", "flac", "aif", "aiff", "webm", "mp4", "mov"}
+
+
+def card_latest(text: str, world: Path | None = None, roots: tuple = ()) -> dict | None:
+    """WALL-6 (hbar 2026-11-26: "it just lets me see the current system but not so much easy"): a card's latest thing
+    to look at or hear, from its "Latest:" line, "<label> | <target>" or just the target. The target is an https
+    address, a console route (/cc/page/..., /sing), an absolute file path under one of `roots`, or a path relative to
+    the world; a file becomes /cc/files/raw<path>. Anything else (other hosts' http, "..", a file outside) is None.
+    {label, href, hear}: hear when the file is sound or film."""
+    body = str(text or "")
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        body = body[end + 4:] if end > 0 else body
+    m = _LATEST_RE.search(body)
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    label, _, target = raw.rpartition("|") if "|" in raw else ("", "", raw)
+    label, target = label.strip().strip("*").strip(), target.strip().strip("`").strip()
+    if not target or any(c.isspace() for c in target) or ".." in target.split("/"):
+        return None
+    if target.startswith("https://"):
+        href = target
+    elif "://" in target or target.startswith("//"):
+        return None
+    elif re.match(r"^/cc/(?:page|files)/[A-Za-z0-9._/~+-]+$", target) or re.match(r"^/[a-z][a-z0-9-]*/?$", target):
+        href = target                                   # a console route: /cc/page/..., /sing
+    else:
+        if not re.match(r"^[A-Za-z0-9._/~+-]+$", target):
+            return None                                 # a file path is plain characters (no scheme, no colon)
+        p = Path(target) if target.startswith("/") else (Path(world) / target if world else None)
+        if p is None or not any(str(p).startswith(str(r).rstrip("/") + "/") for r in (*roots, world) if r):
+            return None
+        href = "/cc/files/raw" + str(p)
+    ext = href.rsplit(".", 1)[-1].lower() if "." in href.rsplit("/", 1)[-1] else ""
+    name = href.rstrip("/").rsplit("/", 1)[-1]
+    return {"label": (label or name)[:80], "href": href[:400], "hear": ext in _HEAR_EXT}
+
+
 def wall_card(world: Path | None, sid: str) -> str | None:
     """The system's wall card in the world, <world>/ops/wall/cards/<id>.md, when there is one (relative path)."""
     if world is None or not isinstance(sid, str) or not ID_RE.match(sid):
@@ -835,6 +875,23 @@ def due_today(tasks, today: str) -> int:
         if isinstance(t, dict) and not t.get("done") and isinstance(t.get("due"), str) and t["due"][:10] and t["due"][:10] <= today:
             n += 1
     return n
+
+
+def today_list(tasks, today: str, n: int = 3) -> list:
+    """WALL-6 (hbar 2026-11-26: the wall "is now main one i want to begin with"; the centre answers "what waits for me
+    today, in order" in place): open tasks due today or before, earliest first, then open tasks with no time, at most
+    n, each {text, due}. `today` is YYYY-MM-DD in the owner's zone; `due` stays as the store keeps it (UTC)."""
+    dated, free = [], []
+    for t in tasks or []:
+        if not isinstance(t, dict) or t.get("done") or not str(t.get("text") or "").strip():
+            continue
+        due = t.get("due") if isinstance(t.get("due"), str) and t.get("due") else None
+        if due and due[:10] <= today:
+            dated.append(t)
+        elif not due:
+            free.append(t)
+    dated.sort(key=lambda t: t["due"])
+    return [{"text": str(t["text"]).strip()[:200], "due": t.get("due") or None} for t in (dated + free)[:n]]
 
 
 # ---------------------------------------------------------------- voice ----
