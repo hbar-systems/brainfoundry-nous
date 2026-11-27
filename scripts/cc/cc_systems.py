@@ -452,6 +452,44 @@ def load_static(path: Path | str | None, cache: dict | None = None) -> dict | No
     return d
 
 
+# PANES-FOCUS-1 (2026-11-27, hbar: "we are wasting space next to the titles of the system. There can be various things
+# that are indicating on system levels how many jobs etc."): a pane's title bar on /systems shows the system's open
+# rows and how many of them wait on him. The rows are the world's own per-system list, ops/systems/<id>/open.tsv
+# (scripts/systems_open.py, PER-SYSTEM-1), counted the way scripts/health_line.py counts them: a row that sits in
+# court counts once, as the court row. "His": court decisions and his tasks (not a task the check found dead).
+# Read only, again only when the file's mtime moves. Field `open_rows` (the bridge sets `open` after the board: an
+# instrument's own page, WALL-3).
+_OPEN_ROWS: dict = {}       # path -> (mtime, {"n", "his"})
+_OPEN_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def open_rows(world: Path | str | None, sid: str) -> dict | None:
+    """{n, his} from <world>/ops/systems/<sid>/open.tsv; None when the world has no such file."""
+    if not world or not _OPEN_ID.match(str(sid or "")) or ".." in sid:
+        return None
+    p = Path(world) / "ops" / "systems" / sid / "open.tsv"
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return None
+    got = _OPEN_ROWS.get(str(p))
+    if got and got[0] == mt:
+        return got[1]
+    n = his = 0
+    for r in read_tsv(p):
+        st = (r.get("state") or "").strip()
+        if st.startswith("in court"):
+            continue
+        n += 1
+        if (r.get("kind") or "") in ("court", "task") and "dead" not in st:
+            his += 1
+    out = {"n": n, "his": his}
+    if len(_OPEN_ROWS) > 200:
+        _OPEN_ROWS.clear()
+    _OPEN_ROWS[str(p)] = (mt, out)
+    return out
+
+
 KEEP = 14   # lines sent per group (the poll stays light); the counts are always whole
 
 
@@ -532,7 +570,7 @@ def board(world: Path | str | None, jobs: list, threads: dict | None = None, now
         tiles.append({"id": s["id"], "status": s.get("status", ""), "description": s.get("description", ""), "kind": s.get("kind", "work"),
                       "domain": s.get("domain", ""), "jobs": job_briefs(running_recs[s["id"]], jobs, now, world),
                       "moving": moving, "total": total, "lines": lines, "more": more, "extra": len(rest),
-                      "thread": threads.get(s["id"]), "detail": detail,
+                      "thread": threads.get(s["id"]), "detail": detail, "open_rows": open_rows(world, s["id"]),
                       "counts": {k: v["count"] for k, v in detail.items()}})
     tiles.sort(key=lambda t: (-t["counts"]["running"], -t["moving"], -t["total"], t["id"]))
     return {"tiles": tiles, "built": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "moving": sum(t["moving"] for t in tiles),
