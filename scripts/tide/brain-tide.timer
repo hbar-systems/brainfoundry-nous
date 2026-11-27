@@ -1,0 +1,14 @@
+# brain-tide.timer (AUTO-UPDATE-1, 2026-11-27, docs/TIDE.md): every five minutes, ask whether it is quiet.
+# Installed by scripts/tide/install-tide.sh to /etc/systemd/system/brain-tide.timer.
+# Nothing updates while the switch on /update is off (the template's default).
+[Unit]
+Description=Tide: every five minutes, ask the bridge whether this is a quiet moment to update
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

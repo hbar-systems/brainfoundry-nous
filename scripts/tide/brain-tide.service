@@ -1,0 +1,17 @@
+# brain-tide.service (AUTO-UPDATE-1, 2026-11-27, docs/TIDE.md): one look, and at a quiet moment the Update.
+# Rendered by scripts/tide/install-tide.sh (the @...@ values) to /etc/systemd/system/brain-tide.service.
+# Its own unit, outside cc-bridge's group: a bridge restart during the update cannot stop it.
+[Unit]
+Description=Tide: update the brain at a quiet moment (asks the bridge; runs scripts/update_brain.sh)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BRAIN_DIR=@BRAIN_DIR@
+Environment=CC_PORT=@CC_PORT@
+Environment=BRIDGE_USER=@BRIDGE_USER@
+Environment=TAB_USER=@TAB_USER@
+ExecStart=/usr/local/sbin/brain-tide
+TimeoutStartSec=2700
+PrivateTmp=yes
