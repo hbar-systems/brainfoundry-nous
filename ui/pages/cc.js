@@ -24,6 +24,7 @@ import { press, routeName, slashName, choiceName } from '../lib/presses'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { splitTree } from '../lib/tree'
 import { splitSteer, steerBody, sayUrl } from '../lib/steer'
+import { cardClock, pressWords } from '../lib/permitClock'
 import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
 import { useActivity, Light, LIGHT_CSS } from '../lib/activity'
@@ -1204,6 +1205,16 @@ function ProposalCard({ p, onDecide }) {
   }
   const [remember, setRemember] = useState(false)
   const [showFull, setShowFull] = useState(false)
+  // the card's clock (PERMIT-SAY-1): minutes left, "expired" at zero, so a dead card is not pressed
+  const seenRef = useRef(Date.now())
+  const [now, setNow] = useState(Date.now())
+  const waiting = !p.decided && !p.auto
+  useEffect(() => {
+    if (!waiting) return undefined
+    const t = setInterval(() => setNow(Date.now()), 10000)
+    return () => clearInterval(t)
+  }, [waiting])
+  const clock = cardClock(p.expires_at, p.ttl_seconds, now, seenRef.current)
   const decided = p.decided
   const box = p.platform === 'box'
   const run = p.platform === 'box-run'   // the Local seat's one command (2026-10-26): the card shows the exact command
@@ -1220,7 +1231,7 @@ function ProposalCard({ p, onDecide }) {
     )
   }
   return (
-    <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${C.gold}`, backgroundColor: C.card }}>
+    <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${clock.expired && !decided ? C.bad : C.gold}`, backgroundColor: C.card, opacity: clock.expired && !decided ? 0.75 : 1 }}>
       <p style={{ ...mono, color: C.gold, fontSize: '10px', letterSpacing: '0.15em', textTransform: 'uppercase', margin: '0 0 6px 0' }}>
         {box ? `on this box · ${p.method || 'action'}` : run ? 'local seat proposes · one command on this box, run as the hands' : `proposed write · ${p.method || 'POST'} · ${p.platform || ''}`}
       </p>
@@ -1233,13 +1244,15 @@ function ProposalCard({ p, onDecide }) {
       ) : null}
       {run && p.why ? <p style={{ margin: '-4px 0 10px 0', color: C.dim, fontSize: '12px' }}>the model says: {p.why}</p> : null}
       {decided ? (
-        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{decided === 'approve' ? (box ? 'allowed' : 'sent') : (box ? 'refused' : 'cancelled')} · permit {p.id}</p>
+        <p style={{ ...mono, color: C.faint, fontSize: '11px', margin: 0 }}>{p.said || (decided === 'approve' ? (box ? 'allowed' : 'sent') : (box ? 'refused' : 'cancelled'))} · permit {p.id}</p>
+      ) : clock.expired ? (
+        <p style={{ ...mono, color: '#d08a7a', fontSize: '11px', margin: 0 }}>expired · the job was told no; if it still needs this it asks again with a fresh card · permit {p.id}</p>
       ) : (
         <>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <Btn primary onClick={() => onDecide(p.id, 'approve', remember)} disabled={p.busy}>{p.busy ? '…' : (box ? 'Allow' : 'Send')}</Btn>
             <Btn onClick={() => onDecide(p.id, 'deny')} disabled={p.busy}>{box ? 'Refuse' : 'Cancel'}</Btn>
-            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : ''}{p.judge ? ` · judged:${p.judge.safe != null ? ` safe ${p.judge.safe.toFixed(2)},` : ''} on request ${p.judge.intent.toFixed(2)}, risk ${p.judge.risk.toFixed(1)}` : ''}</span>
+            <span style={{ ...mono, color: C.faint, fontSize: '11px' }}>permit {p.id}{clock.known ? ` · ${clock.label}` : (p.ttl_seconds ? ` · valid ${Math.round(p.ttl_seconds / 60)} min` : '')}{p.judge ? ` · judged:${p.judge.safe != null ? ` safe ${p.judge.safe.toFixed(2)},` : ''} on request ${p.judge.intent.toFixed(2)}, risk ${p.judge.risk.toFixed(1)}` : ''}</span>
           </div>
           {p.held && <p style={{ ...mono, color: C.gold, fontSize: '11px', margin: '8px 0 0 0' }}>{p.held}</p>}
           {p.remember_ok !== false && (
@@ -2953,11 +2966,14 @@ function CC() {
     } catch (e) { data = { ok: false, error: 'the bridge did not answer' } }
     setPending(p => p.filter(x => x.id !== id))
     if (remember && data.ok) loadPending()
-    markCard(id, { busy: false, decided: action })
+    const said = pressWords(data, action)
+    // the card says what happened to it (PERMIT-SAY-1): "already allowed", or the bridge's plain reason
+    markCard(id, { busy: false, decided: action, said: data.ok ? (data.status === 'already allowed' ? 'already allowed' : '') : `not done: ${data.error || 'no reason given'}` })
     if (isBox) {   // the reasoner continues in the same live answer; a failed press is said, not swallowed (2026-10-18)
-      if (!data.ok) setTurns(t => [...t, { who: 'brain', error: true, text: `That ${action === 'approve' ? 'Allow' : 'Refuse'} did not reach the job: ${data.error || data.status || 'the permit has expired (15 minutes) or the job that asked has ended'}.` }])
+      if (said.error) setTurns(t => [...t, { who: 'brain', error: true, text: said.text }])
       return
     }
+    if (data.ok && data.status === 'already allowed') { setTurns(t => [...t, { who: 'brain', text: said.text }]); return }
     if (action === 'approve') {
       const text = data.ok
         ? `Done: ${data.summary || 'the action ran'}.` + (data.result && data.result.status ? ` One answered ${data.result.status}.` : '') + (data.result && data.result.out ? `\n\n\`\`\`\n${data.result.out}\n\`\`\`` : '')
