@@ -94,13 +94,13 @@ console.log(JSON.stringify({
 
 def test_systems_page_wiring():
     sy = (ROOT / "ui" / "pages" / "systems" / "index.js").read_text()
-    assert "readFocus, framesLayout, paneMarks, OPEN_KEY, FOCUS_KEY } from '../../lib/steer'" in sy
+    assert "readFocus, framesLayout, paneMarks, layPages" in sy and "OPEN_KEY, FOCUS_KEY, PAGES_KEY, MAX_PANES } from '../../lib/steer'" in sy   # SYSTEMS-PAGES-1 added the pages
     assert "localStorage.setItem(FOCUS_KEY, focus)" in sy and "localStorage.getItem(FOCUS_KEY)" in sy
     # no remount: one Thread per open sid, keyed by sid alone, in the same container in grid and focus
-    assert sy.count("<Thread key={sid} sid={sid}") == 1 and "zoom={zoomOf(sid)}" in sy
+    assert sy.count("<Thread key={sid} sid={sid}") == 1 and "zoom={off ? 'grid' : zoomOf(sid)}" in sy   # off its page: hidden, not focused
     assert "<iframe key={thread + (ask ? ':' + ask.n : '')}" in sy                # the frame's key did not change
     assert "el.animate(" in sy and "duration: 220" in sy and "prefers-reduced-motion: reduce" in sy
-    assert "e.data.type !== 'cc-pane-key' || e.data.key !== 'Escape'" in sy      # Esc from inside the pane
+    assert "e.data.type !== 'cc-pane-key') return" in sy and "if (e.data.key === 'Escape') zoomTo(null)" in sy   # Esc from inside the pane
     assert "type: 'cc-pane-focus', focus: zoomRef.current === 'focus'" in sy
     assert ".sy-right.mini .sy-frame{position:absolute" in sy and "visibility:hidden" in sy
     assert "back to all the panes (Esc)" in sy and "commit 186eace" in sy         # the look before, by commit
