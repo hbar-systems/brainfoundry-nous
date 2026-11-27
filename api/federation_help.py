@@ -108,7 +108,11 @@ def check_inbound(door: Door, rec: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------- config
 
 def config() -> Dict[str, Any]:
-    """{"helper": "<brain id>" or None, "button": bool}. BRAIN_HELP_PEER wins over data/help.json."""
+    """{"helper": "<brain id>" or None, "button": bool}. BRAIN_HELP_PEER wins over data/help.json.
+
+    The button (CHIP-1, 2026-11-27): it is a member's line to their helper, so a brain with no
+    helper of its own (the helper's owner, hbar, is the one asked) shows it off by default; a
+    member's brain shows it on. data/help.json {"button": true|false} overrides either way."""
     cfg: Dict[str, Any] = {}
     p = Path(os.getenv("HELP_CONFIG_PATH", "data/help.json"))
     try:
@@ -118,8 +122,9 @@ def config() -> Dict[str, Any]:
     except Exception:
         pass
     helper = (os.getenv("BRAIN_HELP_PEER") or cfg.get("helper") or "").strip()
-    return {"helper": helper if helper and ID_RE.match(helper) else None,
-            "button": cfg.get("button", True) is not False}
+    helper = helper if helper and ID_RE.match(helper) else None
+    button = cfg.get("button")
+    return {"helper": helper, "button": bool(helper) if not isinstance(button, bool) else button}
 
 
 # ---------------------------------------------------------------- the member's side

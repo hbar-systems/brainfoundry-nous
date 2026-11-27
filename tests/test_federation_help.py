@@ -306,3 +306,18 @@ def test_help_module_carries_no_content_words():
     src = open(fh.__file__, encoding="utf-8").read()
     for w in ("import api.memory", "vector", "chroma", "persona_", "open(", "chat_history"):
         assert w not in src, w
+
+
+def test_button_off_without_a_helper_on_with_one_override_wins(tmp_path, monkeypatch):
+    """CHIP-1 2026-11-27: the chip is a member's line to their helper; on a brain with no helper
+    (the helper's own console, hbar's) it is off by default; help.json "button" switches it."""
+    cfg = tmp_path / "help.json"
+    monkeypatch.setenv("HELP_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("BRAIN_HELP_PEER", raising=False)
+    assert fh.config() == {"helper": None, "button": False}
+    cfg.write_text(json.dumps({"button": True}))
+    assert fh.config()["button"] is True
+    cfg.write_text(json.dumps({"helper": "brain-helper-test"}))
+    assert fh.config() == {"helper": "brain-helper-test", "button": True}
+    cfg.write_text(json.dumps({"helper": "brain-helper-test", "button": False}))
+    assert fh.config()["button"] is False

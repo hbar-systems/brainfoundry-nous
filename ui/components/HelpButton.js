@@ -26,35 +26,77 @@ function markSeen(rids) {
   } catch (e) {}
 }
 
-// How far above the bottom edge the button sits so it covers no control of the page under it
-// (the chat's send button above all): raise it over whatever control is in its spot, a few times.
-function clearBottom(el) {
-  if (!el || typeof document.elementsFromPoint !== 'function') return EDGE
+// Where the button sits so it covers no control of the page under it (CHIP-1, 2026-11-27: it sat on
+// the Send button of a /systems column and of the /wall centre thread). Those composers live inside
+// same-origin iframes, which elementsFromPoint only reports as the <iframe>, and five sample points
+// missed a round Send between them. So: collect the rect of every visible control in the page and in
+// each same-origin iframe (shifted by the frame's place), and raise the button over whatever its own
+// rect touches, a few times (a Send, then the composer's text box above it). When that climbs past
+// 60 percent of the screen, it goes to the left edge of the footer instead. Returns {bottom, side}.
+function controlRects(skip) {
+  const out = []
+  const walk = (doc, dx, dy, depth) => {
+    let list = []
+    try { list = doc.querySelectorAll(INTERACTIVE + ', iframe') } catch (e) { return }
+    for (const e of list) {
+      if (skip && (skip.contains(e) || (e.closest && e.closest('[data-help-panel]')))) continue
+      const r = e.getBoundingClientRect()
+      if (r.width < 1 || r.height < 1) continue
+      const view = doc.defaultView
+      const cs = view && view.getComputedStyle ? view.getComputedStyle(e) : null
+      if (cs && (cs.visibility === 'hidden' || cs.display === 'none' || cs.pointerEvents === 'none')) continue
+      if (e.tagName === 'IFRAME') {
+        if (depth > 1) continue
+        let inner = null
+        try { inner = e.contentDocument } catch (err) { inner = null }
+        if (inner) walk(inner, dx + r.left + e.clientLeft, dy + r.top + e.clientTop, depth + 1)
+        continue
+      }
+      out.push({ left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy })
+    }
+  }
+  walk(document, 0, 0, 0)
+  return out
+}
+
+function overlaps(a, b) {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+}
+
+function clearSpot(el) {
+  if (!el || typeof document === 'undefined') return { bottom: EDGE, side: 'right' }
   const w = el.offsetWidth || 120
-  const h = el.offsetHeight || 32
+  const h = el.offsetHeight || 28
   const vw = window.innerWidth
   const vh = window.innerHeight
-  let bottom = EDGE
-  for (let i = 0; i < 6; i++) {
-    const top = vh - bottom - h
-    const left = vw - EDGE - w
-    const pts = [[left + 2, top + 2], [left + w - 2, top + 2], [left + 2, top + h - 2], [left + w - 2, top + h - 2], [left + w / 2, top + h / 2]]
-    let hit = null
-    for (const [x, y] of pts) {
-      for (const e of document.elementsFromPoint(x, y)) {
-        if (el.contains(e) || (e.closest && e.closest('[data-help-panel]'))) continue
-        const c = e.closest ? e.closest(INTERACTIVE) : null
-        if (c) { hit = c; break }
-      }
-      if (hit) break
+  const rects = controlRects(el)
+  const fit = (side) => {
+    let bottom = EDGE
+    for (let i = 0; i < 8; i++) {
+      const left = side === 'right' ? vw - EDGE - w : EDGE
+      const me = { left: left - 4, right: left + w + 4, top: vh - bottom - h - 4, bottom: vh - bottom + 4 }
+      const hits = rects.filter(r => overlaps(me, r))
+      if (!hits.length) return bottom
+      const next = vh - Math.min(...hits.map(r => r.top)) + 8
+      if (next <= bottom || next > vh * 0.6) return null
+      bottom = next
     }
-    if (!hit) break
-    const next = vh - hit.getBoundingClientRect().top + 8
-    if (next <= bottom || next > vh * 0.6) break
-    bottom = next
+    return null
   }
-  return Math.round(bottom)
+  const r = fit('right')
+  if (r !== null) return { bottom: Math.round(r), side: 'right' }
+  const l = fit('left')
+  if (l !== null) return { bottom: Math.round(l), side: 'left' }
+  return { bottom: EDGE, side: 'left' }
 }
+
+// Faint at rest (about a quarter strength, no fill: the skin's own ink), full on hover, keyboard focus
+// and while its panel is open. Touch screens have no hover: there it stays readable, and smaller.
+const CHIP_CSS = `
+.bf-help-chip{opacity:.25;background:transparent;box-shadow:none;transition:opacity .18s ease,background-color .18s ease}
+.bf-help-chip:hover,.bf-help-chip:focus-visible,.bf-help-chip[aria-expanded="true"],.bf-help-chip[data-news="1"]{opacity:1;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.25)}
+@media (hover:none){.bf-help-chip{opacity:.6;font-size:11px!important;padding:3px 8px!important}}
+`
 
 export default function HelpButton() {
   const lang = useConsoleLang()
@@ -67,6 +109,7 @@ export default function HelpButton() {
   const [screen, setScreen] = useState('/')
   const [pressed, setPressed] = useState([])
   const [bottom, setBottom] = useState(EDGE)
+  const [side, setSide] = useState('right')
   const [narrow, setNarrow] = useState(false)
   const [seen, setSeen] = useState(() => new Set())
   const btnRef = useRef(null)
@@ -89,11 +132,12 @@ export default function HelpButton() {
   useEffect(() => {
     const place = () => {
       setNarrow(window.innerWidth < 520)
-      const b = clearBottom(btnRef.current)
-      setBottom(prev => (prev === b ? prev : b))
+      const spot = clearSpot(btnRef.current)
+      setBottom(prev => (prev === spot.bottom ? prev : spot.bottom))
+      setSide(prev => (prev === spot.side ? prev : spot.side))
     }
     place()
-    const t = setInterval(place, 2000)
+    const t = setInterval(place, 1500)
     window.addEventListener('resize', place)
     Router.events.on('routeChangeComplete', place)
     return () => { clearInterval(t); window.removeEventListener('resize', place); Router.events.off('routeChangeComplete', place) }
@@ -143,24 +187,25 @@ export default function HelpButton() {
   if (st === undefined || (st && st.button === false)) return null
 
   const pill = {
-    position: 'fixed', right: EDGE, bottom: `calc(${bottom}px + env(safe-area-inset-bottom, 0px))`, zIndex: 9990,
+    position: 'fixed', [side]: EDGE, bottom: `calc(${bottom}px + env(safe-area-inset-bottom, 0px))`, zIndex: 9990,
     display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999,
-    background: 'var(--surface)', color: unseen.length ? 'var(--text)' : 'var(--muted)',
+    color: unseen.length ? 'var(--text)' : 'var(--muted)',
     border: `1px solid ${unseen.length ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, lineHeight: 1.4,
-    fontFamily: 'var(--font-body)', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
+    fontFamily: 'var(--font-body)', cursor: 'pointer',
   }
   const small = { fontSize: 12, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }
 
   return (
     <>
-      <button ref={btnRef} type="button" data-help-button="1" onClick={open ? closePanel : openPanel}
+      <style>{CHIP_CSS}</style>
+      <button ref={btnRef} type="button" className="bf-help-chip" data-help-button="1" data-news={unseen.length ? '1' : '0'} onClick={open ? closePanel : openPanel}
         aria-expanded={open} title={W.title} style={pill}>
         {unseen.length > 0 && <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--accent)' }} />}
         {unseen.length > 0 ? W.answered : narrow ? W.short : W.button}
       </button>
       {open && (
         <div data-help-panel="1" role="dialog" aria-label={W.title} style={{
-          position: 'fixed', right: EDGE, bottom: `calc(${bottom + 42}px + env(safe-area-inset-bottom, 0px))`, zIndex: 9991,
+          position: 'fixed', [side]: EDGE, bottom: `calc(${bottom + 42}px + env(safe-area-inset-bottom, 0px))`, zIndex: 9991,
           width: `min(360px, calc(100vw - ${EDGE * 2}px))`, maxHeight: `calc(100vh - ${bottom + 120}px)`, overflowY: 'auto',
           background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 12,
           padding: '14px 16px', boxShadow: '0 8px 30px rgba(0,0,0,0.4)', fontFamily: 'var(--font-body)', boxSizing: 'border-box',
