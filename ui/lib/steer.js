@@ -82,4 +82,81 @@ function gridOf(n) {
   return { cols, rows: Math.max(1, Math.ceil(k / cols)) }
 }
 
-module.exports = { splitSteer, steerBody, sayUrl, readOpen, toggleOpen, gridOf, OPEN_KEY, MAX_OPEN, MAX_STEERS }
+// ---- /systems: one pane in focus (PANES-FOCUS-1 "Lens", 2026-11-27, hbar: "click any one of these and it expands to
+// most of the screen so I can read it much better ... and then an easy exit back so we see all four") ----
+const FOCUS_KEY = 'cc.systems.focus'   // localStorage is per origin, and each brain's console is its own origin
+
+// The saved focus, kept only while that pane is still open.
+function readFocus(raw, shown) {
+  const s = String(raw || '')
+  return ID_RE.test(s) && (shown || []).includes(s) ? s : null
+}
+
+// Where each open pane sits. No focus: the grid of gridOf (central first, full height, when it is open). In focus:
+// the focused pane takes the wide column at full height, the others stack as title bars in a narrow column beside,
+// in the order they were open. -> { cols, rows, place: { sid: {gridColumn, gridRow} }, mini: [sid] }
+function framesLayout(shown, focus, central, strip = 'clamp(190px, 18%, 280px)') {
+  const all = (shown || []).slice()
+  const f = focus && all.includes(focus) ? focus : null
+  if (f) {
+    const rest = all.filter(x => x !== f)
+    const place = { [f]: { gridColumn: 1, gridRow: '1 / -1' } }
+    rest.forEach((sid, i) => { place[sid] = { gridColumn: 2, gridRow: i + 1 } })
+    return {
+      cols: rest.length ? `minmax(0,1fr) ${strip}` : 'minmax(0,1fr)',
+      rows: rest.length ? `${rest.map(() => 'auto').join(' ')} minmax(0,1fr)` : 'minmax(0,1fr)',
+      place, mini: rest,
+    }
+  }
+  const list = all.filter(x => x !== central)
+  const hasC = !!central && all.includes(central)
+  const { cols, rows } = gridOf(list.length)
+  const place = {}
+  if (hasC) place[central] = { gridColumn: 1, gridRow: '1 / -1' }
+  list.forEach((sid, i) => { place[sid] = { gridColumn: (hasC ? 2 : 1) + (i % cols), gridRow: 1 + Math.floor(i / cols) } })
+  const c = Math.max(1, list.length ? cols : 1)
+  return {
+    cols: hasC && list.length ? `minmax(0,1fr) repeat(${cols}, minmax(0,1fr))` : `repeat(${c}, minmax(0,1fr))`,
+    rows: `repeat(${list.length ? rows : 1}, minmax(0,1fr))`, place, mini: [],
+  }
+}
+
+// The quiet marks right of a pane's name, from what GET /cc/systems already carries (never a made-up number):
+//   run   jobs running in that system now            (tile.counts.running; nothing when zero)
+//   open  open rows of ops/systems/<id>/open.tsv     (tile.open.n, when the bridge serves it)
+//   his   of those, the ones that wait on him         (tile.open.his: court decisions and his tasks; the accent)
+//   last  the time of the last turn in its thread     (tile.said.at; "live" while it answers)
+// -> [{ k, text, title }], numbers first, few words.
+function hhmm(iso, now) {
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const n = now ? new Date(now) : new Date()
+  const p = (x) => String(x).padStart(2, '0')
+  if (d.toDateString() === n.toDateString()) return `${p(d.getHours())}:${p(d.getMinutes())}`
+  const days = Math.round((n - d) / 86400000)
+  if (days >= 1 && days < 7) return `${days}d`
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+}
+
+function paneMarks(tile, now) {
+  const t = tile || {}
+  const sid = t.id || 'this system'
+  const out = []
+  const run = Number((t.counts || {}).running) || 0
+  if (run > 0) out.push({ k: 'run', text: String(run), title: `${run} job${run === 1 ? '' : 's'} running in ${sid} now` })
+  const o = t.open && typeof t.open === 'object' ? t.open : null
+  if (o && Number(o.n) > 0) {
+    out.push({ k: 'open', text: `${o.n} open`, title: `${o.n} open item${o.n === 1 ? '' : 's'} in ${sid} (tasks, next rows, court rows)` })
+    if (Number(o.his) > 0) out.push({ k: 'his', text: `${o.his} yours`, title: `${o.his} of them wait on you (court decisions and your tasks)` })
+  }
+  const s = t.said && typeof t.said === 'object' ? t.said : null
+  if (s && s.live) out.push({ k: 'last', text: 'live', title: `${sid} is answering now` })
+  else if (s && s.at) {
+    const w = hhmm(s.at, now)
+    if (w) out.push({ k: 'last', text: w, title: `last turn in the ${sid} thread: ${new Date(s.at).toLocaleString('en-GB')}` })
+  }
+  return out
+}
+
+module.exports = { splitSteer, steerBody, sayUrl, readOpen, toggleOpen, gridOf, readFocus, framesLayout, paneMarks, hhmm,
+  OPEN_KEY, FOCUS_KEY, MAX_OPEN, MAX_STEERS }

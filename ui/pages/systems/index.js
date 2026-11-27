@@ -1,6 +1,6 @@
 import Head from 'next/head'
-import React, { useEffect, useRef, useState } from 'react'
-import { readOpen, toggleOpen, gridOf, OPEN_KEY } from '../../lib/steer'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { readOpen, toggleOpen, readFocus, framesLayout, paneMarks, OPEN_KEY, FOCUS_KEY } from '../../lib/steer'
 import SurfaceCard, { SURFACE_CSS } from '../../components/SurfaceCard'
 import { systemsFor } from '../../lib/surfaces'
 import { switchView } from '../../lib/wall'
@@ -40,6 +40,17 @@ const toWall = async () => {
 // POST /cc/systems/voice?system=<id> keeps the clip as in/<date>/memo_<id>_<stamp>.<ext> for the memo tape.
 // Updates: one light request every three seconds, none while the tab is hidden (the /board pattern).
 // Look: the chat's sand skin, no borders, no black, nothing moves on its own.
+// Focus (PANES-FOCUS-1 "Lens", 2026-11-27, hbar: "should be possibility to click any one of these and it expands to most
+// of the screen so I can read it much better ... and then an easy exit back so we see all four also we are wasting space
+// next to the titles of the system"): one press on a pane's title bar (or its corner mark) grows it to the wide column
+// at full height in about 220 ms; the other open panes stay as a strip of title bars beside, each one press from the
+// focus. Esc (here or from inside the focused pane, outside a text box), a press on its title bar again, or "all"
+// goes back to the grid. Nothing remounts: the frames only move, so scroll, drafts and running answers stay; a pane
+// in the strip keeps its frame at the size it had, hidden. The focus survives a reload (localStorage cc.systems.focus).
+// Right of each name: jobs running, open rows and the ones that wait on him, the time of the thread's last turn
+// (ui/lib/steer.js paneMarks; only what GET /cc/systems carries). The frames are told grid or focus ('cc-pane-focus')
+// so a small pane folds its tools strip to its one mark.
+// The look before this one: commit 186eace of brainfoundry-nous (ui/pages/systems/index.js there).
 
 const KINDS = [
   ['running', 'running now'], ['done_today', 'done today'], ['tasks', 'open tasks'], ['next', 'next'],
@@ -123,14 +134,36 @@ const CSS = `
 .sy .sf{--text:var(--ink);--surface:var(--bg)}
 .sy-t.has-sf{box-shadow:inset 3px 0 0 var(--sfh)}
 .sy-alone{margin:0 0 6px}
+.sy-ph{cursor:zoom-in;user-select:none}
+.sy-right.focus .sy-ph{cursor:zoom-out}
+.sy-nmb{flex:1;min-width:0;display:flex;align-items:baseline;gap:12px;overflow:hidden}
+.sy-nmb .sy-nm{flex:0 0 auto;max-width:100%}
+/* a mark that does not fit wraps onto a hidden second line, whole, never cut; the bar's title says them all */
+.sy-marks{flex:1 1 0;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;height:1.6em;overflow:hidden;font-size:13px;line-height:1.6;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.sy-mk.run{color:var(--rust);display:inline-flex;align-items:center;gap:5px}
+.sy-mk.run::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;animation:sy-pulse 2.4s ease-in-out infinite}
+.sy-mk.his{color:var(--rust);font-weight:500}
+.sy-all{font-size:13px;color:var(--muted);padding:3px 9px;border-radius:999px;background:var(--bg)}
+.sy-all:hover,.sy-all:focus-visible{color:var(--rust)}
+@media(min-width:900px){
+  .sy-split.focus{grid-template-columns:minmax(0,1fr)}.sy-split.focus .sy-left{display:none}
+  .sy-right.mini{border-radius:12px;overflow:hidden;cursor:zoom-in;min-height:0}
+  .sy-right.mini .sy-ph{min-height:0;padding:10px 14px;flex-wrap:wrap;row-gap:2px}
+  .sy-right.mini .sy-nmb{flex-wrap:wrap;row-gap:2px}.sy-right.mini .sy-marks{flex-basis:100%;height:auto}
+  .sy-right.mini .sy-ph .sy-nm{font-size:17px}
+  .sy-right.mini .sy-m,.sy-right.mini .sy-x,.sy-right.mini .sy-msg,.sy-right.mini .sy-hold{display:none}
+  .sy-right.mini .sy-frame{position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;flex:none}
+  .sy-right.mini:hover{background:color-mix(in srgb,var(--surface) 80%,var(--rust))}
+}
 @media(max-width:899px){
   .sy-split{display:block}.sy-left{padding:18px 12px 48px}.sy-grid{grid-template-columns:1fr;gap:2px}
   .sy-right{display:none;position:fixed;left:0;right:0;bottom:0;top:var(--top);height:auto;z-index:40}
   .sy-right.show{display:flex}.sy-back{display:inline-block}.sy-talk{display:block}.sy-frame{border-radius:0}
   .sy-frames{display:contents}.sy-frames .sy-right{position:fixed;top:var(--top);border-radius:0}
   .sy-right .sy-tabs{display:flex;gap:6px;overflow-x:auto;padding:0 18px 8px}
+  .sy-all{display:none}.sy-ph{cursor:default}.sy-nmb{flex-wrap:wrap;row-gap:0}.sy-marks{flex-basis:100%;height:auto}
 }
-@media(prefers-reduced-motion:reduce){.sy-fold,.sy-t{transition:none!important}.sy-m.rec{animation:none}}
+@media(prefers-reduced-motion:reduce){.sy-fold,.sy-t{transition:none!important}.sy-m.rec,.sy-mk.run::before{animation:none}}
 `
 
 const ICON = {
@@ -139,6 +172,8 @@ const ICON = {
   stop: <rect x="4.5" y="4.5" width="7" height="7" rx="1.5" />,
   send: <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" />,
   close: <path d="M4 4l8 8M12 4l-8 8" />,
+  grow: <path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" />,
+  shrink: <path d="M13.5 6.5h-4v-4M9.5 6.5l4-4M2.5 9.5h4v4M6.5 9.5l-4 4" />,
   done_today: <path d="M3 8.5 6.5 12 13 4.5" />,
   tasks: <rect x="3.5" y="3.5" width="9" height="9" rx="2" />,
   next: <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" />,
@@ -277,7 +312,7 @@ function Mic({ sid, onDone }) {
 
 // One open thread: its head (name, what it does now, the mic, open in full, close) over the live chat in a frame.
 // `tabs` is the phone's row of the other open threads, so one press moves between them.
-function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place, tabs, ask }) {
+function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place, tabs, ask, zoom, keep, onZoom, onAll, asideRef }) {
   const [state, setState] = useState(null)      // the frame's own report ('cc-pane-state')
   const [msg, setMsg] = useState(null)
   const frame = useRef(null)
@@ -285,23 +320,44 @@ function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place,
   useEffect(() => {
     const on = (e) => {
       if (e.origin !== window.location.origin || !frame.current || e.source !== frame.current.contentWindow) return
-      if (e.data && e.data.type === 'cc-pane-state') setState(e.data)
+      if (e.data && e.data.type === 'cc-pane-state') { setState(e.data); tell() }
     }
     window.addEventListener('message', on)
     return () => window.removeEventListener('message', on)
-  }, [])
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  // the frame learns whether it is small (grid) or large (focus): small, it folds its tools strip to one mark
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const tell = () => {
+    try { if (frame.current && frame.current.contentWindow) frame.current.contentWindow.postMessage({ type: 'cc-pane-focus', focus: zoomRef.current === 'focus' }, window.location.origin) } catch {}
+  }
+  useEffect(() => { tell() }, [zoom])   // eslint-disable-line react-hooks/exhaustive-deps
   const c = (tile && tile.counts) || {}
-  const st = state && state.busy ? (state.waiting ? 'waits for you' : state.writing ? 'writing' : 'thinking')
-    : c.running ? `${c.running} running` : ''
+  const st = state && state.busy ? (state.waiting ? 'waits for you' : state.writing ? 'writing' : 'thinking') : ''
   const name = central ? 'central' : sid
+  const marks = sid ? paneMarks({ ...(tile || {}), id: name }) : []
+  const big = zoom === 'focus'
+  const grow = big ? `back to all (Esc)` : `read ${name || 'it'} large; Esc comes back`
+  // a press anywhere on the bar that is not one of its marks grows or shrinks the pane
+  const onBar = (e) => { if (!onZoom || (e.target.closest && e.target.closest('button, a'))) return; onZoom() }
+  const flat = keep && zoom === 'mini' ? { width: keep.w + 'px', height: keep.h + 'px' } : undefined
   return (
-    <aside className={'sy-right' + (show ? ' show' : '')} style={place} aria-label={sid ? `${name} thread` : 'thread'}>
-      <div className="sy-ph">
+    <aside ref={asideRef} className={'sy-right' + (show ? ' show' : '') + (zoom === 'focus' ? ' focus' : zoom === 'mini' ? ' mini' : '')} style={place}
+      aria-label={sid ? `${name} thread` : 'thread'}>
+      <div className="sy-ph" onClick={onBar} title={onZoom ? grow : undefined}>
         <button className="sy-back" onClick={onBack} aria-label="back to the systems">back</button>
-        <span className="sy-nm" title={central ? 'the world thread; its send lines steer the others' : undefined}>{name || ''}</span>
+        {onZoom ? (
+          <button className="sy-nmb" onClick={onZoom} aria-pressed={big ? 'true' : 'false'} aria-label={grow}
+            title={[central ? 'the world thread; its send lines steer the others' : '', ...marks.map(m => m.title), grow].filter(Boolean).join('. ')}>
+            <span className="sy-nm">{name || ''}</span>
+            {marks.length ? <span className="sy-marks">{marks.map(m => <span key={m.k} className={'sy-mk ' + m.k} title={m.title}>{m.text}</span>)}</span> : null}
+          </button>
+        ) : <span className="sy-nm">{name || ''}</span>}
         {st ? <span className={'st' + (state && state.busy ? ' busy' : '')}>{st}</span> : null}
         {sid ? <Mic sid={sid} onDone={setMsg} /> : null}
         {thread ? <a className="sy-m" href={`/talk?thread=${encodeURIComponent(thread)}`} aria-label="open the thread in full" title="open the thread in full"><Svg k="link" /></a> : null}
+        {onZoom && !big ? <button className="sy-m" onClick={onZoom} aria-label={grow} title={grow}><Svg k="grow" /></button> : null}
+        {big && onAll ? <button className="sy-all" onClick={onAll} title="back to all the panes (Esc)">all</button> : null}
         {onClose ? <button className="sy-x" onClick={onClose} aria-label={`close ${name}`} title={`close ${name}; it keeps running`}><Svg k="close" /></button> : null}
       </div>
       {tabs}
@@ -311,7 +367,7 @@ function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place,
         </p>
       ) : null}
       {thread ? (
-        <iframe key={thread + (ask ? ':' + ask.n : '')} ref={frame} className="sy-frame" title={`${name} thread`} src={`/talk?pane=sys-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}${ask ? `&ask=${encodeURIComponent(ask.text)}&n=${ask.n}` : ''}`}
+        <iframe key={thread + (ask ? ':' + ask.n : '')} ref={frame} className="sy-frame" style={flat} onLoad={tell} title={`${name} thread`} src={`/talk?pane=sys-${encodeURIComponent(sid)}&thread=${encodeURIComponent(thread)}${ask ? `&ask=${encodeURIComponent(ask.text)}&n=${ask.n}` : ''}`}
           allow="microphone; clipboard-write" />
       ) : (
         <div className="sy-hold">{err ? err : sid ? `opening the ${name} thread` : 'press a system to talk in it'}</div>
@@ -332,8 +388,12 @@ export default function Systems() {
   const [ready, setReady] = useState(false)     // the saved choice was read (no save before that)
   const [surfs, setSurfs] = useState([])        // the surfaces register (SURFACES-1)
   const [asks, setAsks] = useState({})          // sid -> {text, n}: a pad's ask, put in that thread's box
+  const [focus, setFocusRaw] = useState(null)   // the pane read large (PANES-FOCUS-1); null: the grid
+  const [keep, setKeep] = useState({})          // sid -> {w, h}: the size its frame had, kept while it sits in the strip
   const timer = useRef(null)
   const asked = useRef({})
+  const els = useRef({})                        // sid -> its <aside>, for the move
+  const before = useRef(null)                   // sid -> rect, just before the layout changed
 
   const load = () => fetch('/cc/systems', { cache: 'no-store' })
     .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
@@ -361,25 +421,72 @@ export default function Systems() {
     document.addEventListener('visibilitychange', onVis)
     fetch('/cc/surfaces', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
       .then(d => { if (d && Array.isArray(d.surfaces)) setSurfs(d.surfaces) }).catch(() => {})
-    const onKey = (e) => { if (e.key === 'Escape') { setShow(false); setOpen({}) } }
+    const onKey = (e) => { if (e.key === 'Escape') { setShow(false); setOpen({}); zoomTo(null) } }
     document.addEventListener('keydown', onKey)
-    let l = [], c = true, q = null
+    // Esc pressed inside a pane (outside its text box) comes up as cc-pane-key
+    const onPaneKey = (e) => {
+      if (e.origin !== window.location.origin || !e.data || e.data.type !== 'cc-pane-key' || e.data.key !== 'Escape') return
+      zoomTo(null)
+    }
+    window.addEventListener('message', onPaneKey)
+    let l = [], c = true, q = null, f = null
     try {
       const u = new URLSearchParams(window.location.search)
       // ?open=hbar.film,hbar.music opens exactly those (a link from the central chat); ?system=<id> adds one
       l = u.get('open') ? readOpen(JSON.stringify(u.get('open').split(','))) : readOpen(localStorage.getItem(OPEN_KEY), localStorage.getItem(SEL))
       c = localStorage.getItem(CKEY) !== '0'
       q = u.get('system')
+      f = u.get('focus') || localStorage.getItem(FOCUS_KEY)   // ?focus=<id> opens that open pane large
     } catch {}
     if (q && q !== CENTRAL) l = toggleOpen(l.filter(x => x !== q), q)
-    setList(l.filter(x => x !== CENTRAL)); setCentral(c); setReady(true)
-    return () => { stop(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('keydown', onKey) }
+    l = l.filter(x => x !== CENTRAL)
+    f = readFocus(f, [...(c ? [CENTRAL] : []), ...l])
+    setList(l); setCentral(c); setFocusRaw(f); setReady(true)
+    if (f && phone()) { setFront(f); setShow(true) }
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('keydown', onKey); window.removeEventListener('message', onPaneKey) }
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!ready) return
     try { localStorage.setItem(OPEN_KEY, JSON.stringify(list)); localStorage.setItem(CKEY, central ? '1' : '0') } catch {}
   }, [list, central, ready])
+  useEffect(() => {
+    if (!ready) return
+    try { if (focus) localStorage.setItem(FOCUS_KEY, focus); else localStorage.removeItem(FOCUS_KEY) } catch {}
+  }, [focus, ready])
+
+  // The move (about 220 ms): each pane slides from where it was to where it is now (FLIP on transform only, so the
+  // frames are never reloaded or resized twice). A pane going into the strip keeps its frame's size, hidden.
+  const zoomTo = (next) => {
+    const rects = {}, sizes = {}
+    Object.entries(els.current).forEach(([sid, el]) => {
+      if (!el) return
+      rects[sid] = el.getBoundingClientRect()
+      const fr = el.querySelector('iframe')
+      if (fr) { const r = fr.getBoundingClientRect(); if (r.width > 40 && r.height > 40) sizes[sid] = { w: Math.round(r.width), h: Math.round(r.height) } }
+    })
+    before.current = rects
+    setKeep(k => ({ ...k, ...sizes }))
+    setFocusRaw(next)
+  }
+  useLayoutEffect(() => {
+    const was = before.current
+    before.current = null
+    if (!was) return
+    let still = false
+    try { still = window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch {}
+    if (still) return
+    Object.entries(els.current).forEach(([sid, el]) => {
+      const a = was[sid]
+      if (!el || !a || !el.animate) return
+      const b = el.getBoundingClientRect()
+      if (!b.width || !b.height) return
+      const dx = a.left - b.left, dy = a.top - b.top, sx = a.width / b.width, sy = a.height / b.height
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return
+      el.animate([{ transformOrigin: '0 0', transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` }, { transformOrigin: '0 0', transform: 'none' }],
+        { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' })
+    })
+  }, [focus])
 
   // every open thread (and the central one) gets its thread id; one the board already knows needs no call
   useEffect(() => {
@@ -413,7 +520,7 @@ export default function Systems() {
   const onTalk = (sid) => {
     if (sid === CENTRAL) setCentral(true)
     else setList(l => (l.includes(sid) ? l : toggleOpen(l, sid)))
-    setFront(sid); setShow(true)
+    setFront(sid); setShow(true); setFocusRaw(sid)
   }
 
   const tiles = (data && data.tiles) || []
@@ -425,27 +532,26 @@ export default function Systems() {
     setAsks(m => ({ ...m, [sid]: { text: a.ask, n: ((m[sid] && m[sid].n) || 0) + 1 } }))
     setList(l => (l.includes(sid) ? l : toggleOpen(l, sid)))
     setFront(sid); if (phone()) setShow(true)
+    if (focus) zoomTo(sid)
   }
   const tileOf = (sid) => tiles.find(t => t.id === sid)
   const running = data && data.running
   const isOpen = (sid) => (sid === CENTRAL ? central : list.includes(sid))
   const shown = [...(central ? [CENTRAL] : []), ...list]
   const many = shown.length > 0
-  const { cols, rows } = gridOf(list.length)
+  const fz = readFocus(focus, shown)            // a closed pane is never the focus
+  const lay = framesLayout(shown, fz, central ? CENTRAL : null)
   const frontSid = front && shown.includes(front) ? front : shown[shown.length - 1]
-  const frameStyle = central && list.length
-    ? { gridTemplateColumns: `minmax(0,1fr) repeat(${cols}, minmax(0,1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0,1fr))` }
-    : { gridTemplateColumns: `repeat(${Math.max(1, list.length ? cols : 1)}, minmax(0,1fr))`, gridTemplateRows: `repeat(${list.length ? rows : 1}, minmax(0,1fr))` }
-  const placeOf = (sid) => {
-    if (sid === CENTRAL) return { gridColumn: 1, gridRow: '1 / -1' }
-    const i = list.indexOf(sid)
-    return { gridColumn: (central ? 2 : 1) + (i % cols), gridRow: 1 + Math.floor(i / cols) }
-  }
+  const frameStyle = { gridTemplateColumns: lay.cols, gridTemplateRows: lay.rows }
+  const placeOf = (sid) => lay.place[sid]
+  const zoomOf = (sid) => (fz ? (sid === fz ? 'focus' : 'mini') : 'grid')
+  // the bar's press: on a phone the pane is already the whole screen; on a desk it grows, or goes back to all
+  const onZoom = (sid) => { if (phone()) return; zoomTo(fz === sid ? null : sid) }
   const tabs = shown.length > 1 ? (
     <div className="sy-tabs" role="tablist">
       {shown.map(sid => (
         <button key={sid} role="tab" aria-selected={sid === frontSid ? 'true' : 'false'} className={'sy-chip' + (sid === frontSid ? ' on' : '')}
-          onClick={() => setFront(sid)}>{sid === CENTRAL ? 'central' : sid}</button>
+          onClick={() => { setFront(sid); setFocusRaw(sid) }}>{sid === CENTRAL ? 'central' : sid}</button>
       ))}
     </div>
   ) : null
@@ -454,7 +560,7 @@ export default function Systems() {
       <Head><title>Systems</title></Head>
       <style dangerouslySetInnerHTML={{ __html: CSS + SURFACE_CSS + VIEW_CSS }} />
       <div className="sy">
-        <div className={'sy-split' + (many ? ' many' : '')}>
+        <div className={'sy-split' + (many ? ' many' : '') + (many && fz ? ' focus' : '')}>
           <main className="sy-left" aria-label={data && data.built ? `Systems, read ${data.built}` : 'Systems'}>
             {data === false ? <p className="sy-note">The bridge is not answering at /cc/systems. The tiles fill by themselves once it does.</p> : null}
             <div className="sy-vw"><ViewSwitch view="columns" style={VIEW_SKIN} onPick={(v) => { if (v === 'wall') toWall() }} /></div>
@@ -494,7 +600,9 @@ export default function Systems() {
               {shown.map(sid => (
                 <Thread key={sid} sid={sid} tile={tileOf(sid)} thread={threads[sid] || null} err={errs[sid] || ''}
                   central={sid === CENTRAL} place={placeOf(sid)} show={show && sid === frontSid} tabs={tabs}
-                  onBack={() => setShow(false)} onClose={() => toggle(sid)} ask={asks[sid] || null} />
+                  onBack={() => { setShow(false); setFocusRaw(null) }} onClose={() => toggle(sid)} ask={asks[sid] || null}
+                  zoom={zoomOf(sid)} keep={keep[sid] || null} onZoom={() => onZoom(sid)} onAll={() => zoomTo(null)}
+                  asideRef={(el) => { if (el) els.current[sid] = el; else delete els.current[sid] }} />
               ))}
             </div>
           ) : (
