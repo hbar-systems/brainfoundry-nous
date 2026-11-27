@@ -260,6 +260,9 @@ def test_busy_brain_says_wait_before_charging(monkeypatch, server):
 def test_plan_takes_books_now_or_overnight(monkeypatch, server):
     from fastapi.testclient import TestClient
     m = server.m
+    # the run's byte cap reads the box's free disk less a tenth of it; on a box near that line it is 0 and the plan is
+    # refused (2026-11-27, root 7.1 G free of 75 G). The test is about pacing, not the disk: a fixed 20 GB cap.
+    monkeypatch.setattr(m, "_survey_cap", lambda: 20 * 1024 ** 3)
     c = TestClient(m.app)
     tok = c.post("/documents/import-laptop/token", json={"survey": True}).json()["token"]
     inv = {"files": [["Documents/a.md", 2700, NOW], ["Books/b.pdf", 9 * 1024 ** 2, NOW]], "skipped": {}, "roots": []}
@@ -292,6 +295,9 @@ class FlakyGate:
 def test_agent_waits_lists_refused_and_sends_them_again(monkeypatch, server, tmp_path):
     from fastapi.testclient import TestClient
     m = server.m
+    # the run's byte cap reads the box's free disk less a tenth of it; on a box near that line it is 0 and the plan is
+    # refused (2026-11-27, root 7.1 G free of 75 G). The test is about pacing, not the disk: a fixed 20 GB cap.
+    monkeypatch.setattr(m, "_survey_cap", lambda: 20 * 1024 ** 3)
     gate = FlakyGate()
     monkeypatch.setattr(m, "_READ_GATE", gate)
     home = tmp_path / "home"
