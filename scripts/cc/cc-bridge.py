@@ -48,6 +48,10 @@ Endpoints (JSON):
                           (WALL-2) and the instruments kept out beside them (WALL-5)
   POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
                           system's standing thread (BOARD-5): operator token, same turn path as /chat, report back to "from"
+  GET  /cc/autoupdate     the Tide's view for /update {on, next, quiet, behind, recent[3], asked, begun} (AUTO-UPDATE-1, cc_tide.py)
+  POST /cc/autoupdate/switch {"on"}  the owner's press; refused on a member's brain
+  GET  /cc/autoupdate/quiet?terminal=<epoch>  POST /cc/autoupdate/begin {from,to}  /end {rc,head,to}: the root timer's door
+                          (scripts/tide/brain-tide.sh), uid 0 on loopback only; begin asks the rule again and says the line before
   POST /cc/systems/voice?system=<id>  multipart audio -> in/<date>/memo_<id>_<stamp>.<ext> for the memo tape
   GET  /cc/tape           {tape, dir, vocab, signer}: the memo tape folder, or {tape:false} (TAPE-2, cc_tape.py)
   GET  /cc/tape/file?path=<p>  /cc/tape/stat?path=<p>   a file in the tape folder only (byte ranges honoured)
@@ -546,6 +550,7 @@ import cc_extras  # noqa: E402
 import cc_layout  # noqa: E402
 import cc_skin  # noqa: E402   a thread's skin and the console default, on the box (SKIN-4)
 import cc_presses  # noqa: E402
+import cc_tide  # noqa: E402   AUTO-UPDATE-1 (2026-11-27): update at a quiet moment, docs/TIDE.md
 import cc_profile  # noqa: E402
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
@@ -5076,6 +5081,7 @@ def _tg_handle(update: dict) -> None:
         if not TG.owner_ok(chat_id):
             TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="This brain is private.")
             return
+        TIDE.touch()                     # his press on the phone (AUTO-UPDATE-1)
         action, _, pid = (ev["data"] or "").partition(":")
         if not TG_APPROVE and action == "allow":
             TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="approvals are console-only on this brain")
@@ -5098,6 +5104,7 @@ def _tg_handle(update: dict) -> None:
     if not TG.owner_ok(chat_id):
         TG.call("sendMessage", chat_id=chat_id, text="This brain is private.")
         return
+    TIDE.touch()                         # his message on the phone (AUTO-UPDATE-1)
     if paired is not None:
         TG.call("sendMessage", chat_id=chat_id, text="That code is wrong or expired; this chat is still the owner's. Make a new one in the console.")
         return
@@ -5194,6 +5201,132 @@ def _tg_loop() -> None:
 # the owner pressed, with time and thread; names only, never content (cc_presses.py checks each one).
 # Step 1 of ops/2026-10-24_adaptive-surfaces-spec.md. On the box only; off in Settings; /usage shows it.
 PRESSES = cc_presses.Store(STATE_DIR)
+
+
+# ---- Tide (AUTO-UPDATE-1, 2026-11-27): the brain updates itself at a quiet moment (docs/TIDE.md) ----
+# The rule is cc_tide.quiet(); this is where its facts come from. The update itself is run by root
+# (scripts/tide/brain-tide.sh from a systemd timer), never by this bridge: the bridge only answers
+# "quiet or not, and why", says the lines before and after, and keeps the owner's switch.
+TIDE = cc_tide.Store(STATE_DIR)
+TIDE_LOCK = threading.Lock()      # one quiet answer and one begin at a time
+
+
+def _tide_git() -> dict:
+    """The brain checkout against origin/main as of the root door's last fetch (git read-only, as this user)."""
+    repo = CWD
+    git = ["git", "--no-optional-locks", "-c", f"safe.directory={repo}", "-C", repo]
+
+    def out(*a):
+        try:
+            r = subprocess.run([*git, *a], capture_output=True, text=True, timeout=10)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except Exception:
+            return None
+    head, latest = out("rev-parse", "HEAD"), out("rev-parse", "origin/main")
+    n = out("rev-list", "--count", "HEAD..origin/main")
+    lines = (out("log", "--format=%s", "-n", "5", "HEAD..origin/main") or "").splitlines()
+    return {"head": head, "latest": latest, "behind": int(n) if n and n.isdigit() else None, "lines": lines}
+
+
+def _tide_uploads_fresh() -> int:
+    """Resumable uploads with a piece in the last 10 minutes (between two pieces no request is open)."""
+    try:
+        now = time.time()
+        return sum(1 for p in BIG_UPLOADS.partial().iterdir() if now - p.stat().st_mtime < cc_tide.UPLOAD_FRESH)
+    except Exception:
+        return 0
+
+
+def _tide_answer(terminal: float | None = None) -> dict:
+    """quiet()'s answer with its facts: the page's line and the root door's question."""
+    g = _tide_git()
+    f = {**TIDE.facts(), "member": bool(MEMBER), "halt": cc_halt.halted(HANDS_HOME, STATE_DIR),
+         "behind": g["behind"], "latest": g["latest"], "runs": len(_runs_active()), "cards": len(ASKS),
+         "uploads": TIDE.uploads() + _tide_uploads_fresh(),
+         "jobs": sum(1 for j in JOBS.list() if j.get("ended") is None), "terminal": terminal}
+    ok, why = cc_tide.quiet(f, time.time())
+    return {"quiet": ok, "why": why, "head": g["head"], "latest": g["latest"], "behind": g["behind"],
+            "lines": g["lines"], "jobs": f["jobs"]}
+
+
+def _tide_central() -> str | None:
+    """The thread the update lines go to: CC_CENTRAL_THREAD, else the newest pinned thread, else the box's
+    current thread."""
+    t = os.environ.get("CC_CENTRAL_THREAD", "").strip()
+    if t:
+        return t
+    try:
+        items = [x for x in _threads_load() if x.get("via") != "side" and not x.get("archived")]
+        pinned = sorted((x for x in items if x.get("pinned")), key=lambda x: float(x.get("last") or 0), reverse=True)
+        if pinned:
+            return pinned[0].get("brain")
+    except Exception:
+        pass
+    return _load_state().get("brain_session_id")
+
+
+def _tide_say(text: str, state: str = "done") -> None:
+    """One line in the central thread (a card in its log, kept across reloads) and on Telegram."""
+    print(f"tide: {text[:160]}", flush=True)
+    try:
+        th = _tide_central()
+        card = REPORTS.note(th, title="Update", state=state, lines=[text]) if th else None
+        if card:
+            CARDLOG.add(th, "report", card)
+    except Exception as e:  # noqa: BLE001
+        print(f"tide: central line not kept: {type(e).__name__}", flush=True)
+    try:
+        _notify(text)
+    except Exception as e:  # noqa: BLE001
+        print(f"tide: telegram line not sent: {type(e).__name__}", flush=True)
+
+
+def _tide_view() -> dict:
+    a = _tide_answer()
+    return {**TIDE.view(), "member": bool(MEMBER), "next": a["why"], "quiet": a["quiet"], "behind": a["behind"],
+            "idle_min": cc_tide.IDLE_MIN, "gap_min": cc_tide.GAP_MIN}
+
+
+def _tide_root_get(query: dict) -> tuple[int, dict]:
+    """GET /cc/autoupdate/quiet, the root door's question. ?terminal=<epoch>: the terminal pane's last activity."""
+    try:
+        term = float(query.get("terminal") or 0) or None
+    except ValueError:
+        term = None
+    with TIDE_LOCK:
+        a = _tide_answer(term)
+        TIDE.asked(a)
+    return 200, a
+
+
+def _tide_root_post(route: str, body: dict) -> tuple[int, dict]:
+    """POST /cc/autoupdate/begin {from, to, terminal}: asked again under the lock, and when still quiet the line
+    "updating now" goes out and the run is recorded; 409 with the reason otherwise. POST /cc/autoupdate/end
+    {rc, head, to}: the line after."""
+    if route == "/autoupdate/begin":
+        try:
+            term = float(body.get("terminal") or 0) or None
+        except (TypeError, ValueError):
+            term = None
+        with TIDE_LOCK:
+            a = _tide_answer(term)
+            if not a["quiet"]:
+                return 409, {"ok": False, "why": a["why"]}
+            if str(body.get("from") or "") != (a["head"] or "") or str(body.get("to") or "") != (a["latest"] or ""):
+                return 409, {"ok": False, "why": "the checkout moved since the question; ask again"}
+            try:
+                rec = TIDE.begin(a["head"], a["latest"], a["behind"] or 0, a["lines"])
+            except ValueError as e:
+                return 409, {"ok": False, "why": str(e)}
+        _tide_say(cc_tide.begin_line(rec["n"], rec["lines"]))
+        return 200, {"ok": True, **rec}
+    if route == "/autoupdate/end":
+        rec = TIDE.end(body.get("rc"), str(body.get("head") or "") or None, str(body.get("to") or "") or None)
+        if rec is None:
+            return 409, {"ok": False, "why": "no update had begun"}
+        _tide_say(cc_tide.end_line(rec), state="done" if rec["result"] in ("healthy", "busy") else "failed")
+        return 200, {"ok": True, **rec}
+    return 404, {"ok": False, "error": "no such door"}
 
 
 def _presses_api(method: str, route: str, body: dict | None) -> tuple[int, dict]:
@@ -6233,8 +6366,18 @@ class Handler(BaseHTTPRequestHandler):
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
             return
+        if route == "/autoupdate/quiet":
+            # the root door only (scripts/tide/brain-tide.sh): uid 0 on loopback, no proxy header
+            if not (_is_direct_local(self.client_address[0], self.headers.get("X-Forwarded-For")) and self._peer_in({0})):
+                self._send(403, {"error": "only the box's root timer asks this"})
+                return
+            self._send(*_tide_root_get(self._query()))
+            return
         if route not in ("/health", "/tasks", "/threads/brief") and not route.startswith("/jobs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
+            return
+        if route == "/autoupdate":
+            self._send(200, _tide_view())
             return
         if (route.startswith("/jobs") or route in ("/tasks", "/threads/brief")) and not self._operator_ok() and not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN) \
                 and not (_get_local_ok(route) and self._direct_local()):
@@ -6615,9 +6758,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        # Tide (AUTO-UPDATE-1): a person's POST is his touch, an upload is counted while it comes in
+        route = self._route()
+        if cc_tide.touch_route(route) and not self._foreign_page() and self._operator_ok():
+            TIDE.touch()
+        up = cc_tide.upload_route(route)
+        if up:
+            TIDE.upload_start()
+        try:
+            self._do_post()
+        finally:
+            if up:
+                TIDE.upload_end()
+
+    def _do_post(self) -> None:
         route = self._route()
         if self._foreign_page():
             self._send(403, {"error": "app_frame_refused"})
+            return
+        if route in ("/autoupdate/begin", "/autoupdate/end"):
+            # the root door only (scripts/tide/brain-tide.sh): uid 0 on loopback, no proxy header
+            if not (_is_direct_local(self.client_address[0], self.headers.get("X-Forwarded-For")) and self._peer_in({0})):
+                self._send(403, {"error": "only the box's root timer reports this"})
+                return
+            body = self._json(limit=8000)
+            self._send(*_tide_root_post(route, body if isinstance(body, dict) else {}))
             return
         if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file", "/spoke") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
@@ -6657,6 +6822,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route in ("/update", "/update/check"):
             self._send(*_update_door(check=route == "/update/check"))
+            return
+        if route == "/autoupdate/switch":
+            # the owner's press on /update (operator token above); a member's brain is never switched on here
+            body = self._json(limit=2000)
+            if MEMBER:
+                self._send(409, {"ok": False, "error": "a member's brain updates only by its owner's press"})
+                return
+            try:
+                TIDE.set_on((body or {}).get("on"), by="the owner, on /update")
+            except ValueError as e:
+                self._send(400, {"ok": False, "error": str(e)})
+                return
+            self._send(200, _tide_view())
             return
         if route.startswith("/presses"):
             self._send(*_presses_api("POST", route, self._json(limit=1000)))

@@ -215,6 +215,21 @@ class Reports:
             self._save(d)
             return dict(card)
 
+    def note(self, parent, *, title: str, state: str = "done", lines=()) -> dict | None:
+        """A card from the box itself, not from a child thread (AUTO-UPDATE-1, 2026-11-27: "updating
+        now", "updated to <sha>" in the central thread). Same shape as a report card, child None."""
+        if not known(parent):
+            return None
+        card = {"id": "R" + secrets.token_hex(5), "parent": parent, "child": None, "title": clean_title(title),
+                "steered": False, "state": state if state in STATES else "done",
+                "lines": [" ".join(str(x).split())[:WIDTH] for x in (lines or []) if str(x).strip()][:LINES],
+                "at": time.time()}
+        with self.lock:
+            d = self._load()
+            d["cards"].append(card)
+            self._save(d)
+        return card
+
     def take(self, parent) -> list:
         """The cards waiting for this parent, oldest first; each is handed over once."""
         if not known(parent):
