@@ -9937,4 +9937,64 @@ def mind_panel_set(req: MindPanelRequest, api_key: str = Depends(get_api_key)) -
     return {"ok": True, "shown": settings_store.get_mind_panel_shown()}
 
 
+
+# STEWARD-1 (2026-11-27): the setup period. A helper finishes the member's move-in under a key the member
+# consented to, scoped to setup actions, with an end (api/setup_steward.py, docs/STEWARD.md). This adapter
+# hands it the api's own functions; it sees counts, never titles or text.
+class _SetupBackend:
+    def pending(self):
+        return _pending_document_proposals()
+
+    def stored(self):
+        return list_documents(limit=100000, offset=0, api_key="internal")["documents"]
+
+    def text_of(self, proposal_id):
+        try:
+            return (PROPOSAL_TEXT_DIR / f"{proposal_id}.txt").read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def reject(self, proposal_id, note):
+        # DENY keeps the proposal's text on disk: a wrong call is undone by proposing it again
+        _nodeos_decide_memory(proposal_id, "DENY", "setup steward", note=note)
+
+    def approve(self, items):
+        return _approve_start(items)
+
+    def waiting(self):
+        return documents_waiting(api_key="internal")
+
+    def intent(self):
+        return _remember_intent()
+
+    def survey(self):
+        st = import_laptop_status(api_key="internal")
+        sv = st.get("survey")
+        if sv is not None:
+            sv = {**sv, "run_created": (st.get("run") or {}).get("created")}
+        return sv
+
+    def held_high(self, items):
+        return [p for p in items if _proposal_scan_risk(p["proposal_id"]) == "high"]
+
+    def chat_doc(self, name):
+        from api import chat_continue as _cc
+        return bool(_cc.CHAT_DOC.match(str(name or "").split("/")[-1]))
+
+    def facts(self):
+        try:
+            persona = len(PERSONA_LOCAL_PATH.read_text(encoding="utf-8"))
+        except OSError:
+            persona = 0
+        return {"version": os.getenv("BRAIN_GIT_COMMIT", "unknown"), "persona_chars": persona}
+
+
+try:
+    from api import setup_steward as _setup_steward
+    SETUP_KEYS = _setup_steward.SetupKeys(RUNTIME_DIR / "setup")
+    app.include_router(_setup_steward.make_router(SETUP_KEYS, _SetupBackend(), get_api_key))
+except Exception as e:  # noqa: BLE001
+    print(f"[startup] setup steward router mount skipped: {e}", flush=True)
+
+
 app.include_router(router)
