@@ -100,7 +100,7 @@ def test_no_person_in_the_mechanism():
 def test_console_wires_the_quiet_home():
     cc = (ROOT / "ui" / "pages" / "cc.js").read_text()
     nav = (ROOT / "ui" / "components" / "Nav.js").read_text()
-    assert "asksUrl(health.out)" in cc and "send(a.send)" in cc and "START_DAY_KEY" in cc
+    assert "asksUrl(health.out)" in cc and "send(a.send)" in cc and "startOpens(d.layout" in cc  # MEMBER-SCREEN-2: every load, not once a day
     assert "!(quietHome && !paneMode)" in cc  # the "latest:" row is hidden on the quiet home
     assert "quietMenu(" in nav and "ownerTitle(" in nav and "bf-start" in nav
 

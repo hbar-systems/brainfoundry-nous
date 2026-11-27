@@ -12,7 +12,7 @@ import { merge as logMerge, whenOf as logWhen, addLive as logAddLive, answerAll 
 import { startBody as reportStartBody, mine as reportsMine, href as reportHref, tone as reportTone, lines as reportLines } from '../lib/reports'
 import { wantsThreads } from '../lib/home'
 import { uploadFiles, fmtMB } from '../lib/bigUpload'
-import { isQuiet, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue } from '../lib/quietHome'
+import { isQuiet, parseAsks, asksUrl, startOpens } from '../lib/quietHome'
 import MoveInCards from '../components/MoveInCards'
 import ListeningCard from '../components/ListeningCard'
 import FirstSignIn from '../components/FirstRun'
@@ -1332,7 +1332,9 @@ function Pane({ pane, onClose, side, onSide, onRoute, panel, quiet }) {
   // when embedded (see _app.js). Narrow screens get it as an overlay; "wide" covers
   // the whole console; the page itself may go fullscreen (allowFullScreen).
   const [narrow, setNarrow] = useState(false)
-  const [wide, setWide] = useState(false)
+  // a member's start page opens covering the console (MEMBER-SCREEN-2); its close is the way to the chat
+  const [wide, setWide] = useState(!!pane.cover)
+  useEffect(() => { setWide(!!pane.cover) }, [pane.route, pane.cover])
   // The width is the owner's: drag the divider on the pane's inner edge. Remembered in cc.paneW (px).
   const [w, setW] = useState(null)
   const [drag, setDrag] = useState(false)
@@ -1818,6 +1820,8 @@ function CC() {
     fetch('/cc/first-run', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => { if (j) setSigninOrder(j) })
   }, [quietHome])
   const [startLabel, setStartLabel] = useState(null)
+  // the address as it arrived: the home's ?threads=1 is dropped from it before the layout answers (NAV-1)
+  const firstSearch = useRef(typeof window !== 'undefined' ? window.location.search : '')
   useEffect(() => {
     let on = true
     fetch('/cc/layout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
@@ -1825,6 +1829,16 @@ function CC() {
       if (on && d && d.pages) setSurfacePages(d.pages)
       if (!on || !d || !d.layout) return
       setLayoutBase(d.layout)
+      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only.
+      // MEMBER-SCREEN-2 (2026-11-27): a member's quiet home opens on it every time, covering the console; the
+      // chat is its close. It runs before the applied-layout check below, which used to end here on every load
+      // after the first in a browser, so a member's start page never opened again. ?start=1 is the menu's entry.
+      try {
+        const how = startOpens(d.layout, firstSearch.current)
+        if (how) openPane({ route: d.layout.start, title: d.layout.start.split('/').pop(), cover: how === 'cover' })
+        const q = new URLSearchParams(window.location.search)
+        if (q.has('start')) { const u = new URL(window.location.href); u.searchParams.delete('start'); window.history.replaceState(window.history.state, '', u.href) }
+      } catch {}
       let seen = null
       try { seen = localStorage.getItem('cc.layout.applied') } catch {}
       const st = stamp(d.layout)
@@ -1848,26 +1862,6 @@ function CC() {
         if (d.layout.view !== 'talk' && d.layout.view !== 'doors' && !q.has('pane') && !q.has('thread') && !sessionStorage.getItem('cc.layout.view')) {
           sessionStorage.setItem('cc.layout.view', '1')
           window.location.href = d.layout.view === 'gallery' ? '/gallery' : '/panes'
-        }
-      } catch {}
-      // the start pane (2026-11-04): a brain app or screen beside the conversation, on the bare console page only.
-      // The quiet home (PARENTS-HOME-1, 2026-11-15): there it opens the first time each day (and on ?start=1,
-      // the menu's start entry), over the thread list the home address asks for; the other days the menu opens it.
-      try {
-        const q = new URLSearchParams(window.location.search)
-        const st = d.layout.start
-        if (st && (d.layout.view === 'talk' || d.layout.view === 'doors') && !q.has('pane') && !q.has('thread')) {
-          if (!isQuiet(d.layout)) openPane({ route: st, title: st.split('/').pop() })
-          else {
-            let last = null
-            try { last = localStorage.getItem(START_DAY_KEY) } catch {}
-            // a phone has no room beside the chat: there the menu's start entry opens it (the home stays first)
-            if (q.has('start') || (startDue(last, dayOf()) && window.innerWidth >= 960)) {
-              openPane({ route: st, title: st.split('/').pop() })
-              try { localStorage.setItem(START_DAY_KEY, dayOf()) } catch {}
-            }
-            if (q.has('start')) { const u = new URL(window.location.href); u.searchParams.delete('start'); window.history.replaceState(window.history.state, '', u.href) }
-          }
         }
       } catch {}
     }).catch(() => {})
@@ -2757,6 +2751,11 @@ function CC() {
     window.addEventListener('cc-open-route', onRoute); window.addEventListener('cc-send-text', onSendText); window.addEventListener('cc-agent', onAgent)
     const onMsg = (e) => {
       if (e.origin !== window.location.origin) return
+      // a start page covering the console hands words to the chat: the chat shows (beside it on a wide screen,
+      // instead of it on a phone), so the answer is never hidden behind the page (MEMBER-SCREEN-2)
+      if (e.data && (e.data.type === 'cc-ask' || e.data.type === 'cc-send') && typeof e.data.text === 'string') {
+        setPane(p => (p && p.cover ? (window.innerWidth < 960 ? null : { ...p, cover: false }) : p))
+      }
       if (e.data && e.data.type === 'cc-ask' && typeof e.data.text === 'string') {
         setDraft(e.data.text)
         if (boxRef.current) boxRef.current.focus()
