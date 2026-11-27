@@ -568,6 +568,7 @@ import cc_skin  # noqa: E402   a thread's skin and the console default, on the b
 import cc_presses  # noqa: E402
 import cc_tide  # noqa: E402   AUTO-UPDATE-1 (2026-11-27): update at a quiet moment, docs/TIDE.md
 import cc_profile  # noqa: E402
+import cc_knowledge  # noqa: E402   the reasoner's read-only door into Knowledge (KNOWLEDGE-REACH-1)
 import cc_recent  # noqa: E402
 import cc_spend  # noqa: E402
 import cc_codex  # noqa: E402
@@ -781,6 +782,17 @@ SYSTEM += (
     f" Files: anything you produce for the person (audio, images, video, documents, data) goes under {OUT_DIR}/<date>/ "
     f"with a clear name, and you end the answer with <pane>/files?path=<that folder or file></pane> so they see and hear it "
     f"beside the chat. Files the person attaches arrive under {IN_DIR}/<date>/ and are named in the message; read them from there."
+)
+# Knowledge reach (KNOWLEDGE-REACH-1, 2026-11-27): a member's 2,027 documents sat in Knowledge while the reasoner
+# looked in ~/in, found it empty and said nothing was uploaded. It may search and list Knowledge itself now, no card.
+KNOWLEDGE_TOOLS = ("Bash(cc-job recall:*)", "Bash(cc-job docs:*)")
+SYSTEM += (
+    f" Knowledge: the person's documents, uploads and imported chats (ChatGPT, Claude and others) live in this brain's "
+    f"Knowledge, not in {IN_DIR} or {OUT_DIR}; the <memory> block shows only the few chunks nearest to the message. "
+    "Before you say something is missing, not uploaded or not remembered, search Knowledge: `cc-job recall \"<words>\" "
+    "[--limit N]` (documents near the words, with excerpts; try the document's own language and names too) and "
+    "`cc-job docs [--match <words>] [--since YYYY-MM-DD]` (titles and counts by source). Name the documents you used. "
+    "Only when both find nothing, say Knowledge has nothing on it, and give <pane>/upload</pane> (their Knowledge)."
 )
 # Decks (2026-10-25, docs/DECK.md): spoken or typed words, or last year's PPTX, become Marp markdown the
 # reasoner rewrites, then an editable PPTX and a PDF rendered on the box.
@@ -3879,6 +3891,36 @@ def _memory(query: str) -> list[dict]:
     return out
 
 
+def _knowledge_recall(req) -> tuple[int, dict]:
+    """POST /knowledge/recall {query, limit}: `cc-job recall`. Open chunks only (the answer goes to a hosted model)."""
+    if not BRAIN_API_KEY:
+        return 409, {"ok": False, "error": "this brain's bridge has no api key, so Knowledge cannot be searched from here"}
+    got = cc_knowledge.recall_request(req if isinstance(req, dict) else {})
+    if isinstance(got, str):
+        return 400, {"ok": False, "error": got}
+    q, n = got
+    d = _brain_api("POST", "/documents/search", {"query": q, "limit": n})
+    if not isinstance(d, dict):
+        return 502, {"ok": False, "error": "the brain's Knowledge did not answer"}
+    res = d.get("results") or []
+    print(f"knowledge recall results={len(res)} limit={n}", flush=True)   # sizes only, never the words
+    return 200, {"ok": True, "count": len(res), "text": cc_knowledge.recall_text(q, res)}
+
+
+def _knowledge_docs(req) -> tuple[int, dict]:
+    """POST /knowledge/docs {match, since}: `cc-job docs`. Local-only documents are counted, not named."""
+    if not BRAIN_API_KEY:
+        return 409, {"ok": False, "error": "this brain's bridge has no api key, so Knowledge cannot be listed from here"}
+    got = cc_knowledge.docs_request(req if isinstance(req, dict) else {})
+    if isinstance(got, str):
+        return 400, {"ok": False, "error": got}
+    words, since = got
+    d = _brain_api("GET", f"/documents?limit={cc_knowledge.LIST_FETCH}")
+    if not isinstance(d, dict) or "documents" not in d:
+        return 502, {"ok": False, "error": "the brain's Knowledge did not answer"}
+    return 200, {"ok": True, "total": d.get("total"), "text": cc_knowledge.docs_text(d, words, since)}
+
+
 LAST_SOURCES: list = []   # document names retrieved for the latest turn; the graph pane lights them up
 
 
@@ -4136,6 +4178,7 @@ def _run_turn(message: str, session_id: str | None, _retry: bool = False, on_eve
     prompt, used = _compose(message, recent, first_use)
     print(f"memory chunks={used} recent={len(recent)}", flush=True)
     tools = [t.strip() for t in ALLOWED_TOOLS.split(",") if t.strip()]
+    tools += [t for t in KNOWLEDGE_TOOLS if t not in tools]   # read-only, no card, like Read (KNOWLEDGE-REACH-1)
     cmd = [REASONER, "-p", "--output-format", "json",
            "--allowedTools", *tools, "--append-system-prompt", SYSTEM,
            # No MCP servers from the user's own Claude Code config: the account's
@@ -6922,7 +6965,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json(limit=8000)
             self._send(*_tide_root_post(route, body if isinstance(body, dict) else {}))
             return
-        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file", "/spoke") and not self._operator_ok():
+        if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file", "/spoke", "/knowledge/recall", "/knowledge/docs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
         if route in ("/restart", "/restart/now", "/restart/cancel"):
@@ -7473,6 +7516,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(*_ask_peer(req))
             return
+        if route in ("/knowledge/recall", "/knowledge/docs"):
+            # The reasoner searches and lists Knowledge (KNOWLEDGE-REACH-1, 2026-11-27): read only, the bridge's key.
+            if not (self._operator_ok() or _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN)):
+                self._send(403, {"ok": False, "error": "not the reasoner or the console"})
+                return
+            self._send(*(_knowledge_recall(req) if route == "/knowledge/recall" else _knowledge_docs(req)))
+            return
         if route == "/tasks/add":
             if not _hmac.compare_digest(self.headers.get("X-CC-Ask", ""), ASK_TOKEN):
                 self._send(403, {"ok": False, "error": "not the reasoner"})
@@ -7684,8 +7734,9 @@ def main() -> None:
         sys.exit(1)
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     MCP_EMPTY.write_text('{"mcpServers": {}}')
-    if BOX_ENABLED:
-        threading.Thread(target=_refresh_cc_job, daemon=True).start()
+    # every brain, not only box brains (KNOWLEDGE-REACH-1, 2026-11-27): `cc-job recall` and `cc-job docs` are the
+    # reasoner's way into Knowledge, and a brain without box hands had no cc-job on the reasoner's PATH at all
+    threading.Thread(target=_refresh_cc_job, daemon=True).start()
     if BRAIN_API_KEY:
         # Warm the memory graph (its first computation averages every chunk vector).
         threading.Thread(target=lambda: _brain_api("GET", "/graph?limit=1000&k=3"), daemon=True).start()
