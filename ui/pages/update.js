@@ -1,5 +1,6 @@
 import Head from 'next/head'
 import { useEffect, useRef, useState } from 'react'
+import { tideView } from '../lib/tide'
 
 // Phases the page can be in. The state machine maps to what the user sees:
 //   idle      → show version banner + "Pull latest" button
@@ -27,6 +28,49 @@ function shortSha(sha) {
   if (!sha || typeof sha !== 'string') return '—'
   if (sha === 'unknown') return 'unknown'
   return sha.slice(0, 7)
+}
+
+function TideLine() {
+  // Tide (AUTO-UPDATE-1, 2026-11-27, docs/TIDE.md): the box updates itself at a quiet moment, through the
+  // same Update. Off by default; on only by the owner's press here. A member's brain shows nothing.
+  const [v, setV] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const load = () => fetch('/cc/autoupdate', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(setV).catch(() => setV(null))
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [])
+  const view = tideView(v)
+  if (!view) return null
+  const flip = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/cc/autoupdate/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: !view.on }) })
+      const d = await r.json().catch(() => ({}))
+      if (r.ok) setV(d); else setErr(d.error || `HTTP ${r.status}`)
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div data-tide style={{ marginBottom: '18px', padding: '12px 14px', border: `1px solid ${view.on ? COLORS.accent : COLORS.border}`, borderRadius: '8px', fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: COLORS.muted }}>
+      <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ color: COLORS.text }}>{view.label}</span>
+        <button onClick={flip} disabled={busy}
+          style={{ padding: '5px 12px', borderRadius: '6px', border: `1px solid ${view.on ? COLORS.border : COLORS.accent}`, backgroundColor: view.on ? 'transparent' : COLORS.accent, color: view.on ? COLORS.muted : 'var(--bg)', cursor: 'pointer', fontSize: '13px' }}>
+          {view.press}
+        </button>
+        <span>{view.next}</span>
+      </div>
+      <div style={{ marginTop: '6px', color: COLORS.mutedDim, fontSize: '12px' }}>{view.timer}</div>
+      {view.recent.length > 0 && (
+        <div style={{ marginTop: '6px', fontSize: '12px', color: COLORS.mutedDim }}>
+          {view.recent.map((line, i) => <div key={i}>{line}</div>)}
+        </div>
+      )}
+      {err && <div style={{ marginTop: '6px', color: COLORS.err.text }}>{err}</div>}
+    </div>
+  )
 }
 
 function AutoUpdateSwitch() {
@@ -495,6 +539,7 @@ export default function Update() {
           </div>
         )}
 
+        {!version?.door && <TideLine />}
         <AutoUpdateSwitch />
         {/* Action button */}
         <div style={{ marginBottom: '24px' }}>
