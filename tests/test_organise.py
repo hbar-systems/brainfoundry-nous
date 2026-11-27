@@ -419,7 +419,7 @@ def test_docs_say_the_map_comes_before_the_intro():
     assert "## After a move-in: the map first (ORGANISE-1, 2026-11-26)" in fu
     assert fu.index("the map first") < fu.index("## The first turn")
     ready = (ROOT / "docs" / "MEMBER_READY.md").read_text()
-    assert "| 13 | their map |" in ready and "recognises their own areas" in ready
+    assert "| 14 | their map |" in ready and "recognises their own areas" in ready
 
 
 def test_member_gets_a_world_folder():
