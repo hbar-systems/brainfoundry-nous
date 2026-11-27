@@ -15,6 +15,8 @@ CC_THREAD_ID and CC_RUN_ID, so a job knows which conversation started it.
     cc-job task list          the open tasks
     cc-job task done <id>... [--undo]   close tasks on the person's word (--undo reopens)
     cc-job threads [words]    thread ids and titles, to link one as /talk?thread=<id>
+    cc-job recall "<query>" [--limit N]   search the person's Knowledge: titles, sources, excerpts (read only)
+    cc-job docs [--match <words>] [--since YYYY-MM-DD]   Knowledge titles and counts by source (read only)
     cc-job radio [https://station]   a link to listen on a radio brain with this brain (orfeo.music by default)
     cc-job send <path> [--caption "..."]   a file from out/, in/ or the world to the owner's Telegram (on their ask)
     cc-job orfeo-post <file> <https audio url> --kind loop|track --title T [--note N] [--bpm B] [--key K] [--station URL]
@@ -285,6 +287,24 @@ def main(argv: list[str]) -> int:
             ev = d.get("event") or {}
             tail = f"  (harmonics score {ev.get('score')})" if isinstance(ev, dict) and ev.get("score") is not None else ""
             print(d["url"] + tail); return 0
+        if cmd in ("recall", "docs"):
+            # Knowledge, read only (KNOWLEDGE-REACH-1, 2026-11-27): the bridge searches or lists with the brain's key.
+            opts, words, i = {}, [], 0
+            while i < len(rest):
+                if rest[i] in ("--limit", "--match", "--since") and i + 1 < len(rest):
+                    opts[rest[i][2:]] = rest[i + 1]; i += 2
+                else:
+                    words.append(rest[i]); i += 1
+            if cmd == "recall":
+                if not words:
+                    print('cc-job recall "<what to look for>" [--limit N]'); return 2
+                d = _call("POST", "/knowledge/recall", {"query": " ".join(words), "limit": opts.get("limit")}, timeout=60)
+            else:
+                match = " ".join(([opts["match"]] if "match" in opts else []) + words)
+                d = _call("POST", "/knowledge/docs", {"match": match, "since": opts.get("since", "")}, timeout=60)
+            if not d.get("ok"):
+                print("refused:", d.get("error", "no answer")); return 1
+            print(d.get("text", "")); return 0
         if cmd == "threads":
             # Thread ids and titles (2026-10-24), to link a thread as /talk?thread=<id>.
             words = [w.lower() for w in rest]

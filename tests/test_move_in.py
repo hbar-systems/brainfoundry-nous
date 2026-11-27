@@ -94,9 +94,10 @@ def test_home_shows_the_cards_on_the_quiet_home_only_and_reuses_the_doors():
         assert name not in card and name not in (ROOT / "ui" / "lib" / "moveIn.js").read_text()
 
 
-def test_phone_home_keeps_moving_in_first():
-    # on a phone the start page would cover the home: there it opens from the menu, not by itself
+def test_start_page_comes_before_moving_in():
+    # MEMBER-SCREEN-2 (hbar 2026-11-27): the member's own page is the first screen at every width, the
+    # moving-in cards one press away (the page's close); superseded "on a phone moving in stays first"
     cc = (ROOT / "ui" / "pages" / "cc.js").read_text()
-    assert "(startDue(last, dayOf()) && window.innerWidth >= 960)" in cc
+    assert "startOpens(d.layout, firstSearch.current)" in cc
     # the quiet pane header: the start page's own name and two words in the console language, no native select
     assert "quiet={quietHome ? {" in cc and "quiet.words.paneClose" in cc

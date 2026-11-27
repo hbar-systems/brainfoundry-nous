@@ -2214,7 +2214,8 @@ def generate_embeddings(texts: List[str]) -> List[List[float]]:
 def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[str]] = None,
                               architecture: Optional[str] = None,
                               scope: Optional[str] = None,
-                              allow_local_only: bool = False) -> List[Dict[str, Any]]:
+                              allow_local_only: bool = False,
+                              areas: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Search for similar documents.
 
     Privacy gate (api/privacy.py, 2026-10-14): `allow_local_only` says whether
@@ -2279,6 +2280,13 @@ def search_similar_documents(query: str, limit: int = 5, layers: Optional[List[s
         if scope:
             scope_sql = " AND metadata->>'scope' = %s"
             scope_params = [scope]
+        # ORGANISE-1: `areas` keeps the search inside the person's named areas (metadata.area from the map
+        # they said yes to); it rides the flat or layer path like the scope filter.
+        if areas:
+            scope_sql += " AND metadata->>'area' = ANY(%s)"
+            scope_params = scope_params + [list(areas)]
+            if not layers:
+                architecture = "flat"
         # Privacy gate: a closed reader never retrieves a local-only chunk —
         # filtered in SQL, so the text is not even read out of the database.
         from api import privacy as _privacy
@@ -5125,6 +5133,7 @@ def _stream_ingest_path_b(
         print(f"[upload] proposal={proposal_id} attestation skipped: {e}", flush=True)
 
     _delete_proposal_text(proposal_id)
+    _organise_arrival(filename)   # ORGANISE-1: after the yes, a new document goes to its area on arrival
 
     total_seconds = round(time.time() - t_total, 2)
     print(f"[upload] proposal={proposal_id} DONE total_seconds={total_seconds}s stored={stored_chunks} reused={reused_chunks} retired={stale_rows}", flush=True)
@@ -6529,6 +6538,9 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
         query = request.get("query", "")
         limit = request.get("limit", 5)
         layers = request.get("layers")  # optional list[str]
+        areas = request.get("areas")    # optional list[str], ORGANISE-1
+        if not (isinstance(areas, list) and all(isinstance(a, str) for a in areas)):
+            areas = None
         # Privacy gate: results of this endpoint are often fed to a hosted model
         # by the caller (the CC bridge, scripts/planner.py), so local-only chunks
         # are returned only when the caller asks for them explicitly — the
@@ -6539,7 +6551,7 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
         results = search_similar_documents(query, limit, layers=layers if layers else None,
-                                           allow_local_only=include_local_only)
+                                           allow_local_only=include_local_only, areas=areas)
 
         return {
             "query": query,
@@ -6552,6 +6564,7 @@ def search_documents(request: dict, api_key: str = Depends(get_api_key)):
 @app.get("/documents")
 def list_documents(
     layer: Optional[str] = None,
+    area: Optional[str] = None,
     limit: int = 10000,
     offset: int = 0,
     api_key: str = Depends(get_api_key),
@@ -6595,6 +6608,9 @@ def list_documents(
                 HAVING bool_or(metadata->>'layer' = %s)
             """
             params.append(layer)
+        if area:   # ORGANISE-1: the person's own areas, from the map they said yes to
+            layer_clause = (layer_clause + " AND " if layer_clause else " HAVING ") + "bool_or(metadata->>'area' = %s)"
+            params.append(area)
 
         cursor.execute(
             f"""
@@ -6611,7 +6627,8 @@ def list_documents(
                    -- First chunk's content, in ingest order, as the doc synopsis.
                    -- Cheap, no LLM call. The UI truncates to ~150 chars; we
                    -- return up to 400 so the client has room to play with.
-                   substring((array_agg(content ORDER BY id ASC))[1], 1, 400) AS synopsis
+                   substring((array_agg(content ORDER BY id ASC))[1], 1, 400) AS synopsis,
+                   MAX(metadata->>'area') AS area
             FROM document_embeddings
             WHERE metadata->>'deleted_at' IS NULL
             GROUP BY document_name
@@ -6652,6 +6669,7 @@ def list_documents(
                     "source": r[4],
                     "privacy": "local-only" if r[5] else "open",
                     "synopsis": r[6],
+                    "area": r[7],
                 }
                 for r in rows
             ],
@@ -6659,6 +6677,7 @@ def list_documents(
             "limit": limit,
             "offset": offset,
             "layer_filter": layer,
+            "area_filter": area,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List failed: {str(e)}")
@@ -8785,6 +8804,153 @@ def documents_waiting(api_key: str = Depends(get_api_key)):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Your map (ORGANISE-1, 2026-11-26): after the move-in, one proposal of the person's own areas from what the
+# brain holds (names, old folders, chat records, stored embeddings; one model call names the areas). Nothing
+# is labelled before the yes; undo restores the labels. Logic: api/organise.py; docs/IMPORT.md "Your map".
+from api import organise as _org
+
+ORGANISE = _org.Maps(RUNTIME_DIR / "organise")
+_ORG_STORE = _org.PgStore(lambda: get_db_connection())
+_ORG_LOCK = threading.Lock()
+
+
+def _org_chats() -> Dict[str, dict]:
+    from api import chat_continue as _cc
+    try:
+        return {r["name"]: r for r in _cc.listing(CHAT_CONTINUE_DIR)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _org_ready(docs: Optional[int]) -> bool:
+    """A map is proposed once there is enough to map and the first pass of reading is done (or no reading
+    runs): the person sees it while the rest is still read overnight."""
+    if not isinstance(docs, int) or docs < _org.MIN_DOCS:
+        return False
+    st = dict(_APPROVE_ALL)
+    if not st.get("running"):
+        return True
+    return (st.get("first_total") or 0) > 0 and (st.get("first_done") or 0) >= (st.get("first_total") or 0)
+
+
+def _org_docs() -> Optional[int]:
+    try:
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT document_name) FROM document_embeddings WHERE metadata->>'deleted_at' IS NULL")
+        n = cur.fetchone()[0]; cur.close(); conn.close()
+        return int(n)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _organise_arrival(name: str) -> None:
+    """A document stored after the yes goes to its area on arrival (or to unsorted). Never fails the read."""
+    try:
+        if ORGANISE.read("accepted.json"):
+            with _ORG_LOCK:
+                _org.sort_arrivals(ORGANISE, _ORG_STORE, chats=_org_chats(), names=[name], limit=5)
+    except Exception as e:  # noqa: BLE001
+        print(f"[organise] arrival {name}: {type(e).__name__}: {e}", flush=True)
+
+
+@app.get("/organise")
+def organise_state(items: int = 0, api_key: str = Depends(get_api_key)):
+    """The map as the home reads it: {state: none | too_few | proposed | accepted, ...areas, ready}. Documents
+    remembered since the yes through any door are sorted here first (at most 200 a call)."""
+    sorted_now = {}
+    if ORGANISE.read("accepted.json"):
+        try:
+            with _ORG_LOCK:
+                sorted_now = _org.sort_arrivals(ORGANISE, _ORG_STORE, chats=_org_chats())
+        except Exception as e:  # noqa: BLE001
+            print(f"[organise] sort: {type(e).__name__}: {e}", flush=True)
+    st = ORGANISE.state()
+    out = _org.public(st, items_per_area=max(0, min(int(items or 0), 50)))
+    docs = _org_docs()
+    out["documents_now"] = docs
+    out["ready"] = _org_ready(docs)
+    out["undo"] = bool(ORGANISE.read("undo.json"))
+    if st.get("state") == "accepted":
+        try:
+            out["labels"] = _ORG_STORE.counts()
+        except Exception:  # noqa: BLE001
+            out["labels"] = None
+    if sorted_now:
+        out["sorted_now"] = sorted_now
+    return out
+
+
+@app.post("/organise/propose")
+async def organise_propose(req: Optional[dict] = None, api_key: str = Depends(get_api_key)):
+    """Build the map from what the brain holds. Body {lang}. One model call names the areas (titles of
+    local-only documents are never in it); when it fails the person's own folder names and words stand."""
+    import asyncio
+    lang = str((req or {}).get("lang") or "en")[:8]
+    loop = asyncio.get_running_loop()
+    model = _providers.default_model()
+
+    def namer(prompt: str) -> Optional[str]:
+        fut = asyncio.run_coroutine_threadsafe(_providers.complete(model, [{"role": "user", "content": prompt}], max_tokens=1200), loop)
+        return fut.result(timeout=120)
+
+    def go():
+        items = _ORG_STORE.items(chats=_org_chats())
+        return _org.build(items, lang=lang, namer=namer)
+
+    try:
+        prop = await asyncio.to_thread(go)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"map failed: {type(e).__name__}: {str(e)[:200]}")
+    if prop.get("state") != "proposed":
+        return prop
+    with _ORG_LOCK:
+        ORGANISE.write("proposal.json", prop)
+    return _org.public(prop)
+
+
+@app.get("/organise/area")
+def organise_area(id: str, api_key: str = Depends(get_api_key)):
+    st = ORGANISE.state()
+    return {"area": id, "items": _org.area_items(st, id)}
+
+
+@app.post("/organise/edit")
+def organise_edit(req: dict, api_key: str = Depends(get_api_key)):
+    """rename {area, name}, merge {area, into}, move {item, to}: on the open map only, before the yes."""
+    with _ORG_LOCK:
+        prop = ORGANISE.read("proposal.json")
+        if not prop:
+            raise HTTPException(409, "no open map")
+        try:
+            prop = _org.edit(prop, req or {})
+        except _org.EditError as e:
+            raise HTTPException(400, str(e))
+        ORGANISE.write("proposal.json", prop)
+    return _org.public(prop)
+
+
+@app.post("/organise/accept")
+def organise_accept(req: dict, api_key: str = Depends(get_api_key)):
+    """The one yes, for the named map id: every document gets its area as a label; the member's
+    <name>.world/ is written where they have a hands user. Undo restores the labels before it."""
+    with _ORG_LOCK:
+        try:
+            acc = _org.accept(ORGANISE, _ORG_STORE, str((req or {}).get("id") or ""), world=_org.world_from_env())
+        except _org.EditError as e:
+            raise HTTPException(409, str(e))
+    return _org.public(acc)
+
+
+@app.post("/organise/undo")
+def organise_undo(api_key: str = Depends(get_api_key)):
+    with _ORG_LOCK:
+        try:
+            return _org.undo(ORGANISE, _ORG_STORE, world=_org.world_from_env())
+        except _org.EditError as e:
+            raise HTTPException(409, str(e))
+
+
 @app.on_event("startup")
 def _resume_remember_all() -> None:
     """IMPORT-PACE-1: a "Remember all" the api did not finish (a restart, an update) picks up again."""
@@ -9986,7 +10152,13 @@ class _SetupBackend:
             persona = len(PERSONA_LOCAL_PATH.read_text(encoding="utf-8"))
         except OSError:
             persona = 0
-        return {"version": os.getenv("BRAIN_GIT_COMMIT", "unknown"), "persona_chars": persona}
+        out = {"version": os.getenv("BRAIN_GIT_COMMIT", "unknown"), "persona_chars": persona}
+        try:   # ORGANISE-1's map: its state and how many areas, never their names
+            st = ORGANISE.state()
+            out["map"] = {"state": st.get("state"), "areas": len(st.get("areas") or [])}
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
 
 try:

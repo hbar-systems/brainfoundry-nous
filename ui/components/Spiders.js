@@ -1,22 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { spidersFrom } from '../lib/spiders'
 
 // Spiders (AGENTS-VIS-1, hbar 2026-11-15: "a spider walks the page while an agent works, small spiders
 // for subagents"). A fixed canvas over the page that never takes a click. `count` large spiders (a turn,
 // a running job) and `small` small ones (subagents, jobs a turn started) walk with planted feet: each leg
 // steps only when its foot falls too far behind, alternating sets, so the gait reads as walking, not
 // sliding. When a count drops the extra spider walks off the nearest edge; at zero the loop stops.
-// Paused while the tab is hidden; prefers-reduced-motion draws nothing. Off with spidersSet(false)
-// (localStorage "bf-spiders" = "0"); every mounted overlay hears the change at once.
+// Paused while the tab is hidden; prefers-reduced-motion draws nothing. Off by default since MEMBER-SCREEN-2
+// (hbar 2026-11-27, a spider on Anne's screen: "I THOUGHT WE SAID WE WOULD PUT THIS AWAY"): they walk only
+// after the owner turns them on with the chip on /cortex (spidersSet(true), localStorage "bf-spiders" = "1");
+// every mounted overlay hears the change at once. The rule is spidersFrom in ui/lib/spiders.js.
 
 const KEY = 'bf-spiders'
 const EVT = 'bf-spiders-change'
-export function spidersOn() { try { return window.localStorage.getItem(KEY) !== '0' } catch { return true } }
+export function spidersOn() { try { return spidersFrom(window.localStorage.getItem(KEY)) } catch { return false } }
 export function spidersSet(on) {
   try { window.localStorage.setItem(KEY, on ? '1' : '0') } catch {}
   try { window.dispatchEvent(new CustomEvent(EVT)) } catch {}
 }
 export function useSpidersOn() {
-  const [on, setOn] = useState(true)
+  const [on, setOn] = useState(false)
   useEffect(() => {
     const read = () => setOn(spidersOn())
     read()

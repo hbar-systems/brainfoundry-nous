@@ -76,6 +76,25 @@ export default function Upload() {
   // read it; "local-only" = only the box's Ollama or a tailnet spoke.
   const [privacy, setPrivacy] = useState("open");
   const [stats, setStats] = useState(null);
+  // ORGANISE-1: the person's own areas, from the map they said yes to (GET /organise); press one to keep the
+  // list and the search inside it.
+  const [areas, setAreas] = useState([]);
+  const [areaFilter, setAreaFilter] = useState(null);
+  const [areaDocs, setAreaDocs] = useState(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/organise`, { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).then(m => {
+      if (!m || m.state !== "accepted") return;
+      const lab = m.labels || {};
+      const names = (m.areas || []).map(a => ({ name: a.name, count: lab[a.name] ?? a.count }));
+      if (lab.unsorted) names.push({ name: "unsorted", count: lab.unsorted });
+      setAreas(names);
+    }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!areaFilter) { setAreaDocs(null); return; }
+    fetch(`${API_BASE}/documents?area=${encodeURIComponent(areaFilter)}&limit=500`, { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null)).then(d => setAreaDocs((d && d.documents) || [])).catch(() => setAreaDocs([]));
+  }, [areaFilter]);
   const [pending, setPending] = useState([]); // [{proposal_id, file, layer, filename, deciding}]
   const [layerFilter, setLayerFilter] = useState(null); // null = no filter; click a badge to set, click again to clear
   const [pasteText, setPasteText] = useState("");   // paste-text path — alternative to file upload
@@ -705,6 +724,7 @@ export default function Upload() {
     // to a model.
     const body = { query, limit: 20, include_local_only: true };
     if (layerFilter) body.layers = [layerFilter];
+    if (areaFilter) body.areas = [areaFilter];
     const r = await fetch(`${API_BASE}/documents/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -719,7 +739,7 @@ export default function Upload() {
   useEffect(() => {
     if (query.trim() && results.length) runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerFilter]);
+  }, [layerFilter, areaFilter]);
 
   const forgetFromSearch = async (name) => {
     await forgetDoc(name);
@@ -1062,8 +1082,18 @@ export default function Upload() {
               </div>
             </div>
           </div>
+          {areas.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }} aria-label="Your areas">
+              {areas.map(a => (
+                <button key={a.name} onClick={() => setAreaFilter(f => (f === a.name ? null : a.name))} aria-pressed={areaFilter === a.name}
+                  style={{ background: areaFilter === a.name ? SURFACE : "transparent", border: `1px solid ${areaFilter === a.name ? TEXT : BORDER}`, color: TEXT, borderRadius: 999, padding: "5px 12px", cursor: "pointer", fontSize: 13 }}>
+                  {a.name} <span style={{ color: MUTED, fontFamily: "DM Mono, monospace", fontSize: 11 }}>{a.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {(() => {
-            const recent = stats.recent_documents || [];
+            const recent = areaFilter ? (areaDocs || []) : (stats.recent_documents || []);
             const filtered = layerFilter ? recent.filter(d => (d.layers || []).includes(layerFilter)) : recent;
             if (!recent.length) {
               return <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>Nothing ingested yet. Upload a file above.</div>;

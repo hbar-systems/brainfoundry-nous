@@ -62,6 +62,7 @@ services:
       - BRAIN_IDENTITY_SECRET=${BRAIN_IDENTITY_SECRET}
       - BRAIN_ENV=${BRAIN_ENV:-dev}
       - LAPTOP_AUDIO_HOST_DIR=${LAPTOP_AUDIO_HOST_DIR:-}
+      - ORGANISE_WORLD_HOST_DIR=${ORGANISE_WORLD_HOST_DIR:-}
       - LAPTOP_SURVEY_MAX_GB=${LAPTOP_SURVEY_MAX_GB:-}
       - KERNEL_RATE_LIMIT_MAX=30
       - KERNEL_RATE_LIMIT_WINDOW=60
@@ -180,6 +181,8 @@ services:
       - api_runtime:/app/runtime
       # Laptop import, audio (docs/IMPORT.md): a member's .env points this at the hands' ~/in.
       - ${LAPTOP_AUDIO_HOST_DIR:-laptop_audio}:/app/laptop_audio
+      # Your map (ORGANISE-1): a member's <name>.world/ in the hands' home; written only when the .env names it.
+      - ${ORGANISE_WORLD_HOST_DIR:-organise_world}:/app/world
       # NOTE: the in-console "Update" tab (/admin/update) is OFF by default.
       # Enabling it requires mounting /var/run/docker.sock into this container,
       # which grants root-equivalent access to the host — an opt-in, not a
@@ -327,3 +330,4 @@ volumes:
   api_data:
   api_runtime:
   laptop_audio:
+  organise_world:
