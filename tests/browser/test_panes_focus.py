@@ -39,7 +39,9 @@ SERVER_JS = BUILD / ".next" / "standalone" / "server.js"
 CHROME_LIBS = Path(os.environ.get("NOUS_CHROME_LIBS", str(Path.home() / ".local/chromelibs/root/usr/lib/aarch64-linux-gnu")))
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright"))
 
-SYSTEMS = ["hbar.media", "brainfoundry", "hbar.security", "hbar.systems"]
+# SYSTEMS-PAGES-1 (2026-11-27): a page holds four panes, the central chat one of them; a fifth would open page 2, so the
+# focus is pinned on one full page: central and three systems.
+SYSTEMS = ["hbar.media", "brainfoundry", "hbar.security"]
 THREADS = {s: f"{i:08x}-0000-4000-8000-00000000000{i}" for i, s in enumerate(["world"] + SYSTEMS, 1)}
 BY_T = {v: k for k, v in THREADS.items()}
 NOW = datetime.now(timezone.utc)
@@ -252,11 +254,11 @@ def test_focus_grows_moves_and_returns_with_nothing_lost(harness):
         end = time.time() + 25
         while time.time() < end:
             fs = panes(page)
-            if len(fs) >= 5 and all(f.query_selector("textarea") and f.query_selector(".cc-conv") for f in fs.values()):
+            if len(fs) >= 4 and all(f.query_selector("textarea") and f.query_selector(".cc-conv") for f in fs.values()):
                 break
             page.wait_for_timeout(150)
         fs = panes(page)
-        assert len(fs) == 5, sorted(fs)
+        assert len(fs) == 4, sorted(fs)
         page.wait_for_timeout(1200)
         loads = []
         page.on("framenavigated", lambda f: f != page.main_frame and loads.append(f.url))
@@ -285,7 +287,7 @@ def test_focus_grows_moves_and_returns_with_nothing_lost(harness):
         page.wait_for_timeout(450)
         big = box(page, "hbar.security")
         assert big["width"] > 0.7 * 1440 and big["height"] > 0.8 * (900 - 60), big
-        for s in ["world", "hbar.media", "brainfoundry", "hbar.systems"]:
+        for s in ["world", "hbar.media", "brainfoundry"]:
             bb = box(page, s)
             assert bb["width"] < 0.25 * 1440 and bb["height"] < 120, (s, bb)
             assert "mini" in (aside(page, s).get_attribute("class") or "")
@@ -311,12 +313,12 @@ def test_focus_grows_moves_and_returns_with_nothing_lost(harness):
         assert loads == [], f"frames loaded again: {loads}"
         assert page.evaluate("localStorage.getItem('cc.systems.focus')") is None
         # the corner mark grows it too; a press on the focused bar goes back
-        aside(page, "hbar.systems").locator('button[aria-label^="read hbar.systems large"]').last.click()
+        aside(page, "brainfoundry").locator('button[aria-label^="read brainfoundry large"]').last.click()
         page.wait_for_timeout(450)
-        assert box(page, "hbar.systems")["width"] > 0.7 * 1440
-        aside(page, "hbar.systems").locator(".sy-nmb").click()
+        assert box(page, "brainfoundry")["width"] > 0.7 * 1440
+        aside(page, "brainfoundry").locator(".sy-nmb").click()
         page.wait_for_timeout(450)
-        assert box(page, "hbar.systems")["width"] < 0.5 * 1440
+        assert box(page, "brainfoundry")["width"] < 0.5 * 1440
         # Esc from inside the focused pane, outside its text box
         aside(page, "hbar.media").locator(".sy-nmb").click()
         page.wait_for_timeout(450)

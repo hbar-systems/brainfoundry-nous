@@ -59,13 +59,13 @@ const OPEN_KEY = 'cc.systems.open'
 const MAX_OPEN = 4
 
 // Read the saved list (a JSON array of ids); an older page saved one id under cc.systems.sel.
-function readOpen(raw, legacy) {
+function readOpen(raw, legacy, max = MAX_OPEN) {
   let v = null
   try { v = JSON.parse(raw || 'null') } catch {}
   const list = Array.isArray(v) ? v : (legacy ? [legacy] : [])
   const out = []
   list.forEach(x => { const s = String(x || ''); if (ID_RE.test(s) && !out.includes(s)) out.push(s) })
-  return out.slice(-MAX_OPEN)
+  return out.slice(-max)
 }
 
 // A press on a tile: open it beside the others, or close it when it is open. A fifth closes the oldest.
@@ -158,5 +158,82 @@ function paneMarks(tile, now) {
   return out
 }
 
+// ---- /systems in pages of four (SYSTEMS-PAGES-1 "Folio", 2026-11-27, hbar: "More than four systems is probably
+// difficult to visually follow so I'm thinking we should have pages ... one page 4 systems the next page 2") ----
+const PAGE_MAX = 4          // panes on one page (the central chat counts as one when it is open)
+const MAX_PANES = 16        // open panes in all, across the pages
+const PAGES_KEY = 'cc.systems.pages'   // {pageOf: {sid: page}, cur}: localStorage, one origin per brain
+
+// Where each open pane sits. `shown` is every open pane in the order it was opened, `pageOf` the saved page of each
+// (0-based), `cur` the page he looks at. A saved pane keeps its page while that page has room (a page over four sends
+// the extra to the next); a newly opened one goes on the page he looks at when it has room, else the last page when it
+// has room, else a new page: a fifth starts page 2, it never refuses and never squeezes. Empty pages close up.
+// Within a page the panes keep the order they were opened. -> { pages: [[sid]], pageOf: {sid: i} }
+function layPages(shown, pageOf, cur) {
+  const all = (shown || []).filter((x, i, a) => x && a.indexOf(x) === i)
+  const saved = pageOf && typeof pageOf === 'object' ? pageOf : {}
+  const pos = (s) => all.indexOf(s)
+  const pages = []
+  const room = (i) => (pages[i] || []).length < PAGE_MAX
+  const put = (sid, i) => { while (pages.length <= i) pages.push([]); pages[i].push(sid) }
+  const known = all.filter(s => Number.isInteger(saved[s]) && saved[s] >= 0 && saved[s] < MAX_PANES)
+  known.sort((a, b) => saved[a] - saved[b] || pos(a) - pos(b)).forEach(sid => { let i = saved[sid]; while (!room(i)) i++; put(sid, i) })
+  const c = Number.isInteger(cur) && cur >= 0 ? cur : 0
+  all.filter(s => !known.includes(s)).forEach(sid => {
+    let i = pages[c] && room(c) ? c : Math.max(0, pages.length - 1)
+    while (!room(i)) i++
+    put(sid, i)
+  })
+  const out = pages.filter(p => p && p.length).map(p => p.slice().sort((a, b) => pos(a) - pos(b)))
+  if (!out.length) out.push([])
+  const of = {}
+  out.forEach((p, i) => p.forEach(s => { of[s] = i }))
+  return { pages: out, pageOf: of }
+}
+
+// Read the saved {pageOf, cur}; anything odd reads as nothing saved.
+function readPages(raw) {
+  let v = null
+  try { v = JSON.parse(raw || 'null') } catch {}
+  const pageOf = {}
+  if (v && v.pageOf && typeof v.pageOf === 'object') {
+    Object.entries(v.pageOf).forEach(([k, n]) => { if (ID_RE.test(k) && Number.isInteger(n) && n >= 0 && n < MAX_PANES) pageOf[k] = n })
+  }
+  const cur = v && Number.isInteger(v.cur) && v.cur >= 0 && v.cur < MAX_PANES ? v.cur : 0
+  return { pageOf, cur }
+}
+
+// Move one pane to page `to` (0-based; to === pages.length starts a new page). -> the new pageOf (layPages closes up).
+function movePane(pageOf, sid, to) {
+  const n = Math.max(0, Math.min(MAX_PANES - 1, to | 0))
+  return { ...(pageOf || {}), [sid]: n }
+}
+
+// The quiet page marks: per page its number, what runs on it (jobs running in its systems, plus threads answering now),
+// whether something on it waits on him (a pane that waits for him, or his open rows: the accent dot), and whether a
+// pane on it finished an answer or raised a card while he looked at another page (`news`: a set of sids).
+//   tileOf(sid) -> the GET /cc/systems tile; states: {sid: {busy, waiting}} from each frame's 'cc-pane-state'.
+function pageMarks(pages, tileOf, states, news, names) {
+  const st = states || {}
+  const nw = news || new Set()
+  return (pages || []).map((p, i) => {
+    let run = 0, waits = 0, fresh = 0
+    p.forEach(sid => {
+      const t = (tileOf && tileOf(sid)) || {}
+      run += Number((t.counts || {}).running) || 0
+      if (st[sid] && st[sid].busy && !st[sid].waiting) run += 1
+      if ((st[sid] && st[sid].waiting) || Number((t.open || {}).his) > 0) waits += 1
+      if (nw.has(sid)) fresh += 1
+    })
+    const nm = p.map(s => (names && names[s]) || s).join(', ')
+    const bits = [`page ${i + 1}: ${nm || 'empty'}`]
+    if (run) bits.push(`${run} running`)
+    if (waits) bits.push(`${waits} wait${waits === 1 ? 's' : ''} on you`)
+    if (fresh) bits.push(`${fresh} finished or asked while you were away`)
+    return { n: i + 1, run, waits, fresh, title: bits.join('; ') }
+  })
+}
+
 module.exports = { splitSteer, steerBody, sayUrl, readOpen, toggleOpen, gridOf, readFocus, framesLayout, paneMarks, hhmm,
-  OPEN_KEY, FOCUS_KEY, MAX_OPEN, MAX_STEERS }
+  layPages, readPages, movePane, pageMarks,
+  OPEN_KEY, FOCUS_KEY, MAX_OPEN, MAX_STEERS, PAGE_MAX, MAX_PANES, PAGES_KEY }

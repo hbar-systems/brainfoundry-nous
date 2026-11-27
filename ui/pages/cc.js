@@ -1989,6 +1989,7 @@ function CC() {
   const paneModeRef = useRef(null)
   const [paneMode, setPaneMode] = useState(null)
   const [paneBig, setPaneBig] = useState(false)   // /systems says this pane is in focus ('cc-pane-focus', PANES-FOCUS-1)
+  const [paneDone, setPaneDone] = useState([])     // /systems: the system's three newest finished lines ('cc-pane-done', SYSTEMS-PAGES-1)
   // Reading space in a pane (2026-10-06): the stream is the pane. The pane's title bar on /panes
   // carries the title, the state and the one menu; this page tells it its state and takes its
   // commands (export, details). The rows of links under the composer open only with "details".
@@ -2759,6 +2760,11 @@ function CC() {
         chooseRef.current({ mode: 'agent', label: String(e.data.label || e.data.text).slice(0, 80), send: e.data.text })
       }
       if (e.data && e.data.type === 'cc-pane-focus') setPaneBig(!!e.data.focus)
+      // SYSTEMS-PAGES-1 (hbar 2026-11-27: "I want to see the updates already made for the system so that I don't repeat
+      // myself"): shown small above the box while it is empty, so he sees them before he asks; nothing pops up as he types
+      if (e.data && e.data.type === 'cc-pane-done' && Array.isArray(e.data.lines)) {
+        setPaneDone(e.data.lines.slice(0, 3).map(x => ({ when: String((x && x.when) || '').slice(0, 12), what: String((x && x.what) || '').slice(0, 160) })).filter(x => x.what))
+      }
       // the pane's own menu on /panes (2026-10-06)
       if (e.data && e.data.type === 'cc-pane-cmd') {
         if (e.data.cmd === 'export' && exportRef.current) exportRef.current()
@@ -4009,6 +4015,16 @@ function CC() {
                 style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</a>
             ))}
           </p>
+        )}
+        {paneMode && paneDone.length > 0 && !draft && (
+          <div className="cc-row cc-pane-done" aria-label="already done in this system" style={{ margin: '8px 0 0 0', fontSize: '12px', lineHeight: 1.45, color: C.faint }}>
+            {paneDone.map((x, i) => (
+              <div key={i} style={{ display: 'flex', gap: '8px', minWidth: 0 }}>
+                <span style={{ ...mono, fontSize: '11px', flex: 'none' }}>{x.when}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={x.what}>{x.what}</span>
+              </div>
+            ))}
+          </div>
         )}
         {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode.
             Hidden with the input's buttons (2026-11-12, HANDOFF-2): a quiet console has no buttons around the input. */}

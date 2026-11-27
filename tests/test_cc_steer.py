@@ -289,7 +289,7 @@ console.log(JSON.stringify({
 
 def test_pages_wire_the_steer_and_keep_v1():
     sy = (ROOT / "ui" / "pages" / "systems" / "index.js").read_text()
-    assert "from '../../lib/steer'" in sy and "toggleOpen(l, sid)" in sy and "localStorage.setItem(OPEN_KEY" in sy
+    assert "from '../../lib/steer'" in sy and "toggleOpen(l, sid, MAX_PANES)" in sy and "localStorage.setItem(OPEN_KEY" in sy
     assert "const CENTRAL = 'world'" in sy
     v1 = (ROOT / "ui" / "pages" / "systems" / "v1.js").read_text()
     assert "kept at /systems/v1" in v1 and "<Head><title>Systems v1</title></Head>" in v1
