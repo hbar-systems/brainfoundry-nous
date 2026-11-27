@@ -3493,8 +3493,11 @@ def _permit_public(pm) -> dict:
 
 _lock = threading.Lock()
 _version: str | None = None
-MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
-MCP_EMPTY_INLINE = '{"mcpServers": {}}'   # what the reasoner gets when the owner names no servers
+# No servers, inline. Until 2026-11-27 this was a file in STATE_DIR (mode 700, the bridge's own), which the
+# reasoner, running as the hands since the split, could not open: every turn on a brain without a tool pack
+# failed "Invalid MCP configuration ... EACCES" (MCP-FIX-1, Anne's sitting). Nothing handed to the reasoner
+# as an argument may be a path inside STATE_DIR.
+MCP_EMPTY = '{"mcpServers": {}}'
 # The owner's tool packs: an MCP servers file (CC_MCP_CONFIG) naming exactly the servers the
 # reasoner may see, for example the ableton-systems and numa-systems plugins. Strict mode stays
 # on, so the account's own connectors never appear; keys for those servers live in the bridge
@@ -3515,13 +3518,10 @@ def _mcp_text() -> str | None:
 
 
 def _mcp_config() -> str:
-    """The MCP servers the reasoner may see: the owner's file when set and present, else none.
-    None is passed inline, not as a file: the bridge's state folder is closed to the hands, so a
-    path there failed every turn on a brain without CC_MCP_CONFIG ("EACCES ... mcp-empty.json",
-    a member brain, 2026-11-27)."""
+    """The MCP servers the reasoner may see: the owner's file when set and present, else none (inline JSON)."""
     if _mcp_text() is not None:
         return MCP_CONFIG
-    return MCP_EMPTY_INLINE
+    return MCP_EMPTY
 
 
 def _mcp_dict() -> dict:
@@ -7683,7 +7683,6 @@ def main() -> None:
         print(f"reasoner binary not found at {REASONER}", file=sys.stderr)
         sys.exit(1)
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    MCP_EMPTY.write_text('{"mcpServers": {}}')
     if BOX_ENABLED:
         threading.Thread(target=_refresh_cc_job, daemon=True).start()
     if BRAIN_API_KEY:

@@ -5,6 +5,7 @@ Run from repo root:
 """
 from __future__ import annotations
 
+import json
 import importlib.util
 import pathlib
 import re
@@ -144,12 +145,29 @@ p({"type": "result", "result": "ok", "session_id": "s2", "is_error": False, "num
 def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("CC_MCP_CONFIG", raising=False)   # the live box sets it; the test wants none
     m = _load(monkeypatch, tmp_path, with_key=False)
-    assert m._mcp_config() == '{"mcpServers": {}}' and m._mcp_servers() == []
+    # MCP-FIX-1 2026-11-27: the reasoner runs as the hands and cannot read the bridge's STATE_DIR (mode 700),
+    # so the no-servers value must be inline JSON, never a path there (the old one was STATE_DIR/mcp-empty.json)
+    v = m._mcp_config()
+    assert json.loads(v) == {"mcpServers": {}} and str(m.STATE_DIR) not in v and m._mcp_servers() == []
     f = tmp_path / "mcp.json"; f.write_text('{"mcpServers": {"b-tools": {"command": "/x"}, "a-tools": {"command": "/y"}}}')
     monkeypatch.setattr(m, "MCP_CONFIG", str(f))
     assert m._mcp_config() == str(f) and m._mcp_servers() == ["a-tools", "b-tools"]
     monkeypatch.setattr(m, "MCP_CONFIG", str(tmp_path / "missing.json"))
-    assert m._mcp_config() == '{"mcpServers": {}}'   # inline: the hands cannot read the bridge's state folder
+    assert json.loads(m._mcp_config()) == {"mcpServers": {}}
+
+
+def test_reasoner_args_never_point_into_state_dir(monkeypatch, tmp_path):
+    """MCP-FIX-1: every value handed to the reasoner must be readable by a user who cannot read STATE_DIR."""
+    monkeypatch.delenv("CC_MCP_CONFIG", raising=False)
+    m = _load(monkeypatch, tmp_path, with_key=False)
+    seen = {}
+    def fake_stream(cmd, on_event, run=None, prompt=""):
+        seen["cmd"] = cmd
+        return {"result": "ok", "session_id": "s"}, "", 0
+    monkeypatch.setattr(m, "_stream_turn", fake_stream)
+    (tmp_path / "brain").mkdir(exist_ok=True)
+    m._run_turn("hi", None, on_event=lambda k, p: None)
+    assert not [a for a in seen["cmd"] if str(m.STATE_DIR) in a]
 
 
 def test_guide_and_tutorial_counts(monkeypatch, tmp_path):
