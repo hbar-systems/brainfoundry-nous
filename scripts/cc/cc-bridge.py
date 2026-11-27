@@ -298,7 +298,21 @@ def _propose_box_run(p: dict) -> dict:
         return {"error": r.error or r.reason or "refused by the gate"}
     return {"id": r.permit["id"], "platform": LOCAL_RUN_PLATFORM, "method": "command", "action_id": args["action_id"],
             "summary": p["command"], "why": p.get("summary") or "", "remember_ok": False,
-            "ttl_seconds": r.permit.get("ttl_seconds")}
+            "ttl_seconds": r.permit.get("ttl_seconds"), "expires_at": _expires_at(r.permit)}
+
+
+def _expires_at(permit) -> int | None:
+    """Epoch seconds when a card stops being approvable (created + ttl), for the card's clock on the page
+    (PERMIT-SAY-1). Display only: permitd alone decides expiry."""
+    from datetime import datetime, timezone
+    d = permit if isinstance(permit, dict) else {}
+    try:
+        t = datetime.fromisoformat(str(d.get("created_at") or ""))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return int(t.timestamp()) + int(d.get("ttl_seconds") or PERMIT_TTL)
+    except Exception:
+        return int(time.time()) + int(d.get("ttl_seconds") or PERMIT_TTL)
 
 
 def _make_gate():
@@ -881,7 +895,8 @@ def _propose(p: dict) -> dict:
     r = GATE.call("one_execute", p)
     if r.permit:
         card = {"id": r.permit["id"], "summary": p.get("summary") or "", "platform": p.get("platform"),
-                "method": p.get("method"), "action_id": p.get("action_id"), "ttl_seconds": r.permit.get("ttl_seconds")}
+                "method": p.get("method"), "action_id": p.get("action_id"), "ttl_seconds": r.permit.get("ttl_seconds"),
+                "expires_at": _expires_at(r.permit)}
         verdict = _judge_proposal(p) if _posture_current() == "judged" else None
         if verdict is not None:
             card["judge"] = verdict
@@ -983,6 +998,113 @@ def _run_permit(pid: str, pm) -> dict:
     return {"ok": r.ok, "status": "executed" if r.ok else "failed",
             "result": r.result if r.ok else {"error": r.error or r.reason},
             "summary": (pm.args or {}).get("summary", "")}
+
+
+# ---- a press that could not approve says why (PERMIT-SAY-1, 2026-11-27) ----
+# hbar 2026-11-27: "That Allow did not reach the job: could not approve: PermitError - again issue!".
+# The bridge answered the class name and threw permitd's reason away. Measured that day: the card was
+# raised 12:37:23Z, nobody answered within 15 minutes, the bridge told the job no and denied the permit
+# at 12:52:24Z, and a later press met an already denied permit. Now every refusal carries a reason code
+# and one sentence in the person's words; nothing here approves more than before: an expired, denied or
+# orphaned permit is never approved, and a permit's life is never extended.
+SETTLED: dict = {}          # permit id -> how its wait ended: "timeout" | "person" | "nobody" (last 500, this process)
+
+
+def _settled(pid: str, how: str) -> None:
+    SETTLED[pid] = how
+    while len(SETTLED) > 500:
+        SETTLED.pop(next(iter(SETTLED)))
+
+
+def _settled_how(pid: str) -> str:
+    """How a box card's wait ended: this process's memory first, then the decision log (survives a restart)."""
+    if pid in SETTLED:
+        return SETTLED[pid]
+    try:
+        with open(DECISIONS_LOG, "rb") as f:
+            f.seek(0, 2); f.seek(max(0, f.tell() - 400_000))
+            tail = f.read().decode("utf-8", "replace").splitlines()
+        for line in reversed(tail):
+            if pid in line:
+                by = (json.loads(line).get("by") or "")
+                return {"timeout": "timeout", "nobody watching": "nobody"}.get(by, "person")
+    except Exception:
+        pass
+    return ""
+
+
+def _permit_say(reason: str, pid: str = "") -> str:
+    """One plain sentence per refusal reason; no class names."""
+    mins = max(1, PERMIT_TTL // 60)
+    mins = f"{mins} minute" + ("" if mins == 1 else "s")
+    if reason in ("already_denied", "denied"):
+        how = _settled_how(pid)
+        if how == "timeout":
+            return (f"this card expired after {mins} without an answer; the job was told no and moved on. "
+                    "If it still needs this step it asks again and a fresh card appears")
+        if how == "nobody":
+            return "this card was closed at once because no console page was open for that turn; nothing ran"
+        return "this card was already refused (here, in another tab or on Telegram); nothing ran"
+    if reason in ("already_expired", "expired"):
+        return (f"this card expired after {mins}; nothing ran. "
+                "If the job still needs this step it asks again and a fresh card appears")
+    if reason in ("already_approved", "already_executed", "already_used"):
+        return "this card was already allowed (from another tab, Telegram or a standing allow); nothing more to do"
+    if reason in ("unknown_permit", "missing_permit"):
+        return "the bridge does not know this card (it may be from before a restart); nothing ran"
+    if reason == "no_waiter":
+        return "the job that asked has ended or is no longer waiting (stopped, or the bridge restarted); nothing ran and the card is closed"
+    if reason == "bad_signature":
+        return "this card's approval did not verify, so it was refused; nothing ran"
+    if reason == "args_mismatch":
+        return "the action no longer matches what this card showed, so it was refused; nothing ran"
+    if reason == "no_gate":
+        return "writes are not enabled on this brain"
+    return f"the gate refused this card ({reason}); nothing ran"
+
+
+def _approve_permit(pid: str, pm, via: str) -> tuple[int, dict]:
+    """Approve and run one permit pressed by the person (the page's Allow/Send, Telegram), or say in plain
+    words why not. Returns (http code, payload); a refusal is {"ok": False, "error": <sentence>, "reason": <code>}.
+    A press on a card that is already allowed is fine, not an error (ok True, status "already allowed")."""
+    if pm is None:
+        print(f"permit {pid} approve refused reason=unknown_permit via={via}", flush=True)
+        return 404, {"ok": False, "error": _permit_say("unknown_permit", pid), "reason": "unknown_permit"}
+    box = (pm.args or {}).get("platform") == "box"
+    status = getattr(pm, "status", "")
+    if status in ("approved", "executed"):
+        print(f"permit {pid} approve again: already allowed via={via}", flush=True)
+        return 200, {"ok": True, "status": "already allowed", "reason": "already_approved",
+                     "error": None, "said": _permit_say("already_approved", pid), "summary": (pm.args or {}).get("summary", "")}
+    if box and status == "proposed":
+        # A box card answers a hook that is waiting in _box_ask_inner. No waiter (the turn was stopped or the
+        # bridge restarted): approving would mint an approval nobody uses, and the page would say "allowed"
+        # for a step that never ran. Close the card instead (fail closed).
+        a = ASKS.get(pid)
+        r = RUNS.get(a.get("run")) if a and a.get("run") else None
+        if a is None or (r is not None and (r.done or r.stopped)):
+            try:
+                GATE.deny(pid)
+            except Exception:
+                pass
+            _box_settle(pid, "deny", "the job that asked is no longer waiting")
+            _decision_log(pid, "deny", "the bridge", "pressed after the asking job ended")
+            print(f"permit {pid} approve refused reason=no_waiter via={via}", flush=True)
+            return 409, {"ok": False, "error": _permit_say("no_waiter", pid), "reason": "no_waiter"}
+    try:
+        outcome = _run_permit(pid, pm)
+    except Exception as e:  # PermitError(reason) from permitd; anything else is said by its reason too
+        reason = str(getattr(e, "reason", "") or type(e).__name__)
+        if reason in ("already_approved", "already_executed", "already_used"):
+            print(f"permit {pid} approve again: already allowed ({reason}) via={via}", flush=True)
+            return 200, {"ok": True, "status": "already allowed", "reason": reason, "error": None,
+                         "said": _permit_say(reason, pid), "summary": (pm.args or {}).get("summary", "")}
+        print(f"permit {pid} approve refused reason={reason} via={via}", flush=True)
+        return 409, {"ok": False, "error": _permit_say(reason, pid), "reason": reason}
+    if box:
+        _box_settle(pid, "allow" if outcome.get("ok") else "deny")
+        outcome["status"] = "allowed" if outcome.get("ok") else "failed"
+    return (200 if outcome.get("ok") else 502), outcome
 
 
 # ---- hands on the box: the reasoner's own tool calls, gated by a card ----
@@ -1390,7 +1512,7 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
         return {"behavior": "deny", "message": r.error or r.reason or "refused by the gate"}
     pid = r.permit["id"]
     card = {"id": pid, "platform": "box", "method": tool, "action_id": action_id, "summary": summary,
-            "ttl_seconds": r.permit.get("ttl_seconds"), "remember_ok": remember_ok}
+            "ttl_seconds": r.permit.get("ttl_seconds"), "expires_at": _expires_at(r.permit), "remember_ok": remember_ok}
     if tool == "spoke" and isinstance(inp, dict) and inp.get("plan"):
         card.update({"full": str(inp["plan"]), "full_length": len(str(inp["plan"]))})
     if tool == "Bash":
@@ -1434,10 +1556,11 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
                 return {"behavior": "allow"}
     if run is None:
         GATE.deny(pid)
+        _settled(pid, "nobody")
         _decision_log(pid, "deny", "nobody watching", "no console page was open for this turn (a background job?)", session_id)
         return {"behavior": "deny", "message": "nobody is watching the page to allow this; ask the person to send the request again from the page"}
     ev = threading.Event()
-    ASKS[pid] = {"event": ev, "decision": None, "message": None}
+    ASKS[pid] = {"event": ev, "decision": None, "message": None, "run": run.id}
     run.waiting += 1
     try:
         run.emit("ask", card)
@@ -1454,8 +1577,14 @@ def _box_ask_inner(tool: str, inp: dict, session_id: str | None = None, run_id: 
             GATE.deny(pid)
         except Exception:
             pass
+        _settled(pid, "timeout")
         _decision_log(pid, "deny", "timeout", f"no answer within {PERMIT_TTL // 60} minutes", session_id)
-        return {"behavior": "deny", "message": f"no answer from the person within {PERMIT_TTL // 60} minutes"}
+        # expired, ask again (PERMIT-SAY-1): the job is told the card expired, not that it was refused, so a
+        # step it still needs is asked once more and raises a fresh card (a new permit, a new 15 minutes)
+        return {"behavior": "deny", "message": f"no answer from the person within {PERMIT_TTL // 60} minutes: the card expired "
+                "and nothing ran. This is not a refusal. If the step is still needed, make the same call once more: "
+                "that raises a fresh card. Do not loop: if that one expires too, stop and say what is waiting."}
+    _settled(pid, "person")
     _decision_log(pid, "deny", "the person", a.get("message") or "card", session_id)
     return {"behavior": "deny", "message": a.get("message") or "the person refused this action"}
 
@@ -3360,7 +3489,7 @@ def _permit_public(pm) -> dict:
     a = d.get("args") or {}
     return {"id": d["id"], "status": d["status"], "summary": a.get("summary") or "", "platform": a.get("platform"),
             "method": a.get("method"), "action_id": a.get("action_id"), "created_at": d.get("created_at"),
-            "ttl_seconds": d.get("ttl_seconds")}
+            "ttl_seconds": d.get("ttl_seconds"), "expires_at": _expires_at(d)}
 
 _lock = threading.Lock()
 _version: str | None = None
@@ -4758,24 +4887,22 @@ def _decide_permit(pid: str, action: str) -> dict:
     """Allow or refuse a card from anywhere (the page does the same inline; Telegram uses this)."""
     pm = GATE.get(pid) if (GATE is not None and pid) else None
     if pm is None:
-        return {"ok": False, "error": "no such permit"}
+        return {"ok": False, "error": _permit_say("unknown_permit", pid), "reason": "unknown_permit"}
     one = (pm.args or {}).get("platform") != "box"   # box permits log their decision in _box_ask
     if action != "allow":
-        GATE.deny(pid)
+        try:
+            GATE.deny(pid)
+        except Exception as e:
+            reason = str(getattr(e, "reason", "") or type(e).__name__)
+            print(f"permit {pid} deny refused reason={reason} via=telegram", flush=True)
+            return {"ok": False, "error": _permit_say(reason, pid), "reason": reason}
         _box_settle(pid, "deny", "the person refused this action")
         if one:
             _decision_log(pid, "deny", "the person", "Telegram or elsewhere")
         return {"ok": True, "status": "denied"}
     if one:
         _decision_log(pid, "allow", "the person", "Telegram or elsewhere")
-    try:
-        outcome = _run_permit(pid, pm)
-    except Exception as e:
-        return {"ok": False, "error": f"could not approve: {type(e).__name__}"}
-    if (pm.args or {}).get("platform") == "box":
-        _box_settle(pid, "allow" if outcome.get("ok") else "deny")
-        outcome["status"] = "allowed" if outcome.get("ok") else "failed"
-    return outcome
+    return _approve_permit(pid, pm, "telegram")[1]
 
 
 # ---- Telegram: the phone talks to the hands lane (2026-09-29) ----
@@ -5090,7 +5217,7 @@ def _tg_handle(update: dict) -> None:
             TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text="approvals are console-only on this brain")
             return
         out = _decide_permit(pid, "allow" if action == "allow" else "deny")
-        word = "allowed" if out.get("ok") and out.get("status") != "denied" else ("refused" if out.get("status") == "denied" else f"failed: {out.get('error', '')}")
+        word = ("already allowed" if out.get("status") == "already allowed" else "allowed") if out.get("ok") and out.get("status") != "denied" else ("refused" if out.get("status") == "denied" else f"not done: {out.get('error', '')}")
         TG.call("answerCallbackQuery", callback_query_id=ev["callback_id"], text=word)
         try:
             TG.call("editMessageReplyMarkup", chat_id=chat_id, message_id=ev["message_id"], reply_markup={"inline_keyboard": []})
@@ -7424,11 +7551,18 @@ class Handler(BaseHTTPRequestHandler):
             pid = str(req.get("id", "")).strip()
             pm = GATE.get(pid) if pid else None
             if pm is None:
-                self._send(404, {"ok": False, "error": "no such permit"})
+                print(f"permit {pid} press refused reason=unknown_permit via=page", flush=True)
+                self._send(404, {"ok": False, "error": _permit_say("unknown_permit", pid), "reason": "unknown_permit"})
                 return
             one = (pm.args or {}).get("platform") != "box"   # box permits log their decision in _box_ask
             if route == "/permits/deny":
-                GATE.deny(pid)
+                try:
+                    GATE.deny(pid)
+                except Exception as e:
+                    reason = str(getattr(e, "reason", "") or type(e).__name__)
+                    print(f"permit {pid} deny refused reason={reason} via=page", flush=True)
+                    self._send(409, {"ok": False, "error": _permit_say(reason, pid), "reason": reason})
+                    return
                 _box_settle(pid, "deny", "the person refused this action")
                 if one:
                     _decision_log(pid, "deny", "the person", "Send card")
@@ -7437,14 +7571,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if one:
                 _decision_log(pid, "allow", "the person", "Send card")
-            try:
-                outcome = _run_permit(pid, pm)
-            except Exception as e:
-                self._send(409, {"ok": False, "error": f"could not approve: {type(e).__name__}"})
+            code, outcome = _approve_permit(pid, pm, "page")
+            if outcome.get("reason"):       # refused, or already allowed: said as it is, nothing remembered
+                self._send(code, outcome)
                 return
             if (pm.args or {}).get("platform") == "box":
-                _box_settle(pid, "allow" if outcome.get("ok") else "deny")
-                outcome["status"] = "allowed" if outcome.get("ok") else "failed"
                 if req.get("remember") is True and outcome.get("ok") and (pm.args or {}).get("remember_ok"):
                     _auto_add(pm.args or {}, title=(pm.args or {}).get("summary", ""))
                 self._send(200 if outcome["ok"] else 502, outcome)
