@@ -4,7 +4,11 @@ Created: 2026-11-23. The operator's word: one standard for every member brain.
 
 Ready means the member opens it and their daily work is the first thing they can press, and it is easier than what they did before (ChatGPT, their computer). A green update, a sign-in or a health check never makes a brain ready on its own.
 
-Check: `bash scripts/member-ready.sh <handle> <lang> [<start-page-sha12>]` on a shared box, `--single <lang> [sha]` on the member's own box. Read only. It prints one GREEN or RED line per item and a sum.
+Check: `bash scripts/member-ready.sh [--no-turn] <handle> <lang> [<start-page-sha12>]` on a shared box, `[--no-turn] --single <lang> [sha]` on the member's own box. It changes nothing in the brain; item 13 runs one tiny reasoner turn (one haiku message on the member's seat) unless `--no-turn`. It prints one GREEN or RED line per item and a sum.
+
+## 2026-11-27 (MCP-FIX-1)
+
+Item 13 added; item 11 now RED when the last turns all failed.
 
 | # | item | green when | why it is on the list |
 |---|---|---|---|
@@ -20,6 +24,7 @@ Check: `bash scripts/member-ready.sh <handle> <lang> [<start-page-sha12>]` on a 
 | 10 | AI history | the move-in carries Codex and Claude Code sessions | many members work in Codex or Claude Code; that history should come along |
 | 11 | used | the console has turns | the member has the link and the password and has opened it |
 | 12 | onboarding time | from the pasted line to the first real answer from their own material under 30 minutes on a 2-vCPU brain (IMPORT-PACE-1, 2026-11-24) | a member's move-in of 1,825 files ran over two days; the first pass (docs/IMPORT.md "Pace") makes the brain useful inside 15 minutes of reading and leaves the rest to the night |
+| 13 | answers | one tiny reasoner turn, run as the member's hands with the MCP arguments the bridge hands it, answers (`--no-turn` or a Codex seat: the MCP argument is only checked readable by the hands) | 2026-11-27 (MCP-FIX-1): Anne's check was green while every turn failed "Invalid MCP configuration ... EACCES": the no-servers file sat in the bridge's own state dir, which the hands cannot open. Item 11 counts only turns that answered since |
 
 Item 12 is measured, not checked by member-ready.sh: `python3 scripts/import/onboarding_time.py --estimate` (the model at the measured rates: 21 minutes, GREEN) and `--brain <url> --key-file <file>` on a local brain or the rehearsal slot only (synthetic home, the real agent, a planted fact asked back). The live mode has not been run yet.
 

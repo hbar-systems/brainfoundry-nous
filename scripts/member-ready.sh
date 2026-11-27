@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # member-ready.sh: is this member brain ready? (MEMBERS-11, 2026-11-23)
 # Ready = the member opens it and their daily work is the first thing they can press, easier than before
-# (docs/MEMBER_READY.md). One GREEN/RED line per item of the standard. READ ONLY: it changes nothing,
-# prints no secret value (key lines are counted, never shown), and never sends a chat.
+# (docs/MEMBER_READY.md). One GREEN/RED line per item of the standard. It changes nothing in the brain and
+# prints no secret value (key lines are counted, never shown). It sends no chat through the console; item 13
+# runs ONE tiny reasoner turn as the member's hands, with the MCP arguments the bridge would hand it
+# (MCP-FIX-1, 2026-11-27: Anne's check was all green while every turn failed). --no-turn skips that turn.
 #
-#   on a shared box:   bash member-ready.sh <handle> <lang> [<start-page-sha12>]
-#   on its own box:    bash member-ready.sh --single <lang> [<start-page-sha12>]
+#   on a shared box:   bash member-ready.sh [--no-turn] <handle> <lang> [<start-page-sha12>]
+#   on its own box:    bash member-ready.sh [--no-turn] --single <lang> [<start-page-sha12>]
 # Needs sudo (reads the member's layout, .env counts and Caddyfile lines), docker compose, curl, python3.
 set -u
+TURN=1; [ "${1:-}" = --no-turn ] && { TURN=0; shift; }
 if [ "${1:-}" = --single ]; then
-  m=$(hostname); D=/home/hbar/brain; P=8010; UI=3010
+  m=$(hostname); D=/home/hbar/brain; P=8010; UI=3010; UNIT=cc-bridge
   B=$(systemctl cat cc-bridge 2>/dev/null | sed -n 's/^Environment=CC_PORT=\([0-9]*\).*/\1/p' | tail -1); B=${B:-7682}
   CCU=$(systemctl cat cc-bridge 2>/dev/null | sed -n 's/^User=//p' | tail -1); CCU=${CCU:-cc}
   HOSTNAMES="console."
 else
   m=$1; n=$(sudo awk -v h="$m" '$1==h{print $2}' /srv/brains/members.tsv)
   [ -n "$n" ] || { echo "RED  0 member: $m is not in /srv/brains/members.tsv"; exit 0; }
-  D=/srv/brains/$m; P=$((8100+10*n)); UI=$((P+1)); B=$((P+8)); CCU=$m-cc
+  D=/srv/brains/$m; P=$((8100+10*n)); UI=$((P+1)); B=$((P+8)); CCU=$m-cc; UNIT=cc-bridge-$m
   HOSTNAMES="console.$m."
 fi
 LANG_WANT=${2:-en}; SHA_WANT=${3:-}
@@ -105,7 +108,46 @@ grep -q 'claude-code' "$D/scripts/import_chats.py" 2>/dev/null && grep -q 'Codex
   && say G "10 AI history: Codex and Claude Code sessions in the move-in" || say R "10 AI history: not in this code yet (branch members-11)"
 
 # 11 used: the member (or the operator testing for them) has had turns in the console
-th=$(sudo sh -c "cat '$CCH/.cc-bridge/turns.jsonl' 2>/dev/null | wc -l" | tr -dc 0-9)
-[ "${th:-0}" -gt 0 ] && say G "11 used: $th console turns (operator tests count too)" || say R "11 used: no console turn yet (link and password not sent, or not opened)"
+# (MCP-FIX-1 2026-11-27: turns that failed do not count; Anne had 3 turns, all "could not answer this turn")
+TU=$(sudo sh -c "tail -n 2000 '$CCH/.cc-bridge/turns.jsonl' 2>/dev/null" | python3 -c '
+import sys, json
+L = []
+for l in sys.stdin:
+    try: L.append(json.loads(l))
+    except Exception: pass
+ok = sum(1 for x in L if not x.get("error")); last = L[-5:]
+print(len(L), ok, sum(1 for x in last if x.get("error")), len(last))' 2>/dev/null)
+read -r th tok lerr ln <<<"${TU:-0 0 0 0}"
+if [ "${th:-0}" -eq 0 ]; then say R "11 used: no console turn yet (link and password not sent, or not opened)"
+elif [ "${ln:-0}" -gt 0 ] && [ "$lerr" -eq "$ln" ]; then say R "11 used: $th console turns, the last $ln all failed ($tok answered ever)"
+else say G "11 used: $th console turns, $tok answered (operator tests count too)"; fi
+
+# 13 answers: one tiny turn as the member's hands, with the bridge's own MCP arguments (MCP-FIX-1, 2026-11-27).
+# The bridge hands the reasoner CC_MCP_CONFIG when the hands can read it, else its no-servers value: in code
+# before MCP-FIX-1 a file in the bridge's STATE_DIR (mode 700) the hands cannot open, so every turn failed.
+UENV=$({ systemctl cat "$UNIT" 2>/dev/null; for f in $(systemctl show -p EnvironmentFiles "$UNIT" 2>/dev/null | sed 's/^EnvironmentFiles=//' | grep -oE '/[^ ]+'); do sudo cat "$f" 2>/dev/null; done; sudo cat "$CCH/.cc-bridge/env" 2>/dev/null; } | grep -oE '(CC_MCP_CONFIG|CC_HANDS_USER|CC_HANDS_HOME|CC_BIN)=[^ "]*')
+uv() { printf '%s\n' "$UENV" | sed -n "s/^$1=//p" | tail -1; }
+HU=$(uv CC_HANDS_USER); HH=$(uv CC_HANDS_HOME); HH=${HH:-$( [ -n "$HU" ] && getent passwd "$HU" | cut -d: -f6 )}; HH=${HH:-$CCH}
+RB=$(uv CC_BIN); RB=${RB:-$HH/.local/bin/claude}; MC=$(uv CC_MCP_CONFIG)
+asu() { if [ -n "$HU" ]; then sudo -n -u "$HU" -H "$@"; else sudo -n -u "$CCU" -H "$@"; fi; }
+if [ -n "$MC" ] && asu test -r "$MC"; then MARG=$MC; mwhy="the tool pack"
+elif grep -q 'return str(MCP_EMPTY)' "$D/scripts/cc/cc-bridge.py" 2>/dev/null; then MARG=$CCH/.cc-bridge/mcp-empty.json; mwhy="the old no-servers file"
+else MARG='{"mcpServers": {}}'; mwhy="no servers, inline"; fi
+if [ "$TURN" = 0 ] || [ "$seat" = codex ]; then
+  why13=$([ "$seat" = codex ] && echo "the seat is Codex; the Claude path checked without a turn" || echo "--no-turn")
+  if [ "$mwhy" = "the old no-servers file" ] && ! asu test -r "$MARG"; then say R "13 answers: not run ($why13), but the reasoner cannot read $MARG: every Claude turn fails (update to MCP-FIX-1)"
+  else say G "13 answers: not run ($why13); MCP argument = $mwhy"; fi
+else
+  TR=$(cd /tmp && asu timeout 120 "$RB" -p --output-format json --model haiku --max-turns 1 --mcp-config "$MARG" --strict-mcp-config "Reply with the single word OK." </dev/null 2>&1 | python3 -c '
+import sys, json
+t = sys.stdin.read()
+try:
+    d = json.loads(t.strip().splitlines()[-1])
+    print("ok" if not d.get("is_error") and (d.get("result") or "").strip() else "err " + str(d.get("result") or d.get("error") or "")[:200])
+except Exception:
+    print("err " + " ".join(t.split())[:200])')
+  case "$TR" in ok) say G "13 answers: a tiny turn as the hands answered (MCP argument: $mwhy)";;
+    *) say R "13 answers: The reasoner could not answer this turn: ${TR#err } (MCP argument: $mwhy)";; esac
+fi
 
 echo "SUM  $m: $g green, $r red"
