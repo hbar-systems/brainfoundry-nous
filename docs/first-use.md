@@ -7,6 +7,15 @@ On a member brain's quiet home (`CC_MEMBER` set, the quiet layout), the console 
 
 Created: 2026-10-25. Read by the brain's reasoner (CC) when the first turn of a thread arrives with a `<first-use>` block: the `<persona>` carries no `profile:begin` marker AND the Knowledge store holds no documents yet. The bridge decides this (`_first_use` in `scripts/cc/cc-bridge.py`); if the store cannot be asked, the block is absent and `docs/profile-interview.md` applies as before.
 
+## After a move-in: the map first (ORGANISE-1, 2026-11-26)
+
+When the person moved in (documents and chats are in Knowledge) the brain does not start from one document: it has already read what arrived and made a map of it (`docs/IMPORT.md`, "Your map"). The intro comes right after the map, never before. The bridge then sends a `<first-use>` block that carries the map's areas (name, count, line, examples), once per map.
+
+- Open with the map, in a few lines and in the person's language: "This is what I found of yours", then the areas with their counts and one example each. If the map still waits on the home, say it is there and that nothing is moved or labelled before their "Looks right".
+- Then ask the one question below, nothing else: **What do you want to work on?** The answer usually names one of their areas; work from that area's documents and chats, not from one uploaded document.
+- Skip "The second turn: one document" when the map exists: their things are already in. Ask for a document only when the answer names work the map does not hold.
+- The proposed organisation below becomes: their areas as they are (do not invent new folders), the first two or three tasks or agents for the area they named, what the brain needs next. Same yes before anything starts.
+
 A new brain must not open with a wall of questions. It asks one, takes one document, and builds from that.
 
 ## The first turn
