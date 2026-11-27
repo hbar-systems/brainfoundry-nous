@@ -3494,6 +3494,7 @@ def _permit_public(pm) -> dict:
 _lock = threading.Lock()
 _version: str | None = None
 MCP_EMPTY = STATE_DIR / "mcp-empty.json"   # written at startup; see _run_turn
+MCP_EMPTY_INLINE = '{"mcpServers": {}}'   # what the reasoner gets when the owner names no servers
 # The owner's tool packs: an MCP servers file (CC_MCP_CONFIG) naming exactly the servers the
 # reasoner may see, for example the ableton-systems and numa-systems plugins. Strict mode stays
 # on, so the account's own connectors never appear; keys for those servers live in the bridge
@@ -3514,10 +3515,13 @@ def _mcp_text() -> str | None:
 
 
 def _mcp_config() -> str:
-    """The MCP servers the reasoner may see: the owner's file when set and present, else none."""
+    """The MCP servers the reasoner may see: the owner's file when set and present, else none.
+    None is passed inline, not as a file: the bridge's state folder is closed to the hands, so a
+    path there failed every turn on a brain without CC_MCP_CONFIG ("EACCES ... mcp-empty.json",
+    a member brain, 2026-11-27)."""
     if _mcp_text() is not None:
         return MCP_CONFIG
-    return str(MCP_EMPTY)
+    return MCP_EMPTY_INLINE
 
 
 def _mcp_dict() -> dict:
