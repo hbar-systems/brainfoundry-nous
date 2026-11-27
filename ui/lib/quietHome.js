@@ -90,4 +90,19 @@ const dayOf = (d) => { const x = d || new Date(); return `${x.getFullYear()}-${S
 const START_DAY_KEY = 'cc.start.day'
 const startDue = (lastDay, today) => !lastDay || lastDay !== today
 
-module.exports = { isQuiet, ruGenitive, ownerTitle, QUIET_ORDER, START_HREF, quietMenu, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue }
+// startOpens(layout, search) -> null | 'beside' | 'cover' (MEMBER-SCREEN-2, hbar 2026-11-27 at Anne's sitting: "she didnt
+// see [her start page] ... she saw the 3 things she had to connect"). On the bare console page (no ?pane, ?thread or
+// ?threads, the last being the menu's Chat) a layout with a start page and the talk or doors view opens it. A quiet
+// (member) home opens it on every load and at every width, covering the console: that page is the first screen, and
+// the chat with the moving-in cards is one press away (the pane's close). Any other layout keeps it beside the chat.
+// Before this the start page opened only once a day, only at 960 px and up, and only on the load that first
+// applied the layout in that browser, so a member who had opened the console before never saw it again.
+function startOpens(lay, search) {
+  if (!lay || !lay.start || (lay.view !== 'talk' && lay.view !== 'doors')) return null
+  let q
+  try { q = new URLSearchParams(search || '') } catch { return null }
+  if (q.has('pane') || q.has('thread') || q.has('threads')) return null
+  return isQuiet(lay) ? 'cover' : 'beside'
+}
+
+module.exports = { isQuiet, ruGenitive, ownerTitle, QUIET_ORDER, START_HREF, quietMenu, parseAsks, asksUrl, dayOf, START_DAY_KEY, startDue, startOpens }
