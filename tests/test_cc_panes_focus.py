@@ -69,14 +69,15 @@ const S = require('./steer')
 const now = '2026-11-27T15:00:00'
 const at = new Date(2026, 10, 27, 14, 2).toISOString()
 console.log(JSON.stringify({
-  full: S.paneMarks({ id: 'hbar.music', counts: { running: 2 }, open: { n: 7, his: 3 }, said: { at, live: false } }, now),
-  one: S.paneMarks({ id: 'x', counts: { running: 1 }, open: { n: 1, his: 0 } }, now),
-  quiet: S.paneMarks({ id: 'x', counts: { running: 0 }, open: { n: 0, his: 0 }, said: null }, now),
+  full: S.paneMarks({ id: 'hbar.music', counts: { running: 2 }, open_rows: { n: 7, his: 3 }, said: { at, live: false } }, now),
+  one: S.paneMarks({ id: 'x', counts: { running: 1 }, open_rows: { n: 1, his: 0 } }, now),
+  quiet: S.paneMarks({ id: 'x', counts: { running: 0 }, open_rows: { n: 0, his: 0 }, said: null }, now),
   nofield: S.paneMarks({ id: 'x', counts: {} }, now),
   live: S.paneMarks({ id: 'x', said: { live: true, at: null } }, now),
   old: S.paneMarks({ id: 'x', said: { at: new Date(2026, 10, 25, 9, 0).toISOString() } }, now),
   bad: S.paneMarks({ id: 'x', said: { at: 'nonsense' } }, now),
   none: S.paneMarks(null, now),
+  inst: S.paneMarks({ id: 'hbar.ink', open: '/apps/hbar-ink' }, now),
 }))
 """)
     assert [m["k"] for m in d["full"]] == ["run", "open", "his", "last"]
@@ -88,6 +89,7 @@ console.log(JSON.stringify({
     assert d["quiet"] == [] and d["nofield"] == [] and d["none"] == [] and d["bad"] == []   # nothing when zero or unknown
     assert d["live"] == [{"k": "last", "text": "live", "title": "x is answering now"}]
     assert d["old"][0]["text"] == "2d"
+    assert d["inst"] == []          # tile.open is an instrument's page (WALL-3), never a count
 
 
 def test_systems_page_wiring():

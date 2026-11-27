@@ -77,7 +77,7 @@ def tile(sid: str) -> dict:
     return {"id": sid, "description": sid, "kind": "work", "thread": THREADS.get(sid),
             "counts": {"running": run, "done_today": 1, "tasks": his, "next": max(0, n - his)},
             "detail": {k: {"count": 0, "lines": []} for k in ("running", "done_today", "tasks", "next")},
-            "open": {"n": n, "his": his}, "said": {"text": "(demo) last line", "live": False, "waiting": False, "at": at},
+            "open_rows": {"n": n, "his": his}, "said": {"text": "(demo) last line", "live": False, "waiting": False, "at": at},
             "lines": [], "more": [], "jobs": []}
 
 
