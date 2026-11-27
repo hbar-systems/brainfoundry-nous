@@ -144,12 +144,12 @@ p({"type": "result", "result": "ok", "session_id": "s2", "is_error": False, "num
 def test_mcp_config_owner_file_or_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("CC_MCP_CONFIG", raising=False)   # the live box sets it; the test wants none
     m = _load(monkeypatch, tmp_path, with_key=False)
-    assert m._mcp_config().endswith("mcp-empty.json") and m._mcp_servers() == []
+    assert m._mcp_config() == '{"mcpServers": {}}' and m._mcp_servers() == []
     f = tmp_path / "mcp.json"; f.write_text('{"mcpServers": {"b-tools": {"command": "/x"}, "a-tools": {"command": "/y"}}}')
     monkeypatch.setattr(m, "MCP_CONFIG", str(f))
     assert m._mcp_config() == str(f) and m._mcp_servers() == ["a-tools", "b-tools"]
     monkeypatch.setattr(m, "MCP_CONFIG", str(tmp_path / "missing.json"))
-    assert m._mcp_config().endswith("mcp-empty.json")
+    assert m._mcp_config() == '{"mcpServers": {}}'   # inline: the hands cannot read the bridge's state folder
 
 
 def test_guide_and_tutorial_counts(monkeypatch, tmp_path):
