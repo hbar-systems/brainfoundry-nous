@@ -126,7 +126,9 @@ def test_console_renders_doors_only_on_an_empty_thread_in_the_doors_view():
     assert "setDraft(d.prompt || '')" in pick and "send(" not in pick and "fetch(" not in pick
     # the doors view never redirects to the gallery or panes, and keeps the start pane
     assert "d.layout.view !== 'talk' && d.layout.view !== 'doors' &&" in CC_JS
-    assert "(d.layout.view === 'talk' || d.layout.view === 'doors')" in CC_JS
+    # MEMBER-SCREEN-2 (2026-11-27): the start-pane rule moved into quietHome.startOpens (talk or doors, same rule)
+    qh = (ROOT / "ui" / "lib" / "quietHome.js").read_text()
+    assert "(lay.view !== 'talk' && lay.view !== 'doors')) return null" in qh and "startOpens(d.layout" in CC_JS
     # once per browser session, never over ?thread= or a pane
     assert "q.has('thread') || q.has('pane') || sessionStorage.getItem('cc.doors.fresh')" in CC_JS
 
