@@ -48,7 +48,7 @@ out.room = s.layPages(['a', 'b', 'c'], { a: 0, b: 1 }, 1)   // c: on the page he
 out.moved = s.layPages(six, s.movePane(out.fresh.pageOf, 'b', out.fresh.pages.length), 0)
 out.none = s.layPages([], {}, 0)
 out.read = [s.readPages('{"pageOf":{"a":1,"../x":0,"b":-1,"c":2.5},"cur":1}'), s.readPages('nonsense'), s.readPages(null)]
-const tiles = { a: { counts: { running: 2 }, open: { his: 1 } }, d: { counts: { running: 1 } } }
+const tiles = { a: { counts: { running: 2 }, open_rows: { his: 1 } }, d: { counts: { running: 1 }, open: '/page' } }
 out.marks = s.pageMarks(out.fresh.pages, (x) => tiles[x], { b: { busy: true }, e: { busy: true, waiting: true } }, new Set(['d']), { world: 'central' })
 out.max = [s.PAGE_MAX, s.MAX_PANES, s.PAGES_KEY]
 out.open16 = s.readOpen(JSON.stringify(Array.from({ length: 20 }, (_, i) => 's' + i)), null, s.MAX_PANES).length

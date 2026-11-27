@@ -223,7 +223,8 @@ function pageMarks(pages, tileOf, states, news, names) {
       const t = (tileOf && tileOf(sid)) || {}
       run += Number((t.counts || {}).running) || 0
       if (st[sid] && st[sid].busy && !st[sid].waiting) run += 1
-      if ((st[sid] && st[sid].waiting) || Number((t.open || {}).his) > 0) waits += 1
+      const o = t.open_rows && typeof t.open_rows === 'object' ? t.open_rows : {}   // tile.open is an instrument's page
+      if ((st[sid] && st[sid].waiting) || Number(o.his) > 0) waits += 1
       if (nw.has(sid)) fresh += 1
     })
     const nm = p.map(s => (names && names[s]) || s).join(', ')
