@@ -123,8 +123,9 @@ function framesLayout(shown, focus, central, strip = 'clamp(190px, 18%, 280px)')
 
 // The quiet marks right of a pane's name, from what GET /cc/systems already carries (never a made-up number):
 //   run   jobs running in that system now            (tile.counts.running; nothing when zero)
-//   open  open rows of ops/systems/<id>/open.tsv     (tile.open.n, when the bridge serves it)
-//   his   of those, the ones that wait on him         (tile.open.his: court decisions and his tasks; the accent)
+//   open  open rows of ops/systems/<id>/open.tsv     (tile.open_rows.n, when the bridge serves it; tile.open is
+//         another thing: an instrument's own page, WALL-3)
+//   his   of those, the ones that wait on him         (tile.open_rows.his: court decisions and his tasks; the accent)
 //   last  the time of the last turn in its thread     (tile.said.at; "live" while it answers)
 // -> [{ k, text, title }], numbers first, few words.
 function hhmm(iso, now) {
@@ -144,7 +145,7 @@ function paneMarks(tile, now) {
   const out = []
   const run = Number((t.counts || {}).running) || 0
   if (run > 0) out.push({ k: 'run', text: String(run), title: `${run} job${run === 1 ? '' : 's'} running in ${sid} now` })
-  const o = t.open && typeof t.open === 'object' ? t.open : null
+  const o = t.open_rows && typeof t.open_rows === 'object' ? t.open_rows : null
   if (o && Number(o.n) > 0) {
     out.push({ k: 'open', text: `${o.n} open`, title: `${o.n} open item${o.n === 1 ? '' : 's'} in ${sid} (tasks, next rows, court rows)` })
     if (Number(o.his) > 0) out.push({ k: 'his', text: `${o.his} yours`, title: `${o.his} of them wait on you (court decisions and your tasks)` })
