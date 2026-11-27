@@ -44,6 +44,8 @@ Endpoints (JSON):
                           <world>/registry/surfaces/*.json: a message that is only a say-word shows the card (SURFACES-1)
   GET  /cc/dashboard      the owner's dashboard {map:{title,line,groups:[{id,name,line,topics}]}|null, live:{threads,jobs,pushes}} (DASH-1, cc_dashboard.py)
   POST /cc/systems/thread {"system"} -> {"ok","thread","created"}: the system's one standing thread, made once
+  GET  /cc/systems/done[?system=<id>&n=<N>]  what a system already finished, newest first, from the world's
+                          <out>/board/systems-done.json (read only; no system: the counts) (SYSTEMS-PAGES-1, cc_systems_done.py)
   GET  /cc/wall  POST /cc/wall {"look"?,"set"?,"pinned"?}  the wall's look (grid | orbit), the systems kept in the orbit
                           (WALL-2) and the instruments kept out beside them (WALL-5)
   POST /cc/threads/<id>/say {"message","from"?,"via"?} -> 202 {"ok","system","thread","reports_to"}: the central chat steers a
@@ -560,6 +562,7 @@ import cc_codex_gate  # noqa: E402   the Codex seat's gated write mode (2026-11-
 import cc_local  # noqa: E402   the Local seat (2026-10-25): Codex's machinery, a self-hosted model
 import cc_private  # noqa: E402   the private seat's lean engine (SEAT-3, 2026-11-23): Ollama direct, three read-only tools
 import cc_systems  # noqa: E402   the systems board (BOARD-3, 2026-11-12)
+import cc_systems_done  # noqa: E402   what each system already finished (SYSTEMS-PAGES-1, 2026-11-27)
 import cc_surfaces  # noqa: E402   the surfaces register: a system's name -> its card (SURFACES-1, 2026-11-24)
 import cc_dashboard  # noqa: E402   the owner's dashboard: knowledge map + live row (DASH-1, 2026-11-22)
 import cc_lanes  # noqa: E402   lanes and the idle archive of the thread list (THREADS-1, 2026-11-18)
@@ -5728,6 +5731,7 @@ SYSTEMS_THREADS = cc_systems.ThreadMap(STATE_DIR / "systems-threads.json",
                                        seed=Path(os.environ.get("CC_SYSTEMS_SEED", "").strip() or str(OUT_DIR / "board" / "threads.json")))
 SYSTEMS_VOICE_MAX = TRANSCRIBE_MAX
 SYSTEMS_BOARD = Path(os.environ.get("CC_SYSTEMS_BOARD", "").strip() or str(OUT_DIR / "board" / "board.json"))
+SYSTEMS_DONE = Path(os.environ.get("CC_SYSTEMS_DONE", "").strip() or str(OUT_DIR / "board" / "systems-done.json"))
 SYSTEMS_JOBS_SEEN = 200     # the newest jobs the tiles count (running now, done today)
 _SYSTEMS_STATIC: dict = {}  # board.json, read again when its mtime moves
 
@@ -6617,6 +6621,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, _board())
         elif route == "/systems":
             self._send(200, _systems_view(self._query().get("depth") or None))
+        elif route == "/systems/done":
+            _q = self._query()
+            self._send(*cc_systems_done.view(cc_systems_done.load(SYSTEMS_DONE), _q.get("system") or None, _q.get("n")))
         elif route == "/wall":
             self._send(200, _wall_view())
         elif route == "/surfaces":

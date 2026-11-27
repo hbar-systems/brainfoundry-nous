@@ -626,14 +626,19 @@ function SeatLine({ seat, onPick, codex, local, onOpenPane, onRecheck }) {
 // SKIN-3 (2026-11-23): the skin and font chips set one of two levels, named on the line: "this thread" (kept
 // with the thread, drawn only where it is open) or "default" (every thread without its own, and the pages that
 // are not a thread: apps, tasks, systems, the brain's own pages). `defaults` is the console default now.
-function ToolLine({ look, setLook, text, density, onFont, defaults, onDefault, scope, setScope, posture, setPosture, extra }) {
-  const [open, setOpen] = useState(false)
+// PANES-FOCUS-1 (2026-11-27, hbar's screenshot: the strip took a third of each small pane on /systems): `small` (a pane
+// in the /systems grid, not in focus) shows only the "tools" mark until pressed; that press opens it for this pane
+// only and is not remembered, so the large panes and the console keep their own choice.
+function ToolLine({ look, setLook, text, density, onFont, defaults, onDefault, scope, setScope, posture, setPosture, extra, small }) {
+  const [wide, setOpen] = useState(false)
+  const [peek, setPeek] = useState(false)
+  const open = small ? peek : wide
   useEffect(() => { try { if (localStorage.getItem('cc.toolline') === '1') setOpen(true) } catch {} }, [])
   const [wall, setWall] = useState({ image: '', veil: 60 })
   const [wallMsg, setWallMsg] = useState('')
   const pickRef = useRef(null)
   useEffect(() => { setWall(readWall()); const on = () => setWall(readWall()); window.addEventListener('bf-wall', on); return () => window.removeEventListener('bf-wall', on) }, [])
-  const flip = () => setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o })
+  const flip = () => (small ? setPeek(o => !o) : setOpen(o => { try { if (!o) localStorage.setItem('cc.toolline', '1'); else localStorage.removeItem('cc.toolline') } catch {}; return !o }))
   const put = (k, v) => { const n = { ...look, [k]: v }; if (v == null || v === false) delete n[k]; setLook(n) }
   const thread = scope !== 'default'
   const lbl = { ...mono, fontSize: '10px', color: C.faint, letterSpacing: '0.08em', textTransform: 'uppercase' }
@@ -705,7 +710,7 @@ function ToolLine({ look, setLook, text, density, onFont, defaults, onDefault, s
           </span>
         ) : null}
       </>}
-      {extra}
+      {small && !open ? null : extra}
     </div>
   )
 }
@@ -1983,6 +1988,8 @@ function CC() {
   // box's current thread (no /cc/threads/switch, no /cc/new), so panes do not pull each other.
   const paneModeRef = useRef(null)
   const [paneMode, setPaneMode] = useState(null)
+  const [paneBig, setPaneBig] = useState(false)   // /systems says this pane is in focus ('cc-pane-focus', PANES-FOCUS-1)
+  const [paneDone, setPaneDone] = useState([])     // /systems: the system's three newest finished lines ('cc-pane-done', SYSTEMS-PAGES-1)
   // Reading space in a pane (2026-10-06): the stream is the pane. The pane's title bar on /panes
   // carries the title, the state and the one menu; this page tells it its state and takes its
   // commands (export, details). The rows of links under the composer open only with "details".
@@ -2751,6 +2758,12 @@ function CC() {
       }
       if (e.data && e.data.type === 'cc-thread' && typeof e.data.text === 'string' && chooseRef.current) {
         chooseRef.current({ mode: 'agent', label: String(e.data.label || e.data.text).slice(0, 80), send: e.data.text })
+      }
+      if (e.data && e.data.type === 'cc-pane-focus') setPaneBig(!!e.data.focus)
+      // SYSTEMS-PAGES-1 (hbar 2026-11-27: "I want to see the updates already made for the system so that I don't repeat
+      // myself"): shown small above the box while it is empty, so he sees them before he asks; nothing pops up as he types
+      if (e.data && e.data.type === 'cc-pane-done' && Array.isArray(e.data.lines)) {
+        setPaneDone(e.data.lines.slice(0, 3).map(x => ({ when: String((x && x.when) || '').slice(0, 12), what: String((x && x.what) || '').slice(0, 160) })).filter(x => x.what))
       }
       // the pane's own menu on /panes (2026-10-06)
       if (e.data && e.data.type === 'cc-pane-cmd') {
@@ -3826,6 +3839,7 @@ function CC() {
             <ToolLine look={look} setLook={setLook} text={lookText} density={lookDensity} onFont={pickFont}
               defaults={defaults} onDefault={pickDefaultSkin} scope={skinScope} setScope={setSkinScope}
               posture={health && health.box ? (health.posture || 'cards') : null} setPosture={setPosture}
+              small={!!paneMode && String(paneMode).startsWith('sys-') && !paneBig}
               extra={<span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
                 <SeatLine seat={seat} onPick={pickSeat} codex={health && health.codex} local={health && health.local} onOpenPane={openPane} onRecheck={() => { recheckCodex(); loadHealth(true) }} />
                 <Chip on={!!look.learn} onClick={() => setLook(look.learn ? (({ learn, ...r }) => r)(look) : { ...look, learn: true })}
@@ -4001,6 +4015,16 @@ function CC() {
                 style={{ color: C.dim, cursor: 'pointer', textDecoration: 'underline', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</a>
             ))}
           </p>
+        )}
+        {paneMode && paneDone.length > 0 && !draft && (
+          <div className="cc-row cc-pane-done" aria-label="already done in this system" style={{ margin: '8px 0 0 0', fontSize: '12px', lineHeight: 1.45, color: C.faint }}>
+            {paneDone.map((x, i) => (
+              <div key={i} style={{ display: 'flex', gap: '8px', minWidth: 0 }}>
+                <span style={{ ...mono, fontSize: '11px', flex: 'none' }}>{x.when}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={x.what}>{x.what}</span>
+              </div>
+            ))}
+          </div>
         )}
         {/* The panel (hbar 2026-10-24): four doors above the composer. Three send a fixed ask; the fourth is a mode.
             Hidden with the input's buttons (2026-11-12, HANDOFF-2): a quiet console has no buttons around the input. */}
