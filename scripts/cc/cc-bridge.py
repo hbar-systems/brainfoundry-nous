@@ -586,6 +586,7 @@ import cc_listen  # noqa: E402   /listen: the owner's playlists and own tracks p
 import cc_booth  # noqa: E402   the booth: just sing, one WAV per take (SING-FREE-1, 2026-11-24)
 import cc_library  # noqa: E402   the private library guard on the release doors (DEMO-3, 2026-11-25)
 import cc_take  # noqa: E402    /take: record, demo, ask (DEMO-1, 2026-11-25)
+import cc_steward  # noqa: E402   the setup period's console side (STEWARD-1, 2026-11-27)
 import cc_find  # noqa: E402    /take: the orfeo library search under the voice (DEMO-2, 2026-11-25)
 import cc_listening  # noqa: E402   "Bring your listening": YouTube likes and playlists into this brain (YT-2, 2026-11-23)
 import cc_guard  # noqa: E402
@@ -3856,6 +3857,33 @@ CONSOLE_LANG_NAMES = {"ru": "Russian", "sk": "Slovak", "de": "German", "el": "Gr
                       "rue": "Rusyn (Presov Rusyn, written in Cyrillic; not Ukrainian, not Russian)"}
 
 
+SETUP_API = cc_steward.api_caller(BRAIN_API_URL, BRAIN_API_KEY)
+SETUP_WATCH = cc_steward.Watch(lambda: SETUP_API("GET", "/setup/status"))
+
+
+def _setup_note() -> str:
+    """STEWARD-1: while a setup period is open, setup questions go to the steward's page (cc_steward.note)."""
+    try:
+        lang = LAYOUT.lang()
+    except Exception:  # noqa: BLE001
+        lang = "en"
+    return cc_steward.note(SETUP_WATCH.status(), lang, os.environ.get("CC_SETUP_PAGE", "/setup"))
+
+
+def _setup_turns() -> list:
+    try:
+        lines = TURNS_LOG.read_text(encoding="utf-8").splitlines()[-2000:]
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
 def _console_lang_line() -> str:
     try:
         name = CONSOLE_LANG_NAMES.get(LAYOUT.lang())
@@ -4003,6 +4031,9 @@ def _compose(message: str, recent: str = "", first_use: str = "") -> tuple[str, 
         persona = (persona + "\n\n" + lang).strip()
     if persona:
         parts.append("<persona>\n" + persona + "\n</persona>")
+    setup = _setup_note()
+    if setup:
+        parts.append("<setup-period>\n" + setup + "\n</setup-period>")
     if chunks:
         lines = []
         for i, c in enumerate(chunks, 1):
@@ -6637,6 +6668,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(*_tide_root_get(self._query()))
             return
+        if route == "/setup/state":
+            # STEWARD-1: the setup key, checked by the api, not the operator token
+            if not cc_steward.key_ok(SETUP_API, self.headers.get(cc_steward.KEY_HEADER, ""), "state"):
+                self._send(401, {"error": "no setup period, or not its key"})
+                return
+            self._send(200, cc_steward.console_state({"lang": LAYOUT.lang(), "current": LAYOUT.get()}, {"auth": _auth_status(), "codex": _codex_status()},
+                                                     len(_persona() or ""), _setup_turns()))
+            return
         if route not in ("/health", "/tasks", "/threads/brief") and not route.startswith("/jobs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
             return
@@ -7059,6 +7098,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = self._json(limit=8000)
             self._send(*_tide_root_post(route, body if isinstance(body, dict) else {}))
+            return
+        if route == "/setup/ask":
+            # STEWARD-1: one test question through the member's own chat door; a verdict back, never the text
+            if not cc_steward.key_ok(SETUP_API, self.headers.get(cc_steward.KEY_HEADER, ""), "ask"):
+                self._send(401, {"error": "no setup period, or not its key"})
+                return
+            body = self._json(limit=8000)
+            self._send(*cc_steward.ask(body if isinstance(body, dict) else {}, _turn, lambda: LAST_SOURCES,
+                                       lambda a: SETUP_API("POST", "/setup/log/append", {"action": a})))
             return
         if route not in ("/ask", "/jobs/start", "/spend/append", "/tasks/add", "/tasks/done", "/ask-peer", "/radio/link", "/orfeo/post", "/notify", "/send-file", "/spoke", "/knowledge/recall", "/knowledge/docs") and not self._operator_ok():
             self._send(403, {"error": "operator token missing: this door opens only through the console"})
