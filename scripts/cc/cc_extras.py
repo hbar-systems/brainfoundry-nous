@@ -28,7 +28,14 @@ from pathlib import Path
 
 MAX_UPLOAD = 50 * 1024 * 1024
 DRAIN_MAX = 256 * 1024 * 1024    # an oversized upload is read away up to this, so the refusal reaches the page
-TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg"}
+TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".json", ".py", ".js", ".ts", ".sh", ".yml", ".yaml", ".toml", ".csv", ".tsv", ".log", ".css", ".ini", ".cfg",
+                 # LaTeX sources read as text (FILES-ARCHIVE-1 2026-11-28: the arXiv package's .tex)
+                 ".tex", ".bib", ".bbl", ".sty", ".cls", ".bst"}
+# Archives list what is inside in the Files pane (FILES-ARCHIVE-1 2026-11-28, hbar: "No preview for this type"
+# on regularization-arxiv.tar.gz). Matched on the end of the name, so .tar.gz is one suffix.
+ARCHIVE_ENDINGS = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".tar", ".zip")
+ARCHIVE_MEMBER_MAX = 200 * 1024 * 1024   # one member streamed out of an archive, at most
+ARCHIVE_LIST_MAX = 5000                  # entries listed; the count line still counts them all
 KIND_BY_SUFFIX = {
     **{s: "audio" for s in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")},
     **{s: "video" for s in (".mp4", ".webm", ".mov", ".m4v")},
@@ -162,6 +169,8 @@ class Files:
 
     @staticmethod
     def kind(p: Path) -> str:
+        if p.name.lower().endswith(ARCHIVE_ENDINGS):
+            return "archive"
         s = p.suffix.lower()
         if s in KIND_BY_SUFFIX:
             return KIND_BY_SUFFIX[s]
@@ -485,8 +494,21 @@ class Files:
             handler.send_response(403); handler.send_header("Content-Type", "application/json")
             handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
             return
-        size = p.stat().st_size
-        ctype = mimetypes.guess_type(p.name)[0] or ("text/plain; charset=utf-8" if self.kind(p) == "text" else "application/octet-stream")
+        try:
+            f = open(p, "rb")
+        except OSError:
+            body = b'{"error": "could not open the file"}'
+            handler.send_response(404); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+            return
+        with f:
+            self._stream(handler, p.name, p.stat().st_size, f)
+
+    def _stream(self, handler, name: str, size: int, f) -> None:
+        """Send an open, seekable file object as `name` (its type from the name): one byte range honoured,
+        html and svg sandboxed. The raw door and the archive door both send through here, so a member out
+        of an archive carries exactly the headers the same file on disk would."""
+        ctype = mimetypes.guess_type(name)[0] or ("text/plain; charset=utf-8" if self.kind(Path(name)) == "text" else "application/octet-stream")
         start, end = 0, size - 1
         rng = handler.headers.get("Range", "")
         m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip())
@@ -499,13 +521,14 @@ class Files:
                 start = max(0, size - int(b))
             start = min(start, size - 1); end = min(end, size - 1)
             partial = True
-        length = end - start + 1
+        length = max(0, end - start + 1)
+        safe_name = re.sub(r'["\\\r\n]', "_", name)
         handler.send_response(206 if partial else 200)
         handler.send_header("Content-Type", ctype)
         handler.send_header("Accept-Ranges", "bytes")
         handler.send_header("Content-Length", str(length))
         handler.send_header("Cache-Control", "no-store")
-        handler.send_header("Content-Disposition", f'inline; filename="{p.name}"')
+        handler.send_header("Content-Disposition", f'inline; filename="{safe_name}"')
         handler.send_header("X-Content-Type-Options", "nosniff")
         if ctype.split(";")[0].strip() in ("text/html", "application/xhtml+xml", "image/svg+xml"):
             # audit 2026-11-13 (app-files-save-html-runs-unsandboxed-on-console-origin): a desk page opened
@@ -515,15 +538,135 @@ class Files:
             handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         handler.end_headers()
         try:
-            with open(p, "rb") as f:
+            if start:
                 f.seek(start)
-                left = length
-                while left > 0:
-                    chunk = f.read(min(1 << 16, left))
-                    if not chunk:
-                        break
-                    handler.wfile.write(chunk)
-                    left -= len(chunk)
+            left = length
+            while left > 0:
+                chunk = f.read(min(1 << 16, left))
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+                left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    # ---- archives (FILES-ARCHIVE-1, 2026-11-28) ----
+    # GET /cc/files/archive?path=<archive>: what is inside, read with the standard library, nothing extracted.
+    # GET /cc/files/member?path=<archive>&name=<member>: that ONE member streamed out of the archive, with the
+    # raw door's headers. The archive passes resolve() like any served file; a member name is only looked up,
+    # never joined to a path on disk, and one with an absolute path, a "..", a link or a device is refused.
+
+    @staticmethod
+    def _member_name_ok(name: str) -> bool:
+        if not name or len(name) > 1024 or "\x00" in name:
+            return False
+        n = name.replace("\\", "/")
+        if n.startswith("/") or re.match(r"^[A-Za-z]:", n):
+            return False
+        return ".." not in n.split("/")
+
+    def _archive_path(self, raw: str) -> tuple[Path | None, int, str]:
+        p = self.resolve(raw)
+        if p is None or not p.is_file():
+            return None, 404, "not a file the reasoner can reach"
+        if self.kind(p) != "archive":
+            return None, 400, "not an archive (tar, tar.gz, tgz, tar.bz2, tar.xz or zip)"
+        if not os.access(p, os.R_OK):
+            return None, 403, "the reasoner wrote this file closed to the bridge; ask it: open the file to the group (chmod g+r)"
+        return p, 200, ""
+
+    @staticmethod
+    def _damaged(e: Exception) -> str:
+        return f"this archive could not be read; it looks damaged or cut short ({type(e).__name__}: {str(e)[:160] or 'no detail'})"
+
+    def archive_list(self, raw: str) -> tuple[int, dict]:
+        """(status, {path, size, mtime, files, bytes, entries:[{name, size, dir, kind, link?}], more})."""
+        import tarfile, zipfile, zlib
+        p, code, why = self._archive_path(raw)
+        if p is None:
+            return code, {"error": why}
+        entries, files, total, seen = [], 0, 0, 0
+        try:
+            if p.name.lower().endswith(".zip"):
+                with zipfile.ZipFile(p) as z:
+                    for i in z.infolist():
+                        isdir = i.is_dir()
+                        mode = (i.external_attr >> 16) & 0xFFFF
+                        # no type bits (a zip made off unix) reads as a plain file; a link or device is marked
+                        link = bool(stat_mod.S_IFMT(mode)) and not (stat_mod.S_ISREG(mode) or stat_mod.S_ISDIR(mode))
+                        seen += 1
+                        if not isdir:
+                            files += 1; total += i.file_size
+                        if len(entries) < ARCHIVE_LIST_MAX:
+                            entries.append({"name": i.filename, "size": i.file_size, "dir": isdir,
+                                            "kind": "dir" if isdir else ("link" if link else self.kind(Path(i.filename.rstrip("/") or "x")))})
+            else:
+                with tarfile.open(p, "r:*") as t:
+                    for m in t:
+                        isdir = m.isdir()
+                        link = not (m.isreg() or isdir)
+                        seen += 1
+                        if m.isreg():
+                            files += 1; total += m.size
+                        if len(entries) < ARCHIVE_LIST_MAX:
+                            entries.append({"name": m.name + ("/" if isdir and not m.name.endswith("/") else ""), "size": m.size if m.isreg() else 0,
+                                            "dir": isdir, "kind": "dir" if isdir else ("link" if link else self.kind(Path(m.name or "x")))})
+        except (tarfile.TarError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, zlib.error, OSError, ValueError, NotImplementedError) as e:
+            return 422, {"error": self._damaged(e), "path": str(p)}
+        for e in entries:
+            if not self._member_name_ok(e["name"].rstrip("/")):
+                e["unsafe"] = True
+        st = p.stat()
+        return 200, {"path": str(p), "size": st.st_size, "mtime": int(st.st_mtime), "files": files, "bytes": total,
+                     "entries": entries, "more": seen - len(entries)}
+
+    def archive_member(self, handler, raw: str, name: str) -> None:
+        """Stream one member of an archive (see above)."""
+        import tarfile, zipfile, zlib
+        def refuse(code: int, msg: str) -> None:
+            body = json.dumps({"error": msg}).encode()
+            handler.send_response(code); handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
+        p, code, why = self._archive_path(raw)
+        if p is None:
+            return refuse(code, why)
+        if not self._member_name_ok(name or ""):
+            return refuse(400, "refused: a member name with an absolute path or '..' is never streamed")
+        try:
+            if p.name.lower().endswith(".zip"):
+                with zipfile.ZipFile(p) as z:
+                    try:
+                        i = z.getinfo(name)
+                    except KeyError:
+                        return refuse(404, "no such file in this archive")
+                    mode = (i.external_attr >> 16) & 0xFFFF
+                    if i.is_dir():
+                        return refuse(400, "that is a folder in the archive")
+                    if stat_mod.S_IFMT(mode) and not stat_mod.S_ISREG(mode):
+                        return refuse(400, "refused: links and devices inside an archive are never streamed")
+                    if i.file_size > ARCHIVE_MEMBER_MAX:
+                        return refuse(413, f"too large to stream out of the archive ({i.file_size // 1048576} MB, the cap is {ARCHIVE_MEMBER_MAX // 1048576} MB); download the archive")
+                    with z.open(i) as f:
+                        self._stream(handler, name.rsplit("/", 1)[-1], i.file_size, f)
+            else:
+                with tarfile.open(p, "r:*") as t:
+                    try:
+                        m = t.getmember(name)
+                    except KeyError:
+                        return refuse(404, "no such file in this archive")
+                    if m.isdir():
+                        return refuse(400, "that is a folder in the archive")
+                    if not m.isreg():
+                        return refuse(400, "refused: links and devices inside an archive are never streamed")
+                    if m.size > ARCHIVE_MEMBER_MAX:
+                        return refuse(413, f"too large to stream out of the archive ({m.size // 1048576} MB, the cap is {ARCHIVE_MEMBER_MAX // 1048576} MB); download the archive")
+                    f = t.extractfile(m)
+                    if f is None:
+                        return refuse(400, "refused: not a regular file")
+                    with f:
+                        self._stream(handler, name.rsplit("/", 1)[-1], m.size, f)
+        except (tarfile.TarError, zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, zlib.error, ValueError, NotImplementedError) as e:
+            return refuse(422, self._damaged(e))
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -2188,11 +2331,31 @@ def first_sentence(text: str, n: int = 200) -> str:
     return (first or lines[0])[:n]
 
 
+
+# A web address that ends a sentence never takes the sentence's last mark (FILES-ARCHIVE-1 2026-11-28, hbar
+# 2026-11-27: ".../done.html." opened nothing). Same rule as ui/lib/pathlinks.js tidyUrl.
+_URL_TAIL = ".,;:!?*_~'\"\u2018\u2019\u201c\u201d\u00bb\u203a"
+_URL_PAIRS = {")": "(", "]": "[", "}": "{", ">": "<"}
+
+
+def tidy_url(u: str) -> str:
+    s = str(u or "")
+    for _ in range(40):
+        if not s:
+            break
+        c = s[-1]
+        if c in _URL_TAIL or (c in _URL_PAIRS and s.count(c) > s.count(_URL_PAIRS[c])):
+            s = s[:-1]
+            continue
+        break
+    return s
+
+
 def links_in(text: str, roots: tuple = (), limit: int = 4) -> list:
     """Links a run produced, read from its answer: web addresses, and files under the given roots."""
     out, seen = [], set()
     for m in re.finditer(r"https?://[^\s)>\]\"'`]+", text or ""):
-        u = m.group(0).rstrip(".,;:")
+        u = tidy_url(m.group(0))
         if u not in seen:
             seen.add(u); out.append({"label": re.sub(r"^https?://", "", u)[:48], "href": u, "kind": "url"})
     for root in [r for r in roots if r]:

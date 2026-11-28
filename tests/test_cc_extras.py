@@ -841,3 +841,140 @@ def test_job_tiles_skip_permission_rule_warnings_and_show_the_first_real_error(t
     assert X.job_lines("J1794777315538 2026-11-15T21:15:15Z in /home/hands/world\nreal\n") == ["real"]   # a cut header
     t = X.board_tiles([], [], [dict(base, id="Je", rc=143, tail=f"{w1}\n{w2}\n")], [], [], set(), now)["tiles"][0]
     assert (t["state"], t["last"]) == ("failed", "stopped by a signal (exit 143)")
+
+
+# ---- archives in the Files pane (FILES-ARCHIVE-1, 2026-11-28) ----
+
+PNG_1PX = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
+
+
+def _tar_gz(path, members, links=()):
+    import tarfile
+    with tarfile.open(path, "w:gz") as t:
+        for name, data in members:
+            ti = tarfile.TarInfo(name); ti.size = len(data); ti.mode = 0o644
+            t.addfile(ti, io.BytesIO(data))
+        for name, target in links:
+            ti = tarfile.TarInfo(name); ti.type = tarfile.SYMTYPE; ti.linkname = target
+            t.addfile(ti)
+    return path
+
+
+def test_archive_kind_and_tex_is_text(tmp_path):
+    for n in ("a.tar.gz", "a.tgz", "a.tar", "a.zip", "a.tar.bz2", "a.tar.xz", "A.TAR.GZ"):
+        assert X.Files.kind(Path(n)) == "archive", n
+    assert X.Files.kind(Path("paper.tex")) == "text" and X.Files.kind(Path("refs.bib")) == "text"
+    assert X.Files.kind(Path("x.gz")) == "other"
+
+
+def test_archive_list_counts_and_sizes(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    _tar_gz(out / "pkg.tar.gz", [("paper.tex", b"\\documentclass{article}\n"), ("figures/fig1.png", PNG_1PX)])
+    f = X.Files({"out": str(out)})
+    code, d = f.archive_list(str(out / "pkg.tar.gz"))
+    assert code == 200 and d["files"] == 2 and d["bytes"] == len(PNG_1PX) + 24 and d["more"] == 0
+    by = {e["name"]: e for e in d["entries"]}
+    assert by["paper.tex"]["kind"] == "text" and by["figures/fig1.png"]["kind"] == "image" and by["figures/fig1.png"]["size"] == len(PNG_1PX)
+    # zip lists the same way, folders flagged
+    import zipfile
+    with zipfile.ZipFile(out / "pkg.zip", "w") as z:
+        z.writestr("figures/", b""); z.writestr("figures/fig1.png", PNG_1PX); z.writestr("main.tex", b"x")
+    code, d = f.archive_list(str(out / "pkg.zip"))
+    assert code == 200 and d["files"] == 2 and any(e["dir"] for e in d["entries"])
+    # outside the roots: the same refusal as any served file
+    (tmp_path / "elsewhere.tar.gz").write_bytes((out / "pkg.tar.gz").read_bytes())
+    code, d = f.archive_list(str(tmp_path / "elsewhere.tar.gz"))
+    assert code == 404 and "reach" in d["error"]
+    # a file that is not an archive
+    (out / "n.md").write_text("hi")
+    assert f.archive_list(str(out / "n.md"))[0] == 400
+
+
+def test_archive_member_streams_png_and_tex_with_raw_headers(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    tex = b"\\section{Regularization}\nText.\n"
+    _tar_gz(out / "pkg.tar.gz", [("paper.tex", tex), ("figures/fig1.png", PNG_1PX), ("page.html", b"<script>1</script>"), ("d.svg", b"<svg/>")])
+    f = X.Files({"out": str(out)})
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "pkg.tar.gz"), "figures/fig1.png")
+    assert h.status == 200 and h.hdrs["Content-Type"] == "image/png" and h.wfile.getvalue() == PNG_1PX
+    assert h.hdrs["X-Content-Type-Options"] == "nosniff" and "Content-Security-Policy" not in h.hdrs
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "pkg.tar.gz"), "paper.tex")
+    assert h.status == 200 and h.wfile.getvalue() == tex
+    # a byte range out of a member, as audio and video seek
+    h = FakeHandler({"Range": "bytes=2-5"})
+    f.archive_member(h, str(out / "pkg.tar.gz"), "paper.tex")
+    assert h.status == 206 and h.wfile.getvalue() == tex[2:6] and h.hdrs["Content-Range"] == f"bytes 2-5/{len(tex)}"
+    # html and svg members never render live: the raw door's sandbox header
+    for n in ("page.html", "d.svg"):
+        h = FakeHandler({})
+        f.archive_member(h, str(out / "pkg.tar.gz"), n)
+        assert h.status == 200 and h.hdrs["Content-Security-Policy"].startswith("sandbox"), n
+    # the same from a zip
+    import zipfile
+    with zipfile.ZipFile(out / "pkg.zip", "w") as z:
+        z.writestr("figures/fig1.png", PNG_1PX)
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "pkg.zip"), "figures/fig1.png")
+    assert h.status == 200 and h.wfile.getvalue() == PNG_1PX
+
+
+def test_archive_member_refuses_dotdot_absolute_and_links(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    _tar_gz(out / "bad.tar.gz", [("../escape.txt", b"no"), ("ok.txt", b"ok")], links=[("link.txt", "/etc/passwd")])
+    f = X.Files({"out": str(out)})
+    for name in ("../escape.txt", "/etc/passwd", "a/../../b", "..\\x"):
+        h = FakeHandler({})
+        f.archive_member(h, str(out / "bad.tar.gz"), name)
+        assert h.status == 400 and b"never streamed" in h.wfile.getvalue(), name
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "bad.tar.gz"), "link.txt")
+    assert h.status == 400 and b"links and devices" in h.wfile.getvalue()
+    code, d = f.archive_list(str(out / "bad.tar.gz"))
+    by = {e["name"]: e for e in d["entries"]}
+    assert by["link.txt"]["kind"] == "link" and by["../escape.txt"].get("unsafe") and not by["ok.txt"].get("unsafe")
+    # a zip member that is a symlink (mode bits in external_attr)
+    import zipfile, stat
+    with zipfile.ZipFile(out / "l.zip", "w") as z:
+        zi = zipfile.ZipInfo("ln"); zi.external_attr = (stat.S_IFLNK | 0o777) << 16
+        z.writestr(zi, "/etc/passwd")
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "l.zip"), "ln")
+    assert h.status == 400 and b"links and devices" in h.wfile.getvalue()
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "bad.tar.gz"), "missing.txt")
+    assert h.status == 404
+
+
+def test_archive_member_size_cap(tmp_path, monkeypatch):
+    out = tmp_path / "out"; out.mkdir()
+    _tar_gz(out / "big.tar.gz", [("big.bin", b"\0" * 2048)])
+    monkeypatch.setattr(X, "ARCHIVE_MEMBER_MAX", 1024)
+    h = FakeHandler({})
+    X.Files({"out": str(out)}).archive_member(h, str(out / "big.tar.gz"), "big.bin")
+    assert h.status == 413 and b"too large" in h.wfile.getvalue()
+
+
+def test_a_corrupt_archive_says_so_in_words(tmp_path):
+    out = tmp_path / "out"; out.mkdir()
+    good = _tar_gz(tmp_path / "g.tar.gz", [("a.txt", b"x" * 5000)]).read_bytes()
+    (out / "cut.tar.gz").write_bytes(good[: len(good) // 2])
+    (out / "junk.zip").write_bytes(b"this is not a zip at all")
+    f = X.Files({"out": str(out)})
+    for n in ("cut.tar.gz", "junk.zip"):
+        code, d = f.archive_list(str(out / n))
+        assert code == 422 and "damaged" in d["error"], (n, d)
+    h = FakeHandler({})
+    f.archive_member(h, str(out / "junk.zip"), "a.txt")
+    assert h.status == 422 and b"damaged" in h.wfile.getvalue()
+
+
+def test_run_links_never_take_the_sentences_last_mark():
+    u = "https://console.hbar.brainfoundry.ai/cc/files/raw/home/hands/world/ops/systems/done.html"
+    for tail in (".", ".**", ".”", "’.", "!", "_"):
+        assert X.tidy_url(u + tail) == u, tail
+    assert X.tidy_url("https://en.wikipedia.org/wiki/Foo_(bar)") == "https://en.wikipedia.org/wiki/Foo_(bar)"
+    links = X.links_in(f"**Done:** the record: {u}. It is rebuilt; also **{u}.**", ())
+    assert [x["href"] for x in links] == [u]

@@ -329,9 +329,11 @@ function dispatchLine(b){var d=b.dispatch;if(!d||!d.state)return null;var line=e
     (r.files||[]).forEach(function(f){var fu=consoleFile(f.charAt(0)==='/'||!WORLD?f:WORLD+'/'+f);line.appendChild(el('a',{href:fu,text:f.split('/').pop(),title:f,onclick:openUrl(fu)}));});}
   return line;}
 function consoleFile(p){return location.origin+'/files?path='+encodeURIComponent(p);}
+/* a link never takes the sentence's last mark: . , ; : ! ? quotes (curly too) * _ ~ and a bracket it did not open (FILES-ARCHIVE-1, same rule as lib/pathlinks.js tidyUrl) */
+function tidyU(u){var s=String(u||''),P={')':'(',']':'[','}':'{','>':'<'};for(var i=0;i<40&&s;i++){var c=s.charAt(s.length-1);if(/[.,;:!?*_~'"\u2018\u2019\u201c\u201d\u00bb\u203a]/.test(c)){s=s.slice(0,-1);continue;}if(P[c]&&s.split(c).length>s.split(P[c]).length){s=s.slice(0,-1);continue;}break;}return s;}
 /* a question from a job renders with its links clickable; **bold** and `code` are kept as plain text */
 function renderQ(q){var box=el('div',{cls:'q'});var t=String(q||'').replace(/\*\*/g,'').replace(/`/g,'');var re=/https?:\/\/[^\s)\]>"'`]+/g,last=0,m;
-  while((m=re.exec(t))){box.appendChild(document.createTextNode(t.slice(last,m.index)));var u=m[0].replace(/[.,;:]+$/,'');box.appendChild(el('a',{href:u,text:u,target:'_blank',rel:'noopener'}));last=m.index+u.length;}
+  while((m=re.exec(t))){box.appendChild(document.createTextNode(t.slice(last,m.index)));var u=tidyU(m[0]);box.appendChild(el('a',{href:u,text:u,target:'_blank',rel:'noopener'}));last=m.index+u.length;}
   box.appendChild(document.createTextNode(t.slice(last)));return box;}
 function askBlock(b,i){var d=b.dispatch;if(!d||!d.result||['asks','answered','failed'].indexOf(d.state)<0)return null;var r=d.result;
   var box=el('div',{cls:'ask'});var k=(d.replies||[]).length;

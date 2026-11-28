@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks } from '../lib/pathlinks'
+import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
@@ -947,7 +947,7 @@ const Md = React.memo(function Md({ text }) {
   const components = useMemo(() => mdComponents(base), [base])
   return (
     <div className="cc-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkPathLinks, remarkMoney, remarkActions, remarkAgents]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkTidyLinks, remarkPathLinks, remarkMoney, remarkActions, remarkAgents]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
     </div>
   )
 })

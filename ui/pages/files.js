@@ -18,12 +18,45 @@ const isMdPath = (p) => /\.(md|markdown)$/i.test(p || '')
 // origin (no allow-same-origin), so a page saved by an app or a job can never read the console's owner key.
 const VIEW_SANDBOX = 'allow-scripts allow-popups allow-downloads'
 function raw(p) { return '/cc/files/raw' + p.split('/').map(encodeURIComponent).join('/') }
+// Archives (FILES-ARCHIVE-1 2026-11-28, hbar: "No preview for this type" on regularization-arxiv.tar.gz): the pane
+// lists what is inside; one member streams out of the archive through /cc/files/member, nothing is unpacked.
+function memberUrl(p, name) { return '/cc/files/member?path=' + encodeURIComponent(p) + '&name=' + encodeURIComponent(name) }
+// the archive's flat names as a folded tree: {dirs: {name: node}, files: [entry]}, sizes summed per folder
+function archiveTree(entries) {
+  const root = { dirs: {}, files: [], size: 0, count: 0 }
+  for (const e of entries || []) {
+    const parts = String(e.name || '').split('/').filter(Boolean)
+    if (!parts.length) continue
+    let node = root
+    const upto = e.dir ? parts.length : parts.length - 1
+    for (let i = 0; i < upto; i++) {
+      node.dirs[parts[i]] = node.dirs[parts[i]] || { dirs: {}, files: [], size: 0, count: 0 }
+      node = node.dirs[parts[i]]
+      if (!e.dir) { node.size += e.size || 0; node.count += 1 }
+    }
+    if (!e.dir) node.files.push({ ...e, leaf: parts[parts.length - 1] })
+  }
+  return root
+}
+
+// An image in a folder shows itself (1127-b34fb2, hbar 2026-11-27: "i don't see any of these PNG's"): a small
+// thumbnail, loaded lazily from the raw door, cropped to fill; until it loads (or if it cannot) the kind word stays.
+function Thumb({ path, kind, size = 40 }) {
+  const [bad, setBad] = useState(false)
+  if (kind !== 'image' || bad) return <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{kind}</span>
+  return <img src={raw(path)} alt="" loading="lazy" decoding="async" onError={() => setBad(true)}
+    style={{ width: `${size}px`, height: `${size}px`, objectFit: 'cover', borderRadius: '6px', backgroundColor: T.card, border: `1px solid ${T.line}`, flexShrink: 0, alignSelf: 'center', marginRight: '4px' }} />
+}
 
 export default function Files() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [sel, setSel] = useState(null)         // selected file info {path, kind, size}
   const [text, setText] = useState(null)
+  const [arc, setArc] = useState(null)          // the open archive's listing {files, bytes, entries} or {error}
+  const [member, setMember] = useState(null)    // the archive member open in the pane {name, kind, size}
+  const [unfold, setUnfold] = useState({})      // archive folders unfolded, by path
+  const deepMember = useRef(null)               // files?path=<archive>&member=<name> opens that member once listed
   // The md is the input, a visual is the output (2026-10-09): a note opens as its view, the source is one click away.
   const [mode, setMode] = useState('view')
   const [recent, setRecent] = useState([])
@@ -96,6 +129,7 @@ export default function Files() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search), q = sp.get('path')
     if (sp.get('full') === '1') setFull(true)
+    if (sp.get('member')) deepMember.current = sp.get('member')
     load(q || null)
     fetch('/cc/files/recent', { cache: 'no-store' }).then(r => r.json()).then(d => setRecent(d.recent || [])).catch(() => {})
   }, [])
@@ -105,7 +139,58 @@ export default function Files() {
   useEffect(() => {
     setText(null); setEditing(false); setSaveNote(null); setMode('view')
     if (sel && sel.kind === 'text' && sel.size < 400000) readText()
+    setArc(null); setUnfold({}); setMember(null)
+    if (sel && sel.kind === 'archive') {
+      fetch('/cc/files/archive?path=' + encodeURIComponent(sel.path), { cache: 'no-store' })
+        .then(r => r.json()).then(d => setArc(d)).catch(() => setArc({ error: 'the bridge did not answer' }))
+    }
   }, [sel && sel.path])
+  // a deep link (?member=) opens its member once the listing names its kind
+  useEffect(() => {
+    const want = deepMember.current
+    if (!want || !arc || !arc.entries) return
+    deepMember.current = null
+    const e = arc.entries.find(x => x.name === want)
+    if (e && !e.dir && e.kind !== 'link' && !e.unsafe) setMember({ name: e.name, kind: e.kind, size: e.size })
+  }, [arc])
+  const [mtext, setMtext] = useState(null)
+  useEffect(() => {
+    setMtext(null)
+    if (!deepMember.current) { try { const u = new URL(window.location.href); if (member && member.name) u.searchParams.set('member', member.name); else u.searchParams.delete('member'); window.history.replaceState(null, '', u.toString()) } catch {} }
+    if (member && sel && member.kind === 'text' && member.size < 400000) {
+      fetch(memberUrl(sel.path, member.name), { cache: 'no-store' }).then(r => (r.ok ? r.text() : r.json().then(d => '(' + (d.error || 'could not read') + ')'))).then(setMtext).catch(() => setMtext('(could not read)'))
+    }
+  }, [member && member.name, member && member.kind, sel && sel.path])
+  function openMember(e) {
+    if (e.kind === 'link' || e.unsafe) return
+    setMember({ name: e.name, kind: e.kind, size: e.size })
+  }
+  function folders(node, prefix, depth) {
+    const rows = []
+    const pad = { paddingLeft: `${16 + depth * 16}px` }
+    for (const d of Object.keys(node.dirs).sort((a, b) => a.localeCompare(b))) {
+      const key = prefix + d + '/', open = !!unfold[key], n = node.dirs[d]
+      rows.push(
+        <div key={'d:' + key} onClick={() => setUnfold(u => ({ ...u, [key]: !open }))} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '7px 16px', ...pad, cursor: 'pointer', borderBottom: `1px solid ${T.line}` }}>
+          <span style={{ ...mono, fontSize: '11px', color: T.gold, width: '12px', flexShrink: 0 }}>{open ? '\u25be' : '\u25b8'}</span>
+          <span style={{ fontSize: '14px', color: T.ink, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{d}/</span>
+          <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{n.count} {n.count === 1 ? 'file' : 'files'} · {fmtSize(n.size)}</span>
+        </div>)
+      if (open) rows.push(...folders(n, key, depth + 1))
+    }
+    for (const e of node.files.slice().sort((a, b) => a.leaf.localeCompare(b.leaf))) {
+      const off = e.kind === 'link' || e.unsafe
+      rows.push(
+        <div key={'f:' + e.name} onClick={() => openMember(e)} title={off ? 'a link or an unsafe name; never opened from here' : e.name}
+          style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '7px 16px', ...pad, cursor: off ? 'default' : 'pointer', borderBottom: `1px solid ${T.line}`, opacity: off ? 0.5 : 1 }}>
+          <span style={{ width: '12px', flexShrink: 0 }} />
+          <span style={{ fontSize: '14px', color: T.ink, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{e.leaf}</span>
+          <span style={{ ...mono, fontSize: '10px', color: T.faint, flexShrink: 0 }}>{off ? 'link' : e.kind === 'other' ? '' : e.kind}</span>
+          <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0, minWidth: '56px', textAlign: 'right' }}>{fmtSize(e.size || 0)}</span>
+        </div>)
+    }
+    return rows
+  }
   const editable = (p) => /\/(world|out|in)\//.test('/' + p + '/')
   const dirty = editing && draft !== text
   function startEdit() { setDraft(text || ''); setEditing(true); setMode('source'); setSaveNote(null) }
@@ -189,7 +274,7 @@ export default function Files() {
                 {recent.map(e => (
                   <div key={e.path} onClick={() => { setSel({ path: e.path, kind: e.kind, size: e.size, mtime: e.mtime, view: e.view }); load(e.dir) }}
                     style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', borderBottom: `1px solid ${T.line}` }}>
-                    <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.kind}</span>
+                    <Thumb path={e.path} kind={e.kind} />
                     <span style={{ fontSize: '14px', color: T.ink, flex: 1, wordBreak: 'break-all' }}>{e.name}{e.view && <span style={{ ...mono, fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.gold, border: `1px solid ${T.gold}`, borderRadius: '8px', padding: '0 6px', marginLeft: '8px' }}>view</span>}<span style={{ ...mono, fontSize: '10px', color: T.faint, marginLeft: '8px' }}>{e.dir.split('/').slice(-2).join('/')}</span></span>
                     <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
                   </div>
@@ -205,7 +290,7 @@ export default function Files() {
               return (
                 <div key={e.name} onClick={() => (e.dir ? load(full) : setSel({ path: full, kind: e.kind, size: e.size, mtime: e.mtime, view: e.view }))}
                   style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', alignItems: 'baseline', padding: '6px 16px', cursor: 'pointer', backgroundColor: active ? T.card : 'transparent', borderBottom: `1px solid ${T.line}` }}>
-                  <span style={{ ...mono, fontSize: '10px', color: T.faint, width: '44px', flexShrink: 0 }}>{e.dir ? 'dir' : e.kind}</span>
+                  <Thumb path={full} kind={e.dir ? 'dir' : e.kind} />
                   <span style={{ fontSize: '14px', color: T.ink, flex: '1 1 160px', minWidth: 0, overflowWrap: 'anywhere' }}>{e.name}{e.dir ? '/' : ''}{e.view && <span title="a hand-made view sits beside this note; it opens first" style={{ ...mono, fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: T.gold, border: `1px solid ${T.gold}`, borderRadius: '8px', padding: '0 6px', marginLeft: '8px' }}>view</span>}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{e.dir ? '' : fmtSize(e.size)}</span>
                   <span style={{ ...mono, fontSize: '11px', color: T.faint, flexShrink: 0 }}>{fmtWhen(e.mtime)}</span>
@@ -251,6 +336,31 @@ export default function Files() {
                     style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, flex: 1, minHeight: '60vh', width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: '10px', color: T.ink, backgroundColor: T.card, border: `1px solid ${dirty ? T.gold : T.line}`, borderRadius: '8px', outline: 'none' }} />
                 : <pre onDoubleClick={() => { if (editable(sel.path)) startEdit() }} style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{text}</pre>)}
               {sel.kind === 'other' && <p style={{ color: T.dim, fontSize: '13px' }}>No preview for this type. Download it, or ask the brain what it is.</p>}
+              {sel.kind === 'archive' && !member && (
+                !arc ? <p style={{ color: T.dim, fontSize: '13px' }}>reading the archive…</p>
+                : arc.error ? <p style={{ color: 'var(--danger, #c0533a)', fontSize: '13px' }}>{arc.error}</p>
+                : <div style={{ margin: '-16px -16px 0' }}>
+                    <p style={{ ...mono, fontSize: '12px', color: T.dim, margin: 0, padding: '10px 16px', borderBottom: `1px solid ${T.line}` }}>{arc.files} {arc.files === 1 ? 'file' : 'files'}, {fmtSize(arc.bytes)}{arc.more ? ` · first ${arc.entries.length} shown` : ''}</p>
+                    {folders(archiveTree(arc.entries), '', 0)}
+                  </div>
+              )}
+              {sel.kind === 'archive' && member && (<>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <a onClick={() => setMember(null)} style={{ ...mono, fontSize: '12px', color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>{'\u2190'} back to the list</a>
+                  <span style={{ fontSize: '14px', color: T.ink, overflowWrap: 'anywhere', flex: '1 1 160px', minWidth: 0 }}>{member.name}</span>
+                  <span style={{ ...mono, fontSize: '11px', color: T.faint }}>{fmtSize(member.size || 0)}</span>
+                  <a href={memberUrl(sel.path, member.name)} download={member.name.split('/').pop()} style={{ ...mono, fontSize: '12px', color: T.dim, textDecoration: 'underline' }}>download this</a>
+                </div>
+                {member.kind === 'audio' && <audio controls preload="metadata" src={memberUrl(sel.path, member.name)} style={{ width: '100%' }} />}
+                {member.kind === 'video' && <video controls preload="metadata" src={memberUrl(sel.path, member.name)} style={{ width: '100%', maxHeight: '70vh', backgroundColor: '#000' }} />}
+                {member.kind === 'image' && <img src={memberUrl(sel.path, member.name)} alt={member.name} style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', alignSelf: 'flex-start' }} />}
+                {(member.kind === 'pdf' || member.kind === 'html') && <iframe src={memberUrl(sel.path, member.name)} title={member.name} sandbox={member.kind === 'html' ? VIEW_SANDBOX : undefined} style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: member.kind === 'html' ? '#fff' : 'transparent' }} />}
+                {member.kind === 'text' && (member.size >= 400000 ? <p style={{ color: T.dim, fontSize: '13px' }}>Too large to show here; download it.</p>
+                  : mtext === null ? <p style={{ color: T.dim, fontSize: '13px' }}>reading…</p>
+                  : isMdPath(member.name) ? <MdView key={member.name} text={mtext} path={member.name} open={() => {}} />
+                  : <pre style={{ ...mono, fontSize: '12.5px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: T.ink }}>{mtext}</pre>)}
+                {(member.kind === 'other' || member.kind === 'office' || member.kind === 'archive') && <p style={{ color: T.dim, fontSize: '13px' }}>No preview for this type inside an archive. Download it with the link above.</p>}
+              </>)}
               {sel.kind === 'office' && (<>
                 {(() => { const pdf = sel.path.replace(/\.[^./]+$/, '.pdf'); return (data && (data.entries || []).some(e => e.name && (sel.path.slice(0, sel.path.lastIndexOf('/') + 1) + e.name) === pdf)) ? <p style={{ ...mono, fontSize: '12px', margin: '0 0 8px 0' }}><a onClick={() => setSel({ ...sel, path: pdf, kind: 'pdf' })} style={{ color: T.gold, textDecoration: 'underline', cursor: 'pointer' }}>open the PDF beside it</a> <span style={{ color: T.faint }}>(the exact layout)</span></p> : null })()}
                 <iframe src={'/cc/files/office?path=' + encodeURIComponent(sel.path)} title={sel.path} sandbox="" style={{ flex: 1, minHeight: '70vh', border: 0, backgroundColor: '#e9e6e1', borderRadius: '6px' }} />

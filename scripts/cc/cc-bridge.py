@@ -6823,6 +6823,14 @@ class Handler(BaseHTTPRequestHandler):
             FILES.serve(self, self._query().get("path", ""))
         elif route == "/files/office":
             FILES.office(self, self._query().get("path", ""))
+        elif route == "/files/archive":
+            # FILES-ARCHIVE-1 (2026-11-28): what is inside a tar/zip, read-only, nothing extracted
+            code, body = FILES.archive_list(self._query().get("path", ""))
+            self._send(code, body)
+        elif route == "/files/member":
+            # one member of an archive streamed with the raw door's headers (cc_extras.Files.archive_member)
+            qy = self._query()
+            FILES.archive_member(self, qy.get("path", ""), qy.get("name", ""))
         elif route.startswith("/files/raw/"):
             # Path form, so a served html page finds its sibling images and scripts by relative name.
             from urllib.parse import unquote

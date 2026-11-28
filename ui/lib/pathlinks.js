@@ -112,4 +112,50 @@ function splitAttached(text) {
   return files.length ? { text: s.slice(0, m.index).replace(/\s+$/, ''), files } : { text: s, files: [] }
 }
 
-module.exports = { looksLikeFile, splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, tidy }
+// A web address that ends a sentence never takes the sentence's last mark (FILES-ARCHIVE-1 2026-11-28, hbar 2026-11-27:
+// ".../done.html." opened nothing). Trailing full stops, commas, colons, quotes (straight and curly), * _ ~ and a
+// closing bracket the address did not open come off; "(see a.org/x_(y))" keeps its own bracket.
+const URL_TAIL = /[.,;:!?*_~'"\u2018\u2019\u201c\u201d\u00bb\u203a]$/
+const PAIRS = { ')': '(', ']': '[', '}': '{', '>': '<' }
+function tidyUrl(u) {
+  let s = String(u == null ? '' : u)
+  for (let i = 0; i < 40 && s; i++) {
+    const c = s[s.length - 1]
+    if (URL_TAIL.test(c)) { s = s.slice(0, -1); continue }
+    if (PAIRS[c]) {
+      const open = s.split(PAIRS[c]).length - 1, close = s.split(c).length - 1
+      if (close > open) { s = s.slice(0, -1); continue }
+    }
+    break
+  }
+  return s
+}
+
+// remark plugin: a link whose text is its own address (GFM autolink literal, <...>) is trimmed with tidyUrl,
+// and what came off goes back into the sentence as text. A written [label](url) is left as written.
+function remarkTidyLinks() {
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.children)) return
+    const next = []
+    for (const ch of node.children) {
+      if (ch.type === 'link' && /^(?:https?:\/\/|mailto:|www\.)/i.test(ch.url || '') && ch.children && ch.children.length === 1 && ch.children[0].type === 'text') {
+        const label = ch.children[0].value
+        const bare = (ch.url || '').replace(/^mailto:/i, '')
+        if (label === ch.url || label === bare || 'http://' + label === ch.url || 'https://' + label === ch.url) {
+          const url = tidyUrl(ch.url), cut = ch.url.length - url.length
+          if (cut > 0 && label.length > cut && label.endsWith(ch.url.slice(url.length))) {
+            next.push({ ...ch, url, children: [{ type: 'text', value: label.slice(0, label.length - cut) }] })
+            next.push({ type: 'text', value: ch.url.slice(url.length) })
+            continue
+          }
+        }
+        next.push(ch); continue
+      }
+      walk(ch); next.push(ch)
+    }
+    node.children = next
+  }
+  return (tree) => { walk(tree) }
+}
+
+module.exports = { looksLikeFile, splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks, tidy, tidyUrl }
