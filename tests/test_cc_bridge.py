@@ -1914,3 +1914,32 @@ def test_persona_falls_back_to_api_when_checkout_has_none(monkeypatch, tmp_path)
     m.PERSONA_FILE.parent.mkdir(parents=True, exist_ok=True)
     m.PERSONA_FILE.write_text("Own file wins.", encoding="utf-8")
     assert m._persona() == "Own file wins."
+
+
+def test_links_in_answers_never_take_the_sentences_last_mark():
+    # FILES-ARCHIVE-1 (2026-11-28), hbar 2026-11-27: ".../done.html." opened nothing
+    import json
+    out = _node(r"""
+const L = require('./pathlinks')
+const W = require('./wall')
+const u = 'https://console.hbar.brainfoundry.ai/cc/files/raw/home/hands/world/ops/systems/done.html'
+const tails = ['.', ',', ')', '".', '.”', '’', '.**', '!', ':', ']', '.)', '>']
+const link = (url) => ({ type: 'link', url, children: [{ type: 'text', value: url }] })
+const tree = { type: 'root', children: [{ type: 'paragraph', children: [{ type: 'text', value: 'see ' }, link(u + '.”'),
+  { type: 'text', value: ' then' }, { type: 'link', url: 'https://a.org/x.', children: [{ type: 'text', value: 'a label' }] }] }] }
+L.remarkTidyLinks()(tree)
+const p = tree.children[0].children
+console.log(JSON.stringify({
+  tidy: tails.map(t => L.tidyUrl(u + t)),
+  keep: [L.tidyUrl('https://en.wikipedia.org/wiki/Foo_(bar)'), L.tidyUrl('https://a.org/x?y=1'), L.tidyUrl('https://a.org/')],
+  tree: p.map(n => n.type === 'link' ? ['link', n.url, n.children[0].value] : ['text', n.value]),
+  today: W.todayLines({ today: [{ text: 'Press Update: ' + u + '."', due: '' }] }, 'UTC', 0)[0].href,
+}))""")
+    d = json.loads(out)
+    u = "https://console.hbar.brainfoundry.ai/cc/files/raw/home/hands/world/ops/systems/done.html"
+    assert d["tidy"] == [u] * 12
+    assert d["keep"] == ["https://en.wikipedia.org/wiki/Foo_(bar)", "https://a.org/x?y=1", "https://a.org/"]
+    # the trimmed mark goes back into the sentence; a written [label](url) is left as written
+    assert d["tree"] == [["text", "see "], ["link", u, u], ["text", ".”"], ["text", " then"], ["link", "https://a.org/x.", "a label"]]
+    assert d["today"] == u
+

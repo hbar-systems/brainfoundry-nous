@@ -12,6 +12,7 @@
 //   sendClip(...)         a recording: transcribed (POST /cc/transcribe) and sent as text; when the box has no speech
 //                         service it is kept as a memo for that system (POST /cc/systems/voice), as /systems does.
 //   Recorder              the /systems recorder (MediaRecorder), with the browser parts handed in.
+const { tidyUrl } = require('./pathlinks')   // a link never takes the sentence's last mark (FILES-ARCHIVE-1)
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 
@@ -614,7 +615,7 @@ function todayLines(waits, tz, now) {
     // a task that carries its link ("Press Update: https://...") reads as its words; the link is the press
     const raw = squash(x.text)
     const m = raw.match(/https:\/\/[^\s]+/)
-    const href = m ? m[0].replace(/[).,;]+$/, '') : null
+    const href = m ? tidyUrl(m[0]) : null
     const text = (m ? raw.replace(m[0], ' ') : raw).replace(/\s+/g, ' ').replace(/[\s:,-]+$/, '').trim() || raw
     out.push({ time: clockOf(due, tz), text: text.slice(0, 160), href, late: !isNaN(when) && when < at, any: !due })
     if (out.length >= 3) break

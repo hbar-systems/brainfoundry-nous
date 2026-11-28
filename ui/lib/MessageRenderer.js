@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
+import { remarkTidyLinks } from './pathlinks'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import DiagramBlock from './DiagramBlock'
@@ -143,7 +144,7 @@ export default function MessageRenderer({ content }) {
   return (
     <div className="bf-md">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
+        remarkPlugins={[remarkGfm, remarkTidyLinks, [remarkMath, { singleDollarTextMath: true }]]}
         rehypePlugins={[rehypeKatex, rehypeHighlight]}
         components={components}
       >

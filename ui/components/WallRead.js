@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { remarkTidyLinks } from '../lib/pathlinks'
 import LineSlot, { LINE_SLOT_CSS } from './LineSlot'
 import { pointOf, pointsIn, lineText, anchorSlot, aboutBlock, HOLD_MS } from '../lib/linetalk'
 import { lastAnswer, transcribe } from '../lib/wall'
@@ -167,7 +168,7 @@ export default function WallRead({ sid, thread, title, now, onClose, onSend, onW
         {now ? <p className="wr-now">now: {now}</p> : null}
         {msg === null ? <p className="wr-q">reading the thread</p> : msg.error ? <p className="wr-q">{msg.error}</p> : (
           <div className="wr-b" ref={body} onMouseDown={down} onMouseMove={move} onMouseUp={up}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{msg.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkTidyLinks]} skipHtml>{msg.text}</ReactMarkdown>
           </div>
         )}
         <p className="wr-f">{note || (filled ? `${filled} to send · Enter` : 'press a line to answer it')}</p>
