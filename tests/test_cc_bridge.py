@@ -749,7 +749,7 @@ def test_console_keeps_selection_and_blocks():
     """The page cannot be run here; guard the two causes by source. Markdown components must not be
     created inline per render (it rebuilt the DOM under a selection), and every text block is a bubble."""
     src = (ROOT / "ui" / "pages" / "cc.js").read_text()
-    assert "const Md = React.memo(" in src and "useMemo(() => mdComponents(base), [base])" in src
+    assert "const Md = React.memo(" in src and "useMemo(() => mdComponents(marks), [marks])" in src and "useMemo(() => folderMarks(text), [text])" in src
     assert "components={{" not in src
     assert "ev === 'block'" in src and "ev === 'note'" in src and "x.run === runId" in src
 
@@ -872,6 +872,75 @@ console.log(JSON.stringify({
     assert d["md"] == ["/home/hands/world/ops/a b.md", "/home/x.MD", None, None, None]
     assert d["att"] == {"text": "Look.", "files": ["/home/hands/in/d/Screenshot 10.12.34 AM.png", "/home/hands/in/d/b.md"]}
     assert d["noatt"]["files"] == []
+
+
+def test_ui_bare_names_take_the_nearest_folder_before_them():
+    # LINK-FIX-1 (2026-11-28, hbar: "not a path the reasoner can reach ... FOR ALL THOSE LINKS"). The answer
+    # named the package folder, then the files by bare name, then the rehearsal page's own path; every bare
+    # name was joined to the LAST folder (rehearse/), so every link missed. Underscores were never the cause.
+    import json
+    out = _node(r"""
+const L = require('./pathlinks')
+const t = [
+  '**Three files** in `/home/hands/out/2026-11-28/martin-package/`:',
+  '- **Paper:** `Chernyak-Mohammad-Plesch_regularization_2026-11-28.pdf`, built from HEAD 5ad2303.',
+  '- **arXiv package:** `regularization-arxiv.tar.gz`. The Overleaf copy is `regularization-overleaf.zip`.',
+  '- **Presentation:** `presentation/defense-deck.pdf` and `.pptx`.',
+  'Email draft at `/home/hands/world/ops/cards/martin-package.md`.',
+  '**Rehearsal page:** `/home/hands/out/2026-11-28/rehearse/index.html`',
+  'Its shots: `check.png`.',
+].join('\n')
+const marks = L.folderMarks(t)
+const at = (name) => L.codeTarget(name, L.baseAt(marks, t.indexOf('`' + name + '`')))
+const names = ['Chernyak-Mohammad-Plesch_regularization_2026-11-28.pdf', 'regularization-arxiv.tar.gz', 'regularization-overleaf.zip',
+               'presentation/defense-deck.pdf', '.pptx', 'check.png', '/home/hands/out/2026-11-28/rehearse/index.html']
+const under = ['a_b_c.pdf', 'x_y.tar.gz', '/home/hands/out/d/a_b.pdf']
+const prose = 'See a_b_c.pdf, x_y.tar.gz. Then /home/hands/out/d/a_b.pdf) and /home/hands/out/d/a_b.pdf; and /home/hands/out/d/a_b.pdf, then _word_.'
+console.log(JSON.stringify({
+  targets: names.map(at),
+  code: [',', '.', ')', ';'].map(p => {
+    const md = 'Files in `/home/hands/out/d/`: (' + under.map(n => '`' + n + '`' + p).join(' ') + ' done'
+    const m2 = L.folderMarks(md), spans = []
+    md.replace(/`([^`]+)`/g, (all, v, off) => { spans.push(L.codeTarget(v, L.baseAt(m2, off))) })
+    return spans.slice(1)
+  }),
+  prose: L.splitPaths(prose).filter(p => p.t === 'path').map(p => p.v),
+  after: L.baseAt(L.folderMarks('`a_b.pdf` is in `/home/hands/out/d/`'), 0),
+  none: L.baseAt(L.folderMarks('no folders here'), 3),
+}))""")
+    d = json.loads(out)
+    pkg = "/home/hands/out/2026-11-28/martin-package"
+    assert d["targets"] == [f"{pkg}/Chernyak-Mohammad-Plesch_regularization_2026-11-28.pdf", f"{pkg}/regularization-arxiv.tar.gz",
+                            f"{pkg}/regularization-overleaf.zip", "presentation/defense-deck.pdf", None,
+                            "/home/hands/out/2026-11-28/rehearse/check.png", "/home/hands/out/2026-11-28/rehearse/index.html"]
+    # in backticks, followed by , . ) ; : every name with underscores links whole, bare names with their folder
+    assert d["code"] == [["/home/hands/out/d/a_b_c.pdf", "/home/hands/out/d/x_y.tar.gz", "/home/hands/out/d/a_b.pdf"]] * 4
+    # out of backticks: full paths with underscores link whole, punctuation left outside
+    assert d["prose"] == ["/home/hands/out/d/a_b.pdf"] * 3
+    assert d["after"] == "/home/hands/out/d" and d["none"] is None
+
+
+def test_locate_recovers_a_wrong_folder_and_a_cut_name(tmp_path):
+    # LINK-FIX-1: an absolute path whose folder the page guessed wrong finds the file by name (with as
+    # much of its folder as matches); a fragment that ends exactly one file name finds that file.
+    home, f = _roots(tmp_path)
+    pkg = home / "out" / "2026-11-28" / "martin-package"
+    (pkg / "presentation").mkdir(parents=True)
+    (home / "out" / "2026-11-28" / "rehearse").mkdir()
+    paper = pkg / "Chernyak-Mohammad-Plesch_regularization_2026-11-28.pdf"; paper.write_bytes(b"%PDF")
+    (pkg / "presentation" / "defense-deck.pdf").write_bytes(b"%PDF")
+    reh = home / "out" / "2026-11-28" / "rehearse"
+    assert f.listing(str(reh / paper.name))["path"] == str(paper)
+    assert f.listing(str(reh / "presentation" / "defense-deck.pdf"))["path"] == str(pkg / "presentation" / "defense-deck.pdf")
+    assert f.listing("ularization_2026-11-28.pdf,")["path"] == str(paper)
+    # two files end with the fragment: no guess
+    (home / "world" / "ops" / "other_regularization_2026-11-28.pdf").write_bytes(b"%PDF")
+    assert f.listing("ularization_2026-11-28.pdf").get("error")
+    # too short or no suffix: no guess
+    assert f.listing("x.pdf").get("error") and f.listing("ation_2026-11-28").get("error")
+    # still never outside the roots
+    (tmp_path / "outside_regularization_2026-11-28.txt").write_text("no")
+    assert f.listing("side_regularization_2026-11-28.txt").get("error")
 
 
 def test_ui_choices_and_money_chips():
