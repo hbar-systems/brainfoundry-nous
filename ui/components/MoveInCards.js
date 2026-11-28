@@ -108,6 +108,10 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
   const [sending, setSending] = useState(null)  // null | 'busy' | { error }
   const [bigNow, setBigNow] = useState(false)    // IMPORT-PACE-1: books now or overnight (the default)
   const [again, setAgain] = useState(null)       // null | 'busy' | 'asked' | { error }
+  // STEWARD-1 (2026-11-27): the setup helper's consent, on the same press as the line (docs/STEWARD.md).
+  // Shown only while no setup period is open; "Without the helper" copies the line alone.
+  const [setup, setSetup] = useState(null)       // null | { text, sha, lang } from GET /setup/consent
+  const [helpOn, setHelpOn] = useState(true)
   const base = typeof window === 'undefined' ? '' : `${window.location.origin}${API}`
   useEffect(() => { if (typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent || '')) setOs('windows') }, [])
   const status = async () => {
@@ -116,6 +120,17 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
     return j
   }
   useEffect(() => { status() }, [])
+  useEffect(() => {
+    const get = (u) => fetch(u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null)
+    Promise.all([get(`${API}/setup/status`), get(`${API}/setup/consent?lang=${encodeURIComponent(lang || 'en')}`)])
+      .then(([s, c]) => setSetup(s && !s.active && c && c.text ? c : null))
+  }, [lang])
+  const consent = async () => {
+    if (!(setup && helpOn)) return
+    await fetch(`${API}/setup/key`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ consent: true, lang: setup.lang, text_sha: setup.sha, by: 'member' }) }).catch(() => null)
+    setSetup(null)
+  }
   const run = st && st.run
   const survey = st && st.survey
   const step = surveyStep(run, survey, !!(mint && mint.token))
@@ -241,7 +256,9 @@ function WholeComputer({ lang, W, P, busy, onFiles, docBusy, docLine, remember, 
         )}
         {step === 'line' && mint && mint.token && (
           <>
-            <button type="button" className="mi-btn mi-primary" onClick={async () => { try { await navigator.clipboard.writeText(cmd); setCopied(true) } catch { setCopied(false) } }}>{copied ? P.compCopied : P.compCopy}</button>
+            {setup && helpOn && <p className="mi-note">{setup.text}</p>}
+            <button type="button" className="mi-btn mi-primary" onClick={async () => { try { await navigator.clipboard.writeText(cmd); setCopied(true) } catch { setCopied(false) } consent() }}>{copied ? P.compCopied : (setup && helpOn ? P.compCopyHelp : P.compCopy)}</button>
+            {setup && <button type="button" className="mi-btn" aria-pressed={!helpOn} onClick={() => setHelpOn(!helpOn)}>{helpOn ? P.compNoHelp : P.compWithHelp}</button>}
             <button type="button" className="mi-btn" onClick={start}>{P.compNew}</button>
           </>
         )}
