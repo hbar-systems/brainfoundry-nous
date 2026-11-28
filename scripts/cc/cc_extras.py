@@ -316,6 +316,14 @@ class Files:
                     q = self._ok(q) if q is not None else None
                     if q is not None:
                         return q
+            # the page joined a bare name to the wrong folder of the message (LINK-FIX-1, 2026-11-28:
+            # every file of an answer pointed into the last folder it named): the file by its own
+            # name, with as much of its folder as still matches, anywhere in the roots
+            if len(parts) > 1 and Path(c).suffix:
+                for k in dict.fromkeys(min(n, len(parts) - 1) for n in (3, 2, 1)):
+                    q = self._search("/".join(parts[-k:]))
+                    if q is not None:
+                        return q
             return None
         order = [k for k in ("world", "work", "out", "in", "brain") if k in self.roots]
         for label in order:
@@ -346,7 +354,32 @@ class Files:
             q = self._search("/".join(tail))
             if q is not None:
                 return q
+        # a fragment of a name (a link or a selection cut a name short: "ularization_2026-11-28.pdf"):
+        # the one file whose name ends with it; two or more, or none, is no answer
+        if len(parts) == 1:
+            return self._suffix_search(parts[0])
         return None
+
+    def _suffix_search(self, frag: str) -> Path | None:
+        want = (frag or "").lower()
+        if len(want) < 8 or "." not in want or "/" in want:
+            return None
+        deadline = time.monotonic() + self.SEARCH_SECONDS
+        seen, hits = 0, []
+        for root in self.roots.values():
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS]
+                seen += len(filenames) + len(dirnames)
+                for fn in filenames:
+                    if fn.lower().endswith(want) and fn.lower() != want:
+                        hits.append(Path(dirpath) / fn)
+                if len(hits) > 1 or seen > self.SEARCH_ENTRIES or time.monotonic() > deadline:
+                    break
+            if len(hits) > 1 or seen > self.SEARCH_ENTRIES or time.monotonic() > deadline:
+                break
+        if len(hits) != 1 or seen > self.SEARCH_ENTRIES or time.monotonic() > deadline:
+            return None
+        return self._ok(hits[0])
 
     def listing(self, raw: str | None) -> dict:
         if not raw:

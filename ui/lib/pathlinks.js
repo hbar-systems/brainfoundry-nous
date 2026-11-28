@@ -158,4 +158,46 @@ function remarkTidyLinks() {
   return (tree) => { walk(tree) }
 }
 
-module.exports = { looksLikeFile, splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks, tidy, tidyUrl }
+
+// The folder a bare file name in an answer belongs to (LINK-FIX-1, 2026-11-28). Before, the LAST absolute
+// folder anywhere in the message was the base for every bare name in it, so an answer that listed
+// "Three files in `/home/hands/out/d/pkg/`: `a_b.pdf`, `c.tar.gz`" and later named
+// `/home/hands/out/d/rehearse/index.html` linked a_b.pdf to .../rehearse/a_b.pdf, and every one of those
+// links said "not a path the reasoner can reach". Now a name takes the nearest folder named BEFORE it
+// (a folder, or the folder of a full file path); with none before it, the first one after it, a folder
+// written as a folder ("/a/b/") first.
+const FOLDER_RE = /\/(?:home|opt|srv|var|tmp|Users)\/[^\s`'"()<>|,;]*\//g
+function folderMarks(text) {
+  const s = String(text == null ? '' : text)
+  const out = []
+  const re = new RegExp(FOLDER_RE.source, 'g')
+  let m
+  while ((m = re.exec(s))) {
+    const end = m.index + m[0].length
+    // explicit: the path stops at this slash (`/a/b/`, "/a/b/ and"); otherwise it is a file's folder
+    const explicit = end >= s.length || !/[^\s`'"()<>|,;]/.test(s[end])
+    out.push({ start: m.index, end, dir: m[0].replace(/\/+$/, ''), explicit })
+  }
+  return out
+}
+function baseAt(marks, offset) {
+  if (!marks || !marks.length) return null
+  if (typeof offset !== 'number' || offset < 0) return marks[marks.length - 1].dir
+  const before = marks.filter(m => m.end <= offset)
+  if (before.length) return before[before.length - 1].dir
+  const after = marks.filter(m => m.start >= offset)
+  const exa = after.filter(m => m.explicit)
+  return (exa.length ? exa[0] : after[0] || marks[marks.length - 1]).dir
+}
+
+// The file an inline-code span names, or null: an absolute path as written (trailing punctuation off), a
+// bare name joined to its folder, a relative path (ops/x.md) as written for the bridge to resolve.
+function codeTarget(s, base) {
+  const t = String(s || '').trim()
+  if (!t || t.length >= 300) return null
+  if (/^\/(home|opt|srv|var|tmp)\/[^\n]+$/.test(t)) return t.replace(/[.,:;)]+$/, '')
+  if (/^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(t) && !t.includes('..')) return base && !t.includes('/') ? `${base}/${t}` : t
+  return null
+}
+
+module.exports = { folderMarks, baseAt, codeTarget, looksLikeFile, splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks, tidy, tidyUrl }

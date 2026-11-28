@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks } from '../lib/pathlinks'
+import { splitPaths, isImagePath, isMdPath, rawUrl, hrefToPath, rawHrefToMdPath, splitAttached, remarkPathLinks, remarkTidyLinks, folderMarks, baseAt, codeTarget } from '../lib/pathlinks'
 import { ladder, locate, positionOf } from '../lib/spanpick'
 import { localPlan, capture, stamp, urgentLines, surfaceOn, homeButtons } from '../lib/layout'
 import { words, stepLabel, stepSub } from '../lib/consoleText'
@@ -787,9 +787,12 @@ function ChipThumb({ file }) {
 // browser moved the ends up to the parent, which selects the paragraph or several blocks above.
 // Now the components are built once per `base` (useMemo) and Md is memoised on its text, so a
 // message's DOM is reused in place and a dragged selection stays exactly as dragged.
-function mdComponents(base) {
+function mdComponents(marks) {
+  // the folder a bare name belongs to: the nearest one named before it in the message (LINK-FIX-1)
+  const baseOf = (node) => baseAt(marks, node && node.position && node.position.start ? node.position.start.offset : undefined)
   return {
     a: ({ node, ...props }) => {
+      const base = baseOf(node)
       // a path on the box (found in the text by remarkPathLinks, or written as a markdown link to a file)
       // opens in the Files pane; a web address opens in a new tab
       const cc = props['data-ccpath']
@@ -825,14 +828,11 @@ function mdComponents(base) {
     code: ({ node, ...props }) => {
       // An absolute path on the box opens the Files pane at that file or folder.
       const s = typeof props.children === 'string' ? props.children : (Array.isArray(props.children) && typeof props.children[0] === 'string' ? props.children[0] : null)
-      const isAbs = s && /^\/(home|opt|srv|var|tmp)\/[^\n]+$/.test(s.trim()) && s.length < 300
-      // a bare name or a relative path (ops/x.md) with a file suffix: the folder last named in the
-      // message if any, else the world (the bridge falls back to the world's root when the guess misses)
-      const isFile = s && /^[\w][\w.\/ -]{0,200}\.[A-Za-z0-9]{1,5}$/.test(s.trim()) && !s.includes('..')
+      // a bare name or a relative path (ops/x.md) with a file suffix: the nearest folder named before it in
+      // the message if any, else the world (the bridge searches by name when the guess misses)
       if (s && looksLikeSha(s.trim())) return <CommitLink sha={s.trim()} />
-      if (isAbs || isFile) {
-        const rel = s.trim()
-        const target = isAbs ? rel.replace(/[.,:;)]+$/, '') : (base && !rel.includes('/') ? `${base}/${rel}` : rel)
+      const target = s ? codeTarget(s, baseOf(node)) : null
+      if (target) {
         return <PathLink path={target} copy={s.trim()} style={{ ...mono, fontSize: '0.88em', backgroundColor: C.codeBg, padding: '1px 5px', borderRadius: '4px' }}>{s}</PathLink>
       }
       return <InlineCode {...props} />
@@ -940,11 +940,10 @@ function AgentPopup() {
 const Md = React.memo(function Md({ text }) {
   // The reasoner answers in markdown. Render it, but keep it plain: no raw HTML,
   // links open in a new tab, code stays monospace.
-  // The last absolute folder named in the message is the base for bare filenames in it,
-  // so "index.html" next to "/home/cc/out/.../" opens as that file (2026-09-22).
-  const dirs = (text || '').match(/\/(?:home|opt|srv|var|tmp)\/[^\s`'")]+\//g) || []
-  const base = dirs.length ? dirs[dirs.length - 1].replace(/\/$/, '') : null
-  const components = useMemo(() => mdComponents(base), [base])
+  // A bare filename takes the nearest absolute folder named before it in the message, so "index.html"
+  // after "/home/cc/out/.../" opens as that file (2026-09-22; nearest, not last: LINK-FIX-1 2026-11-28).
+  const marks = useMemo(() => folderMarks(text), [text])
+  const components = useMemo(() => mdComponents(marks), [marks])
   return (
     <div className="cc-md">
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkTidyLinks, remarkPathLinks, remarkMoney, remarkActions, remarkAgents]} skipHtml urlTransform={(u) => (/^file:/i.test(u) ? u : defaultUrlTransform(u))} components={components}>{text || ''}</ReactMarkdown>
