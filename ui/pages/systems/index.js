@@ -1,7 +1,9 @@
 import Head from 'next/head'
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { readOpen, toggleOpen, readFocus, framesLayout, paneMarks, layPages, readPages, movePane, pageMarks,
   OPEN_KEY, FOCUS_KEY, PAGES_KEY, MAX_PANES } from '../../lib/steer'
+import { swipeInit, swipeStep, swipeIdle, swipeSettled, sideways, px as wheelPx, pageRects, IDLE_MS, SETTLE_MS, PAGE_GAP, EASE } from '../../lib/swipe'
 import SurfaceCard, { SURFACE_CSS } from '../../components/SurfaceCard'
 import { systemsFor } from '../../lib/surfaces'
 import { switchView } from '../../lib/wall'
@@ -65,6 +67,14 @@ const toWall = async () => {
 // a press opens the system's finished work over the pane's top, newest first (Esc closes); the three newest lines
 // sit small above the pane's empty box ('cc-pane-done' to the frame), never while he types.
 // The look before pages: commit 80e070b of brainfoundry-nous.
+// The slide (SWIPE-PAGES-1 "Spaces", 2026-11-28, hbar: "a two finger slide if hovering over the [panes] so it slides to
+// the second or the third page how similarly three fingers does a window on a MacBook"): a sideways two-finger slide
+// over the panes (each pane sends it up as 'cc-pane-swipe', ui/lib/swipe.js) or over their bars moves the row of pages
+// with the fingers (translateX on the frames box; the next page's panes sit beside it at their places, resistance
+// where there is no page). When the fingers lift it settles on the next page past a third of the width or on a flick,
+// else springs back, in 280 ms. Transform only: no frame moves in the DOM, reloads or changes size. One page per
+// slide; the momentum after a turn is ignored. Reduced motion: no follow, the page turns at once. One page: nothing.
+// The page turn before the slide: commit df834d8 of brainfoundry-nous.
 
 const KINDS = [
   ['running', 'running now'], ['done_today', 'done today'], ['tasks', 'open tasks'], ['next', 'next'],
@@ -159,7 +169,9 @@ const CSS = `
 .sy-mk.his{color:var(--rust);font-weight:500}
 .sy-all{font-size:13px;color:var(--muted);padding:3px 9px;border-radius:999px;background:var(--bg)}
 .sy-all:hover,.sy-all:focus-visible{color:var(--rust)}
-.sy-deck{position:sticky;top:var(--top);height:calc(100vh - var(--top));display:flex;flex-direction:column;min-width:0;overscroll-behavior-x:none}
+.sy-deck{position:sticky;top:var(--top);height:calc(100vh - var(--top));display:flex;flex-direction:column;min-width:0;overscroll-behavior-x:none;overflow:clip}
+.sy-frames.sliding{will-change:transform}
+.sy-right.off.peek{visibility:visible}
 .sy-deck .sy-frames{position:relative;top:auto;height:auto;flex:1;min-height:0}
 .sy-pg{display:flex;align-items:center;gap:2px;padding:6px 10px 6px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;user-select:none}
 .sy-pg .sep{opacity:.5;padding:0 2px}
@@ -419,7 +431,7 @@ function DoneLayer({ sid, name, count, onClose }) {
 // One open thread: its head (name, what it does now, the mic, open in full, close) over the live chat in a frame.
 // `tabs` is the phone's row of the other open threads, so one press moves between them.
 function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place, tabs, ask, zoom, keep, onZoom, onAll, asideRef,
-  off, offSize, done, page, pages, onMove, onState }) {
+  off, offSize, done, page, pages, onMove, onState, peek }) {
   const [state, setState] = useState(null)      // the frame's own report ('cc-pane-state')
   const [msg, setMsg] = useState(null)
   const [layer, setLayer] = useState(false)     // the "already done" layer over the pane's top
@@ -459,9 +471,11 @@ function Thread({ sid, tile, thread, err, show, onBack, onClose, central, place,
   const onBar = (e) => { if (!onZoom || (e.target.closest && e.target.closest('button, a'))) return; onZoom() }
   const flat = keep && zoom === 'mini' ? { width: keep.w + 'px', height: keep.h + 'px' } : undefined
   const dn = done && Number.isInteger(done.count) ? done.count : null
-  const style = off ? (offSize ? { '--kw': offSize.w + 'px', '--kh': offSize.h + 'px' } : undefined) : place
+  // a pane of the page beside, while the row slides: at its place in that page's grid (px), next to this page
+  const style = off ? (peek ? { left: peek.left + 'px', top: peek.top + 'px', width: peek.width + 'px', height: peek.height + 'px' }
+    : offSize ? { '--kw': offSize.w + 'px', '--kh': offSize.h + 'px' } : undefined) : place
   return (
-    <aside ref={asideRef} className={'sy-right' + (show ? ' show' : '') + (off ? ' off' : '') + (zoom === 'focus' ? ' focus' : zoom === 'mini' ? ' mini' : '')} style={style}
+    <aside ref={asideRef} className={'sy-right' + (show ? ' show' : '') + (off ? ' off' + (peek ? ' peek' : '') : '') + (zoom === 'focus' ? ' focus' : zoom === 'mini' ? ' mini' : '')} style={style}
       aria-label={sid ? `${name} thread` : 'thread'} aria-hidden={off ? 'true' : undefined}>
       <div className="sy-ph" onClick={onBar} title={onZoom ? grow : undefined}>
         <button className="sy-back" onClick={onBack} aria-label="back to the systems">back</button>
@@ -582,6 +596,13 @@ export default function Systems() {
       else if (e.data.key === '[' || e.data.key === ']') turnPage(e.data.key === ']' ? 1 : -1)
     }
     window.addEventListener('message', onPaneKey)
+    // a sideways slide inside a pane comes up as cc-pane-swipe (the pane already checked it is sideways and its own)
+    const onPaneSwipe = (e) => {
+      if (e.origin !== window.location.origin || !e.data || e.data.type !== 'cc-pane-swipe') return
+      const dx = Number(e.data.dx)
+      if (Number.isFinite(dx) && Math.abs(dx) < 5000) feedRef.current(dx)
+    }
+    window.addEventListener('message', onPaneSwipe)
     let l = [], c = true, q = null, f = null, po = {}, pc = 0
     try {
       const u = new URLSearchParams(window.location.search)
@@ -598,7 +619,7 @@ export default function Systems() {
     f = readFocus(f, [...(c ? [CENTRAL] : []), ...l])
     setList(l); setCentral(c); setFocusRaw(f); setPageOf(po); setCur(pc); setReady(true)
     if (f && phone()) { setFront(f); setShow(true) }
-    return () => { stop(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('keydown', onKey); window.removeEventListener('message', onPaneKey) }
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('keydown', onKey); window.removeEventListener('message', onPaneKey); window.removeEventListener('message', onPaneSwipe) }
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -646,16 +667,105 @@ export default function Systems() {
       return was.busy === now.busy && was.waiting === now.waiting ? m : { ...m, [sid]: now }
     })
   }
-  // a two-finger swipe over the bars (the panes' own frames keep their scrolling): one page per swipe
-  const swipe = useRef({ x: 0, at: 0 })
-  const onWheel = (e) => {
-    if (Math.abs(e.deltaX) < Math.abs(e.deltaY) * 1.5) return
-    const now = Date.now()
-    if (now - swipe.current.at < 650) return
-    swipe.current.x = (now - (swipe.current.t || 0) > 300 ? 0 : swipe.current.x) + e.deltaX
-    swipe.current.t = now
-    if (Math.abs(swipe.current.x) > 120) { const d = swipe.current.x > 0 ? 1 : -1; swipe.current = { x: 0, at: now, t: now }; turnPage(d) }
+  // ---- the slide (SWIPE-PAGES-1) ----
+  // The wheel sums go through ui/lib/swipe.js; the row follows by a transform set on the frames box directly (no render
+  // per wheel event); only which page shows beside it (`peek`) is state. The settle turns the page in one commit.
+  const framesEl = useRef(null)
+  const deckEl = useRef(null)
+  const slide = useRef({ st: swipeInit(), idle: null, anim: null, x: 0 })
+  const [peek, setPeek] = useState(null)        // {side, rects: {sid: rect}} of the page shown beside while it slides
+  const peekRef = useRef(null)
+  peekRef.current = peek
+  const still = () => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } }
+  const slideCtx = () => {
+    const el = framesEl.current
+    return { w: el ? el.clientWidth : 0, h: el ? el.clientHeight : 0, cur: curRef.current, n: pagesRef.current.pages.length, still: still() }
   }
+  const place = (x) => {
+    const el = framesEl.current
+    slide.current.x = x
+    if (!el) return
+    el.classList.toggle('sliding', x !== 0)
+    el.style.transform = x ? `translate3d(${x}px,0,0)` : ''
+  }
+  const showBeside = (side, ctx) => {
+    const was = peekRef.current
+    if ((was ? was.side : 0) === side) return
+    if (!side) { setPeek(null); return }
+    const pg = pagesRef.current.pages[ctx.cur + side] || []
+    const r = pageRects(pg, pg.includes(CENTRAL) ? CENTRAL : null, ctx.w, ctx.h, 6)
+    const off = side * (ctx.w + PAGE_GAP)
+    const rects = {}
+    Object.entries(r).forEach(([sid, b]) => { rects[sid] = { ...b, left: b.left + off } })
+    setPeek({ side, rects })
+  }
+  const settle = (d, ctx) => {
+    const el = framesEl.current
+    const to = d ? -d * (ctx.w + PAGE_GAP) : 0
+    const from = slide.current.x
+    const end = () => {
+      slide.current.anim = null
+      if (d) {
+        flushSync(() => { goPage(ctx.cur + d); setPeek(null) })
+      } else setPeek(null)
+      place(0)
+      slide.current.st = swipeSettled(slide.current.st, d, performance.now())
+    }
+    if (!el || !el.animate || Math.abs(from - to) < 1) { end(); return }
+    el.style.transform = `translate3d(${to}px,0,0)`
+    slide.current.x = to
+    const a = el.animate([{ transform: `translate3d(${from}px,0,0)` }, { transform: `translate3d(${to}px,0,0)` }],
+      { duration: Math.round(SETTLE_MS * Math.min(1, Math.max(0.45, Math.abs(from - to) / Math.max(1, ctx.w)))), easing: EASE })
+    slide.current.anim = a
+    a.onfinish = end
+    a.oncancel = end
+  }
+  const apply = (out, ctx) => {
+    if (!out) return
+    if (out.kind === 'turn') { goPage(ctx.cur + out.d); return }
+    if (out.kind === 'follow') { showBeside(out.side, ctx); place(out.x); return }
+    if (out.kind === 'settle') {
+      if (out.d) showBeside(out.d, ctx)
+      // the page beside must be laid out before it slides in: settle on the next frame
+      requestAnimationFrame(() => settle(out.d, ctx))
+    }
+  }
+  // one sideways wheel delta (px), from the bars or from inside a pane
+  const feed = (dx) => {
+    if (phone()) return
+    const ctx = slideCtx()
+    if (ctx.n < 2 || !ctx.w) return
+    const s = slide.current
+    const r = swipeStep(s.st, { dx, t: performance.now() }, ctx)
+    s.st = r.st
+    apply(r.out, ctx)
+    clearTimeout(s.idle)
+    if (s.st.phase === 'drag') {
+      s.idle = setTimeout(() => {
+        const c = slideCtx()
+        const q = swipeIdle(slide.current.st, c, performance.now())
+        slide.current.st = q.st
+        apply(q.out, c)
+      }, IDLE_MS)
+    }
+  }
+  const feedRef = useRef(feed)
+  feedRef.current = feed
+  // the bars themselves (the deck): a native listener, so a sideways slide can stop the browser's history swipe
+  useEffect(() => {
+    const el = deckEl.current
+    if (!el) return undefined
+    const w = (e) => {
+      if (e.ctrlKey) return
+      const dx = wheelPx(e.deltaX, e.deltaMode, window.innerWidth), dy = wheelPx(e.deltaY, e.deltaMode, window.innerHeight)
+      if (!sideways(dx, dy)) return
+      e.preventDefault()
+      feedRef.current(dx)
+    }
+    el.addEventListener('wheel', w, { passive: false })
+    return () => el.removeEventListener('wheel', w, { passive: false })
+  })
+  useEffect(() => () => { clearTimeout(slide.current.idle); if (slide.current.anim) { slide.current.anim.onfinish = null; slide.current.anim.oncancel = null } }, [])
 
   // The move (about 220 ms): each pane slides from where it was to where it is now (FLIP on transform only, so the
   // frames are never reloaded or resized twice). A pane going into the strip keeps its frame's size, hidden.
@@ -855,7 +965,7 @@ export default function Systems() {
             </div>
           </main>
           {many ? (
-            <div className="sy-deck" onWheel={onWheel}>
+            <div className="sy-deck" ref={deckEl}>
               {pl.pages.length > 1 ? (
                 <nav className="sy-pg" aria-label="pages of panes">
                   {marksP.map((m, i) => (
@@ -870,7 +980,7 @@ export default function Systems() {
                   <span className="hint" aria-hidden="true">[ ]</span>
                 </nav>
               ) : null}
-              <div className="sy-frames" style={frameStyle}>
+              <div className="sy-frames" ref={framesEl} style={frameStyle}>
                 {/* every open pane stays mounted in the order it was opened; one on another page is only hidden */}
                 {shown.map(sid => {
                   const off = !onPage.includes(sid)
@@ -880,7 +990,7 @@ export default function Systems() {
                       onBack={() => { setShow(false); setFocusRaw(null) }} onClose={() => toggle(sid)} ask={asks[sid] || null}
                       zoom={off ? 'grid' : zoomOf(sid)} keep={keep[sid] || null} onZoom={() => onZoom(sid)} onAll={() => zoomTo(null)}
                       off={off} offSize={sizes[sid] || null} done={done[sid] || null} page={pl.pageOf[sid] || 0} pages={pl.pages.length}
-                      onMove={shown.length > 1 ? onMove : null} onState={onState}
+                      onMove={shown.length > 1 ? onMove : null} onState={onState} peek={off && peek ? peek.rects[sid] || null : null}
                       asideRef={(el) => { if (el) els.current[sid] = el; else delete els.current[sid] }} />
                   )
                 })}

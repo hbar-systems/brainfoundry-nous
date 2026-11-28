@@ -25,6 +25,7 @@ import { press, routeName, slashName, choiceName } from '../lib/presses'
 import { synopsis, splitChoices, remarkMoney, remarkActions, remarkAgents, sentenceAround } from '../lib/choices'
 import { splitTree } from '../lib/tree'
 import { splitSteer, steerBody, sayUrl } from '../lib/steer'
+import { forwardSwipe, px as wheelPx } from '../lib/swipe'
 import { cardClock, pressWords } from '../lib/permitClock'
 import ThreadTree from '../components/ThreadTree'
 import { Face } from '../lib/agentface'
@@ -2068,6 +2069,26 @@ function CC() {
     }
     document.addEventListener('keydown', fwd, true)
     return () => document.removeEventListener('keydown', fwd, true)
+  }, [paneMode])
+  // SWIPE-PAGES-1: inside a /systems pane a clearly sideways two-finger slide goes up ('cc-pane-swipe', dx in px) so the
+  // pages slide under his hand; anything under the pointer that scrolls sideways itself keeps it, vertical is untouched.
+  useEffect(() => {
+    if (!paneMode || !String(paneMode).startsWith('sys-')) return undefined
+    const wheel = (e) => {
+      if (e.ctrlKey) return                       // a pinch
+      const chain = []
+      for (let n = e.target; n && n.nodeType === 1 && chain.length < 40; n = n.parentElement) {
+        let ox = ''
+        try { ox = window.getComputedStyle(n).overflowX } catch {}
+        chain.push({ sw: n.scrollWidth, cw: n.clientWidth, ox })
+      }
+      const dx = wheelPx(e.deltaX, e.deltaMode, window.innerWidth), dy = wheelPx(e.deltaY, e.deltaMode, window.innerHeight)
+      if (!forwardSwipe(dx, dy, chain)) return
+      e.preventDefault()                          // no history swipe of the browser
+      try { window.parent.postMessage({ type: 'cc-pane-swipe', dx }, window.location.origin) } catch {}
+    }
+    window.addEventListener('wheel', wheel, { passive: false })
+    return () => window.removeEventListener('wheel', wheel, { passive: false })
   }, [paneMode])
   useEffect(() => {
     // Esc, or a press outside the conversation, clears the underlined span
